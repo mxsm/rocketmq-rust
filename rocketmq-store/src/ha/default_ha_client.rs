@@ -66,6 +66,8 @@ const TRANSFER_HEADER_SIZE: usize = 12; // 8 bytes offset + 4 bytes body size
 /// Default HA Client implementation using bytes crate
 pub struct DefaultHAClient {
     inner: ArcMut<Inner>,
+    /// Service handle
+    service_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 struct Inner {
@@ -113,9 +115,6 @@ struct Inner {
 
     /// Shutdown notification
     shutdown_notify: Arc<Notify>,
-
-    /// Service handle
-    service_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl Inner {
@@ -334,8 +333,8 @@ impl DefaultHAClient {
                 current_state: Arc::new(RwLock::new(HAConnectionState::Ready)),
                 flow_monitor,
                 shutdown_notify: Arc::new(Notify::new()),
-                service_handle: Arc::new(RwLock::new(None)),
             }),
+            service_handle: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -403,7 +402,7 @@ impl DefaultHAClient {
         self.inner.shutdown_notify.notify_waiters();
 
         // Wait for service to stop
-        let mut service_handle = self.inner.service_handle.write().await;
+        let mut service_handle = self.service_handle.write().await;
         if let Some(handle) = service_handle.take() {
             let _ = handle.await;
         }
@@ -439,13 +438,20 @@ impl DefaultHAClient {
 
 impl HAClient for DefaultHAClient {
     async fn start(&mut self) {
+        // Idempotent start: if a service handle already exists, do nothing
+        if self.service_handle.read().await.is_some() {
+            warn!("HAClient service is already running");
+            return;
+        }
+
         self.inner.flow_monitor.start().await;
         let mut client = ArcMut::clone(&self.inner);
         let join_handle = tokio::spawn(async move {
             let client_clone = ArcMut::clone(&client);
-
             loop {
                 select! {
+                    biased;
+
                     _ = client_clone.shutdown_notify.notified() => {
                         info!("HAClient received shutdown notification");
                         break;
@@ -517,6 +523,8 @@ impl HAClient for DefaultHAClient {
             }
             client.flow_monitor.shutdown_with_interrupt(true).await;
         });
+        let mut service_handle = self.service_handle.write().await;
+        *service_handle = Some(join_handle);
     }
 
     async fn shutdown(&self) {
@@ -526,7 +534,7 @@ impl HAClient for DefaultHAClient {
         self.inner.shutdown_notify.notify_waiters();
 
         // Wait for service to stop
-        let mut service_handle = self.inner.service_handle.write().await;
+        let mut service_handle = self.service_handle.write().await;
         if let Some(handle) = service_handle.take() {
             let _ = handle.await;
         }
