@@ -15,15 +15,15 @@
  * limitations under the License.
  */
 use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, RequestHeaderCodec)]
 pub struct GetTopicConfigRequestHeader {
+    #[required]
     #[serde(rename = "topic")]
     pub topic: CheetahString,
 
@@ -32,46 +32,10 @@ pub struct GetTopicConfigRequestHeader {
 }
 
 impl GetTopicConfigRequestHeader {
-    pub const TOPIC: &'static str = "topic";
-
     pub fn get_topic(&self) -> &CheetahString {
         &self.topic
     }
     pub fn set_topic(&mut self, topic: CheetahString) {
         self.topic = topic;
-    }
-}
-
-impl CommandCustomHeader for GetTopicConfigRequestHeader {
-    fn to_map(&self) -> Option<std::collections::HashMap<CheetahString, CheetahString>> {
-        let mut map = std::collections::HashMap::new();
-        map.insert(
-            CheetahString::from_static_str(Self::TOPIC),
-            self.topic.clone(),
-        );
-        if let Some(value) = self.topic_request_header.as_ref() {
-            if let Some(value) = value.to_map() {
-                map.extend(value);
-            }
-        }
-        Some(map)
-    }
-}
-
-impl FromMap for GetTopicConfigRequestHeader {
-    type Error = rocketmq_error::RocketmqError;
-
-    type Target = Self;
-
-    fn from(
-        map: &std::collections::HashMap<CheetahString, CheetahString>,
-    ) -> Result<Self::Target, Self::Error> {
-        Ok(GetTopicConfigRequestHeader {
-            topic: map
-                .get(&CheetahString::from_static_str(Self::TOPIC))
-                .cloned()
-                .unwrap_or_default(),
-            topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
-        })
     }
 }
