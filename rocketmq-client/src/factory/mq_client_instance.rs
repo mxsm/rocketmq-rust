@@ -318,6 +318,7 @@ impl MQClientInstance {
                 // Start rebalance service
                 self.rebalance_service.start(this).await;
                 // Start push service
+
                 self.default_producer
                     .default_mqproducer_impl
                     .as_mut()

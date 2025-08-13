@@ -643,7 +643,7 @@ impl MQClientAPIImpl {
         self.process_send_response(broker_name, msg, &response, addr)
     }
 
-    async fn send_message_async<T: MessageTrait>(
+    /*    async fn send_message_async<T: MessageTrait>(
         &mut self,
         addr: &CheetahString,
         broker_name: &CheetahString,
@@ -721,6 +721,183 @@ impl MQClientAPIImpl {
             }
             Err(err) => {
                 error!("send message async error: {:?}", err);
+            }
+        }
+    }*/
+
+    async fn send_message_async<T: MessageTrait>(
+        &mut self,
+        addr: &CheetahString,
+        broker_name: &CheetahString,
+        msg: &T,
+        timeout_millis: u64,
+        request: RemotingCommand,
+        send_callback: Option<SendMessageCallback>,
+        topic_publish_info: Option<&TopicPublishInfo>,
+        instance: Option<ArcMut<MQClientInstance>>,
+        retry_times_when_send_failed: u32,
+        times: &AtomicU32,
+        context: &mut Option<SendMessageContext<'_>>,
+        producer: &DefaultMQProducerImpl,
+    ) {
+        let mut current_addr = addr.clone();
+        let mut current_broker_name = broker_name.clone();
+        let mut current_request = request;
+
+        loop {
+            let begin_start_time = Instant::now();
+            let result = self
+                .remoting_client
+                .invoke_async(Some(&current_addr), current_request.clone(), timeout_millis)
+                .await;
+
+            match result {
+                Ok(response) => {
+                    let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
+                    if send_callback.is_none() {
+                        let send_result = self.process_send_response(
+                            &current_broker_name,
+                            msg,
+                            &response,
+                            &current_addr,
+                        );
+                        if let Ok(result) = send_result {
+                            if context.is_some() {
+                                let inner = context.as_mut().unwrap();
+                                inner.send_result = Some(result.clone());
+                                producer.execute_send_message_hook_after(context);
+                            }
+                        }
+                        let duration = (Instant::now() - begin_start_time).as_millis() as u64;
+                        producer
+                            .update_fault_item(current_broker_name.clone(), duration, false, true)
+                            .await;
+                        return;
+                    }
+
+                    let send_result = self.process_send_response(
+                        &current_broker_name,
+                        msg,
+                        &response,
+                        &current_addr,
+                    );
+                    match send_result {
+                        Ok(result) => {
+                            if context.is_some() {
+                                let inner = context.as_mut().unwrap();
+                                inner.send_result = Some(result.clone());
+                                producer.execute_send_message_hook_after(context);
+                            }
+                            let duration = (Instant::now() - begin_start_time).as_millis() as u64;
+                            send_callback.as_ref().unwrap()(Some(&result), None);
+                            producer
+                                .update_fault_item(
+                                    current_broker_name.clone(),
+                                    duration,
+                                    false,
+                                    true,
+                                )
+                                .await;
+                            return; // success, return loop
+                        }
+                        Err(err) => {
+                            let duration = (Instant::now() - begin_start_time).as_millis() as u64;
+                            producer
+                                .update_fault_item(
+                                    current_broker_name.clone(),
+                                    duration,
+                                    true,
+                                    true,
+                                )
+                                .await;
+
+                            // Check if a retry is needed
+                            let current_times =
+                                times.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                            if current_times < retry_times_when_send_failed {
+                                // Prepare to retry: Select a new broker
+                                match self
+                                    .prepare_retry(
+                                        &current_broker_name,
+                                        msg,
+                                        &mut current_request,
+                                        topic_publish_info,
+                                        instance.as_ref(),
+                                        producer,
+                                    )
+                                    .await
+                                {
+                                    Some((new_addr, new_broker_name)) => {
+                                        current_addr = new_addr;
+                                        current_broker_name = new_broker_name;
+                                        warn!(
+                                            "async send msg by retry {} times. topic={}, \
+                                             brokerAddr={}, brokerName={}",
+                                            current_times + 1,
+                                            msg.get_topic(),
+                                            current_addr,
+                                            current_broker_name
+                                        );
+                                        current_request.set_opaque_mut(
+                                            RemotingCommand::create_new_request_id(),
+                                        );
+                                        continue; // continue to retry
+                                    }
+                                    None => {
+                                        // can not choose new broker, fail
+                                        if let Some(callback) = send_callback {
+                                            callback(None, Some(&err));
+                                        }
+                                        return;
+                                    }
+                                }
+                            } else {
+                                // The maximum number of retries has been reached
+                                if let Some(callback) = send_callback {
+                                    callback(None, Some(&err));
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    error!("send message async error: {:?}", err);
+                    let current_times = times.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                    if current_times < retry_times_when_send_failed {
+                        // Try to retry even if there is a network error.
+                        match self
+                            .prepare_retry(
+                                &current_broker_name,
+                                msg,
+                                &mut current_request,
+                                topic_publish_info,
+                                instance.as_ref(),
+                                producer,
+                            )
+                            .await
+                        {
+                            Some((new_addr, new_broker_name)) => {
+                                current_addr = new_addr;
+                                current_broker_name = new_broker_name;
+                                current_request
+                                    .set_opaque_mut(RemotingCommand::create_new_request_id());
+                                continue;
+                            }
+                            None => {
+                                if let Some(callback) = send_callback {
+                                    callback(None, Some(&err));
+                                }
+                                return;
+                            }
+                        }
+                    } else {
+                        if let Some(callback) = send_callback {
+                            callback(None, Some(&err));
+                        }
+                        return;
+                    }
+                }
             }
         }
     }
@@ -803,7 +980,7 @@ impl MQClientAPIImpl {
         Ok(send_result)
     }
 
-    async fn on_exception_impl<T: MessageTrait>(
+    /*async fn on_exception_impl<T: MessageTrait>(
         &mut self,
         broker_name: &CheetahString,
         msg: &T,
@@ -868,6 +1045,42 @@ impl MQClientAPIImpl {
             inner.exception = Some(Arc::new(Box::new(e)));
             producer.execute_send_message_hook_after(context);
         }
+    }*/
+
+    async fn prepare_retry<T: MessageTrait>(
+        &self,
+        broker_name: &CheetahString,
+        msg: &T,
+        request: &mut RemotingCommand,
+        topic_publish_info: Option<&TopicPublishInfo>,
+        instance: Option<&ArcMut<MQClientInstance>>,
+        producer: &DefaultMQProducerImpl,
+    ) -> Option<(CheetahString, CheetahString)> {
+        let mut retry_broker_name = broker_name.clone();
+
+        if let Some(topic_publish_info) = topic_publish_info {
+            let mq_chosen = producer.select_one_message_queue(
+                topic_publish_info,
+                Some(&retry_broker_name),
+                false,
+            );
+            if let Some(instance) = instance {
+                retry_broker_name = instance
+                    .get_broker_name_from_message_queue(mq_chosen.as_ref().unwrap())
+                    .await;
+            }
+        }
+
+        if let Some(instance) = instance {
+            if let Some(addr) = instance
+                .find_broker_address_in_publish(retry_broker_name.as_ref())
+                .await
+            {
+                return Some((addr, retry_broker_name));
+            }
+        }
+
+        None
     }
 
     pub async fn send_heartbeat(
