@@ -41,8 +41,8 @@ use rocketmq_remoting::protocol::subscription::subscription_group_config::Subscr
 use crate::common::admin_tool_result::AdminToolResult;
 
 #[allow(dead_code)]
-#[trait_variant::make(MQAdminExt: Send)]
-pub trait MQAdminExtLocal: Sync {
+#[allow(async_fn_in_trait)]
+pub trait MQAdminExt: Send {
     async fn start(&mut self) -> rocketmq_error::RocketMQResult<()>;
     async fn shutdown(&mut self);
     async fn add_broker_to_container(

@@ -24,8 +24,8 @@ use crate::producer::send_callback::SendMessageCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::transaction_send_result::TransactionSendResult;
 
-#[trait_variant::make(MQProducer: Send)]
-pub trait MQProducerLocal {
+#[allow(async_fn_in_trait)]
+pub trait MQProducer {
     /// Starts the producer.
     ///
     /// # Returns

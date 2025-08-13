@@ -848,7 +848,7 @@ impl MQClientAPIImpl {
                 retry_broker_name
             );
             request.set_opaque_mut(RemotingCommand::create_new_request_id());
-            Box::pin(self.send_message_async(
+             Box::pin(self.send_message_async(
                 &addr,
                 &retry_broker_name,
                 msg,
@@ -863,6 +863,7 @@ impl MQClientAPIImpl {
                 producer,
             ))
             .await;
+
         } else if context.is_some() {
             let inner = context.as_mut().unwrap();
             inner.exception = Some(Arc::new(Box::new(e)));
