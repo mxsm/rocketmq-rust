@@ -27,7 +27,6 @@ use crate::consumer::mq_consumer::MQConsumer;
 
 /// The `MQPushConsumer` trait defines the interface for a push consumer in RocketMQ.
 /// A push consumer receives messages from the broker and processes them using registered listeners.
-
 #[allow(async_fn_in_trait)]
 pub trait MQPushConsumer: MQConsumer {
     /// Starts the push consumer.
