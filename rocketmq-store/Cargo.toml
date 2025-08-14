@@ -56,7 +56,7 @@ rand = { workspace = true }
 uuid = { workspace = true }
 
 [target.'cfg(linux)'.dependencies]
-libc = "0.2.174"
+libc = "0.2.175"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61.3", features = ["Win32_Security", "Win32_System_Memory_NonVolatile"] }
