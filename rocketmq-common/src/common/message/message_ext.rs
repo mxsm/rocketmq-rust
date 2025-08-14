@@ -67,34 +67,42 @@ impl MessageExt {
         }
     }
 
+    #[inline]
     pub fn born_host_bytes(&self) -> bytes::Bytes {
         Self::socket_address_2_byte_buffer(&self.born_host)
     }
 
+    #[inline]
     pub fn born_store_bytes(&self) -> bytes::Bytes {
         Self::socket_address_2_byte_buffer(&self.store_host)
     }
 
+    #[inline]
     pub fn topic(&self) -> &CheetahString {
         self.message.topic()
     }
 
+    #[inline]
     pub fn born_host(&self) -> SocketAddr {
         self.born_host
     }
 
+    #[inline]
     pub fn store_host(&self) -> SocketAddr {
         self.store_host
     }
 
+    #[inline]
     pub fn with_born_host_v6_flag(&mut self) {
         self.sys_flag |= MessageSysFlag::BORNHOST_V6_FLAG;
     }
 
+    #[inline]
     pub fn with_store_host_v6_flag(&mut self) {
         self.sys_flag |= MessageSysFlag::STOREHOSTADDRESS_V6_FLAG;
     }
 
+    #[inline]
     pub fn body(&self) -> Option<bytes::Bytes> {
         self.message.body()
     }
@@ -114,46 +122,57 @@ impl MessageExt {
         self.queue_id
     }
 
+    #[inline]
     pub fn flag(&self) -> i32 {
         self.message.flag()
     }
 
+    #[inline]
     pub fn message_inner(&self) -> &Message {
         &self.message
     }
 
+    #[inline]
     pub fn broker_name(&self) -> &str {
         &self.broker_name
     }
 
+    #[inline]
     pub fn store_size(&self) -> i32 {
         self.store_size
     }
 
+    #[inline]
     pub fn queue_offset(&self) -> i64 {
         self.queue_offset
     }
 
+    #[inline]
     pub fn born_timestamp(&self) -> i64 {
         self.born_timestamp
     }
 
+    #[inline]
     pub fn store_timestamp(&self) -> i64 {
         self.store_timestamp
     }
 
+    #[inline]
     pub fn msg_id(&self) -> &CheetahString {
         &self.msg_id
     }
 
+    #[inline]
     pub fn commit_log_offset(&self) -> i64 {
         self.commit_log_offset
     }
 
+    #[inline]
     pub fn reconsume_times(&self) -> i32 {
         self.reconsume_times
     }
 
+    #[inline]
     pub fn prepared_transaction_offset(&self) -> i64 {
         self.prepared_transaction_offset
     }
