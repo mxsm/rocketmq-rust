@@ -25,6 +25,7 @@ pub enum RemotingSysResponseCode {
 }
 
 impl From<RemotingSysResponseCode> for i32 {
+    #[inline]
     fn from(value: RemotingSysResponseCode) -> Self {
         value as i32
     }
