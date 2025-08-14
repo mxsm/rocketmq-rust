@@ -24,7 +24,7 @@ use rocketmq_common::common::mix_all;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BrokerData {
     cluster: CheetahString,
     #[serde(rename = "brokerName")]
@@ -36,6 +36,14 @@ pub struct BrokerData {
     #[serde(rename = "enableActingMaster")]
     enable_acting_master: bool,
 }
+
+impl PartialEq for BrokerData {
+    fn eq(&self, other: &Self) -> bool {
+        self.broker_name == other.broker_name && self.broker_addrs == other.broker_addrs
+    }
+}
+
+impl Eq for BrokerData {}
 
 impl PartialOrd for BrokerData {
     #[inline]
@@ -204,19 +212,21 @@ mod tests {
         let cluster = CheetahString::from("test_cluster");
         let broker_name = CheetahString::from("test_broker");
         let broker_addrs = HashMap::new();
-        let zone_name = Some(CheetahString::from("test_zone"));
+        let zone_name = CheetahString::from("test_zone");
 
         let broker_data = BrokerData::new(
             cluster.clone(),
             broker_name.clone(),
             broker_addrs.clone(),
-            zone_name.clone(),
+            Some(zone_name.clone()),
         );
 
         assert_eq!(broker_data.cluster, cluster);
         assert_eq!(broker_data.broker_name, broker_name);
         assert_eq!(broker_data.broker_addrs, broker_addrs);
-        assert_eq!(broker_data.zone_name, zone_name);
+        if let Some(zone) = &broker_data.zone_name {
+            assert_eq!(zone, &zone_name);
+        }
         assert!(!broker_data.enable_acting_master);
     }
 
@@ -241,7 +251,9 @@ mod tests {
             broker_data.broker_addrs.get(&1).unwrap(),
             &CheetahString::from("127.0.0.1")
         );
-        assert_eq!(broker_data.zone_name, Some(CheetahString::from("zone1")));
+        if let Some(zone_name) = &broker_data.zone_name {
+            assert_eq!(zone_name, &CheetahString::from("zone1"));
+        }
         assert!(broker_data.enable_acting_master);
     }
 
