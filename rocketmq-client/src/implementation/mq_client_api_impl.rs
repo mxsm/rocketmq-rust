@@ -457,7 +457,6 @@ impl MQClientAPIImpl {
                             let route_data = TopicRouteData::decode(body_inner.as_ref());
                             if let Ok(data) = route_data {
                                 return Ok(Some(data));
-                            } else {
                             } else if let Err(error1) = route_data {
                                 error!(
                                     "get Topic [{}] RouteInfoFromNameServer decode error: {}",
