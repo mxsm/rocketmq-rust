@@ -209,7 +209,7 @@ mod tests {
         let body = RegisterBrokerBody::new(wrapper, filter_list);
         let encoded = body.encode(false);
         let decoded =
-            RegisterBrokerBody::decode(&Bytes::from(encoded), false, RocketMqVersion::V500);
+            RegisterBrokerBody::decode(&Bytes::from(encoded), false, RocketMqVersion::V5_0_0);
         assert_eq!(decoded.filter_server_list, body.filter_server_list);
     }
 
@@ -229,7 +229,7 @@ mod tests {
             .topic_config_table = topic_config_table;
         let compare_encode = register_broker_body.encode(true);
         let compare_decode =
-            RegisterBrokerBody::decode(&Bytes::from(compare_encode), true, RocketMqVersion::V500);
+            RegisterBrokerBody::decode(&Bytes::from(compare_encode), true, RocketMqVersion::V5_0_0);
         assert_eq!(
             register_broker_body
                 .topic_config_serialize_wrapper
