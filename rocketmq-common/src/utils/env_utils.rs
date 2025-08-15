@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::ffi::OsStr;
 
 use crate::common::mix_all::ROCKETMQ_HOME_ENV;
 
@@ -31,8 +32,66 @@ impl EnvUtils {
     ///
     /// An `Option` containing the value of the environment variable, or `None` if the variable is
     /// not set.
-    pub fn get_property(key: impl Into<String>) -> Option<String> {
-        std::env::var(key.into()).ok()
+    pub fn get_property<K: AsRef<OsStr>>(key: K) -> Option<String> {
+        std::env::var(key).ok()
+    }
+
+    /// Retrieves the value of the specified environment variable or returns a default value if the
+    /// variable is not set.
+    ///
+    /// # Arguments
+    /// * `key` - The name of the environment variable to retrieve.
+    /// * `default` - The default value to return if the environment variable is not set.
+    ///
+    /// # Returns
+    /// A `String` containing the value of the environment variable, or the default value.
+    pub fn get_property_or_default<K: AsRef<OsStr>>(key: K, default: impl Into<String>) -> String {
+        std::env::var(key).unwrap_or_else(|_| default.into())
+    }
+
+    /// Retrieves the value of the specified environment variable as an `i32`, or returns a default
+    /// value if the variable is not set or cannot be parsed.
+    ///
+    /// # Arguments
+    /// * `key` - The name of the environment variable to retrieve.
+    /// * `default` - The default value to return if the environment variable is not set or cannot
+    ///   be parsed.
+    ///
+    /// # Returns
+    /// An `i32` containing the value of the environment variable, or the default value.
+    pub fn get_property_as_i32<K: AsRef<OsStr>>(key: K, default: i32) -> i32 {
+        std::env::var(key)
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(default)
+    }
+
+    /// Retrieves the value of the specified environment variable as a `bool`, or returns a default
+    /// value if the variable is not set or cannot be parsed.
+    ///
+    /// # Arguments
+    /// * `key` - The name of the environment variable to retrieve.
+    /// * `default` - The default value to return if the environment variable is not set or cannot
+    ///   be parsed.
+    ///
+    /// # Returns
+    /// A `bool` containing the value of the environment variable, or the default value.
+    ///
+    /// # Notes
+    /// The function considers the following values as `true`: `"true"`, `"1"`.
+    /// The function considers the following values as `false`: `"false"`, `"0"`.
+    pub fn get_property_as_bool<K: AsRef<OsStr>>(key: K, default: bool) -> bool {
+        std::env::var(key)
+            .ok()
+            .and_then(|v| {
+                let lower = v.to_lowercase();
+                match lower.as_str() {
+                    "true" | "1" => Some(true),
+                    "false" | "0" => Some(false),
+                    _ => None,
+                }
+            })
+            .unwrap_or(default)
     }
 
     /// Sets the value of the specified environment variable.
@@ -46,9 +105,9 @@ impl EnvUtils {
     ///
     /// This function uses `unsafe` because it modifies the environment variables,
     /// which can have side effects on the entire process.
-    pub fn put_property(key: impl Into<String>, value: impl Into<String>) {
+    pub fn put_property<K: AsRef<OsStr>, V: AsRef<OsStr>>(key: K, value: V) {
         unsafe {
-            std::env::set_var(key.into(), value.into());
+            std::env::set_var(key, value);
         }
     }
 
@@ -64,13 +123,12 @@ impl EnvUtils {
         std::env::var(ROCKETMQ_HOME_ENV).unwrap_or_else(|_| unsafe {
             // If ROCKETMQ_HOME is not set, use the current directory as the default value
             let rocketmq_home_dir = std::env::current_dir()
-                .unwrap()
-                .into_os_string()
-                .to_string_lossy()
-                .to_string();
+                .ok()
+                .and_then(|p| p.into_os_string().into_string().ok())
+                .unwrap_or_else(|| ".".to_string());
 
             // Set ROCKETMQ_HOME to the current directory
-            std::env::set_var(ROCKETMQ_HOME_ENV, rocketmq_home_dir.clone());
+            std::env::set_var(ROCKETMQ_HOME_ENV, &rocketmq_home_dir);
             rocketmq_home_dir
         })
     }
@@ -181,5 +239,65 @@ mod tests {
 
         let result = std::env::var(key).unwrap();
         assert_eq!(result, value);
+    }
+
+    #[test]
+    fn retrieves_env_variable_value() {
+        std::env::set_var("TEST_KEY", "test_value");
+        assert_eq!(
+            EnvUtils::get_property_or_default("TEST_KEY", "default_value"),
+            "test_value"
+        );
+        std::env::remove_var("TEST_KEY");
+    }
+
+    #[test]
+    fn returns_default_when_env_variable_not_set() {
+        assert_eq!(
+            EnvUtils::get_property_or_default("NON_EXISTENT_KEY", "default_value"),
+            "default_value"
+        );
+    }
+
+    #[test]
+    fn retrieves_env_variable_as_i32() {
+        std::env::set_var("TEST_INT_KEY", "42");
+        assert_eq!(EnvUtils::get_property_as_i32("TEST_INT_KEY", 0), 42);
+        std::env::remove_var("TEST_INT_KEY");
+    }
+
+    #[test]
+    fn returns_default_when_env_variable_as_i32_not_set() {
+        assert_eq!(
+            EnvUtils::get_property_as_i32("NON_EXISTENT_INT_KEY", 10),
+            10
+        );
+    }
+
+    #[test]
+    fn returns_default_when_env_variable_as_i32_invalid() {
+        std::env::set_var("INVALID_INT_KEY", "not_a_number");
+        assert_eq!(EnvUtils::get_property_as_i32("INVALID_INT_KEY", 5), 5);
+        std::env::remove_var("INVALID_INT_KEY");
+    }
+
+    #[test]
+    fn returns_default_when_env_variable_as_bool_not_set() {
+        assert!(EnvUtils::get_property_as_bool(
+            "NON_EXISTENT_BOOL_KEY",
+            true
+        ));
+        assert!(!EnvUtils::get_property_as_bool(
+            "NON_EXISTENT_BOOL_KEY",
+            false
+        ));
+    }
+
+    #[test]
+    fn returns_default_when_env_variable_as_bool_invalid() {
+        std::env::set_var("INVALID_BOOL_KEY", "not_a_bool");
+        assert!(EnvUtils::get_property_as_bool("INVALID_BOOL_KEY", true));
+        assert!(!EnvUtils::get_property_as_bool("INVALID_BOOL_KEY", false));
+        std::env::remove_var("INVALID_BOOL_KEY");
     }
 }
