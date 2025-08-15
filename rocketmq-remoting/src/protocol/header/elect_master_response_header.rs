@@ -17,13 +17,11 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
-
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct ElectMasterResponseHeader {
     pub master_broker_id: Option<i64>,
@@ -32,79 +30,11 @@ pub struct ElectMasterResponseHeader {
     pub sync_state_set_epoch: Option<i32>,
 }
 
-impl ElectMasterResponseHeader {
-    pub const MASTER_BROKER_ID: &'static str = "masterBrokerId";
-    pub const MASTER_ADDRESS: &'static str = "masterAddress";
-    pub const MASTER_EPOCH: &'static str = "masterEpoch";
-    pub const SYNC_STATE_SET_EPOCH: &'static str = "syncStateSetEpoch";
-}
-
-impl CommandCustomHeader for ElectMasterResponseHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        let mut map = std::collections::HashMap::new();
-        if let Some(value) = self.master_broker_id.as_ref() {
-            map.insert(
-                CheetahString::from_static_str(Self::MASTER_BROKER_ID),
-                CheetahString::from(value.to_string()),
-            );
-        }
-        if let Some(value) = self.master_address.as_ref() {
-            map.insert(
-                CheetahString::from_static_str(Self::MASTER_ADDRESS),
-                value.clone(),
-            );
-        }
-        if let Some(value) = self.master_epoch.as_ref() {
-            map.insert(
-                CheetahString::from_static_str(Self::MASTER_EPOCH),
-                CheetahString::from(value.to_string()),
-            );
-        }
-        if let Some(value) = self.sync_state_set_epoch.as_ref() {
-            map.insert(
-                CheetahString::from_static_str(Self::SYNC_STATE_SET_EPOCH),
-                CheetahString::from(value.to_string()),
-            );
-        }
-        Some(map)
-    }
-}
-
-impl FromMap for ElectMasterResponseHeader {
-    type Error = rocketmq_error::RocketmqError;
-
-    type Target = Self;
-    fn from(
-        map: &std::collections::HashMap<CheetahString, CheetahString>,
-    ) -> Result<Self::Target, Self::Error> {
-        Ok(ElectMasterResponseHeader {
-            master_broker_id: map
-                .get(&CheetahString::from_static_str(
-                    ElectMasterResponseHeader::MASTER_BROKER_ID,
-                ))
-                .and_then(|s| s.parse::<i64>().ok()),
-            master_address: map
-                .get(&CheetahString::from_static_str(
-                    ElectMasterResponseHeader::MASTER_ADDRESS,
-                ))
-                .cloned(),
-            master_epoch: map
-                .get(&CheetahString::from_static_str(
-                    ElectMasterResponseHeader::MASTER_EPOCH,
-                ))
-                .and_then(|s| s.parse::<i32>().ok()),
-            sync_state_set_epoch: map
-                .get(&CheetahString::from_static_str(
-                    ElectMasterResponseHeader::SYNC_STATE_SET_EPOCH,
-                ))
-                .and_then(|s| s.parse::<i32>().ok()),
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::command_custom_header::CommandCustomHeader;
+    use crate::protocol::command_custom_header::FromMap;
 
     #[test]
     fn elect_master_response_header_serializes_correctly() {
