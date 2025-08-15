@@ -22,7 +22,6 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Once;
-use std::sync::RwLock;
 
 use bytes::Buf;
 use bytes::BufMut;
@@ -30,8 +29,8 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use lazy_static::lazy_static;
-use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_error::RocketmqError;
 use rocketmq_rust::ArcMut;
 use serde::Deserialize;
@@ -53,7 +52,12 @@ pub const REMOTING_VERSION_KEY: &str = "rocketmq.remoting.version";
 
 lazy_static! {
     static ref requestId: Arc<AtomicI32> = Arc::new(AtomicI32::new(0));
-    static ref CONFIG_VERSION: RwLock<i32> = RwLock::new(-1);
+    static ref CONFIG_VERSION: i32 = {
+        EnvUtils::get_property(REMOTING_VERSION_KEY)
+            .unwrap_or(String::from("0"))
+            .parse::<i32>()
+            .unwrap_or(0)
+    };
     static ref INIT: Once = Once::new();
     pub static ref SERIALIZE_TYPE_CONFIG_IN_THIS_SERVER: SerializeType = {
         let protocol = std::env::var(SERIALIZE_TYPE_PROPERTY).unwrap_or_else(|_| {
@@ -68,26 +72,7 @@ lazy_static! {
 }
 
 fn set_cmd_version(cmd: &mut RemotingCommand) {
-    INIT.call_once(|| {
-        let v = match std::env::var("REMOTING_VERSION_KEY") {
-            Ok(value) => value
-                .parse::<i32>()
-                .unwrap_or(i32::from(RocketMqVersion::V500)),
-            Err(_) => i32::from(RocketMqVersion::V500),
-        };
-        *CONFIG_VERSION.write().unwrap() = v;
-    });
-
-    let config_version = *CONFIG_VERSION.read().unwrap();
-
-    if config_version >= 0 {
-        cmd.set_version_ref(config_version);
-    } else if let Ok(v) = std::env::var("rocketmq.remoting.version") {
-        if let Ok(value) = v.parse::<i32>() {
-            cmd.set_version_ref(value);
-            *CONFIG_VERSION.write().unwrap() = value;
-        }
-    }
+    cmd.set_version_ref(*CONFIG_VERSION);
 }
 
 #[derive(Serialize, Deserialize)]

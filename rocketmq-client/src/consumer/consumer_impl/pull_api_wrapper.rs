@@ -285,7 +285,7 @@ impl PullAPIWrapper {
         if let Some(find_broker_result) = find_broker_result {
             {
                 if !ExpressionType::is_tag_type(Some(expression_type.as_str()))
-                    && find_broker_result.broker_version < RocketMqVersion::V410Snapshot.into()
+                    && find_broker_result.broker_version < RocketMqVersion::V4_1_0_SNAPSHOT as i32
                 {
                     return mq_client_err!(format!(
                         "The broker[{}],[{}] does not support consumer to filter message by \

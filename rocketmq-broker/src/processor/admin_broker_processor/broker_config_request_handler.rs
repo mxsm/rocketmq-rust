@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::mix_all;
-use rocketmq_common::common::mq_version::RocketMqVersion;
+use rocketmq_common::common::mq_version::CURRENT_VERSION;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
@@ -118,9 +118,9 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             "brokerActive".to_string(),
             self.is_special_service_running().to_string(),
         );
-        let version = RocketMqVersion::CURRENT_VERSION;
-        runtime_info.insert("brokerVersionDesc".to_string(), version.to_string());
-        runtime_info.insert("brokerVersion".to_string(), version.to_string());
+        let version = CURRENT_VERSION;
+        runtime_info.insert("brokerVersionDesc".to_string(), version.name().to_string());
+        runtime_info.insert("brokerVersion".to_string(), version.name().to_string());
         let msg_put_total_yesterday_morning = match &self.broker_runtime_inner.broker_stats() {
             Some(broker_stats) => broker_stats
                 .get_msg_put_total_yesterday_morning()

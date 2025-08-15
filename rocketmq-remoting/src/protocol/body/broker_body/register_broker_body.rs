@@ -158,7 +158,7 @@ impl RegisterBrokerBody {
         register_broker_body.filter_server_list =
             SerdeJsonUtils::from_json_slice(filter_server_list_json.as_ref()).unwrap();
 
-        if broker_version as i32 >= RocketMqVersion::V500 as i32 {
+        if broker_version as i32 >= RocketMqVersion::V5_0_0 as i32 {
             let topic_queue_mapping_num = bytes.get_i32();
             let mut topic_queue_mapping_info_map = HashMap::new();
             for _ in 0..topic_queue_mapping_num {

@@ -32,12 +32,14 @@ use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssi
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
+use rocketmq_common::common::mq_version::CURRENT_VERSION;
 use rocketmq_common::common::namesrv::default_top_addressing::DefaultTopAddressing;
 use rocketmq_common::common::namesrv::name_server_update_callback::NameServerUpdateCallback;
 use rocketmq_common::common::namesrv::top_addressing::TopAddressing;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::MessageDecoder;
 use rocketmq_error::client_broker_err;
 use rocketmq_error::mq_client_err;
@@ -95,6 +97,7 @@ use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
+use rocketmq_remoting::protocol::remoting_command;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::RemotingDeserializable;
@@ -134,6 +137,12 @@ lazy_static! {
         .unwrap_or("false".to_string())
         .parse()
         .unwrap_or(false);
+    static ref INIT: () = {
+        EnvUtils::put_property(
+            remoting_command::REMOTING_VERSION_KEY,
+            (CURRENT_VERSION as u32).to_string(),
+        );
+    };
 }
 
 pub struct MQClientAPIImpl {

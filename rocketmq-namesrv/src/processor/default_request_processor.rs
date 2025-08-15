@@ -236,10 +236,11 @@ impl DefaultRequestProcessor {
         }
 
         let mut response_command = RemotingCommand::create_response_command();
-        let broker_version = RocketMqVersion::try_from(request.version()).expect("invalid version");
+        let broker_version =
+            RocketMqVersion::try_from(request.version() as u32).expect("invalid version");
         let topic_config_wrapper;
         let mut filter_server_list = Vec::new();
-        if broker_version as usize >= RocketMqVersion::V3011 as usize {
+        if broker_version as usize >= RocketMqVersion::V3_0_11 as usize {
             let register_broker_body =
                 extract_register_broker_body_from_request(&request, &request_header);
             topic_config_wrapper = register_broker_body.topic_config_serialize_wrapper;
@@ -678,7 +679,7 @@ fn extract_register_broker_body_from_request(
         if body_inner.is_empty() {
             return RegisterBrokerBody::default();
         }
-        let version = RocketMqVersion::try_from(request.version()).unwrap();
+        let version = RocketMqVersion::try_from(request.version() as u32).unwrap();
         return RegisterBrokerBody::decode(body_inner, request_header.compressed, version);
     }
     RegisterBrokerBody::default()

@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::process::exit;
 
 use clap::Parser;
-use rocketmq_common::common::mq_version::RocketMqVersion;
+use rocketmq_common::common::mq_version::CURRENT_VERSION;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::EnvUtils::EnvUtils;
@@ -40,7 +40,7 @@ async fn main() -> RocketMQResult<()> {
 
     EnvUtils::put_property(
         remoting_command::REMOTING_VERSION_KEY,
-        RocketMqVersion::CURRENT_VERSION.to_string(),
+        (CURRENT_VERSION as u32).to_string(),
     );
 
     let home = EnvUtils::get_rocketmq_home();

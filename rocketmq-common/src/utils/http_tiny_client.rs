@@ -28,6 +28,7 @@ use reqwest::header::HeaderValue;
 use reqwest::header::CONTENT_TYPE;
 
 use crate::common::mq_version::RocketMqVersion;
+use crate::common::mq_version::CURRENT_VERSION;
 use crate::TimeUtils::get_current_millis;
 
 pub struct HttpTinyClient;
@@ -221,10 +222,7 @@ impl HttpTinyClient {
 
         // Set standard headers (matching Java implementation)
         request_builder = request_builder
-            .header(
-                "Client-Version",
-                RocketMqVersion::CURRENT_VERSION.to_string(),
-            )
+            .header("Client-Version", CURRENT_VERSION.name())
             .header(
                 "Content-Type",
                 format!("application/x-www-form-urlencoded;charset={encoding}"),
