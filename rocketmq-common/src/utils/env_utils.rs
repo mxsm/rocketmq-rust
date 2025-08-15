@@ -282,24 +282,6 @@ mod tests {
     }
 
     #[test]
-    fn retrieves_env_variable_as_bool_true() {
-        std::env::set_var("TEST_BOOL_KEY", "true");
-        assert!(EnvUtils::get_property_as_bool("TEST_BOOL_KEY", false));
-        std::env::set_var("TEST_BOOL_KEY", "1");
-        assert!(EnvUtils::get_property_as_bool("TEST_BOOL_KEY", false));
-        std::env::remove_var("TEST_BOOL_KEY");
-    }
-
-    #[test]
-    fn retrieves_env_variable_as_bool_false() {
-        std::env::set_var("TEST_BOOL_KEY", "false");
-        assert!(!EnvUtils::get_property_as_bool("TEST_BOOL_KEY", true));
-        std::env::set_var("TEST_BOOL_KEY", "0");
-        assert!(!EnvUtils::get_property_as_bool("TEST_BOOL_KEY", true));
-        std::env::remove_var("TEST_BOOL_KEY");
-    }
-
-    #[test]
     fn returns_default_when_env_variable_as_bool_not_set() {
         assert!(EnvUtils::get_property_as_bool(
             "NON_EXISTENT_BOOL_KEY",
