@@ -47,6 +47,7 @@ use rocketmq_error::ClientErr;
 use rocketmq_error::MQBrokerErr;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::RocketmqError;
+use rocketmq_error::RocketmqError::JsonError;
 use rocketmq_error::RocketmqError::MQClientBrokerError;
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
@@ -446,17 +447,22 @@ impl MQClientAPIImpl {
             .invoke_async(None, request, timeout_millis)
             .await;
         match response {
-            Ok(result) => {
+            Ok(mut result) => {
                 let code = result.code();
                 let response_code = ResponseCode::from(code);
                 match response_code {
                     ResponseCode::Success => {
-                        let body = result.body();
-                        if body.is_some() && !body.as_ref().unwrap().is_empty() {
-                            let route_data =
-                                TopicRouteData::decode(body.as_ref().unwrap().as_ref());
+                        let body = result.take_body();
+                        if let Some(body_inner) = body {
+                            let route_data = TopicRouteData::decode(body_inner.as_ref());
                             if let Ok(data) = route_data {
                                 return Ok(Some(data));
+                            } else if let Err(error1) = route_data {
+                                error!(
+                                    "get Topic [{}] RouteInfoFromNameServer decode error: {}",
+                                    topic, error1
+                                );
+                                return Err(JsonError(error1.to_string()));
                             }
                         }
                     }
