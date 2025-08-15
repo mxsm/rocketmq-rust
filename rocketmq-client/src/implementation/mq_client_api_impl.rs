@@ -458,7 +458,7 @@ impl MQClientAPIImpl {
                             if let Ok(data) = route_data {
                                 return Ok(Some(data));
                             } else {
-                                let error1 = route_data.err().unwrap();
+                            } else if let Err(error1) = route_data {
                                 error!(
                                     "get Topic [{}] RouteInfoFromNameServer decode error: {}",
                                     topic, error1
