@@ -137,7 +137,7 @@ lazy_static! {
         .unwrap_or("false".to_string())
         .parse()
         .unwrap_or(false);
-    static ref INIT: () = {
+    static ref INIT_REMOTING_VERSION: () = {
         EnvUtils::put_property(
             remoting_command::REMOTING_VERSION_KEY,
             (CURRENT_VERSION as u32).to_string(),
@@ -342,6 +342,8 @@ impl MQClientAPIImpl {
         client_config: ClientConfig,
         tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
     ) -> Self {
+        lazy_static::initialize(&INIT_REMOTING_VERSION);
+
         let mut default_client =
             RocketmqDefaultClient::new_with_cl(tokio_client_config, client_remoting_processor, tx);
         if let Some(hook) = rpc_hook {

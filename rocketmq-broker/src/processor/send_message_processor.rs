@@ -977,7 +977,7 @@ where
             let subscription_group_config = subscription_group_config.unwrap();
 
             let mut max_reconsume_times = subscription_group_config.retry_max_times();
-            if request.version() >= RocketMqVersion::V3_4_9 as i32
+            if request.rocketmq_version() >= RocketMqVersion::V3_4_9
                 && request_header.max_reconsume_times.is_some()
             {
                 max_reconsume_times = request_header.max_reconsume_times.unwrap();
@@ -1237,7 +1237,7 @@ where
         msg_ext.set_wait_store_msg_ok(false);
         let mut delay_level = request_header.delay_level;
         let mut max_reconsume_times = subscription_group_config.retry_max_times();
-        if request.version() >= RocketMqVersion::V3_4_9 as i32 {
+        if request.rocketmq_version() >= RocketMqVersion::V3_4_9 {
             if let Some(num) = request_header.max_reconsume_times {
                 max_reconsume_times = num;
             }
