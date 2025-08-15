@@ -1280,7 +1280,7 @@ mod tests {
     use super::*;
     #[test]
     fn test_current_version() {
-        assert_eq!(CURRENT_VERSION, RocketMqVersion::V5_3_3);
+        assert_eq!(CURRENT_VERSION, RocketMqVersion::V5_3_1_SNAPSHOT);
     }
     #[test]
     fn test_overflow_clamp() {
