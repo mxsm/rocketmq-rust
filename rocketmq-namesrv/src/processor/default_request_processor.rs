@@ -240,7 +240,7 @@ impl DefaultRequestProcessor {
             RocketMqVersion::try_from(request.version() as u32).expect("invalid version");
         let topic_config_wrapper;
         let mut filter_server_list = Vec::new();
-        if broker_version as usize >= RocketMqVersion::V3_0_11 as usize {
+        if broker_version >= RocketMqVersion::V3_0_11 {
             let register_broker_body =
                 extract_register_broker_body_from_request(&request, &request_header);
             topic_config_wrapper = register_broker_body.topic_config_serialize_wrapper;
@@ -679,7 +679,7 @@ fn extract_register_broker_body_from_request(
         if body_inner.is_empty() {
             return RegisterBrokerBody::default();
         }
-        let version = RocketMqVersion::try_from(request.version() as u32).unwrap();
+        let version = request.rocketmq_version();
         return RegisterBrokerBody::decode(body_inner, request_header.compressed, version);
     }
     RegisterBrokerBody::default()

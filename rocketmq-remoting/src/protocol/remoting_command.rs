@@ -29,6 +29,7 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use lazy_static::lazy_static;
+use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_error::RocketmqError;
@@ -586,6 +587,10 @@ impl RemotingCommand {
     #[inline]
     pub fn version(&self) -> i32 {
         self.version
+    }
+
+    pub fn rocketmq_version(&self) -> RocketMqVersion {
+        RocketMqVersion::from_ordinal(self.version as u32)
     }
 
     #[inline]

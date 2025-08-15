@@ -16,10 +16,12 @@
  */
 #![allow(non_camel_case_types)]
 
+use std::cmp::Ordering;
+
 pub const CURRENT_VERSION: RocketMqVersion = RocketMqVersion::V5_3_1_SNAPSHOT;
 
 #[repr(u32)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug)]
 pub enum RocketMqVersion {
     V3_0_0_SNAPSHOT,
     V3_0_0_ALPHA1,
@@ -637,6 +639,7 @@ pub enum RocketMqVersion {
 }
 
 impl RocketMqVersion {
+    #[inline]
     pub fn from_ordinal(mut value: u32) -> RocketMqVersion {
         let max = RocketMqVersion::HIGHER_VERSION as u32;
         if value > max {
@@ -644,6 +647,12 @@ impl RocketMqVersion {
         }
         unsafe { std::mem::transmute::<u32, RocketMqVersion>(value) }
     }
+
+    #[inline]
+    pub fn ordinal(&self) -> u32 {
+        *self as u32
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             RocketMqVersion::V3_0_0_SNAPSHOT => "V3_0_0_SNAPSHOT",
@@ -1268,6 +1277,25 @@ impl TryFrom<u32> for RocketMqVersion {
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         Ok(RocketMqVersion::from_ordinal(value))
+    }
+}
+
+impl PartialEq for RocketMqVersion {
+    fn eq(&self, other: &Self) -> bool {
+        self.ordinal() == other.ordinal()
+    }
+}
+impl Eq for RocketMqVersion {}
+
+impl PartialOrd for RocketMqVersion {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RocketMqVersion {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.ordinal().cmp(&other.ordinal())
     }
 }
 
