@@ -14,8 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashMap;
-
 use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
@@ -32,6 +30,8 @@ pub struct ElectMasterResponseHeader {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::protocol::command_custom_header::CommandCustomHeader;
     use crate::protocol::command_custom_header::FromMap;
