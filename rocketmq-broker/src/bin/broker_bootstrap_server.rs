@@ -21,9 +21,11 @@ use clap::Parser;
 use rocketmq_broker::command::Args;
 use rocketmq_broker::Builder;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::mq_version::CURRENT_VERSION;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::ParseConfigFile;
 use rocketmq_error::RocketMQResult;
+use rocketmq_remoting::protocol::remoting_command;
 use rocketmq_rust::rocketmq;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use tracing::info;
@@ -32,6 +34,12 @@ use tracing::info;
 async fn main() -> RocketMQResult<()> {
     // init logger
     rocketmq_common::log::init_logger_with_level(rocketmq_common::log::Level::INFO);
+
+    EnvUtils::put_property(
+        remoting_command::REMOTING_VERSION_KEY,
+        (CURRENT_VERSION as u32).to_string(),
+    );
+
     let (broker_config, message_store_config) = parse_config_file().unwrap_or_default();
     // boot strap broker
     Builder::new()

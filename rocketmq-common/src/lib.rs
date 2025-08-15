@@ -32,6 +32,7 @@ use std::sync::Weak;
 pub use crate::common::attribute::topic_attributes as TopicAttributes;
 pub use crate::common::message::message_accessor as MessageAccessor;
 pub use crate::common::message::message_decoder as MessageDecoder;
+pub use crate::common::mq_version::RocketMqVersion as RocketMQVersion;
 pub use crate::thread_pool::FuturesExecutorService;
 pub use crate::thread_pool::FuturesExecutorServiceBuilder;
 pub use crate::thread_pool::ScheduledExecutorService;
