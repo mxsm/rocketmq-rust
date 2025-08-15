@@ -538,7 +538,7 @@ impl MQClientInstance {
         let lock = self.lock_namesrv.lock().await;
         let topic_route_data = if let (true, Some(producer_config)) = (is_default, producer_config)
         {
-            let mut result = self
+            let mut result = match self
                 .mq_client_api_impl
                 .as_mut()
                 .unwrap()
@@ -546,7 +546,17 @@ impl MQClientInstance {
                     self.client_config.mq_client_api_timeout,
                 )
                 .await
-                .unwrap_or(None);
+            {
+                Ok(value) => value,
+                Err(e) => {
+                    error!(
+                        "get_default_topic_route_info_from_name_server failed, topic: {}, error: \
+                         {}",
+                        topic, e
+                    );
+                    None
+                }
+            };
             if let Some(topic_route_data) = result.as_mut() {
                 for data in topic_route_data.queue_datas.iter_mut() {
                     let queue_nums = producer_config
