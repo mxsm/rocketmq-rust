@@ -54,6 +54,8 @@ thiserror = { workspace = true }
 futures-util = "0.3.31"
 rand = { workspace = true }
 uuid = { workspace = true }
+anyhow = { workspace = true }
+
 
 [target.'cfg(linux)'.dependencies]
 libc = "0.2.175"

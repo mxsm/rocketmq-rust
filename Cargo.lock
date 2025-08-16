@@ -2449,6 +2449,7 @@ dependencies = [
 name = "rocketmq-store"
 version = "0.6.0"
 dependencies = [
+ "anyhow",
  "bytes",
  "cheetah-string",
  "criterion",
