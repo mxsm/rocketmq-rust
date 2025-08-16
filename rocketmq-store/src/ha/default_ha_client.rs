@@ -225,6 +225,10 @@ impl Inner {
         true
     }
 
+    pub fn notify_shutdown(&mut self) {
+        self.shutdown_notify.notify_waiters();
+    }
+
     /// Process read events from master using bytes buffer
     async fn process_read_event(&mut self) -> bool {
         /*if let Some(read_stream) = self.read_stream.as_mut() {
@@ -299,6 +303,85 @@ impl Inner {
         info!("change state to {:?}", new_state);
         let mut state = self.current_state.write().await;
         *state = new_state;
+    }
+
+    async fn state_step(&mut self) -> bool {
+        let state = *self.current_state.read().await;
+        match state {
+            HAConnectionState::Shutdown => {
+                self.flow_monitor.shutdown_with_interrupt(true).await;
+                return false; // Stop the service
+            }
+            HAConnectionState::Ready => {
+                match self.connect_master().await {
+                    Ok(true) => return true,
+                    Ok(false) => {
+                        warn!(
+                            "HAClient connect to master {:?} failed",
+                            self.ha_master_address().await
+                        );
+                        sleep(Duration::from_secs(5)).await;
+                        return true; // Retry connection
+                    }
+                    Err(_) => {
+                        warn!(
+                            "HAClient connect to master {:?} failed",
+                            self.ha_master_address().await
+                        );
+                        self.close_master_and_wait().await;
+                        return true; // Retry connection
+                    }
+                }
+            }
+            HAConnectionState::Transfer => {
+                match self.transfer_from_master().await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        warn!(
+                            "HAClient transfer from master {:?} failed",
+                            self.ha_master_address().await
+                        );
+                        self.close_master_and_wait().await;
+                        return true; // Retry connection
+                    }
+                    Err(_) => {
+                        warn!(
+                            "HAClient transfer from master {:?} failed",
+                            self.ha_master_address().await
+                        );
+                        self.close_master_and_wait().await;
+                        return true; // Retry connection
+                    }
+                }
+            }
+            _ => {
+                // Other states like Handshake, Suspend, etc. do nothing
+                sleep(Duration::from_secs(2)).await;
+            }
+        }
+
+        // Housekeeping
+        let interval =
+            get_current_millis() - (self.last_read_timestamp.load(Ordering::Relaxed) as u64);
+        if interval
+            > self
+                .default_message_store
+                .get_message_store_config()
+                .ha_housekeeping_interval
+        {
+            warn!(
+                "AutoRecoverHAClient, housekeeping, connection [{:?}] expired, {}",
+                self.ha_master_address().await,
+                interval
+            );
+            self.close_master().await;
+            warn!("AutoRecoverHAClient, master not response some time, so close connection");
+        }
+        true
+    }
+
+    pub async fn ha_master_address(&self) -> Option<String> {
+        self.master_ha_address.lock().await.clone()
     }
 }
 
@@ -447,81 +530,24 @@ impl HAClient for DefaultHAClient {
         self.inner.flow_monitor.start().await;
         let mut client = ArcMut::clone(&self.inner);
         let join_handle = tokio::spawn(async move {
-            let client_clone = ArcMut::clone(&client);
+            let client_inner = ArcMut::clone(&client);
             loop {
                 select! {
                     biased;
-
-                    _ = client_clone.shutdown_notify.notified() => {
+                    _ = client_inner.shutdown_notify.notified() => {
                         info!("HAClient received shutdown notification");
                         break;
                     }
-                    _ = async {
-                            loop {
-                                let current_state = *client.current_state.read().await;
-                                match current_state {
-                                    HAConnectionState::Ready => match client.connect_master().await {
-                                        Ok(false) => {
-                                            let ha_address = client
-                                                .master_ha_address
-                                                .lock()
-                                                .await
-                                                .clone()
-                                                .unwrap_or(String::from("127.0.0.1"));
-                                            warn!("HAClient connect to master {} failed", ha_address);
-                                            tokio::time::sleep(Duration::from_secs(5)).await;
-                                            continue;
-                                        }
-                                        Ok(true) => {
-                                            continue;
-                                        }
-                                        Err(e) => {
-                                            warn!("Failed to connect master: {}", e);
-                                            client.close_master_and_wait().await;
-                                            continue;
-                                        }
-                                    },
-
-                                    HAConnectionState::Transfer => match client.transfer_from_master().await {
-                                        Ok(false) => {
-                                            client.close_master_and_wait().await;
-                                            continue;
-                                        }
-                                        Ok(true) => {}
-                                        Err(e) => {
-                                            warn!("Failed to transfer from master: {}", e);
-                                            client.close_master_and_wait().await;
-                                            continue;
-                                        }
-                                    },
-
-                                    HAConnectionState::Shutdown => {
-                                        info!("HAClient service is shutting down");
-                                        client.flow_monitor.shutdown_with_interrupt(true).await;
-                                        return;
-                                    }
-
-                                    HAConnectionState::Handshake | HAConnectionState::Suspend => {
-                                        tokio::time::sleep(Duration::from_secs(2)).await;
-                                        continue;
-                                    }
-                                }
-                                let interval = get_current_millis()
-                                    - (client.last_read_timestamp.load(Ordering::Relaxed) as u64);
-                                if interval
-                                    > client
-                                        .default_message_store
-                                        .get_message_store_config()
-                                        .ha_housekeeping_interval
-                                {
-                                    info!("HAClient housekeeping, current state: {:?}", current_state);
-                                    client.close_master().await;
-                                }
-                            }
-                     } => {}
+                    result = client.state_step() => {
+                        if !result {
+                            info!("HAClient service stopped");
+                            break;
+                        }
+                    }
                 }
             }
             client.flow_monitor.shutdown_with_interrupt(true).await;
+            info!("HAClient service finished");
         });
         let mut service_handle = self.service_handle.write().await;
         *service_handle = Some(join_handle);
