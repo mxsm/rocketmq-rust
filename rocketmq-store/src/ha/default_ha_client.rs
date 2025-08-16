@@ -188,7 +188,7 @@ impl Inner {
     fn is_time_to_report_offset(&self) -> bool {
         let now = self.default_message_store.now();
         let last_write = self.last_write_timestamp.load(Ordering::SeqCst);
-        let interval = now - last_write;
+        let interval = now.saturating_sub(last_write);
         let heartbeat_interval = self
             .default_message_store
             .get_message_store_config()
@@ -648,7 +648,7 @@ struct WriterTask {
 impl WriterTask {
     async fn run(&mut self) -> anyhow::Result<()> {
         let mut ticker = interval(Duration::from_millis(
-            self.cfg.heartbeat_interval_ms.max(10),
+            self.cfg.heartbeat_interval_ms.max(1000),
         ));
 
         loop {
