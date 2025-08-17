@@ -14,29 +14,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashMap;
-
-use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
-
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
 pub struct GetConsumerListByGroupResponseHeader;
 
-impl CommandCustomHeader for GetConsumerListByGroupResponseHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        None
-    }
-}
-impl FromMap for GetConsumerListByGroupResponseHeader {
-    type Error = rocketmq_error::RocketmqError;
+// impl CommandCustomHeader for GetConsumerListByGroupResponseHeader {
+//     fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
+//         None
+//     }
+// }
+// impl FromMap for GetConsumerListByGroupResponseHeader {
+//     type Error = rocketmq_error::RocketmqError;
 
-    type Target = Self;
+//     type Target = Self;
 
-    fn from(_map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(Self {})
-    }
-}
+//     fn from(_map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+//         Ok(Self {})
+//     }
+// }
