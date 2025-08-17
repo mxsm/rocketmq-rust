@@ -2333,6 +2333,7 @@ dependencies = [
 name = "rocketmq-error"
 version = "0.6.0"
 dependencies = [
+ "anyhow",
  "thiserror 2.0.14",
 ]
 

@@ -47,6 +47,7 @@ pub use crate::utils::time_utils as TimeUtils;
 pub use crate::utils::util_all as UtilAll;
 
 pub mod common;
+pub mod error;
 pub mod log;
 mod thread_pool;
 pub mod utils;
