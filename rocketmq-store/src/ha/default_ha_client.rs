@@ -552,7 +552,7 @@ impl ReaderTask {
                         .add_byte_count_transferred(bytes.len() as i64);
                     self.buf.extend_from_slice(&bytes);
 
-                    if !self.dispatch_read()? {
+                    if !self.dispatch_read().await? {
                         bail!("dispatchReadRequest error");
                     }
                 }
@@ -566,7 +566,7 @@ impl ReaderTask {
         }
     }
 
-    fn dispatch_read(&mut self) -> anyhow::Result<bool> {
+    async fn dispatch_read(&mut self) -> anyhow::Result<bool> {
         loop {
             let diff = self.buf.len().saturating_sub(self.dispatch_pos);
             if diff < TRANSFER_HEADER_SIZE {
@@ -598,12 +598,9 @@ impl ReaderTask {
             let data_end = data_start + body_size;
             let body = &self.buf[data_start..data_end];
 
-            self.store.append_to_commit_log(
-                master_phy_offset,
-                body,
-                data_start as i32,
-                data_end as i32,
-            )?;
+            self.store
+                .append_to_commit_log(master_phy_offset, body, data_start as i32, data_end as i32)
+                .await?;
 
             self.dispatch_pos = data_end;
 
