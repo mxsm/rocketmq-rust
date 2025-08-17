@@ -21,28 +21,35 @@ use std::path::PathBuf;
 use config::Config;
 use rocketmq_error::RocketMQResult;
 use serde::Deserialize;
+use tracing::error;
 use tracing::warn;
 
-pub fn parse_config_file<'de, C>(config_file: PathBuf) -> RocketMQResult<C>
+use crate::error::CommonError;
+
+pub fn parse_config_file<'de, C>(config_file: PathBuf) -> crate::error::RocketMQResult<C>
 where
-    C: Default + Debug + Deserialize<'de>,
+    C: Debug + Deserialize<'de>,
 {
     let config_file = match Config::builder()
-        .add_source(config::File::from(config_file))
+        .add_source(config::File::from(config_file.as_path()))
         .build()
     {
         Ok(cfg) => match cfg.try_deserialize::<C>() {
             Ok(value) => value,
-            Err(e) => {
-                warn!(
-                    "Failed to parse config file: {:?}, and will use default config",
-                    e
+            Err(err) => {
+                error!(
+                    "Failed to load config file: {:?}, error: {:?}",
+                    config_file, err
                 );
-                C::default()
+                return Err(CommonError::ConfigError(err));
             }
         },
         Err(err) => {
-            return Err(rocketmq_error::RocketmqError::ConfigError(err.to_string()));
+            error!(
+                "Failed to load config file: {:?}, error: {:?}",
+                config_file, err
+            );
+            return Err(CommonError::ConfigError(err));
         }
     };
     Ok(config_file)

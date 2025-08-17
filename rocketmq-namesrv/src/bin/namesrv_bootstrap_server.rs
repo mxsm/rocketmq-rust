@@ -24,7 +24,7 @@ use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::ParseConfigFile;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result;
 use rocketmq_namesrv::bootstrap::Builder;
 use rocketmq_remoting::protocol::remoting_command;
 use rocketmq_rust::rocketmq;
@@ -32,16 +32,33 @@ use tracing::info;
 use tracing::warn;
 
 #[rocketmq::main]
-async fn main() -> RocketMQResult<()> {
+async fn main() -> Result<()> {
     // Initialize the logger
     rocketmq_common::log::init_logger_with_level(rocketmq_common::log::Level::INFO);
-    // parse command line arguments
-    let args = Args::parse();
 
     EnvUtils::put_property(
         remoting_command::REMOTING_VERSION_KEY,
         (CURRENT_VERSION as u32).to_string(),
     );
+
+    let (namesrv_config, port, ip) = parse_config_file()?;
+
+    Builder::new()
+        .set_name_server_config(namesrv_config)
+        .set_server_config(ServerConfig {
+            listen_port: port,
+            bind_address: ip,
+        })
+        .build()
+        .boot()
+        .await;
+
+    Ok(())
+}
+
+fn parse_config_file() -> Result<(NamesrvConfig, u32, String)> {
+    // parse command line arguments
+    let args = Args::parse();
 
     let home = EnvUtils::get_rocketmq_home();
     info!("Rocketmq(Rust) home: {}", home);
@@ -70,17 +87,7 @@ async fn main() -> RocketMQResult<()> {
         "Rocketmq name remoting_server(Rust) running on: {}:{}",
         args.ip, args.port
     );
-    Builder::new()
-        .set_name_server_config(namesrv_config)
-        .set_server_config(ServerConfig {
-            listen_port: args.port,
-            bind_address: args.ip,
-        })
-        .build()
-        .boot()
-        .await;
-
-    Ok(())
+    Ok((namesrv_config, args.port, args.ip))
 }
 
 #[derive(Parser, Debug)]

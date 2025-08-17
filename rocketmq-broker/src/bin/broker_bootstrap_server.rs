@@ -17,6 +17,7 @@
 
 use std::path::PathBuf;
 
+use anyhow::bail;
 use clap::Parser;
 use rocketmq_broker::command::Args;
 use rocketmq_broker::Builder;
@@ -24,14 +25,14 @@ use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::mq_version::CURRENT_VERSION;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::ParseConfigFile;
-use rocketmq_error::RocketMQResult;
+use rocketmq_error::Result;
 use rocketmq_remoting::protocol::remoting_command;
 use rocketmq_rust::rocketmq;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use tracing::info;
 
 #[rocketmq::main]
-async fn main() -> RocketMQResult<()> {
+async fn main() -> Result<()> {
     // init logger
     rocketmq_common::log::init_logger_with_level(rocketmq_common::log::Level::INFO);
 
@@ -40,7 +41,7 @@ async fn main() -> RocketMQResult<()> {
         (CURRENT_VERSION as u32).to_string(),
     );
 
-    let (broker_config, message_store_config) = parse_config_file().unwrap_or_default();
+    let (broker_config, message_store_config) = parse_config_file()?;
     // boot strap broker
     Builder::new()
         .set_broker_config(broker_config)
@@ -51,23 +52,34 @@ async fn main() -> RocketMQResult<()> {
     Ok(())
 }
 
-fn parse_config_file() -> RocketMQResult<(BrokerConfig, MessageStoreConfig)> {
+fn parse_config_file() -> Result<(BrokerConfig, MessageStoreConfig)> {
     let args = Args::parse();
     let home = EnvUtils::get_rocketmq_home();
     info!("Rocketmq(Rust) home: {}", home);
     let config = if let Some(ref config_file) = args.config_file {
         let config_file = PathBuf::from(config_file);
+        info!("Using config file: {:?}", config_file);
+        if !config_file.exists() || !config_file.is_file() {
+            bail!(
+                "Config file does not exist or is not a file: {:?}",
+                config_file
+            );
+        }
         Ok((
             ParseConfigFile::parse_config_file::<BrokerConfig>(config_file.clone())?,
             ParseConfigFile::parse_config_file::<MessageStoreConfig>(config_file)?,
         ))
     } else {
-        let path_buf = PathBuf::from(home.as_str())
+        let config_file = PathBuf::from(home.as_str())
             .join("conf")
             .join("broker.toml");
+        info!("Using config file: {:?}", config_file);
+        if !config_file.exists() || !config_file.is_file() {
+            return Ok((Default::default(), Default::default()));
+        }
         Ok((
-            ParseConfigFile::parse_config_file::<BrokerConfig>(path_buf.clone())?,
-            ParseConfigFile::parse_config_file::<MessageStoreConfig>(path_buf)?,
+            ParseConfigFile::parse_config_file::<BrokerConfig>(config_file.clone())?,
+            ParseConfigFile::parse_config_file::<MessageStoreConfig>(config_file)?,
         ))
     };
     config
