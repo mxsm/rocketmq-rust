@@ -29,6 +29,9 @@ pub enum StoreError {
 
     #[error("General store error: {0}")]
     General(String),
+
+    #[error("Mapped file not found")]
+    MappedFileNotFound,
 }
 
 #[derive(Debug, Error)]

@@ -1387,8 +1387,8 @@ impl MessageStore for LocalFileMessageStore {
         self.commit_log.get_bulk_data(offset, size)
     }
 
-    fn append_to_commit_log(
-        &self,
+    async fn append_to_commit_log(
+        &mut self,
         start_offset: i64,
         data: &[u8],
         data_start: i32,
@@ -1401,9 +1401,10 @@ impl MessageStore for LocalFileMessageStore {
 
         let result = self
             .commit_log
-            .append_data(start_offset, data, data_start, data_length)?;
+            .append_data(start_offset, data, data_start, data_length)
+            .await?;
         if result {
-            // weak up to do commit log flush TODO
+            // TODO weak up to do commit log flush
         } else {
             error!(
                 "DefaultMessageStore#appendToCommitLog: failed to append data to commitLog, \

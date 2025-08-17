@@ -1236,14 +1236,35 @@ impl CommitLog {
         }
     }
 
-    pub fn append_data(
-        &self,
+    pub async fn append_data(
+        &mut self,
         start_offset: i64,
         data: &[u8],
         data_start: i32,
         data_length: i32,
     ) -> Result<bool, StoreError> {
-        unimplemented!("append_data not implemented")
+        let lock = self.put_message_lock.lock().await;
+        let mapped_file = self
+            .mapped_file_queue
+            .get_last_mapped_file_mut_start_offset(start_offset as u64, true);
+        if mapped_file.is_none() {
+            drop(lock);
+            return Err(StoreError::MappedFileNotFound);
+        }
+        let Some(mapped_file) = self
+            .mapped_file_queue
+            .get_last_mapped_file_mut_start_offset(start_offset as u64, true)
+        else {
+            drop(lock);
+            return Err(StoreError::MappedFileNotFound);
+        };
+        let flag = mapped_file.append_message_offset_length(
+            data,
+            data_start as usize,
+            data_length as usize,
+        );
+        drop(lock);
+        Ok(flag)
     }
 
     pub fn set_local_file_message_store(

@@ -302,8 +302,8 @@ pub trait MessageStoreInner: Sync + 'static {
     ) -> Option<Vec<SelectMappedBufferResult>>;
 
     /// Append data to commit log.
-    fn append_to_commit_log(
-        &self,
+    async fn append_to_commit_log(
+        &mut self,
         start_offset: i64,
         data: &[u8],
         data_start: i32,
