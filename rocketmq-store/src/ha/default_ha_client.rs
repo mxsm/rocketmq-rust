@@ -599,7 +599,7 @@ impl ReaderTask {
             let body = &self.buf[data_start..data_end];
 
             self.store
-                .append_to_commit_log(master_phy_offset, body, data_start as i32, data_end as i32)
+                .append_to_commit_log(master_phy_offset, body, data_start as i32, body_size as i32)
                 .await?;
 
             self.dispatch_pos = data_end;
