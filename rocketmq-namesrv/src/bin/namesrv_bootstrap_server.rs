@@ -34,7 +34,7 @@ use tracing::warn;
 #[rocketmq::main]
 async fn main() -> RocketMQResult<()> {
     // Initialize the logger
-    rocketmq_common::log::init_logger();
+    rocketmq_common::log::init_logger_with_level(rocketmq_common::log::Level::INFO);
     // parse command line arguments
     let args = Args::parse();
 
