@@ -13,10 +13,171 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-brokerClusterName = "DefaultCluster"
-brokerName = "broker-a"
-brokerId = 0
-deleteWhen = 04
-fileReservedTime = 48
-brokerRole = "ASYNC_MASTER"
-flushDiskType = "ASYNC_FLUSH"
+# ======================
+# Broker Identity
+# ======================
+[brokerIdentity]
+brokerName = "broker-mxsm-a"          # default_broker_name()
+brokerClusterName = "DefaultCluster-mxsm"
+brokerId = 0                           # MASTER_ID
+isBrokerContainer = false
+isInBrokerContainer = false
+
+# ======================
+# Core Broker Settings
+# ======================
+regionId = "DefaultRegion"             # DEFAULT_TRACE_REGION_ID
+brokerRole = "ASYNC_MASTER"             # enum BrokerRole: ASYNC_MASTER|SYNC_MASTER|SLAVE
+flushDiskType = "ASYNC_FLUSH"           # enum FlushDiskType: SYNC_FLUSH|ASYNC_FLUSH
+deleteWhen = 4
+
+listenPort = 10911
+brokerIp1 = "127.0.0.1"
+brokerIp2 = "127.0.0.1"
+
+traceTopicEnable = false
+msgTraceTopicName = "RMQ_SYS_TRACE_TOPIC"
+traceOn = true
+brokerPermission = 6                   # READ(4)|WRITE(2)
+
+asyncSendEnable = false
+storePathRootDir = "/opt/data/rocketmq/store"
+
+enableControllerMode = false
+enableSplitRegistration = false
+splitRegistrationSize = 800
+registerBrokerTimeoutMills = 24000
+
+# ======================
+# Topic / Queue
+# ======================
+[topicQueueConfig]
+defaultTopicQueueNums = 8
+
+# ======================
+# Timer Wheel
+[timerWheelConfig]
+timerWheelEnable = false
+
+# ======================
+# Features / Toggles
+autoCreateTopicEnable = true
+enableSingleTopicRegister = true
+brokerTopicEnable = true
+clusterTopicEnable = true
+enableSlaveActingMaster = false
+rejectTransactionMessage = false
+enableDetailStat = true
+duplicationEnable = false
+recoverConcurrently = false
+
+# POP / Retry
+enableRetryTopicV2 = false
+retrieveMessageFromPopRetryTopicV1 = true
+popFromRetryProbability = 20
+popResponseReturnActualRetryTopic = false
+initPopOffsetByCheckMsgInMem = true
+enablePopBufferMerge = false
+enablePopBatchAck = false
+enableSkipLongAwaitingAck = false
+skipWhenCkRePutReachMaxTimes = false
+enablePopLog = false
+enablePopMessageThreshold = false
+
+# Filtering / Property
+enablePropertyFilter = false
+filterSupportRetry = false
+enableCalcFilterBitMap = false
+maxErrorRateOfBloomFilter = 20
+expectConsumerNumUseFilter = 32
+bitMapLengthConsumeQueueExt = 64
+
+# Mixed message types
+enableMixedMessageType = false
+autoDeleteUnusedStats = false
+compressedRegister = false
+transferMsgByHeap = true
+
+# ======================
+# Intervals / Timeouts (ms)
+flushConsumerOffsetInterval = 5000
+registerNameServerPeriod = 30000
+shortPollingTimeMills = 1000
+forwardTimeout = 3000
+transactionTimeout = 6000
+loadBalancePollNameServerInterval = 30000
+reviveInterval = 1000
+reviveScanTime = 10000
+reviveAckWaitMs = 180000            # 3 * 60 * 1000
+channelExpiredTimeout = 120000
+subscriptionExpiredTimeout = 600000
+popCkStayBufferTimeOut = 3000
+popCkStayBufferTime = 10000
+delayOffsetUpdateVersionStep = 200
+transactionCheckInterval = 30000
+transactionOpBatchInterval = 3000
+syncBrokerMemberGroupPeriod = 1000
+reviveMaxSlow = 3
+brokerNotActiveTimeoutMillis = 10000
+forwardTimeoutMs = 3000
+
+# ======================
+# POP / Buffer / Thresholds
+popInflightMessageThreshold = 10000
+popCkMaxBufferSize = 200000
+popCkOffsetMaxQueueSize = 20000
+popPollingMapSize = 100000
+maxPopPollingSize = 100000
+popPollingSize = 1024
+defaultPopShareQueueNum = -1
+popPollingSizeInternal = 1024
+
+# ======================
+# Message / Transaction
+transactionOpMsgMaxSize = 4096
+transactionCheckMax = 15
+defaultMessageRequestMode = "Pull"    # enum MessageRequestMode: Pull|Pop
+
+# ======================
+# Statistics / Ack / Resume
+forceRegister = true
+startAcceptSendRequestTimeStamp = 0
+consumerOffsetUpdateVersionStep = 500
+commercialSizePerMsg = 4096
+commercialBaseCount = 1
+
+# ======================
+# POP Revive
+reviveQueueNum = 8
+
+# ======================
+# Offsets / Reset
+useServerSideResetOffset = true
+slaveReadEnable = false
+
+# ======================
+# Nameserver
+namesrvAddr = "127.0.0.1:9876"
+fetchNameSrvAddrByDnsLookup = false
+skipPreOnline = false
+
+# ======================
+# Reply / Forward / Escapes
+storeReplyMessageEnable = true
+enableRemoteEscape = false
+
+# ======================
+# Misc
+lockInStrictMode = false
+
+# ======================
+# Derived / Advanced (leave unless tuning)
+enableBroadcastOffsetStore = true
+longPollingEnable = true
+
+# ======================
+# Example override section (uncomment to customize)
+# brokerRole = "SyncMaster"
+# autoCreateTopicEnable = false
+# slaveReadEnable = true
+# namesrvAddr = "10.0.0.10:9876;10.0.0.11:9876"
