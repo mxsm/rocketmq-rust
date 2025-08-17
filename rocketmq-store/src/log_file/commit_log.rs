@@ -1251,7 +1251,13 @@ impl CommitLog {
             drop(lock);
             return Err(StoreError::MappedFileNotFound);
         }
-        let mapped_file = mapped_file.unwrap();
+        let Some(mapped_file) = self
+            .mapped_file_queue
+            .get_last_mapped_file_mut_start_offset(start_offset as u64, true)
+        else {
+            drop(lock);
+            return Err(StoreError::MappedFileNotFound);
+        };
         let flag = mapped_file.append_message_offset_length(
             data,
             data_start as usize,
