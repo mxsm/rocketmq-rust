@@ -14,18 +14,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct GetMaxOffsetRequestHeader {
     pub topic: CheetahString,
@@ -38,76 +36,76 @@ pub struct GetMaxOffsetRequestHeader {
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 
-impl Default for GetMaxOffsetRequestHeader {
-    fn default() -> Self {
-        GetMaxOffsetRequestHeader {
-            topic: Default::default(),
-            queue_id: Default::default(),
-            committed: true,
-            topic_request_header: Default::default(),
-        }
-    }
-}
+// impl Default for GetMaxOffsetRequestHeader {
+//     fn default() -> Self {
+//         GetMaxOffsetRequestHeader {
+//             topic: Default::default(),
+//             queue_id: Default::default(),
+//             committed: true,
+//             topic_request_header: Default::default(),
+//         }
+//     }
+// }
 
-impl GetMaxOffsetRequestHeader {
-    pub const TOPIC: &'static str = "topic";
-    pub const QUEUE_ID: &'static str = "queueId";
-    pub const COMMITTED: &'static str = "committed";
-}
+// impl GetMaxOffsetRequestHeader {
+//     pub const TOPIC: &'static str = "topic";
+//     pub const QUEUE_ID: &'static str = "queueId";
+//     pub const COMMITTED: &'static str = "committed";
+// }
 
-impl CommandCustomHeader for GetMaxOffsetRequestHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        let mut map = HashMap::new();
-        map.insert(
-            CheetahString::from_static_str(Self::TOPIC),
-            self.topic.clone(),
-        );
-        map.insert(
-            CheetahString::from_static_str(Self::QUEUE_ID),
-            CheetahString::from_string(self.queue_id.to_string()),
-        );
-        map.insert(
-            CheetahString::from_static_str(Self::COMMITTED),
-            CheetahString::from_string(self.committed.to_string()),
-        );
-        if let Some(topic_request_header) = &self.topic_request_header {
-            if let Some(topic_request_header_map) = topic_request_header.to_map() {
-                map.extend(topic_request_header_map);
-            }
-        }
-        Some(map)
-    }
-}
+// impl CommandCustomHeader for GetMaxOffsetRequestHeader {
+//     fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
+//         let mut map = HashMap::new();
+//         map.insert(
+//             CheetahString::from_static_str(Self::TOPIC),
+//             self.topic.clone(),
+//         );
+//         map.insert(
+//             CheetahString::from_static_str(Self::QUEUE_ID),
+//             CheetahString::from_string(self.queue_id.to_string()),
+//         );
+//         map.insert(
+//             CheetahString::from_static_str(Self::COMMITTED),
+//             CheetahString::from_string(self.committed.to_string()),
+//         );
+//         if let Some(topic_request_header) = &self.topic_request_header {
+//             if let Some(topic_request_header_map) = topic_request_header.to_map() {
+//                 map.extend(topic_request_header_map);
+//             }
+//         }
+//         Some(map)
+//     }
+// }
 
-impl FromMap for GetMaxOffsetRequestHeader {
-    type Error = rocketmq_error::RocketmqError;
+// impl FromMap for GetMaxOffsetRequestHeader {
+//     type Error = rocketmq_error::RocketmqError;
 
-    type Target = Self;
+//     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(GetMaxOffsetRequestHeader {
-            topic: map
-                .get(&CheetahString::from_static_str(
-                    GetMaxOffsetRequestHeader::TOPIC,
-                ))
-                .cloned()
-                .unwrap_or_default(),
-            queue_id: map
-                .get(&CheetahString::from_static_str(
-                    GetMaxOffsetRequestHeader::QUEUE_ID,
-                ))
-                .map(|s| s.parse().unwrap())
-                .unwrap_or_default(),
-            committed: map
-                .get(&CheetahString::from_static_str(
-                    GetMaxOffsetRequestHeader::COMMITTED,
-                ))
-                .map(|s| s.parse().unwrap())
-                .unwrap_or(true),
-            topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
-        })
-    }
-}
+//     fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+//         Ok(GetMaxOffsetRequestHeader {
+//             topic: map
+//                 .get(&CheetahString::from_static_str(
+//                     GetMaxOffsetRequestHeader::TOPIC,
+//                 ))
+//                 .cloned()
+//                 .unwrap_or_default(),
+//             queue_id: map
+//                 .get(&CheetahString::from_static_str(
+//                     GetMaxOffsetRequestHeader::QUEUE_ID,
+//                 ))
+//                 .map(|s| s.parse().unwrap())
+//                 .unwrap_or_default(),
+//             committed: map
+//                 .get(&CheetahString::from_static_str(
+//                     GetMaxOffsetRequestHeader::COMMITTED,
+//                 ))
+//                 .map(|s| s.parse().unwrap())
+//                 .unwrap_or(true),
+//             topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
+//         })
+//     }
+//}
 
 impl TopicRequestHeaderTrait for GetMaxOffsetRequestHeader {
     fn set_lo(&mut self, lo: Option<bool>) {
