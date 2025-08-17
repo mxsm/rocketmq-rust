@@ -312,7 +312,7 @@ impl HAClient for DefaultHAClient {
         self.inner.flow_monitor.start().await;
         let mut client = ArcMut::clone(&self.inner);
         let join_handle = tokio::spawn(async move {
-            // 主循环：连接 -> 启动读写任务 -> 监督/重连
+            // main loop: connect -> start read/write tasks -> supervise/reconnect
             loop {
                 let read_guard = client.current_state.read().await;
                 if *read_guard == HAConnectionState::Shutdown {
