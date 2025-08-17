@@ -14,18 +14,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct GetMinOffsetRequestHeader {
     pub topic: CheetahString,
@@ -36,54 +34,54 @@ pub struct GetMinOffsetRequestHeader {
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 
-impl GetMinOffsetRequestHeader {
-    pub const TOPIC: &'static str = "topic";
-    pub const QUEUE_ID: &'static str = "queueId";
-}
+// impl GetMinOffsetRequestHeader {
+//     pub const TOPIC: &'static str = "topic";
+//     pub const QUEUE_ID: &'static str = "queueId";
+// }
 
-impl CommandCustomHeader for GetMinOffsetRequestHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        let mut map = HashMap::new();
-        map.insert(
-            CheetahString::from_static_str(Self::TOPIC),
-            self.topic.clone(),
-        );
-        map.insert(
-            CheetahString::from_static_str(Self::QUEUE_ID),
-            CheetahString::from_string(self.queue_id.to_string()),
-        );
-        if let Some(topic_request_header) = &self.topic_request_header {
-            if let Some(topic_request_header_map) = topic_request_header.to_map() {
-                map.extend(topic_request_header_map);
-            }
-        }
-        Some(map)
-    }
-}
+// impl CommandCustomHeader for GetMinOffsetRequestHeader {
+//     fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
+//         let mut map = HashMap::new();
+//         map.insert(
+//             CheetahString::from_static_str(Self::TOPIC),
+//             self.topic.clone(),
+//         );
+//         map.insert(
+//             CheetahString::from_static_str(Self::QUEUE_ID),
+//             CheetahString::from_string(self.queue_id.to_string()),
+//         );
+//         if let Some(topic_request_header) = &self.topic_request_header {
+//             if let Some(topic_request_header_map) = topic_request_header.to_map() {
+//                 map.extend(topic_request_header_map);
+//             }
+//         }
+//         Some(map)
+//     }
+// }
 
-impl FromMap for GetMinOffsetRequestHeader {
-    type Error = rocketmq_error::RocketmqError;
+// impl FromMap for GetMinOffsetRequestHeader {
+//     type Error = rocketmq_error::RocketmqError;
 
-    type Target = Self;
+//     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(GetMinOffsetRequestHeader {
-            topic: map
-                .get(&CheetahString::from_static_str(
-                    GetMinOffsetRequestHeader::TOPIC,
-                ))
-                .cloned()
-                .unwrap_or_default(),
-            queue_id: map
-                .get(&CheetahString::from_static_str(
-                    GetMinOffsetRequestHeader::QUEUE_ID,
-                ))
-                .map(|s| s.parse().unwrap())
-                .unwrap_or_default(),
-            topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
-        })
-    }
-}
+//     fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+//         Ok(GetMinOffsetRequestHeader {
+//             topic: map
+//                 .get(&CheetahString::from_static_str(
+//                     GetMinOffsetRequestHeader::TOPIC,
+//                 ))
+//                 .cloned()
+//                 .unwrap_or_default(),
+//             queue_id: map
+//                 .get(&CheetahString::from_static_str(
+//                     GetMinOffsetRequestHeader::QUEUE_ID,
+//                 ))
+//                 .map(|s| s.parse().unwrap())
+//                 .unwrap_or_default(),
+//             topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
+//         })
+//     }
+// }
 
 impl TopicRequestHeaderTrait for GetMinOffsetRequestHeader {
     fn set_lo(&mut self, lo: Option<bool>) {
