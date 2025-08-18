@@ -136,7 +136,7 @@ popPollingSizeInternal = 1024
 # Message / Transaction
 transactionOpMsgMaxSize = 4096
 transactionCheckMax = 15
-defaultMessageRequestMode = "Pull"    # enum MessageRequestMode: Pull|Pop
+defaultMessageRequestMode = "Pull"    # enum MessageRequestMode: Pull/PULL|Pop/POP
 
 # ======================
 # Statistics / Ack / Resume
