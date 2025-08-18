@@ -38,6 +38,10 @@ pub enum GeneralHAService {
 }
 
 impl GeneralHAService {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     pub fn new_with_default_ha_service(default_ha_service: ArcMut<DefaultHAService>) -> Self {
         GeneralHAService::DefaultHAService(default_ha_service)
     }
