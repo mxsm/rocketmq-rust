@@ -15,14 +15,13 @@
  * limitations under the License.
  */
 use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, RequestHeaderCodec)]
 pub struct GetConsumeStatsRequestHeader {
     #[serde(rename = "consumerGroup")]
     pub consumer_group: CheetahString,
@@ -33,8 +32,8 @@ pub struct GetConsumeStatsRequestHeader {
 }
 
 impl GetConsumeStatsRequestHeader {
-    pub const CONSUMER_GROUP: &'static str = "consumerGroup";
-    pub const TOPIC: &'static str = "topic";
+    // pub const CONSUMER_GROUP: &'static str = "consumerGroup";
+    // pub const TOPIC: &'static str = "topic";
 
     pub fn get_consumer_group(&self) -> &CheetahString {
         &self.consumer_group
@@ -51,45 +50,45 @@ impl GetConsumeStatsRequestHeader {
     }
 }
 
-impl CommandCustomHeader for GetConsumeStatsRequestHeader {
-    fn to_map(&self) -> Option<std::collections::HashMap<CheetahString, CheetahString>> {
-        let mut map = std::collections::HashMap::new();
+// impl CommandCustomHeader for GetConsumeStatsRequestHeader {
+//     fn to_map(&self) -> Option<std::collections::HashMap<CheetahString, CheetahString>> {
+//         let mut map = std::collections::HashMap::new();
 
-        map.insert(
-            CheetahString::from_static_str(Self::CONSUMER_GROUP),
-            self.consumer_group.clone(),
-        );
-        map.insert(
-            CheetahString::from_static_str(Self::TOPIC),
-            self.topic.clone(),
-        );
-        if let Some(value) = self.topic_request_header.as_ref() {
-            if let Some(value) = value.to_map() {
-                map.extend(value);
-            }
-        }
-        Some(map)
-    }
-}
+//         map.insert(
+//             CheetahString::from_static_str(Self::CONSUMER_GROUP),
+//             self.consumer_group.clone(),
+//         );
+//         map.insert(
+//             CheetahString::from_static_str(Self::TOPIC),
+//             self.topic.clone(),
+//         );
+//         if let Some(value) = self.topic_request_header.as_ref() {
+//             if let Some(value) = value.to_map() {
+//                 map.extend(value);
+//             }
+//         }
+//         Some(map)
+//     }
+// }
 
-impl FromMap for GetConsumeStatsRequestHeader {
-    type Error = rocketmq_error::RocketmqError;
+// impl FromMap for GetConsumeStatsRequestHeader {
+//     type Error = rocketmq_error::RocketmqError;
 
-    type Target = Self;
+//     type Target = Self;
 
-    fn from(
-        map: &std::collections::HashMap<CheetahString, CheetahString>,
-    ) -> Result<Self::Target, Self::Error> {
-        Ok(GetConsumeStatsRequestHeader {
-            consumer_group: map
-                .get(&CheetahString::from_static_str(Self::CONSUMER_GROUP))
-                .cloned()
-                .unwrap_or_default(),
-            topic: map
-                .get(&CheetahString::from_static_str(Self::TOPIC))
-                .cloned()
-                .unwrap_or_default(),
-            topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
-        })
-    }
-}
+//     fn from(
+//         map: &std::collections::HashMap<CheetahString, CheetahString>,
+//     ) -> Result<Self::Target, Self::Error> {
+//         Ok(GetConsumeStatsRequestHeader {
+//             consumer_group: map
+//                 .get(&CheetahString::from_static_str(Self::CONSUMER_GROUP))
+//                 .cloned()
+//                 .unwrap_or_default(),
+//             topic: map
+//                 .get(&CheetahString::from_static_str(Self::TOPIC))
+//                 .cloned()
+//                 .unwrap_or_default(),
+//             topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
+//         })
+//     }
+//}
