@@ -102,9 +102,9 @@ impl<'de> Deserialize<'de> for MessageRequestMode {
                 E: de::Error,
             {
                 match value {
-                    "PULL" => Ok(MessageRequestMode::Pull),
-                    "POP" => Ok(MessageRequestMode::Pop),
-                    _ => Err(de::Error::unknown_variant(value, &["PULL", "POP"])),
+                    "PULL" | "Pull" => Ok(MessageRequestMode::Pull),
+                    "POP" | "Pop" => Ok(MessageRequestMode::Pop),
+                    _ => Err(de::Error::unknown_variant(value, &["PULL/Pull", "POP/Pop"])),
                 }
             }
         }
@@ -179,11 +179,19 @@ mod tests {
         let json = "\"PULL\"";
         let deserialized: MessageRequestMode = serde_json::from_str(json).unwrap();
         assert_eq!(deserialized, MessageRequestMode::Pull);
+
+        let json = "\"Pull\"";
+        let deserialized: MessageRequestMode = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized, MessageRequestMode::Pull);
     }
 
     #[test]
     fn deserialize_message_request_mode_pop() {
         let json = "\"POP\"";
+        let deserialized: MessageRequestMode = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized, MessageRequestMode::Pop);
+
+        let json = "\"Pop\"";
         let deserialized: MessageRequestMode = serde_json::from_str(json).unwrap();
         assert_eq!(deserialized, MessageRequestMode::Pop);
     }
