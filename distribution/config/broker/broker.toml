@@ -181,3 +181,248 @@ longPollingEnable = true
 # autoCreateTopicEnable = false
 # slaveReadEnable = true
 # namesrvAddr = "10.0.0.10:9876;10.0.0.11:9876"
+
+#===========Store config========================
+# RocketMQ Message Store Configuration
+[storeConfig]
+# Storage paths
+storePathRootDir = "~/store"
+storePathCommitLog = ""
+storePathDLedgerCommitLog = ""
+storePathEpochFile = ""
+storePathBrokerIdentity = ""
+readOnlyCommitLogStorePaths = ""
+
+# File sizes (in bytes)
+mappedFileSizeCommitLog = 1073741824  # 1GB
+compactionMappedFileSize = 104857600   # 100MB
+compactionCqMappedFileSize = 10485760  # 10MB
+mappedFileSizeTimerLog = 104857600     # 100MB
+mappedFileSizeConsumeQueue = 6000000   # 300000 * 20
+mappedFileSizeConsumeQueueExt = 50331648  # 48MB
+mapperFileSizeBatchConsumeQueue = 13800000 # 300000 * 46
+
+# Store type and features
+storeType = "default"
+enableCompaction = true
+enableConsumeQueueExt = false
+enableDLegerCommitLog = false
+enableBatchPush = false
+enableScheduleMessageStats = true
+enableLmq = false
+enableMultiDispatch = false
+enableScheduleAsyncDeliver = false
+enableAutoInSyncReplicas = false
+enableCleanExpiredOffset = false
+enableAsyncReput = true
+enableBuildConsumeQueueConcurrently = false
+
+# Timing and intervals
+compactionScheduleInternal = 900000     # 15 minutes
+timerPrecisionMs = 1000
+timerRollWindowSlot = 172800           # 2 days
+timerFlushIntervalMs = 1000
+timerMaxDelaySec = 259200              # 3 days
+disappearTimeAfterStart = -1
+flushIntervalCommitLog = 500
+commitIntervalCommitLog = 200
+flushIntervalConsumeQueue = 1000
+cleanResourceInterval = 10000
+deleteCommitLogFilesInterval = 100
+deleteConsumeQueueFilesInterval = 100
+destroyMapedFileIntervalForcibly = 120000
+redeleteHangedFileInterval = 120000
+flushDelayOffsetInterval = 10000
+
+# Thread configurations
+compactionThreadNum = 6
+timerGetMessageThreadNum = 3
+timerPutMessageThreadNum = 3
+dispatchCqThreads = 10
+batchDispatchRequestThreadPoolNums = 16
+
+# Timer configurations
+timerEnableDisruptor = false
+timerEnableCheckMetrics = true
+timerInterceptDelayLevel = false
+timerWheelEnable = true
+timerStopEnqueue = false
+timerCheckMetricsWhen = "05"
+timerSkipUnknownError = false
+timerWarmEnable = false
+timerStopDequeue = false
+timerEnableRetryUntilSuccess = false
+timerCongestNumEachSlot = 2147483647   # Integer.MAX_VALUE
+timerMetricSmallThreshold = 1000000
+timerProgressLogIntervalMs = 10000
+timerColdDataCheckIntervalMs = 60000
+
+# Disk and memory settings
+deleteWhen = "04"
+diskMaxUsedSpaceRatio = 75
+diskSpaceWarningLevelRatio = 90
+diskSpaceCleanForciblyRatio = 85
+fileReservedTime = 72
+deleteFileBatchMax = 10
+maxOffsetMapSize = 104857600           # 100MB
+maxMessageSize = 4194304               # 4MB
+maxFilterMessageSize = 16000
+maxRecoveryCommitlogFiles = 30
+maxAsyncPutMessageRequests = 5000
+maxBatchDeleteFilesNum = 50
+
+# Transfer and memory limits
+putMsgIndexHightWater = 600000
+maxTransferBytesOnMessageInMemory = 262144    # 256KB
+maxTransferCountOnMessageInMemory = 32
+maxTransferBytesOnMessageInDisk = 65536       # 64KB
+maxTransferCountOnMessageInDisk = 8
+accessMessageInMemoryMaxRatio = 40
+accessMessageInMemoryHotRatio = 26
+
+# Index settings
+messageIndexEnable = true
+messageIndexSafe = false
+maxHashSlotNum = 5000000
+maxIndexNum = 20000000                 # 5000000 * 4
+maxMsgsNumBatch = 64
+bitMapLengthConsumeQueueExt = 64
+
+# HA (High Availability) settings
+haListenPort = 10912
+haSendHeartbeatInterval = 5000
+haHousekeepingInterval = 20000
+haTransferBatchSize = 32768            # 32KB
+haMasterAddress = ""
+haMaxGapNotInSync = 268435456          # 256MB
+haFlowControlEnable = false
+maxHaTransferByteInSecond = 104857600  # 100MB
+haMaxTimeSlaveNotCatchup = 15000
+
+# Broker role and flush settings
+brokerRole = "ASYNC_MASTER"
+flushDiskType = "ASYNC_FLUSH"
+syncFlushTimeout = 5000
+putMessageTimeout = 8000
+slaveTimeout = 3000
+messageDelayLevel = "1s 5s 10s 30s 1m 2m 3m 4m 5m 6m 7m 8m 9m 10m 20m 30m 1h 2h"
+
+# Flush settings
+flushCommitLogTimed = true
+useReentrantLockWhenPutMessage = true
+checkCRCOnRecover = true
+forceVerifyPropCRC = false
+flushCommitLogLeastPages = 4
+commitCommitLogLeastPages = 4
+flushLeastPagesWhenWarmMapedFile = 4096
+flushConsumeQueueLeastPages = 2
+flushCommitLogThoroughInterval = 10000
+commitCommitLogThoroughInterval = 200
+flushConsumeQueueThoroughInterval = 60000
+
+# Advanced settings
+cleanFileForciblyEnable = true
+warmMapedFileEnable = false
+offsetCheckInSlave = false
+debugLockEnable = false
+duplicationEnable = false
+diskFallRecorded = true
+osPageCacheBusyTimeOutMills = 1000
+defaultQueryMaxNum = 32
+wakeCommitWhenPutMessage = true
+wakeFlushWhenPutMessage = false
+dispatchFromSenderThread = false
+
+# Pool settings
+transientStorePoolEnable = false
+transientStorePoolSize = 5
+fastFailIfNoBufferInStorePool = false
+
+# DLedger settings
+dLegerGroup = ""
+dLegerPeers = ""
+dLegerSelfId = ""
+preferredLeaderId = ""
+
+# Replica settings
+totalReplicas = 1
+inSyncReplicas = 1
+minInSyncReplicas = 1
+allAckInSyncStateSet = false
+replicasPerDiskPartition = 1
+syncMasterFlushOffsetWhenStartup = false
+syncFromLastFile = false
+asyncLearner = false
+
+# LMQ settings
+maxLmqConsumeQueueNum = 20000
+scheduleAsyncDeliverMaxPendingLimit = 2000
+scheduleAsyncDeliverMaxResendNum2Blocked = 3
+
+# Advanced configuration
+dispatchCqCacheNum = 4096
+recheckReputOffsetFromCq = false
+maxTopicLength = 127                   # Byte.MAX_VALUE (deprecated)
+autoMessageVersionOnTopicLen = true
+enabledAppendPropCRC = false
+travelCqFileNumWhenGetMessage = 1
+correctLogicMinOffsetSleepInterval = 1
+correctLogicMinOffsetForceInterval = 300000
+
+# Swap settings
+mappedFileSwapEnable = true
+commitLogForceSwapMapInterval = 43200000      # 12 hours
+commitLogSwapMapInterval = 3600000            # 1 hour
+commitLogSwapMapReserveFileNum = 100
+logicQueueForceSwapMapInterval = 43200000     # 12 hours
+logicQueueSwapMapInterval = 3600000           # 1 hour
+cleanSwapedMapInterval = 300000               # 5 minutes
+logicQueueSwapMapReserveFileNum = 20
+
+# Cache and search settings
+searchBcqByCacheEnable = true
+pullBatchMaxMessageCount = 160
+maxChecksumRange = 1073741824          # 1GB
+logicalDiskSpaceCleanForciblyThreshold = 0.8
+maxSlaveResendLength = 268435456       # 256MB
+
+# Consume queue scan settings
+maxConsumeQueueScan = 20000
+sampleCountThreshold = 5000
+sampleSteps = 32
+
+# Cold data settings
+coldDataFlowControlEnable = false
+coldDataScanEnable = false
+dataReadAheadEnable = true
+
+# RocksDB settings
+cleanRocksDBDirtyCQIntervalMin = 60
+statRocksDBCQIntervalSec = 10
+memTableFlushIntervalMs = 3600000      # 1 hour
+realTimePersistRocksDBConfig = true
+enableRocksDBLog = false
+rocksdbCQDoubleWriteEnable = false
+bottomMostCompressionTypeForConsumeQueueStore = "zstd"
+rocksdbCompressionType = "lz4"
+rocksdbFlushWalFrequency = 1024
+rocksdbWalFileRollingThreshold = 1073741824   # 1GB
+
+# Lock settings
+topicQueueLockNum = 32
+spinLockCollisionRetreatOptimalDegree = 1000
+useABSLock = false
+
+# Read settings
+readUnCommitted = false
+putConsumeQueueDataByFileChannel = true
+
+# Combine CQ settings
+combineCQLoadingCQTypes = "default;defaultRocksDB"
+combineCQPreferCQType = "default"
+combineAssignOffsetCQType = "default"
+combineCQEnableCheckSelf = false
+combineCQMaxExtraSearchCommitLogFiles = 3
+
+# Logging settings
+enableLogConsumeQueueRepeatedlyBuildWhenRecover = false
