@@ -160,7 +160,7 @@ impl MessageTrait for MessageBatch {
         &self.final_message.topic
     }
 
-    #[inline]   
+    #[inline]
     fn set_topic(&mut self, topic: CheetahString) {
         self.final_message.topic = topic;
     }
