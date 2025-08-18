@@ -14,15 +14,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodec;
 use serde::Deserialize;
 use serde::Serialize;
-
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
@@ -69,14 +65,14 @@ impl AddWritePermOfBrokerRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
 #[serde(rename_all = "camelCase")]
 pub struct AddWritePermOfBrokerResponseHeader {
     pub add_topic_count: i32,
 }
 
 impl AddWritePermOfBrokerResponseHeader {
-    const ADD_TOPIC_COUNT: &'static str = "addTopicCount";
+    //const ADD_TOPIC_COUNT: &'static str = "addTopicCount";
 
     pub fn new(add_topic_count: i32) -> Self {
         Self { add_topic_count }
@@ -89,28 +85,28 @@ impl AddWritePermOfBrokerResponseHeader {
     }
 }
 
-impl CommandCustomHeader for AddWritePermOfBrokerResponseHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        Some(HashMap::from([(
-            CheetahString::from_static_str(Self::ADD_TOPIC_COUNT),
-            CheetahString::from_string(self.add_topic_count.to_string()),
-        )]))
-    }
-}
+// impl CommandCustomHeader for AddWritePermOfBrokerResponseHeader {
+//     fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
+//         Some(HashMap::from([(
+//             CheetahString::from_static_str(Self::ADD_TOPIC_COUNT),
+//             CheetahString::from_string(self.add_topic_count.to_string()),
+//         )]))
+//     }
+// }
 
-impl FromMap for AddWritePermOfBrokerResponseHeader {
-    type Error = rocketmq_error::RocketmqError;
+// impl FromMap for AddWritePermOfBrokerResponseHeader {
+//     type Error = rocketmq_error::RocketmqError;
 
-    type Target = Self;
+//     type Target = Self;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(AddWritePermOfBrokerResponseHeader {
-            add_topic_count: map
-                .get(&CheetahString::from_static_str(
-                    AddWritePermOfBrokerResponseHeader::ADD_TOPIC_COUNT,
-                ))
-                .and_then(|s| s.parse::<i32>().ok())
-                .unwrap_or(0),
-        })
-    }
-}
+//     fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+//         Ok(AddWritePermOfBrokerResponseHeader {
+//             add_topic_count: map
+//                 .get(&CheetahString::from_static_str(
+//                     AddWritePermOfBrokerResponseHeader::ADD_TOPIC_COUNT,
+//                 ))
+//                 .and_then(|s| s.parse::<i32>().ok())
+//                 .unwrap_or(0),
+//         })
+//     }
+// }
