@@ -58,6 +58,7 @@ impl Iterator for MessageBatch {
 }
 
 impl MessageBatch {
+    #[inline]
     pub fn encode(&self) -> Bytes {
         message_decoder::encode_messages(self.messages.as_ref().unwrap())
     }
@@ -139,66 +140,82 @@ impl fmt::Display for MessageBatch {
 
 #[allow(unused_variables)]
 impl MessageTrait for MessageBatch {
+    #[inline]
     fn put_property(&mut self, key: CheetahString, value: CheetahString) {
         self.final_message.properties.insert(key, value);
     }
 
+    #[inline]
     fn clear_property(&mut self, name: &str) {
         self.final_message.properties.remove(name);
     }
 
+    #[inline]
     fn get_property(&self, name: &CheetahString) -> Option<CheetahString> {
         self.final_message.properties.get(name).cloned()
     }
 
+    #[inline]
     fn get_topic(&self) -> &CheetahString {
         &self.final_message.topic
     }
 
+    #[inline]   
     fn set_topic(&mut self, topic: CheetahString) {
         self.final_message.topic = topic;
     }
 
+    #[inline]
     fn get_flag(&self) -> i32 {
         self.final_message.flag
     }
 
+    #[inline]
     fn set_flag(&mut self, flag: i32) {
         self.final_message.flag = flag;
     }
 
+    #[inline]
     fn get_body(&self) -> Option<&Bytes> {
         self.final_message.body.as_ref()
     }
 
+    #[inline]
     fn set_body(&mut self, body: Bytes) {
         self.final_message.body = Some(body);
     }
 
+    #[inline]
     fn get_properties(&self) -> &HashMap<CheetahString, CheetahString> {
         &self.final_message.properties
     }
 
+    #[inline]
     fn set_properties(&mut self, properties: HashMap<CheetahString, CheetahString>) {
         self.final_message.properties = properties;
     }
 
+    #[inline]
     fn get_transaction_id(&self) -> Option<&CheetahString> {
         self.final_message.transaction_id.as_ref()
     }
 
+    #[inline]
     fn set_transaction_id(&mut self, transaction_id: CheetahString) {
         self.final_message.transaction_id = Some(transaction_id);
     }
 
+    #[inline]
     fn get_compressed_body_mut(&mut self) -> &mut Option<Bytes> {
         &mut self.final_message.compressed_body
     }
 
+    #[inline]
     fn get_compressed_body(&self) -> Option<&Bytes> {
         self.final_message.compressed_body.as_ref()
     }
 
+    #[inline]
     fn set_compressed_body_mut(&mut self, compressed_body: Bytes) {
         self.final_message.compressed_body = Some(compressed_body);
     }
