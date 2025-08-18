@@ -72,8 +72,9 @@ impl<'de> Deserialize<'de> for FlushDiskType {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json;
+
+    use super::*;
 
     #[test]
     fn test_default_flush_disk_type() {
@@ -83,7 +84,10 @@ mod tests {
     #[test]
     fn test_get_flush_disk_type_string() {
         assert_eq!(FlushDiskType::SyncFlush.get_flush_disk_type(), "SYNC_FLUSH");
-        assert_eq!(FlushDiskType::AsyncFlush.get_flush_disk_type(), "ASYNC_FLUSH");
+        assert_eq!(
+            FlushDiskType::AsyncFlush.get_flush_disk_type(),
+            "ASYNC_FLUSH"
+        );
     }
 
     #[test]
@@ -122,7 +126,7 @@ mod tests {
         let sync_flush = FlushDiskType::SyncFlush;
         let copied = sync_flush;
         let cloned = sync_flush.clone();
-        
+
         assert_eq!(sync_flush, copied);
         assert_eq!(sync_flush, cloned);
     }
