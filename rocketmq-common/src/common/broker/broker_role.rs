@@ -57,12 +57,16 @@ impl<'de> Deserialize<'de> for BrokerRole {
                 E: serde::de::Error,
             {
                 match value {
-                    "ASYNC_MASTER" => Ok(BrokerRole::AsyncMaster),
-                    "SYNC_MASTER" => Ok(BrokerRole::SyncMaster),
-                    "SLAVE" => Ok(BrokerRole::Slave),
+                    "ASYNC_MASTER" | "AsyncMaster" => Ok(BrokerRole::AsyncMaster),
+                    "SYNC_MASTER" | "SyncMaster" => Ok(BrokerRole::SyncMaster),
+                    "SLAVE" | "Slave" => Ok(BrokerRole::Slave),
                     _ => Err(serde::de::Error::unknown_variant(
                         value,
-                        &["AsyncMaster", "SyncMaster", "Slave"],
+                        &[
+                            "ASYNC_MASTER/AsyncMaster",
+                            "SYNC_MASTER/SyncMaster",
+                            "SLAVE/Slave",
+                        ],
                     )),
                 }
             }
@@ -113,6 +117,10 @@ mod tests {
         let json = "\"ASYNC_MASTER\"";
         let deserialized: BrokerRole = serde_json::from_str(json).unwrap();
         assert_eq!(deserialized, BrokerRole::AsyncMaster);
+
+        let json = "\"AsyncMaster\"";
+        let deserialized: BrokerRole = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized, BrokerRole::AsyncMaster);
     }
 
     #[test]
@@ -120,11 +128,19 @@ mod tests {
         let json = "\"SYNC_MASTER\"";
         let deserialized: BrokerRole = serde_json::from_str(json).unwrap();
         assert_eq!(deserialized, BrokerRole::SyncMaster);
+
+        let json = "\"SyncMaster\"";
+        let deserialized: BrokerRole = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized, BrokerRole::SyncMaster);
     }
 
     #[test]
     fn broker_role_slave_deserialization() {
         let json = "\"SLAVE\"";
+        let deserialized: BrokerRole = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized, BrokerRole::Slave);
+
+        let json = "\"Slave\"";
         let deserialized: BrokerRole = serde_json::from_str(json).unwrap();
         assert_eq!(deserialized, BrokerRole::Slave);
     }
