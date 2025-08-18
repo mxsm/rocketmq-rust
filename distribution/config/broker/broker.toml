@@ -27,8 +27,8 @@ isInBrokerContainer = false
 # Core Broker Settings
 # ======================
 regionId = "DefaultRegion"             # DEFAULT_TRACE_REGION_ID
-brokerRole = "ASYNC_MASTER"             # enum BrokerRole: ASYNC_MASTER|SYNC_MASTER|SLAVE
-flushDiskType = "ASYNC_FLUSH"           # enum FlushDiskType: SYNC_FLUSH|ASYNC_FLUSH
+brokerRole = "ASYNC_MASTER"             # enum BrokerRole: ASYNC_MASTER/AsyncMaster|SYNC_MASTER/SyncMaster|SLAVE/Slave
+flushDiskType = "ASYNC_FLUSH"           # enum FlushDiskType: SYNC_FLUSH/SyncFlush|ASYNC_FLUSH/AsyncFlush
 deleteWhen = 4
 
 listenPort = 10911
