@@ -165,7 +165,7 @@ impl BrokerRuntime {
             server_config,
             topic_config_manager: None,
             topic_queue_mapping_manager,
-            onsumer_offset_manager: ConsumerOffsetManager::new(
+            consumer_offset_manager: ConsumerOffsetManager::new(
                 broker_config.clone(),
                 message_store_config.clone(),
                 None,
@@ -1856,7 +1856,10 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn set_consumer_offset_manager(&mut self, consumer_offset_manager: ConsumerOffsetManager) {
+    pub fn set_consumer_offset_manager(
+        &mut self,
+        consumer_offset_manager: ConsumerOffsetManager<MS>,
+    ) {
         self.consumer_offset_manager = consumer_offset_manager;
     }
 
