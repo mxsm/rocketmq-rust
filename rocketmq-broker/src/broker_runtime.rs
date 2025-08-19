@@ -165,7 +165,11 @@ impl BrokerRuntime {
             server_config,
             topic_config_manager: None,
             topic_queue_mapping_manager,
-            consumer_offset_manager: Default::default(),
+            consumer_offset_manager: ConsumerOffsetManager::new(
+                broker_config.clone(),
+                message_store_config.clone(),
+                None,
+            ),
             subscription_group_manager: None,
             consumer_filter_manager: Some(ConsumerFilterManager::new(
                 broker_config,
@@ -446,7 +450,10 @@ impl BrokerRuntime {
                 message_store.set_timer_message_store(Arc::new(time_message_store));
             }
             self.inner.broker_stats = Some(BrokerStats::new(message_store.clone()));
-            self.inner.message_store = Some(message_store);
+            self.inner.message_store = Some(message_store.clone());
+            self.inner
+                .consumer_offset_manager
+                .set_message_store(Some(message_store))
         } else if self.inner.message_store_config.store_type == StoreType::RocksDB {
             unimplemented!("Use RocksDB as message store unimplemented");
         } else {
@@ -1321,7 +1328,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     server_config: Arc<ServerConfig>,
     topic_config_manager: Option<TopicConfigManager<MS>>,
     topic_queue_mapping_manager: TopicQueueMappingManager,
-    consumer_offset_manager: ConsumerOffsetManager,
+    consumer_offset_manager: ConsumerOffsetManager<MS>,
     subscription_group_manager: Option<SubscriptionGroupManager<MS>>,
     consumer_filter_manager: Option<ConsumerFilterManager>,
     consumer_order_info_manager: Option<ConsumerOrderInfoManager<MS>>,
@@ -1384,7 +1391,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn consumer_offset_manager_mut(&mut self) -> &mut ConsumerOffsetManager {
+    pub fn consumer_offset_manager_mut(&mut self) -> &mut ConsumerOffsetManager<MS> {
         &mut self.consumer_offset_manager
     }
 
@@ -1628,7 +1635,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn consumer_offset_manager(&self) -> &ConsumerOffsetManager {
+    pub fn consumer_offset_manager(&self) -> &ConsumerOffsetManager<MS> {
         &self.consumer_offset_manager
     }
 
@@ -1849,7 +1856,10 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn set_consumer_offset_manager(&mut self, consumer_offset_manager: ConsumerOffsetManager) {
+    pub fn set_consumer_offset_manager(
+        &mut self,
+        consumer_offset_manager: ConsumerOffsetManager<MS>,
+    ) {
         self.consumer_offset_manager = consumer_offset_manager;
     }
 

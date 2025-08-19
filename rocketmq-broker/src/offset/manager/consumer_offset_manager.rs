@@ -31,7 +31,7 @@ use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
+use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use serde::de;
 use serde::de::MapAccess;
 use serde::de::Visitor;
@@ -46,20 +46,26 @@ use crate::broker_path_config_helper::get_consumer_offset_path;
 
 pub const TOPIC_GROUP_SEPARATOR: &str = "@";
 
-#[derive(Default, Clone)]
-pub(crate) struct ConsumerOffsetManager {
-    pub(crate) broker_config: Arc<BrokerConfig>,
+#[derive(Clone)]
+pub(crate) struct ConsumerOffsetManager<MS: MessageStore> {
+    broker_config: Arc<BrokerConfig>,
+    message_store_config: Arc<MessageStoreConfig>,
     consumer_offset_wrapper: ConsumerOffsetWrapper,
-    message_store: Option<ArcMut<LocalFileMessageStore>>,
+    message_store: Option<ArcMut<MS>>,
 }
 
-impl ConsumerOffsetManager {
+impl<MS> ConsumerOffsetManager<MS>
+where
+    MS: MessageStore,
+{
     pub fn new(
         broker_config: Arc<BrokerConfig>,
-        message_store: Option<ArcMut<LocalFileMessageStore>>,
+        message_store_config: Arc<MessageStoreConfig>,
+        message_store: Option<ArcMut<MS>>,
     ) -> Self {
         ConsumerOffsetManager {
             broker_config,
+            message_store_config,
             consumer_offset_wrapper: ConsumerOffsetWrapper {
                 data_version: ArcMut::new(DataVersion::default()),
                 offset_table: Arc::new(parking_lot::RwLock::new(HashMap::new())),
@@ -70,12 +76,42 @@ impl ConsumerOffsetManager {
             message_store,
         }
     }
-    pub fn set_message_store(&mut self, message_store: Option<ArcMut<LocalFileMessageStore>>) {
+    pub fn set_message_store(&mut self, message_store: Option<ArcMut<MS>>) {
         self.message_store = message_store;
     }
-}
 
-impl ConsumerOffsetManager {
+    pub fn commit_pull_offset(
+        &self,
+        _client_host: SocketAddr,
+        group: &CheetahString,
+        topic: &CheetahString,
+        queue_id: i32,
+        offset: i64,
+    ) {
+        let key = CheetahString::from_string(format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}"));
+        self.consumer_offset_wrapper
+            .pull_offset_table
+            .write()
+            .entry(key)
+            .or_default()
+            .insert(queue_id, offset);
+    }
+
+    pub fn query_then_erase_reset_offset(
+        &self,
+        topic: &CheetahString,
+        group: &CheetahString,
+        queue_id: i32,
+    ) -> Option<i64> {
+        let key = format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}");
+        let mut write_guard = self.consumer_offset_wrapper.reset_offset_table.write();
+        let offset_table = write_guard.get_mut(key.as_str());
+        match offset_table {
+            None => None,
+            Some(value) => value.remove(&queue_id),
+        }
+    }
+
     pub fn clean_offset_by_topic(&self, topic: &CheetahString) {
         let mut offset_table = self.consumer_offset_wrapper.offset_table.write();
         let mut keys_to_remove = Vec::new();
@@ -201,9 +237,12 @@ impl ConsumerOffsetManager {
     }
 }
 
-impl ConfigManager for ConsumerOffsetManager {
+impl<MS> ConfigManager for ConsumerOffsetManager<MS>
+where
+    MS: MessageStore,
+{
     fn config_file_path(&self) -> String {
-        get_consumer_offset_path(self.broker_config.store_path_root_dir.as_str())
+        get_consumer_offset_path(self.message_store_config.store_path_root_dir.as_str())
     }
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
@@ -233,42 +272,6 @@ impl ConfigManager for ConsumerOffsetManager {
         }
     }
 }
-
-#[allow(unused_variables)]
-impl ConsumerOffsetManager {
-    pub fn commit_pull_offset(
-        &self,
-        _client_host: SocketAddr,
-        group: &CheetahString,
-        topic: &CheetahString,
-        queue_id: i32,
-        offset: i64,
-    ) {
-        let key = CheetahString::from_string(format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}"));
-        self.consumer_offset_wrapper
-            .pull_offset_table
-            .write()
-            .entry(key)
-            .or_default()
-            .insert(queue_id, offset);
-    }
-
-    pub fn query_then_erase_reset_offset(
-        &self,
-        topic: &CheetahString,
-        group: &CheetahString,
-        queue_id: i32,
-    ) -> Option<i64> {
-        let key = format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}");
-        let mut write_guard = self.consumer_offset_wrapper.reset_offset_table.write();
-        let offset_table = write_guard.get_mut(key.as_str());
-        match offset_table {
-            None => None,
-            Some(value) => value.remove(&queue_id),
-        }
-    }
-}
-
 #[derive(Default, Clone)]
 struct ConsumerOffsetWrapper {
     data_version: ArcMut<DataVersion>,
