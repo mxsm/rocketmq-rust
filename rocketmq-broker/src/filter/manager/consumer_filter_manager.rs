@@ -24,6 +24,7 @@ use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_filter::utils::bloom_filter::BloomFilter;
+use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
 use crate::broker_path_config_helper::get_consumer_filter_path;
 use crate::filter::consumer_filter_data::ConsumerFilterData;
@@ -31,15 +32,19 @@ use crate::filter::manager::consumer_filter_wrapper::ConsumerFilterWrapper;
 
 const MS_24_HOUR: u64 = Duration::from_hours(24).as_millis() as u64;
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub(crate) struct ConsumerFilterManager {
     broker_config: Arc<BrokerConfig>,
+    message_store_config: Arc<MessageStoreConfig>,
     consumer_filter_wrapper: Arc<parking_lot::RwLock<ConsumerFilterWrapper>>,
     bloom_filter: Option<BloomFilter>,
 }
 
 impl ConsumerFilterManager {
-    pub fn new(mut broker_config: Arc<BrokerConfig>) -> Self {
+    pub fn new(
+        mut broker_config: Arc<BrokerConfig>,
+        message_store_config: Arc<MessageStoreConfig>,
+    ) -> Self {
         let consumer_filter_wrapper =
             Arc::new(parking_lot::RwLock::new(ConsumerFilterWrapper::default()));
         let bloom_filter = BloomFilter::new(
@@ -51,6 +56,7 @@ impl ConsumerFilterManager {
         broker_config_mut.bit_map_length_consume_queue_ext = bloom_filter.m();
         ConsumerFilterManager {
             broker_config,
+            message_store_config,
             consumer_filter_wrapper,
             bloom_filter: Some(bloom_filter),
         }
@@ -69,7 +75,7 @@ impl ConfigManager for ConsumerFilterManager {
     }
 
     fn config_file_path(&self) -> String {
-        get_consumer_filter_path(self.broker_config.store_path_root_dir.as_str())
+        get_consumer_filter_path(self.message_store_config.store_path_root_dir.as_str())
     }
 
     fn encode(&mut self) -> String {
