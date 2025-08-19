@@ -14,15 +14,6 @@
 #  limitations under the License.
 
 # ======================
-# Broker Identity
-# ======================
-[brokerIdentity]
-brokerName = "broker-mxsm-a"          # default_broker_name()
-brokerClusterName = "DefaultCluster-mxsm"
-brokerId = 0                           # MASTER_ID
-
-
-# ======================
 # Core Broker Settings
 # ======================
 brokerRole = "ASYNC_MASTER"             # enum BrokerRole: ASYNC_MASTER/AsyncMaster|SYNC_MASTER/SyncMaster|SLAVE/Slave
@@ -32,3 +23,12 @@ fileReservedTime = 72
 listenPort = 10911
 haListenPort = 10912
 storePathRootDir="/opt/rocketmq/store"
+
+
+# ======================
+# Broker Identity
+# ======================
+[brokerIdentity]
+brokerName = "broker-mxsm-a"          # default_broker_name()
+brokerClusterName = "DefaultCluster-mxsm"
+brokerId = 0                           # MASTER_ID
