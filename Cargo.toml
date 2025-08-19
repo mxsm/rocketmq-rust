@@ -51,7 +51,7 @@ tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
 tracing-appender = "0.2.3"
 
-thiserror = "2.0.14"
+thiserror = "2.0.15"
 
 
 #serde
