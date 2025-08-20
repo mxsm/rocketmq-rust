@@ -224,7 +224,7 @@ pub mod simple_scheduler {
                                         break;
                                     }
                                     _ = ticker.tick() => {
-                                        // Try to get permission. If you can't get it, skip the current tick.
+                                        // Try to acquire permission. If unable to acquire, skip the current tick.
                                         if let Ok(permit) = gate.clone().try_acquire_owned() {
                                             let task_fn = task_fn.clone();
                                             let child = token_child.clone();
