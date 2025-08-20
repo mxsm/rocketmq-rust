@@ -289,7 +289,7 @@ pub mod simple_scheduler {
             }
         }
 
-        /// Batch suspension
+        /// Batch abort
         pub async fn abort_all(&self) {
             let mut tasks = self.tasks.write().await;
             for (_, info) in tasks.drain() {
