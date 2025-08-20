@@ -2435,11 +2435,13 @@ dependencies = [
 name = "rocketmq-rust"
 version = "0.7.0"
 dependencies = [
+ "anyhow",
  "chrono",
  "cron",
  "rocketmq-error",
  "tokio",
  "tokio-test",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "trait-variant",
