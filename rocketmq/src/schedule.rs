@@ -237,7 +237,7 @@ pub mod simple_scheduler {
                                                 if let Err(e) = fut.await {
                                                     error!("FixedRateNoOverlap task {} failed: {:?}", id, e);
                                                 }
-                                                drop(permit); // Release the license after completion
+                                                drop(permit); // Release the permit after completion
                                             });
                                         } else {
                                             info!("Task {} skipped due to overlap", id);
