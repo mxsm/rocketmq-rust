@@ -214,7 +214,7 @@ pub mod simple_scheduler {
                             let start = Instant::now() + initial_delay;
                             let mut ticker = time::interval_at(start, period);
 
-                            // Permission=1, control non - overlapping
+                            // Permission=1, controls non-overlapping execution
                             let gate = Arc::new(Semaphore::new(1));
 
                             loop {
