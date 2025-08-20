@@ -177,7 +177,7 @@ pub mod simple_scheduler {
                                                 let mut f = task_fn.lock().await;
                                                 (f)(child)
                                             };
-                                            // 2) The lock has been released. If you await here, the lock won't cross  await.
+                                            // The lock has been released. Awaiting here ensures the lock doesn't cross await boundaries.
                                             if let Err(e) = fut.await {
                                                 error!("FixedRate task {} failed: {:?}", id, e);
                                             }
