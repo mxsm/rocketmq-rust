@@ -42,7 +42,7 @@ serde_json.workspace = true
 
 lazy_static.workspace = true
 
-tempfile = "3.20.0"
+tempfile = "3.21.0"
 
 memmap2 = "0.9.7"
 trait-variant.workspace = true
@@ -65,7 +65,7 @@ windows = { version = "0.61.3", features = ["Win32_Security", "Win32_System_Memo
 
 
 [dev-dependencies]
-tempfile = "3.20.0"
+tempfile = "3.21.0"
 criterion = { version = "0.7", features = ["html_reports"] }
 
 [[bench]]
