@@ -115,6 +115,92 @@ pub mod simple_scheduler {
             self.counter.fetch_add(1, Ordering::Relaxed)
         }
 
+        /// Adds a fixed-rate scheduled task to the task manager.
+        ///
+        /// # Arguments
+        /// * `initial_delay` - The delay before the first execution of the task.
+        /// * `period` - The interval between task executions.
+        /// * `task_fn` - A function that defines the task to be executed. It takes a
+        ///   `CancellationToken` as an argument and returns a `Future` that resolves to a
+        ///   `Result<()>`.
+        ///
+        /// # Returns
+        /// A `TaskId` representing the unique identifier of the scheduled task.
+        ///
+        /// # Notes
+        /// - Tasks are executed at fixed intervals, even if previous executions overlap.
+        pub fn add_fixed_rate_task<F, Fut>(
+            &self,
+            initial_delay: Duration,
+            period: Duration,
+            task_fn: F,
+        ) -> TaskId
+        where
+            F: FnMut(CancellationToken) -> Fut + Send + Sync + 'static,
+            Fut: Future<Output = Result<()>> + Send + 'static,
+        {
+            self.add_scheduled_task(ScheduleMode::FixedRate, initial_delay, period, task_fn)
+        }
+
+        /// Adds a fixed-delay scheduled task to the task manager.
+        ///
+        /// # Arguments
+        /// * `initial_delay` - The delay before the first execution of the task.
+        /// * `period` - The interval between task executions.
+        /// * `task_fn` - A function that defines the task to be executed. It takes a
+        ///   `CancellationToken` as an argument and returns a `Future` that resolves to a
+        ///   `Result<()>`.
+        ///
+        /// # Returns
+        /// A `TaskId` representing the unique identifier of the scheduled task.
+        ///
+        /// # Notes
+        /// - Tasks are executed serially, with a delay after each task completes.
+        pub fn add_fixed_delay_task<F, Fut>(
+            &self,
+            initial_delay: Duration,
+            period: Duration,
+            task_fn: F,
+        ) -> TaskId
+        where
+            F: FnMut(CancellationToken) -> Fut + Send + Sync + 'static,
+            Fut: Future<Output = Result<()>> + Send + 'static,
+        {
+            self.add_scheduled_task(ScheduleMode::FixedDelay, initial_delay, period, task_fn)
+        }
+
+        /// Adds a fixed-rate-no-overlap scheduled task to the task manager.
+        ///
+        /// # Arguments
+        /// * `initial_delay` - The delay before the first execution of the task.
+        /// * `period` - The interval between task executions.
+        /// * `task_fn` - A function that defines the task to be executed. It takes a
+        ///   `CancellationToken` as an argument and returns a `Future` that resolves to a
+        ///   `Result<()>`.
+        ///
+        /// # Returns
+        /// A `TaskId` representing the unique identifier of the scheduled task.
+        ///
+        /// # Notes
+        /// - Tasks are executed at fixed intervals, but overlapping executions are skipped.
+        pub fn add_fixed_rate_no_overlap_task<F, Fut>(
+            &self,
+            initial_delay: Duration,
+            period: Duration,
+            task_fn: F,
+        ) -> TaskId
+        where
+            F: FnMut(CancellationToken) -> Fut + Send + Sync + 'static,
+            Fut: Future<Output = Result<()>> + Send + 'static,
+        {
+            self.add_scheduled_task(
+                ScheduleMode::FixedRateNoOverlap,
+                initial_delay,
+                period,
+                task_fn,
+            )
+        }
+
         /// Adds a scheduled task to the task manager.
         ///
         /// # Arguments
