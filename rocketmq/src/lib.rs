@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 #![feature(sync_unsafe_cell)]
+#![feature(async_fn_traits)]
+#![feature(unboxed_closures)]
 #![allow(dead_code)]
 
 mod arc_mut;
