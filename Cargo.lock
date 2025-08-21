@@ -2438,6 +2438,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "cron",
+ "parking_lot",
  "rocketmq-error",
  "tokio",
  "tokio-test",

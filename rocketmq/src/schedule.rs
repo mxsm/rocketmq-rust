@@ -62,8 +62,7 @@ pub mod simple_scheduler {
     use std::sync::Arc;
 
     use anyhow::Result;
-    use tokio::sync::Mutex;
-    use tokio::sync::RwLock;
+    use parking_lot::RwLock;
     use tokio::sync::Semaphore;
     use tokio::task::JoinHandle;
     use tokio::time::Duration;
@@ -72,6 +71,8 @@ pub mod simple_scheduler {
     use tokio_util::sync::CancellationToken;
     use tracing::error;
     use tracing::info;
+
+    use crate::ArcMut;
 
     #[derive(Debug, Clone, Copy)]
     pub enum ScheduleMode {
@@ -136,7 +137,7 @@ pub mod simple_scheduler {
         /// - The `CancellationToken` can be used to gracefully cancel the task.
         /// - The task is added to the internal task manager and can be managed (e.g., canceled or
         ///   aborted) later.
-        pub async fn add_scheduled_task<F, Fut>(
+        pub fn add_scheduled_task<F, Fut>(
             &self,
             mode: ScheduleMode,
             initial_delay: Duration,
@@ -144,17 +145,17 @@ pub mod simple_scheduler {
             task_fn: F,
         ) -> TaskId
         where
-            F: FnMut(CancellationToken) -> Fut + Send + 'static,
+            F: FnMut(CancellationToken) -> Fut + Send + Sync + 'static,
             Fut: Future<Output = Result<()>> + Send + 'static,
         {
             let id = self.next_id();
             let token = CancellationToken::new();
             let token_child = token.clone();
 
-            let task_fn = Arc::new(Mutex::new(task_fn));
+            let task_fn = ArcMut::new(task_fn);
 
             let handle = tokio::spawn({
-                let task_fn = task_fn.clone();
+                let mut task_fn = task_fn.clone();
                 async move {
                     match mode {
                         ScheduleMode::FixedRate => {
@@ -169,13 +170,12 @@ pub mod simple_scheduler {
                                     }
                                     _ = ticker.tick() => {
                                         // Allow concurrent execution: One subtask per tick
-                                        let task_fn = task_fn.clone();
+                                        let mut task_fn = task_fn.clone();
                                         let child = token_child.clone();
                                         tokio::spawn(async move {
                                             // 1) Lock out &mut F, call once to get a future
                                             let fut = {
-                                                let mut f = task_fn.lock().await;
-                                                (f)(child)
+                                                (task_fn)(child)
                                             };
                                             // The lock has been released. Awaiting here ensures the lock doesn't cross await boundaries.
                                             if let Err(e) = fut.await {
@@ -198,8 +198,7 @@ pub mod simple_scheduler {
                                     _ = async {
                                         // Serial execution: complete one task and then sleep
                                         let fut = {
-                                            let mut f = task_fn.lock().await;
-                                            (f)(token_child.clone())
+                                            (task_fn)(token_child.clone())
                                         };
                                         if let Err(e) = fut.await {
                                             error!("FixedDelay task {} failed: {:?}", id, e);
@@ -226,13 +225,12 @@ pub mod simple_scheduler {
                                     _ = ticker.tick() => {
                                         // Try to acquire permission. If unable to acquire, skip the current tick.
                                         if let Ok(permit) = gate.clone().try_acquire_owned() {
-                                            let task_fn = task_fn.clone();
+                                            let mut task_fn = task_fn.clone();
                                             let child = token_child.clone();
                                             tokio::spawn(async move {
                                                 // Release the lock immediately after generating the future
                                                 let fut = {
-                                                    let mut f = task_fn.lock().await;
-                                                    (f)(child)
+                                                    (task_fn)(child)
                                                 };
                                                 if let Err(e) = fut.await {
                                                     error!("FixedRateNoOverlap task {} failed: {:?}", id, e);
@@ -250,7 +248,7 @@ pub mod simple_scheduler {
                 }
             });
 
-            self.tasks.write().await.insert(
+            self.tasks.write().insert(
                 id,
                 TaskInfo {
                     cancel_token: token,
@@ -262,8 +260,8 @@ pub mod simple_scheduler {
         }
 
         /// Graceful cancellation
-        pub async fn cancel_task(&self, id: TaskId) {
-            if let Some(info) = self.tasks.write().await.remove(&id) {
+        pub fn cancel_task(&self, id: TaskId) {
+            if let Some(info) = self.tasks.write().remove(&id) {
                 info.cancel_token.cancel();
                 tokio::spawn(async move {
                     let _ = info.handle.await;
@@ -272,15 +270,15 @@ pub mod simple_scheduler {
         }
 
         /// Roughly abort
-        pub async fn abort_task(&self, id: TaskId) {
-            if let Some(info) = self.tasks.write().await.remove(&id) {
+        pub fn abort_task(&self, id: TaskId) {
+            if let Some(info) = self.tasks.write().remove(&id) {
                 info.handle.abort();
             }
         }
 
         /// Batch cancel
-        pub async fn cancel_all(&self) {
-            let mut tasks = self.tasks.write().await;
+        pub fn cancel_all(&self) {
+            let mut tasks = self.tasks.write();
             for (_, info) in tasks.drain() {
                 info.cancel_token.cancel();
                 tokio::spawn(async move {
@@ -290,15 +288,15 @@ pub mod simple_scheduler {
         }
 
         /// Batch abort
-        pub async fn abort_all(&self) {
-            let mut tasks = self.tasks.write().await;
+        pub fn abort_all(&self) {
+            let mut tasks = self.tasks.write();
             for (_, info) in tasks.drain() {
                 info.handle.abort();
             }
         }
 
-        pub async fn task_count(&self) -> usize {
-            self.tasks.read().await.len()
+        pub fn task_count(&self) -> usize {
+            self.tasks.read().len()
         }
     }
 }
@@ -312,134 +310,122 @@ mod tests {
     #[tokio::test]
     async fn adds_task_and_increments_task_count() {
         let manager = ScheduledTaskManager::new();
-        let task_id = manager
-            .add_scheduled_task(
-                ScheduleMode::FixedRate,
-                Duration::from_secs(1),
-                Duration::from_secs(2),
-                |token| async move {
-                    if token.is_cancelled() {
-                        return Ok(());
-                    }
-                    Ok(())
-                },
-            )
-            .await;
+        let task_id = manager.add_scheduled_task(
+            ScheduleMode::FixedRate,
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+            |token| async move {
+                if token.is_cancelled() {
+                    return Ok(());
+                }
+                Ok(())
+            },
+        );
 
-        assert_eq!(manager.task_count().await, 1);
-        manager.cancel_task(task_id).await;
+        assert_eq!(manager.task_count(), 1);
+        manager.cancel_task(task_id);
     }
 
     #[tokio::test]
     async fn cancels_task_and_decrements_task_count() {
         let manager = ScheduledTaskManager::new();
-        let task_id = manager
-            .add_scheduled_task(
-                ScheduleMode::FixedRate,
-                Duration::from_secs(1),
-                Duration::from_secs(2),
-                |token| async move {
-                    if token.is_cancelled() {
-                        return Ok(());
-                    }
-                    Ok(())
-                },
-            )
-            .await;
+        let task_id = manager.add_scheduled_task(
+            ScheduleMode::FixedRate,
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+            |token| async move {
+                if token.is_cancelled() {
+                    return Ok(());
+                }
+                Ok(())
+            },
+        );
 
-        manager.cancel_task(task_id).await;
-        assert_eq!(manager.task_count().await, 0);
+        manager.cancel_task(task_id);
+        assert_eq!(manager.task_count(), 0);
     }
 
     #[tokio::test]
     async fn aborts_task_and_decrements_task_count() {
         let manager = ScheduledTaskManager::new();
-        let task_id = manager
-            .add_scheduled_task(
-                ScheduleMode::FixedRate,
-                Duration::from_secs(1),
-                Duration::from_secs(2),
-                |token| async move {
-                    if token.is_cancelled() {
-                        return Ok(());
-                    }
-                    Ok(())
-                },
-            )
-            .await;
+        let task_id = manager.add_scheduled_task(
+            ScheduleMode::FixedRate,
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+            |token| async move {
+                if token.is_cancelled() {
+                    return Ok(());
+                }
+                Ok(())
+            },
+        );
 
-        manager.abort_task(task_id).await;
-        assert_eq!(manager.task_count().await, 0);
+        manager.abort_task(task_id);
+        assert_eq!(manager.task_count(), 0);
     }
 
     #[tokio::test]
     async fn cancels_all_tasks() {
         let manager = ScheduledTaskManager::new();
         for _ in 0..3 {
-            manager
-                .add_scheduled_task(
-                    ScheduleMode::FixedRate,
-                    Duration::from_secs(1),
-                    Duration::from_secs(2),
-                    |token| async move {
-                        if token.is_cancelled() {
-                            return Ok(());
-                        }
-                        Ok(())
-                    },
-                )
-                .await;
+            manager.add_scheduled_task(
+                ScheduleMode::FixedRate,
+                Duration::from_secs(1),
+                Duration::from_secs(2),
+                |token| async move {
+                    if token.is_cancelled() {
+                        return Ok(());
+                    }
+                    Ok(())
+                },
+            );
         }
 
-        assert_eq!(manager.task_count().await, 3);
-        manager.cancel_all().await;
-        assert_eq!(manager.task_count().await, 0);
+        assert_eq!(manager.task_count(), 3);
+        manager.cancel_all();
+        assert_eq!(manager.task_count(), 0);
     }
 
     #[tokio::test]
     async fn aborts_all_tasks() {
         let manager = ScheduledTaskManager::new();
         for _ in 0..3 {
-            manager
-                .add_scheduled_task(
-                    ScheduleMode::FixedRate,
-                    Duration::from_secs(1),
-                    Duration::from_secs(2),
-                    |token| async move {
-                        if token.is_cancelled() {
-                            return Ok(());
-                        }
-                        Ok(())
-                    },
-                )
-                .await;
-        }
-
-        assert_eq!(manager.task_count().await, 3);
-        manager.abort_all().await;
-        assert_eq!(manager.task_count().await, 0);
-    }
-
-    #[tokio::test]
-    async fn skips_task_execution_in_fixed_rate_no_overlap_mode() {
-        let manager = ScheduledTaskManager::new();
-        let task_id = manager
-            .add_scheduled_task(
-                ScheduleMode::FixedRateNoOverlap,
-                Duration::from_secs(0),
-                Duration::from_millis(100),
+            manager.add_scheduled_task(
+                ScheduleMode::FixedRate,
+                Duration::from_secs(1),
+                Duration::from_secs(2),
                 |token| async move {
-                    tokio::time::sleep(Duration::from_millis(200)).await;
                     if token.is_cancelled() {
                         return Ok(());
                     }
                     Ok(())
                 },
-            )
-            .await;
+            );
+        }
 
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        manager.cancel_task(task_id).await;
-        assert_eq!(manager.task_count().await, 0);
+        assert_eq!(manager.task_count(), 3);
+        manager.abort_all();
+        assert_eq!(manager.task_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn skips_task_execution_in_fixed_rate_no_overlap_mode() {
+        let manager = ScheduledTaskManager::new();
+        let task_id = manager.add_scheduled_task(
+            ScheduleMode::FixedRateNoOverlap,
+            Duration::from_secs(0),
+            Duration::from_millis(100),
+            |token| async move {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                if token.is_cancelled() {
+                    return Ok(());
+                }
+                Ok(())
+            },
+        );
+
+        tokio::time::sleep(Duration::from_secs(1));
+        let _ = manager.cancel_task(task_id);
+        assert_eq!(manager.task_count(), 0);
     }
 }
