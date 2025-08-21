@@ -28,6 +28,11 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 use std::sync::Weak;
 
+/// A weak version of `ArcMut` that doesn't prevent the inner value from being dropped.
+///
+/// # Safety
+/// This type uses `SyncUnsafeCell` which is not thread-safe by default.
+/// You must ensure that no data races occur when using this type across threads.
 pub struct WeakArcMut<T: ?Sized> {
     inner: Weak<SyncUnsafeCell<T>>,
 }
@@ -71,6 +76,11 @@ impl<T: ?Sized> WeakArcMut<T> {
     }
 }
 
+/// A mutable reference-counted pointer with interior mutability.
+///
+/// # Safety
+/// This type uses `SyncUnsafeCell` which is not thread-safe by default.
+/// You must ensure that no data races occur when using this type across threads.
 #[derive(Default)]
 pub struct ArcMut<T: ?Sized> {
     inner: Arc<SyncUnsafeCell<T>>,
@@ -101,6 +111,11 @@ impl<T> ArcMut<T> {
         }
     }
 
+    /// Returns a mutable reference to the inner value
+    ///
+    /// # Safety
+    /// This is safe as long as no other mutable references exist
+    /// and the caller ensures proper synchronization.
     #[inline]
     #[allow(clippy::mut_from_ref)]
     pub fn mut_from_ref(&self) -> &mut T {
