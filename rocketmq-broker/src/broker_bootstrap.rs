@@ -67,6 +67,7 @@ pub struct Builder {
 }
 
 impl Builder {
+    #[inline]
     pub fn new() -> Self {
         Builder {
             broker_config: Default::default(),
@@ -74,22 +75,22 @@ impl Builder {
             server_config: Default::default(),
         }
     }
-
+    #[inline]
     pub fn set_broker_config(mut self, broker_config: BrokerConfig) -> Self {
         self.broker_config = broker_config;
         self
     }
-
+    #[inline]
     pub fn set_message_store_config(mut self, message_store_config: MessageStoreConfig) -> Self {
         self.message_store_config = message_store_config;
         self
     }
-
+    #[inline]
     pub fn set_server_config(mut self, server_config: ServerConfig) -> Self {
         self.server_config = server_config;
         self
     }
-
+    #[inline]
     pub fn build(self) -> BrokerBootstrap {
         BrokerBootstrap {
             broker_runtime: BrokerRuntime::new(
