@@ -155,8 +155,9 @@ pub fn get_cq_type(
     topic_config_table: &Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
     msg_inner: &MessageExtBrokerInner,
 ) -> CQType {
-    let option = topic_config_table.lock().get(msg_inner.topic()).cloned();
-    QueueTypeUtils::get_cq_type(&option)
+    let topic_config_table_guard = topic_config_table.lock();
+    let option = topic_config_table_guard.get(msg_inner.topic());
+    QueueTypeUtils::get_cq_type(option)
 }
 
 pub fn get_message_num(

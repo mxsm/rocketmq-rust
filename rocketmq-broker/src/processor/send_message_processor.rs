@@ -302,7 +302,7 @@ where
                 .message_ext_inner
                 .message,
         );
-        if batch_uniq_id.is_some() && QueueTypeUtils::is_batch_cq(&Some(topic_config)) {
+        if batch_uniq_id.is_some() && QueueTypeUtils::is_batch_cq(Some(topic_config).as_ref()) {
             let sys_flag = batch_message
                 .message_ext_broker_inner
                 .message_ext_inner

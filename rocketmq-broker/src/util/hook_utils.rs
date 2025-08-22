@@ -156,8 +156,9 @@ impl HookUtils {
         }
 
         if MessageSysFlag::check(msg.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG) {
-            let topic_config = topic_config_table.lock().get(msg.topic()).cloned();
-            if !QueueTypeUtils::is_batch_cq(&topic_config) {
+            let topic_config_table_guard = topic_config_table.lock();
+            let topic_config = topic_config_table_guard.get(msg.topic());
+            if !QueueTypeUtils::is_batch_cq(topic_config) {
                 error!("[BUG]The message is an inner batch but cq type is not batch cq");
                 return Some(PutMessageResult::new_default(
                     PutMessageStatus::MessageIllegal,

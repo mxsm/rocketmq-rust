@@ -8,11 +8,11 @@ use crate::TopicAttributes::TopicAttributes;
 pub struct QueueTypeUtils;
 
 impl QueueTypeUtils {
-    pub fn is_batch_cq(topic_config: &Option<TopicConfig>) -> bool {
+    pub fn is_batch_cq(topic_config: Option<&TopicConfig>) -> bool {
         Self::get_cq_type(topic_config) == CQType::BatchCQ
     }
 
-    pub fn get_cq_type(topic_config: &Option<TopicConfig>) -> CQType {
+    pub fn get_cq_type(topic_config: Option<&TopicConfig>) -> CQType {
         match topic_config {
             Some(config) => {
                 let default_value = TopicAttributes::queue_type_attribute().default_value();
@@ -40,13 +40,13 @@ mod tests {
     #[test]
     fn test_is_batch_cq() {
         let topic_config = None;
-        assert_eq!(QueueTypeUtils::is_batch_cq(&topic_config), false);
+        assert_eq!(QueueTypeUtils::is_batch_cq(topic_config), false);
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::new(),
             ..TopicConfig::default()
         });
-        assert_eq!(QueueTypeUtils::is_batch_cq(&topic_config), false);
+        assert_eq!(QueueTypeUtils::is_batch_cq(topic_config.as_ref()), false);
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::from_iter([(
@@ -58,7 +58,7 @@ mod tests {
             )]),
             ..TopicConfig::default()
         });
-        assert_eq!(QueueTypeUtils::is_batch_cq(&topic_config), true);
+        assert_eq!(QueueTypeUtils::is_batch_cq(topic_config.as_ref()), true);
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::from_iter([(
@@ -70,19 +70,22 @@ mod tests {
             )]),
             ..TopicConfig::default()
         });
-        assert_eq!(QueueTypeUtils::is_batch_cq(&topic_config), false);
+        assert_eq!(QueueTypeUtils::is_batch_cq(topic_config.as_ref()), false);
     }
 
     #[test]
     fn test_get_cq_type() {
         let topic_config = None;
-        assert_eq!(QueueTypeUtils::get_cq_type(&topic_config), CQType::SimpleCQ);
+        assert_eq!(QueueTypeUtils::get_cq_type(topic_config), CQType::SimpleCQ);
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::new(),
             ..TopicConfig::default()
         });
-        assert_eq!(QueueTypeUtils::get_cq_type(&topic_config), CQType::SimpleCQ);
+        assert_eq!(
+            QueueTypeUtils::get_cq_type(topic_config.as_ref()),
+            CQType::SimpleCQ
+        );
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::from_iter([(
@@ -94,7 +97,10 @@ mod tests {
             )]),
             ..TopicConfig::default()
         });
-        assert_eq!(QueueTypeUtils::get_cq_type(&topic_config), CQType::BatchCQ);
+        assert_eq!(
+            QueueTypeUtils::get_cq_type(topic_config.as_ref()),
+            CQType::BatchCQ
+        );
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::from_iter([(
@@ -106,6 +112,9 @@ mod tests {
             )]),
             ..TopicConfig::default()
         });
-        assert_eq!(QueueTypeUtils::get_cq_type(&topic_config), CQType::SimpleCQ);
+        assert_eq!(
+            QueueTypeUtils::get_cq_type(topic_config.as_ref()),
+            CQType::SimpleCQ
+        );
     }
 }
