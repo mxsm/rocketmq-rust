@@ -334,7 +334,7 @@ pub trait MessageStoreInner: Sync + 'static {
     ) -> Result<QueryMessageResult, StoreError>;*/
 
     /// Update HA master address.
-    fn update_ha_master_address(&self, new_addr: &CheetahString);
+    async fn update_ha_master_address(&self, new_addr: &str);
 
     /// Update master address.
     fn update_master_address(&self, new_addr: &CheetahString);

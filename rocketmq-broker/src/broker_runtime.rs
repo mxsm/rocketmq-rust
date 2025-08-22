@@ -100,6 +100,7 @@ use crate::processor::reply_message_processor::ReplyMessageProcessor;
 use crate::processor::send_message_processor::SendMessageProcessor;
 use crate::processor::BrokerRequestProcessor;
 use crate::schedule::schedule_message_service::ScheduleMessageService;
+use crate::slave::slave_synchronize::SlaveSynchronize;
 use crate::subscription::manager::subscription_group_manager::SubscriptionGroupManager;
 use crate::topic::manager::topic_config_manager::TopicConfigManager;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
@@ -214,6 +215,8 @@ impl BrokerRuntime {
             notification_processor: None,
             broker_attached_plugins: vec![],
             transactional_message_service: None,
+            slave_synchronize: SlaveSynchronize,
+            last_sync_time_ms: AtomicU64::new(get_current_millis()),
         });
         let mut stats_manager = BrokerStatsManager::new(inner.broker_config.clone());
         stats_manager.set_producer_state_getter(Arc::new(ProducerStateGetter {
@@ -714,37 +717,53 @@ impl BrokerRuntime {
         {
             if BrokerRole::Slave == self.inner.broker_config.broker_role {
                 info!("Broker is Slave, start replicas manager");
-                if self.inner.message_store_config.ha_master_address.is_some()
-                    && self
-                        .inner
-                        .message_store_config
-                        .ha_master_address
-                        .as_ref()
-                        .unwrap()
-                        .len()
-                        > 6
-                {
-                    let ha_master_address = self
-                        .inner
-                        .message_store_config
-                        .ha_master_address
-                        .clone()
-                        .unwrap()
-                        .into();
-                    self.inner
-                        .message_store
-                        .as_ref()
-                        .unwrap()
-                        .update_ha_master_address(&ha_master_address);
-                    self.inner.update_master_haserver_addr_periodically = false;
+                let ha_master_address = self.inner.message_store_config.ha_master_address.as_ref();
+                if let Some(ha_master_address) = ha_master_address {
+                    if ha_master_address.len() > 6 {
+                        self.inner
+                            .message_store
+                            .as_ref()
+                            .unwrap()
+                            .update_ha_master_address(ha_master_address.as_str())
+                            .await;
+                        self.inner.update_master_haserver_addr_periodically = false;
+                    } else {
+                        self.inner.update_master_haserver_addr_periodically = true;
+                    }
                 } else {
                     self.inner.update_master_haserver_addr_periodically = true;
                 }
+                let inner_clone = self.inner.clone();
+                self.scheduled_task_manager.add_fixed_rate_task_async(
+                    Duration::from_secs(10),
+                    Duration::from_secs(3),
+                    async move |_ctx| {
+                        if get_current_millis()
+                            - inner_clone.last_sync_time_ms.load(Ordering::Relaxed)
+                            > 60_000
+                        {
+                            inner_clone.slave_synchronize.sync_all().await;
+                            inner_clone
+                                .last_sync_time_ms
+                                .store(get_current_millis(), Ordering::Relaxed);
+                        }
+                        if inner_clone.message_store_config.timer_wheel_enable {
+                            inner_clone.slave_synchronize.sync_timer_check_point().await;
+                        }
+                        Ok(())
+                    },
+                );
             } else {
-                info!("Broker is Master, skip replicas manager initialization");
+                let inner_clone = self.inner.clone();
+                self.scheduled_task_manager.add_fixed_rate_task_async(
+                    Duration::from_secs(10),
+                    Duration::from_secs(60),
+                    async move |_ctx| {
+                        inner_clone.print_master_and_slave_diff();
+                        Ok(())
+                    },
+                );
             }
-        } else {
-            //TODO
         }
 
         if self.inner.broker_config.enable_controller_mode {
@@ -1379,6 +1398,8 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     notification_processor: Option<ArcMut<NotificationProcessor<MS>>>,
     broker_attached_plugins: Vec<Arc<dyn BrokerAttachedPlugin>>,
     transactional_message_service: Option<ArcMut<DefaultTransactionalMessageService<MS>>>,
+    slave_synchronize: SlaveSynchronize,
+    last_sync_time_ms: AtomicU64,
 }
 
 impl<MS: MessageStore> BrokerRuntimeInner<MS> {
@@ -2062,6 +2083,10 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 .update_name_server_address_list(namesrv_addr.clone())
                 .await;
         }
+    }
+
+    fn print_master_and_slave_diff(&self) {
+        warn!("print_master_and_slave_diff not implemented");
     }
 
     /// Register broker to name remoting_server

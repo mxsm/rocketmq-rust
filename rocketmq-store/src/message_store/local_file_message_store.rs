@@ -1482,8 +1482,10 @@ impl MessageStore for LocalFileMessageStore {
 
     }*/
 
-    fn update_ha_master_address(&self, new_addr: &CheetahString) {
-        todo!()
+    async fn update_ha_master_address(&self, new_addr: &str) {
+        if let Some(ha_service) = self.ha_service.as_ref() {
+            ha_service.update_master_address(new_addr).await;
+        }
     }
 
     fn update_master_address(&self, new_addr: &CheetahString) {

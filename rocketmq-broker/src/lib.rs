@@ -45,6 +45,7 @@ pub(crate) mod out_api;
 pub(crate) mod plugin;
 pub(crate) mod processor;
 pub(crate) mod schedule;
+pub(crate) mod slave;
 pub(crate) mod subscription;
 pub(crate) mod topic;
 mod transaction;
