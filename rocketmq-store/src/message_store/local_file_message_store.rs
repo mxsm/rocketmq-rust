@@ -770,7 +770,7 @@ impl MessageStore for LocalFileMessageStore {
 
         if MessageSysFlag::check(msg.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG) {
             let topic_config = self.get_topic_config(msg.topic());
-            if !QueueTypeUtils::is_batch_cq(&topic_config) {
+            if !QueueTypeUtils::is_batch_cq(topic_config.as_ref()) {
                 error!("[BUG]The message is an inner batch but cq type is not batch cq");
                 return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
             }
