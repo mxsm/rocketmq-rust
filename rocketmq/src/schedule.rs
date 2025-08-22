@@ -533,7 +533,7 @@ pub mod simple_scheduler {
                                         tokio::spawn(async move {
                                             // 1) Lock out &mut F, call once to get a future
                                             let fut = {
-                                                (task_fn)(child)
+                                                task_fn(child)
                                             };
                                             // The lock has been released. Awaiting here ensures the lock doesn't cross await boundaries.
                                             if let Err(e) = fut.await {
