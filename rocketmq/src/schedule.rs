@@ -385,11 +385,248 @@ pub mod simple_scheduler {
             self.tasks.read().len()
         }
     }
+
+    impl ScheduledTaskManager {
+        /// Adds a fixed-rate scheduled task to the task manager asynchronously.
+        ///
+        /// # Arguments
+        /// * `initial_delay` - The delay before the first execution of the task.
+        /// * `period` - The interval between task executions.
+        /// * `task_fn` - A function that defines the task to be executed. It takes a
+        ///   `CancellationToken` as an argument and returns a `Result<()>`.
+        ///
+        /// # Returns
+        /// A `TaskId` representing the unique identifier of the scheduled task.
+        ///
+        /// # Notes
+        /// - Tasks are executed at fixed intervals, even if previous executions overlap.
+        /// - The task function is executed asynchronously.
+        pub fn add_fixed_rate_task_async<F>(
+            &self,
+            initial_delay: Duration,
+            period: Duration,
+            task_fn: F,
+        ) -> TaskId
+        where
+            F: AsyncFnMut(CancellationToken) -> Result<()> + Send + Sync + 'static,
+            for<'a> <F as AsyncFnMut<(CancellationToken,)>>::CallRefFuture<'a>: Send,
+        {
+            self.add_scheduled_task_async(ScheduleMode::FixedRate, initial_delay, period, task_fn)
+        }
+
+        /// Adds a fixed-delay scheduled task to the task manager asynchronously.
+        ///
+        /// # Arguments
+        /// * `initial_delay` - The delay before the first execution of the task.
+        /// * `period` - The interval between task executions.
+        /// * `task_fn` - A function that defines the task to be executed. It takes a
+        ///   `CancellationToken` as an argument and returns a `Result<()>`.
+        ///
+        /// # Returns
+        /// A `TaskId` representing the unique identifier of the scheduled task.
+        ///
+        /// # Notes
+        /// - Tasks are executed serially, with a delay after each task completes.
+        /// - The task function is executed asynchronously.
+        pub fn add_fixed_delay_task_async<F>(
+            &self,
+            initial_delay: Duration,
+            period: Duration,
+            task_fn: F,
+        ) -> TaskId
+        where
+            F: AsyncFnMut(CancellationToken) -> Result<()> + Send + Sync + 'static,
+            for<'a> <F as AsyncFnMut<(CancellationToken,)>>::CallRefFuture<'a>: Send,
+        {
+            self.add_scheduled_task_async(ScheduleMode::FixedDelay, initial_delay, period, task_fn)
+        }
+
+        /// Adds a fixed-rate-no-overlap scheduled task to the task manager asynchronously.
+        ///
+        /// # Arguments
+        /// * `initial_delay` - The delay before the first execution of the task.
+        /// * `period` - The interval between task executions.
+        /// * `task_fn` - A function that defines the task to be executed. It takes a
+        ///   `CancellationToken` as an argument and returns a `Result<()>`.
+        ///
+        /// # Returns
+        /// A `TaskId` representing the unique identifier of the scheduled task.
+        ///
+        /// # Notes
+        /// - Tasks are executed at fixed intervals, but overlapping executions are skipped.
+        /// - The task function is executed asynchronously.
+        pub fn add_fixed_rate_no_overlap_task_async<F>(
+            &self,
+            initial_delay: Duration,
+            period: Duration,
+            task_fn: F,
+        ) -> TaskId
+        where
+            F: AsyncFnMut(CancellationToken) -> Result<()> + Send + Sync + 'static,
+            for<'a> <F as AsyncFnMut<(CancellationToken,)>>::CallRefFuture<'a>: Send,
+        {
+            self.add_scheduled_task_async(
+                ScheduleMode::FixedRateNoOverlap,
+                initial_delay,
+                period,
+                task_fn,
+            )
+        }
+
+        /// Adds a scheduled task to the task manager asynchronously.
+        ///
+        /// # Arguments
+        /// * `mode` - The scheduling mode for the task. Determines how the task is executed:
+        ///   - `FixedRate`: Aligns the beats, allowing tasks to pile up if they take too long.
+        ///   - `FixedDelay`: Executes tasks serially, with a delay after each task completes.
+        ///   - `FixedRateNoOverlap`: Aligns the beats but skips execution if the previous task is
+        ///     still running.
+        /// * `initial_delay` - The delay before the first execution of the task.
+        /// * `period` - The interval between task executions.
+        /// * `task_fn` - A function that defines the task to be executed. It takes a
+        ///   `CancellationToken` as an argument and returns a `Future` that resolves to a
+        ///   `Result<()>`.
+        ///
+        /// # Returns
+        /// A `TaskId` representing the unique identifier of the scheduled task.
+        ///
+        /// # Notes
+        /// - The task function is executed asynchronously.
+        /// - The `CancellationToken` can be used to gracefully cancel the task.
+        /// - The task is added to the internal task manager and can be managed (e.g., canceled or
+        ///   aborted) later.
+        pub fn add_scheduled_task_async<F>(
+            &self,
+            mode: ScheduleMode,
+            initial_delay: Duration,
+            period: Duration,
+            task_fn: F,
+        ) -> TaskId
+        where
+            F: AsyncFnMut(CancellationToken) -> Result<()> + Send + Sync + 'static,
+            for<'a> <F as AsyncFnMut<(CancellationToken,)>>::CallRefFuture<'a>: Send,
+        {
+            let id = self.next_id();
+            let token = CancellationToken::new();
+            let token_child = token.clone();
+
+            let task_fn = ArcMut::new(task_fn);
+
+            let handle = tokio::spawn({
+                let mut task_fn = task_fn.clone();
+                async move {
+                    match mode {
+                        ScheduleMode::FixedRate => {
+                            let start = Instant::now() + initial_delay;
+                            let mut ticker = time::interval_at(start, period);
+
+                            loop {
+                                tokio::select! {
+                                    _ = token_child.cancelled() => {
+                                        info!("Task {} cancelled gracefully", id);
+                                        break;
+                                    }
+                                    _ = ticker.tick() => {
+                                        // Allow concurrent execution: One subtask per tick
+                                        let mut task_fn = task_fn.clone();
+                                        let child = token_child.clone();
+                                        tokio::spawn(async move {
+                                            // 1) Lock out &mut F, call once to get a future
+                                            let fut = {
+                                                task_fn(child)
+                                            };
+                                            // The lock has been released. Awaiting here ensures the lock doesn't cross await boundaries.
+                                            if let Err(e) = fut.await {
+                                                error!("FixedRate task {} failed: {:?}", id, e);
+                                            }
+                                        });
+                                    }
+                                }
+                            }
+                        }
+
+                        ScheduleMode::FixedDelay => {
+                            time::sleep(initial_delay).await;
+                            loop {
+                                tokio::select! {
+                                    _ = token_child.cancelled() => {
+                                        info!("Task {} cancelled gracefully", id);
+                                        break;
+                                    }
+                                    _ = async {
+                                        // Serial execution: complete one task and then sleep
+                                        let fut = {
+                                            (task_fn)(token_child.clone())
+                                        };
+                                        if let Err(e) = fut.await {
+                                            error!("FixedDelay task {} failed: {:?}", id, e);
+                                        }
+                                        time::sleep(period).await;
+                                    } => {}
+                                }
+                            }
+                        }
+
+                        ScheduleMode::FixedRateNoOverlap => {
+                            let start = Instant::now() + initial_delay;
+                            let mut ticker = time::interval_at(start, period);
+
+                            // Permission=1, controls non-overlapping execution
+                            let gate = Arc::new(Semaphore::new(1));
+
+                            loop {
+                                tokio::select! {
+                                    _ = token_child.cancelled() => {
+                                        info!("Task {} cancelled gracefully", id);
+                                        break;
+                                    }
+                                    _ = ticker.tick() => {
+                                        // Try to acquire permission. If unable to acquire, skip the current tick.
+                                        if let Ok(permit) = gate.clone().try_acquire_owned() {
+                                            let mut task_fn = task_fn.clone();
+                                            let child = token_child.clone();
+                                            tokio::spawn(async move {
+                                                // Release the lock immediately after generating the future
+                                                let fut = {
+                                                    (task_fn)(child)
+                                                };
+                                                if let Err(e) = fut.await {
+                                                    error!("FixedRateNoOverlap task {} failed: {:?}", id, e);
+                                                }
+                                                drop(permit); // Release the permit after completion
+                                            });
+                                        } else {
+                                            info!("Task {} skipped due to overlap", id);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            self.tasks.write().insert(
+                id,
+                TaskInfo {
+                    cancel_token: token,
+                    handle,
+                },
+            );
+
+            id
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
     use std::time::Duration;
+
+    use tokio::time;
 
     use crate::schedule::simple_scheduler::*;
 
@@ -510,8 +747,97 @@ mod tests {
             },
         );
 
-        tokio::time::sleep(Duration::from_secs(1));
+        let _ = tokio::time::sleep(Duration::from_secs(1));
         let _ = manager.cancel_task(task_id);
         assert_eq!(manager.task_count(), 0);
+    }
+
+    fn new_manager() -> ScheduledTaskManager {
+        ScheduledTaskManager::new()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_fixed_rate_task() {
+        let mgr = new_manager();
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        let c = counter.clone();
+        let task_id = mgr.add_fixed_rate_task_async(
+            Duration::from_millis(50),
+            Duration::from_millis(100),
+            async move |_ctx| {
+                c.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            },
+        );
+
+        time::sleep(Duration::from_millis(500)).await;
+
+        mgr.cancel_task(task_id);
+        time::sleep(Duration::from_millis(50)).await;
+
+        let executed = counter.load(Ordering::Relaxed);
+        assert!(
+            executed >= 3,
+            "FixedRate executed too few times: {}",
+            executed
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_fixed_delay_task() {
+        let mgr = new_manager();
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        let c = counter.clone();
+        let task_id = mgr.add_fixed_delay_task_async(
+            Duration::from_millis(10),
+            Duration::from_millis(50),
+            async move |_ctx| {
+                c.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            },
+        );
+
+        time::sleep(Duration::from_millis(300)).await;
+
+        mgr.cancel_task(task_id);
+        time::sleep(Duration::from_millis(50)).await;
+
+        let executed = counter.load(Ordering::Relaxed);
+        assert!(
+            executed >= 3 && executed <= 6,
+            "FixedDelay count unexpected: {}",
+            executed
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_fixed_rate_no_overlap_task() {
+        let mgr = new_manager();
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        let c = counter.clone();
+        let task_id = mgr.add_fixed_rate_no_overlap_task_async(
+            Duration::from_millis(10),
+            Duration::from_millis(50),
+            async move |_ctx| {
+                time::sleep(Duration::from_millis(80)).await;
+                c.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            },
+        );
+
+        time::sleep(Duration::from_millis(400)).await;
+
+        mgr.cancel_task(task_id);
+        time::sleep(Duration::from_millis(50)).await;
+
+        let executed = counter.load(Ordering::Relaxed);
+        assert!(
+            executed >= 2 && executed <= 5,
+            "FixedRateNoOverlap count unexpected: {}",
+            executed
+        );
     }
 }
