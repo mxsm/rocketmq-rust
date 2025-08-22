@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
+use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::constant::PermName;
@@ -43,6 +44,7 @@ use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::remoting_server::server::RocketMQServer;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_runtime::RocketMQRuntime;
+use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::commit_log_dispatcher::CommitLogDispatcher;
 use rocketmq_store::base::message_store::MessageStore;
@@ -119,6 +121,7 @@ pub(crate) struct BrokerRuntime {
     broker_pre_online_service: BrokerPreOnlineService,
     // receiver for shutdown signal
     pub(crate) shutdown_rx: Option<tokio::sync::broadcast::Receiver<()>>,
+    scheduled_task_manager: ScheduledTaskManager,
 }
 
 impl BrokerRuntime {
@@ -245,6 +248,7 @@ impl BrokerRuntime {
             topic_queue_mapping_clean_service: TopicQueueMappingCleanService,
             broker_pre_online_service: BrokerPreOnlineService,
             shutdown_rx: None,
+            scheduled_task_manager: Default::default(),
         }
     }
 
@@ -260,6 +264,8 @@ impl BrokerRuntime {
         self.shutdown_basic_service().await;
 
         self.inner.broker_outer_api.shutdown();
+
+        self.scheduled_task_manager.cancel_all();
 
         if let Some(runtime) = self.broker_runtime.take() {
             runtime.shutdown();
@@ -624,116 +630,122 @@ impl BrokerRuntime {
 
     async fn initialize_scheduled_tasks(&mut self) {
         let initial_delay = compute_next_morning_time_millis() - get_current_millis();
-        let period = Duration::from_days(1).as_millis() as u64;
+        let period = Duration::from_days(1);
         let broker_stats_ = self.inner.clone();
-        self.broker_runtime
-            .as_ref()
-            .unwrap()
-            .get_handle()
-            .spawn(async move {
-                info!("BrokerStats Start scheduled task");
-                tokio::time::sleep(Duration::from_millis(initial_delay)).await;
-                loop {
-                    let current_execution_time = tokio::time::Instant::now();
-                    broker_stats_.broker_stats().as_ref().unwrap().record();
-                    let next_execution_time =
-                        current_execution_time + Duration::from_millis(period);
-                    let delay =
-                        next_execution_time.saturating_duration_since(tokio::time::Instant::now());
-                    tokio::time::sleep(delay).await;
+        self.scheduled_task_manager.add_fixed_rate_task_async(
+            Duration::from_millis(initial_delay),
+            period,
+            async move |_ctx| {
+                if let Some(broker_stats) = broker_stats_.broker_stats() {
+                    broker_stats.record();
+                } else {
+                    warn!("BrokerStats is not initialized");
                 }
-            });
+                Ok(())
+            },
+        );
 
         //need to optimize
         let consumer_offset_manager_inner = self.inner.clone();
         let flush_consumer_offset_interval =
             self.inner.broker_config.flush_consumer_offset_interval;
-        self.broker_runtime
-            .as_ref()
-            .unwrap()
-            .get_handle()
-            .spawn(async move {
-                info!("Consumer offset manager Start scheduled task");
-                tokio::time::sleep(Duration::from_millis(1000 * 10)).await;
-                loop {
-                    let current_execution_time = tokio::time::Instant::now();
-                    consumer_offset_manager_inner
-                        .consumer_offset_manager
-                        .persist();
-                    let next_execution_time = current_execution_time
-                        + Duration::from_millis(flush_consumer_offset_interval);
-                    let delay =
-                        next_execution_time.saturating_duration_since(tokio::time::Instant::now());
-                    tokio::time::sleep(delay).await;
-                }
-            });
+
+        self.scheduled_task_manager.add_fixed_rate_task_async(
+            Duration::from_secs(10),
+            Duration::from_millis(flush_consumer_offset_interval),
+            async move |_ctx| {
+                consumer_offset_manager_inner
+                    .consumer_offset_manager
+                    .persist();
+                Ok(())
+            },
+        );
 
         //need to optimize
         let mut _inner = self.inner.clone();
-        //let mut  consumer_order_info_manager = self.inner.consumer_order_info_manager.clone();
-        self.broker_runtime
-            .as_ref()
-            .unwrap()
-            .get_handle()
-            .spawn(async move {
-                info!("consumer filter manager Start scheduled task");
-                info!("consumer order info manager Start scheduled task");
-                tokio::time::sleep(Duration::from_millis(1000 * 10)).await;
-                loop {
-                    let current_execution_time = tokio::time::Instant::now();
-                    _inner.consumer_filter_manager.as_mut().unwrap().persist();
-                    _inner
-                        .consumer_order_info_manager
-                        .as_mut()
-                        .unwrap()
-                        .persist();
-                    let next_execution_time =
-                        current_execution_time + Duration::from_millis(1000 * 10);
-                    let delay =
-                        next_execution_time.saturating_duration_since(tokio::time::Instant::now());
-                    tokio::time::sleep(delay).await;
+        self.scheduled_task_manager.add_fixed_rate_task_async(
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+            async move |_ctx| {
+                if let Some(consumer_filter_manager_) = &mut _inner.consumer_filter_manager {
+                    consumer_filter_manager_.persist();
+                } else {
+                    warn!("ConsumerFilterManager is not initialized");
                 }
-            });
+                if let Some(consumer_order_info_manager_) = &mut _inner.consumer_order_info_manager
+                {
+                    consumer_order_info_manager_.persist();
+                } else {
+                    warn!("ConsumerOrderInfoManager is not initialized");
+                }
+
+                Ok(())
+            },
+        );
 
         let mut runtime = self.inner.clone();
-        self.broker_runtime
-            .as_ref()
-            .unwrap()
-            .get_handle()
-            .spawn(async move {
-                info!("Protect broker Start scheduled task");
-                tokio::time::sleep(Duration::from_mins(3)).await;
-                loop {
-                    let current_execution_time = tokio::time::Instant::now();
-                    runtime.protect_broker();
-                    let next_execution_time = current_execution_time + Duration::from_mins(3);
-                    let delay =
-                        next_execution_time.saturating_duration_since(tokio::time::Instant::now());
-                    tokio::time::sleep(delay).await;
-                }
-            });
+        self.scheduled_task_manager.add_fixed_rate_task_async(
+            Duration::from_mins(3),
+            Duration::from_mins(3),
+            async move |_ctx| {
+                runtime.protect_broker();
+                Ok(())
+            },
+        );
 
         let message_store_inner = self.inner.clone();
-        self.broker_runtime
-            .as_ref()
-            .unwrap()
-            .get_handle()
-            .spawn(async move {
-                info!("Message store dispatch_behind_bytes Start scheduled task");
-                tokio::time::sleep(Duration::from_secs(10)).await;
-                loop {
-                    let current_execution_time = tokio::time::Instant::now();
-                    message_store_inner
+        self.scheduled_task_manager.add_fixed_rate_task_async(
+            Duration::from_secs(10),
+            Duration::from_secs(60),
+            async move |_ctx| {
+                if let Some(message_store) = message_store_inner.message_store.as_ref() {
+                    let behind = message_store.dispatch_behind_bytes();
+                    info!("Dispatch task fall behind commit log {behind}bytes");
+                } else {
+                    warn!("MessageStore is not initialized");
+                }
+                Ok(())
+            },
+        );
+
+        if !self.inner.message_store_config.enable_dledger_commit_log
+            && !self.inner.message_store_config.duplication_enable
+            && !self.inner.message_store_config.enable_controller_mode
+        {
+            if BrokerRole::Slave == self.inner.broker_config.broker_role {
+                info!("Broker is Slave, start replicas manager");
+                if self.inner.message_store_config.ha_master_address.is_some()
+                    && self
+                        .inner
+                        .message_store_config
+                        .ha_master_address
+                        .as_ref()
+                        .unwrap()
+                        .len()
+                        > 6
+                {
+                    let ha_master_address = self
+                        .inner
+                        .message_store_config
+                        .ha_master_address
+                        .clone()
+                        .unwrap()
+                        .into();
+                    self.inner
                         .message_store
                         .as_ref()
                         .unwrap()
-                        .dispatch_behind_bytes();
-                    let next_execution_time = current_execution_time + Duration::from_secs(60);
-                    let delay =
-                        next_execution_time.saturating_duration_since(tokio::time::Instant::now());
-                    tokio::time::sleep(delay).await;
+                        .update_ha_master_address(&ha_master_address);
+                    self.inner.update_master_haserver_addr_periodically = false;
+                } else {
+                    self.inner.update_master_haserver_addr_periodically = true;
                 }
-            });
+            } else {
+                info!("Broker is Master, skip replicas manager initialization");
+            }
+        } else {
+            //TODO
+        }
 
         if self.inner.broker_config.enable_controller_mode {
             self.inner.update_master_haserver_addr_periodically = true;
