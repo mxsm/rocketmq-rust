@@ -443,6 +443,7 @@ impl BrokerRuntime {
     }
 
     async fn initialize_message_store(&mut self) -> bool {
+        let mut flag = true;
         if self.inner.message_store_config.store_type == StoreType::LocalFile {
             info!("Use local file as message store");
             let mut message_store = ArcMut::new(LocalFileMessageStore::new(
@@ -462,7 +463,18 @@ impl BrokerRuntime {
             self.inner.message_store = Some(message_store.clone());
             self.inner
                 .consumer_offset_manager
-                .set_message_store(Some(message_store))
+                .set_message_store(Some(message_store));
+            if let Some(message_store) = &mut self.inner.message_store {
+                match message_store.init().await {
+                    Ok(_) => {
+                        info!("Initialize message store success");
+                    }
+                    Err(e) => {
+                        warn!("Initialize message store failed, error: {:?}", e);
+                        flag = false;
+                    }
+                }
+            }
         } else if self.inner.message_store_config.store_type == StoreType::RocksDB {
             unimplemented!("Use RocksDB as message store unimplemented");
         } else {
@@ -476,7 +488,7 @@ impl BrokerRuntime {
         self.inner
             .message_store_unchecked_mut()
             .add_first_dispatcher(filter);
-        true
+        flag
     }
 
     async fn recover_initialize_service(&mut self) -> bool {
