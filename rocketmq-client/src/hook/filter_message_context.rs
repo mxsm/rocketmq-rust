@@ -45,8 +45,8 @@ impl<'a> FilterMessageContext<'a> {
         }
     }
 
-    pub fn consumer_group(&self) -> &Option<String> {
-        &self.consumer_group
+    pub fn consumer_group(&self) -> Option<&String> {
+        self.consumer_group.as_ref()
     }
 
     pub fn msg_list(&self) -> &'a [MessageExt] {
