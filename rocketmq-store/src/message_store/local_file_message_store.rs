@@ -1710,8 +1710,16 @@ impl MessageStore for LocalFileMessageStore {
         todo!()
     }
 
-    fn get_commit_log(&self) -> Arc<CommitLog> {
-        todo!()
+    fn get_commit_log(&self) -> &CommitLog {
+        self.commit_log.as_ref()
+    }
+
+    fn get_commit_log_mut_from_ref(&self) -> &mut CommitLog {
+        self.commit_log.mut_from_ref()
+    }
+
+    fn get_commit_log_mut(&mut self) -> &mut CommitLog {
+        self.commit_log.as_mut()
     }
 
     fn get_running_flags(&self) -> &RunningFlags {

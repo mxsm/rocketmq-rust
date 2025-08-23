@@ -458,7 +458,13 @@ pub trait MessageStoreInner: Sync + 'static {
     fn get_system_clock(&self) -> Arc<SystemClock>;
 
     /// Get the commit log
-    fn get_commit_log(&self) -> Arc<CommitLog>;
+    fn get_commit_log(&self) -> &CommitLog;
+
+    /// Get mutable commit log
+    #[allow(clippy::mut_from_ref)]
+    fn get_commit_log_mut_from_ref(&self) -> &mut CommitLog;
+
+    fn get_commit_log_mut(&mut self) -> &mut CommitLog;
 
     /// Get running flags
     fn get_running_flags(&self) -> &RunningFlags;
