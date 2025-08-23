@@ -68,6 +68,9 @@ pub trait MessageStoreInner: Sync + 'static {
     /// Launch this message store.
     async fn start(&mut self) -> Result<(), StoreError>;
 
+    /// Initialize this message store.
+    async fn init(&mut self) -> Result<(), StoreError>;
+
     /// Shutdown this message store.
     async fn shutdown(&mut self);
 

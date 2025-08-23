@@ -647,23 +647,6 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     async fn start(&mut self) -> Result<(), StoreError> {
-        if !self.message_store_config.enable_dleger_commit_log
-            && !self.message_store_config.duplication_enable
-        {
-            if let Some(ha_service) = self.ha_service.as_mut() {
-                ha_service
-                    .init(self.message_store_arc.clone().unwrap())
-                    .map_err(|e| {
-                        error!("HA service start failed: {:?}", e);
-                        StoreError::General(e.to_string())
-                    })?;
-            }
-        }
-
-        if self.is_transient_store_pool_enable() {
-            self.transient_store_pool.init();
-        }
-
         self.allocate_mapped_file_service.start();
 
         self.index_service.start();
@@ -693,6 +676,26 @@ impl MessageStore for LocalFileMessageStore {
         self.add_schedule_task();
         // self.perfs.start();
         self.shutdown.store(false, Ordering::Release);
+        Ok(())
+    }
+
+    async fn init(&mut self) -> Result<(), StoreError> {
+        if !self.message_store_config.enable_dleger_commit_log
+            && !self.message_store_config.duplication_enable
+        {
+            if let Some(ha_service) = self.ha_service.as_mut() {
+                ha_service
+                    .init(self.message_store_arc.clone().unwrap())
+                    .map_err(|e| {
+                        error!("HA service start failed: {:?}", e);
+                        StoreError::General(e.to_string())
+                    })?;
+            }
+        }
+
+        if self.is_transient_store_pool_enable() {
+            self.transient_store_pool.init();
+        }
         Ok(())
     }
 
