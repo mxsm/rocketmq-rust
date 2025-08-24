@@ -129,7 +129,7 @@ impl BrokerRuntime {
     pub(crate) fn new(
         broker_config: Arc<BrokerConfig>,
         message_store_config: Arc<MessageStoreConfig>,
-        server_config: Arc<ServerConfig>,
+        //server_config: Arc<ServerConfig>,
     ) -> Self {
         let broker_address = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port);
         let store_host = broker_address
@@ -166,7 +166,7 @@ impl BrokerRuntime {
             broker_addr: CheetahString::from(broker_address),
             broker_config: broker_config.clone(),
             message_store_config: message_store_config.clone(),
-            server_config,
+            //server_config,
             topic_config_manager: None,
             topic_queue_mapping_manager,
             consumer_offset_manager: ConsumerOffsetManager::new(
@@ -853,7 +853,9 @@ impl BrokerRuntime {
         let request_processor = self.init_processor();
         let fast_request_processor = request_processor.clone();
 
-        let server = RocketMQServer::new(self.inner.server_config.clone());
+        let server = RocketMQServer::new(Arc::new(
+            self.inner.broker_config.broker_server_config.clone(),
+        ));
         //start nomarl broker remoting_server
         let client_housekeeping_service_main = self
             .inner
@@ -867,8 +869,9 @@ impl BrokerRuntime {
                 .await
         });
         //start fast broker remoting_server
-        let mut fast_server_config = self.inner.server_config.as_ref().clone();
-        fast_server_config.listen_port = self.inner.server_config.listen_port - 2;
+        let mut fast_server_config = self.inner.broker_config.broker_server_config.clone();
+        fast_server_config.listen_port =
+            self.inner.broker_config.broker_server_config.listen_port - 2;
         let fast_server = RocketMQServer::new(Arc::new(fast_server_config));
         tokio::spawn(async move {
             fast_server
@@ -1133,7 +1136,8 @@ impl BrokerRuntime {
         let broker_name = self.inner.broker_config.broker_identity.broker_name.clone();
         let broker_addr = CheetahString::from_string(format!(
             "{}:{}",
-            self.inner.broker_config.broker_ip1, self.inner.server_config.listen_port
+            self.inner.broker_config.broker_ip1,
+            self.inner.broker_config.broker_server_config.listen_port
         ));
         let broker_id = self.inner.broker_config.broker_identity.broker_id;
         //  let weak = Arc::downgrade(&self.inner.broker_outer_api);
@@ -1252,7 +1256,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         let broker_name = this.broker_config.broker_identity.broker_name.clone();
         let broker_addr = CheetahString::from_string(format!(
             "{}:{}",
-            this.broker_config.broker_ip1, this.server_config.listen_port
+            this.broker_config.broker_ip1, this.broker_config.broker_server_config.listen_port
         ));
         let broker_id = this.broker_config.broker_identity.broker_id;
         //let weak = Arc::downgrade(&self.broker_out_api);
@@ -1368,7 +1372,6 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     broker_addr: CheetahString,
     broker_config: Arc<BrokerConfig>,
     message_store_config: Arc<MessageStoreConfig>,
-    server_config: Arc<ServerConfig>,
     topic_config_manager: Option<TopicConfigManager<MS>>,
     topic_queue_mapping_manager: TopicQueueMappingManager,
     consumer_offset_manager: ConsumerOffsetManager<MS>,
@@ -1661,7 +1664,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn server_config(&self) -> &ServerConfig {
-        &self.server_config
+        &self.broker_config.broker_server_config
     }
 
     #[inline]
@@ -1882,10 +1885,10 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         self.message_store_config = Arc::new(message_store_config);
     }
 
-    #[inline]
+    /*    #[inline]
     pub fn set_server_config(&mut self, server_config: ServerConfig) {
         self.server_config = Arc::new(server_config);
-    }
+    }*/
 
     #[inline]
     pub fn set_topic_config_manager(&mut self, topic_config_manager: TopicConfigManager<MS>) {
@@ -2212,7 +2215,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         let broker_name = this.broker_config.broker_identity.broker_name.clone();
         let broker_addr = CheetahString::from_string(format!(
             "{}:{}",
-            this.broker_config.broker_ip1, this.server_config.listen_port
+            this.broker_config.broker_ip1, this.broker_config.broker_server_config.listen_port
         ));
         let broker_id = this.broker_config.broker_identity.broker_id;
         //  let weak = Arc::downgrade(&self.inner.broker_outer_api);

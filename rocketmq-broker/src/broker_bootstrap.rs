@@ -17,7 +17,6 @@
 use std::sync::Arc;
 
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
-use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_rust::wait_for_signal;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 use tracing::error;
@@ -63,7 +62,7 @@ async fn wait_for_signal_inner(shutdown_tx: tokio::sync::broadcast::Sender<()>) 
 pub struct Builder {
     broker_config: BrokerConfig,
     message_store_config: MessageStoreConfig,
-    server_config: ServerConfig,
+    //server_config: ServerConfig,
 }
 
 impl Builder {
@@ -72,7 +71,7 @@ impl Builder {
         Builder {
             broker_config: Default::default(),
             message_store_config: MessageStoreConfig::default(),
-            server_config: Default::default(),
+            //server_config: Default::default(),
         }
     }
     #[inline]
@@ -85,18 +84,18 @@ impl Builder {
         self.message_store_config = message_store_config;
         self
     }
-    #[inline]
+    /*    #[inline]
     pub fn set_server_config(mut self, server_config: ServerConfig) -> Self {
         self.server_config = server_config;
         self
-    }
+    }*/
     #[inline]
     pub fn build(self) -> BrokerBootstrap {
         BrokerBootstrap {
             broker_runtime: BrokerRuntime::new(
                 Arc::new(self.broker_config),
                 Arc::new(self.message_store_config),
-                Arc::new(self.server_config),
+                //Arc::new(self.server_config),
             ),
         }
     }
