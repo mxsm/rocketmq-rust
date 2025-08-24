@@ -439,16 +439,9 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
         request_processor: RP,
         channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
     ) {
-        let listener = TcpListener::bind(&format!(
-            "{}:{}",
-            self.config.bind_address, self.config.listen_port
-        ))
-        .await
-        .unwrap();
-        info!(
-            "Bind local address: {}",
-            format!("{}:{}", self.config.bind_address, self.config.listen_port)
-        );
+        let addr = format!("{}:{}", self.config.bind_address, self.config.listen_port);
+        let listener = TcpListener::bind(&addr).await.unwrap();
+        info!("Starting remoting_server at: {}", addr);
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
         run(
             listener,
