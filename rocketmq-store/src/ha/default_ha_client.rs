@@ -347,13 +347,14 @@ impl HAClient for DefaultHAClient {
                             let store = client.default_message_store.clone();
                             let flow = client.flow_monitor.clone();
                             let mut reader_client = ReaderTask {
-                                rd: framed_rd,
+                                reader: framed_rd,
                                 buf: BytesMut::with_capacity(READ_MAX_BUFFER_SIZE),
                                 dispatch_pos: 0,
                                 offset_tx,
                                 err_tx,
                                 store,
                                 flow_monitor: flow,
+                                last_read_timestamp: client.last_read_timestamp.clone(),
                             };
                             let reader_handle = tokio::spawn(async move {
                                 tokio::select! {
@@ -370,9 +371,10 @@ impl HAClient for DefaultHAClient {
                                     .message_store_config_ref()
                                     .ha_send_heartbeat_interval,
                             };
+
                             let mut writer_client = WriterTask {
                                 wr: framed_wr,
-                                last_write_ts_ref: client.last_write_timestamp.clone(),
+                                last_write_timestamp: client.last_write_timestamp.clone(),
                                 current_reported_offset_ref: client.current_reported_offset.clone(),
                                 cfg,
                                 offset_rx,
@@ -532,22 +534,24 @@ impl HAClient for DefaultHAClient {
 // ====== Reader（read task）======
 
 struct ReaderTask {
-    rd: FramedRead<OwnedReadHalf, BytesCodec>,
+    reader: FramedRead<OwnedReadHalf, BytesCodec>,
     buf: BytesMut,
     dispatch_pos: usize,
     offset_tx: tokio::sync::mpsc::UnboundedSender<i64>,
     err_tx: tokio::sync::mpsc::UnboundedSender<anyhow::Error>,
     store: ArcMut<LocalFileMessageStore>,
     flow_monitor: Arc<FlowMonitor>,
+    /// Last time slave read data from master
+    last_read_timestamp: Arc<AtomicU64>,
 }
 
 impl ReaderTask {
     async fn run(&mut self) -> anyhow::Result<()> {
         loop {
-            match self.rd.next().await {
+            match self.reader.next().await {
                 Some(Ok(bytes)) => {
                     // framed - once for one piece of data; we are still doing custom protocol
-                    // unpacking in the local buffer
+                    // unpacking in the local buffe
                     self.flow_monitor
                         .add_byte_count_transferred(bytes.len() as i64);
                     self.buf.extend_from_slice(&bytes);
@@ -555,6 +559,8 @@ impl ReaderTask {
                     if !self.dispatch_read().await? {
                         bail!("dispatchReadRequest error");
                     }
+                    self.last_read_timestamp
+                        .store(get_current_millis(), Ordering::SeqCst);
                 }
                 Some(Err(e)) => {
                     bail!(e);
@@ -634,7 +640,7 @@ struct WriterCfg {
 
 struct WriterTask {
     wr: FramedWrite<OwnedWriteHalf, BytesCodec>,
-    last_write_ts_ref: Arc<AtomicU64>,
+    last_write_timestamp: Arc<AtomicU64>,
     current_reported_offset_ref: Arc<AtomicI64>,
     cfg: WriterCfg,
     offset_rx: tokio::sync::mpsc::UnboundedReceiver<i64>,
@@ -673,7 +679,7 @@ impl WriterTask {
         self.report_offset.put_i64(max_off);
         let bytes = self.report_offset.split().freeze();
         self.wr.send(bytes).await?;
-        self.last_write_ts_ref
+        self.last_write_timestamp
             .store(get_current_millis(), Ordering::Release);
         Ok(())
     }
