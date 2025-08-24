@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-mod auto_switch;
+pub(crate) mod auto_switch;
 pub(crate) mod default_ha_client;
 mod default_ha_connection;
 pub(crate) mod default_ha_service;

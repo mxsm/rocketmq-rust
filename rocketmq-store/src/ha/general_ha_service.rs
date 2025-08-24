@@ -28,7 +28,6 @@ use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::ha_service::HAService;
 use crate::log_file::group_commit_request::GroupCommitRequest;
-use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::store_error::HAResult;
 
 #[derive(Clone)]
@@ -38,10 +37,6 @@ pub enum GeneralHAService {
 }
 
 impl GeneralHAService {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn new_with_default_ha_service(default_ha_service: ArcMut<DefaultHAService>) -> Self {
         GeneralHAService::DefaultHAService(default_ha_service)
     }
@@ -52,21 +47,16 @@ impl GeneralHAService {
         GeneralHAService::AutoSwitchHAService(auto_switch_ha_service)
     }
 
-    pub(crate) fn init(&mut self, message_store: ArcMut<LocalFileMessageStore>) -> HAResult<()> {
-        if message_store
-            .get_message_store_config()
-            .enable_controller_mode
-        {
-            *self = GeneralHAService::AutoSwitchHAService(ArcMut::new(AutoSwitchHAService::new(
-                message_store,
-            )));
-        } else {
-            let mut default_ha_service = ArcMut::new(DefaultHAService::new(message_store));
-            let default_ha_service_clone = default_ha_service.clone();
-            DefaultHAService::init(&mut default_ha_service, default_ha_service_clone)?;
-            *self = GeneralHAService::DefaultHAService(default_ha_service);
+    pub(crate) fn init(&mut self) -> HAResult<()> {
+        match self {
+            GeneralHAService::DefaultHAService(service) => {
+                let this = service.clone();
+                service.init(this)
+            }
+            GeneralHAService::AutoSwitchHAService(service) => {
+                unimplemented!("AutoSwitchHAService init is not implemented yet")
+            }
         }
-        Ok(())
     }
 
     #[inline]

@@ -247,7 +247,7 @@ impl LocalFileMessageStore {
             timer_message_store: None,
             transient_store_pool,
             message_store_arc: None,
-            ha_service: Some(GeneralHAService::new()),
+            ha_service: None,
             flush_consume_queue_service: FlushConsumeQueueService,
             delay_level_table: ArcMut::new(delay_level_table),
             max_delay_level,
@@ -683,13 +683,21 @@ impl MessageStore for LocalFileMessageStore {
         if !self.message_store_config.enable_dleger_commit_log
             && !self.message_store_config.duplication_enable
         {
-            if let Some(ha_service) = self.ha_service.as_mut() {
-                ha_service
-                    .init(self.message_store_arc.clone().unwrap())
-                    .map_err(|e| {
-                        error!("HA service start failed: {:?}", e);
-                        StoreError::General(e.to_string())
-                    })?;
+            if self.message_store_config.enable_controller_mode {
+                let mut auto_switch_ha_service =
+                    GeneralHAService::AutoSwitchHAService(ArcMut::new(
+                        crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService,
+                    ));
+                let _ = auto_switch_ha_service.init();
+                self.ha_service = Some(auto_switch_ha_service);
+            } else {
+                let mut default_ha_service = GeneralHAService::DefaultHAService(ArcMut::new(
+                    crate::ha::default_ha_service::DefaultHAService::new(
+                        self.message_store_arc.clone().unwrap(),
+                    ),
+                ));
+                let _ = default_ha_service.init();
+                self.ha_service = Some(default_ha_service);
             }
         }
 
