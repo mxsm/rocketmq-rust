@@ -20,7 +20,6 @@ use std::sync::atomic::AtomicU32;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_rust::ArcMut;
 use tokio::sync::Notify;
-use tracing::error;
 
 use crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService;
 use crate::ha::default_ha_service::DefaultHAService;
@@ -29,78 +28,82 @@ use crate::ha::general_ha_connection::GeneralHAConnection;
 use crate::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use crate::ha::ha_service::HAService;
 use crate::log_file::group_commit_request::GroupCommitRequest;
-use crate::message_store::local_file_message_store::LocalFileMessageStore;
-use crate::store_error::HAError;
 use crate::store_error::HAResult;
 
-#[derive(Clone, Default)]
-pub struct GeneralHAService {
-    default_ha_service: Option<ArcMut<DefaultHAService>>,
-    auto_switch_ha_service: Option<ArcMut<AutoSwitchHAService>>,
+#[derive(Clone)]
+pub enum GeneralHAService {
+    DefaultHAService(ArcMut<DefaultHAService>),
+    AutoSwitchHAService(ArcMut<AutoSwitchHAService>),
 }
 
 impl GeneralHAService {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn new_with_default_ha_service(default_ha_service: ArcMut<DefaultHAService>) -> Self {
-        GeneralHAService {
-            default_ha_service: Some(default_ha_service),
-            auto_switch_ha_service: None,
-        }
+        GeneralHAService::DefaultHAService(default_ha_service)
     }
 
-    pub(crate) fn init(&mut self, message_store: ArcMut<LocalFileMessageStore>) -> HAResult<()> {
-        if message_store
-            .get_message_store_config()
-            .enable_controller_mode
-        {
-            self.auto_switch_ha_service = Some(ArcMut::new(AutoSwitchHAService))
-        } else {
-            let mut default_ha_service = ArcMut::new(DefaultHAService::new(message_store));
-            let default_ha_service_clone = default_ha_service.clone();
-            DefaultHAService::init(&mut default_ha_service, default_ha_service_clone)?;
-            self.default_ha_service = Some(default_ha_service);
+    pub fn new_with_auto_switch_ha_service(
+        auto_switch_ha_service: ArcMut<AutoSwitchHAService>,
+    ) -> Self {
+        GeneralHAService::AutoSwitchHAService(auto_switch_ha_service)
+    }
+
+    pub(crate) fn init(&mut self) -> HAResult<()> {
+        match self {
+            GeneralHAService::DefaultHAService(service) => {
+                let this = service.clone();
+                service.init(this)
+            }
+            GeneralHAService::AutoSwitchHAService(service) => {
+                unimplemented!("AutoSwitchHAService init is not implemented yet")
+            }
         }
-        Ok(())
     }
 
     #[inline]
     pub fn is_auto_switch_enabled(&self) -> bool {
-        self.auto_switch_ha_service.is_some()
+        matches!(self, GeneralHAService::AutoSwitchHAService(_))
     }
 }
 
 impl HAService for GeneralHAService {
     async fn start(&mut self) -> HAResult<()> {
-        if let Some(ref mut service) = self.default_ha_service {
-            service.start().await?;
-        } else if let Some(ref mut service) = self.auto_switch_ha_service {
-            service.start().await?;
-        } else {
-            error!("No HA service initialized");
-            return Err(HAError::Service("No HA service initialized".to_string()));
+        match self {
+            GeneralHAService::DefaultHAService(service) => service.start().await,
+            GeneralHAService::AutoSwitchHAService(service) => service.start().await,
         }
-        Ok(())
     }
 
     async fn shutdown(&self) {
-        if let Some(ref service) = self.default_ha_service {
-            service.shutdown().await;
-        } else if let Some(ref service) = self.auto_switch_ha_service {
-            service.shutdown().await;
-        } else {
-            error!("No HA service initialized to shutdown");
+        match self {
+            GeneralHAService::DefaultHAService(service) => service.shutdown().await,
+            GeneralHAService::AutoSwitchHAService(service) => service.shutdown().await,
         }
     }
 
     async fn change_to_master(&self, master_epoch: i32) -> HAResult<bool> {
-        todo!()
+        match self {
+            GeneralHAService::DefaultHAService(service) => {
+                service.change_to_master(master_epoch).await
+            }
+            GeneralHAService::AutoSwitchHAService(service) => {
+                service.change_to_master(master_epoch).await
+            }
+        }
     }
 
     async fn change_to_master_when_last_role_is_master(&self, master_epoch: i32) -> HAResult<bool> {
-        todo!()
+        match self {
+            GeneralHAService::DefaultHAService(service) => {
+                service
+                    .change_to_master_when_last_role_is_master(master_epoch)
+                    .await
+            }
+            GeneralHAService::AutoSwitchHAService(service) => {
+                service
+                    .change_to_master_when_last_role_is_master(master_epoch)
+                    .await
+            }
+        }
     }
 
     async fn change_to_slave(
@@ -109,7 +112,18 @@ impl HAService for GeneralHAService {
         new_master_epoch: i32,
         slave_id: Option<i64>,
     ) -> HAResult<bool> {
-        todo!()
+        match self {
+            GeneralHAService::DefaultHAService(service) => {
+                service
+                    .change_to_slave(new_master_addr, new_master_epoch, slave_id)
+                    .await
+            }
+            GeneralHAService::AutoSwitchHAService(service) => {
+                service
+                    .change_to_slave(new_master_addr, new_master_epoch, slave_id)
+                    .await
+            }
+        }
     }
 
     async fn change_to_slave_when_master_not_change(
@@ -117,113 +131,133 @@ impl HAService for GeneralHAService {
         new_master_addr: &str,
         new_master_epoch: i32,
     ) -> HAResult<bool> {
-        todo!()
+        match self {
+            GeneralHAService::DefaultHAService(service) => {
+                service
+                    .change_to_slave_when_master_not_change(new_master_addr, new_master_epoch)
+                    .await
+            }
+            GeneralHAService::AutoSwitchHAService(service) => {
+                service
+                    .change_to_slave_when_master_not_change(new_master_addr, new_master_epoch)
+                    .await
+            }
+        }
     }
 
     async fn update_master_address(&self, new_addr: &str) {
-        if let Some(ref service) = self.default_ha_service {
-            service.update_master_address(new_addr).await;
-        } else if let Some(ref service) = self.auto_switch_ha_service {
-            service.update_master_address(new_addr).await;
-        } else {
-            error!("No HA service initialized to update master address");
+        match self {
+            GeneralHAService::DefaultHAService(service) => {
+                service.update_master_address(new_addr).await
+            }
+            GeneralHAService::AutoSwitchHAService(service) => {
+                service.update_master_address(new_addr).await
+            }
         }
     }
 
     async fn update_ha_master_address(&self, new_addr: &str) {
-        todo!()
+        match self {
+            GeneralHAService::DefaultHAService(service) => {
+                service.update_ha_master_address(new_addr).await
+            }
+            GeneralHAService::AutoSwitchHAService(service) => {
+                service.update_ha_master_address(new_addr).await
+            }
+        }
     }
 
     fn in_sync_replicas_nums(&self, master_put_where: i64) -> i32 {
-        todo!()
+        match self {
+            GeneralHAService::DefaultHAService(service) => {
+                service.in_sync_replicas_nums(master_put_where)
+            }
+            GeneralHAService::AutoSwitchHAService(service) => {
+                service.in_sync_replicas_nums(master_put_where)
+            }
+        }
     }
 
     fn get_connection_count(&self) -> &AtomicU32 {
-        todo!()
+        match self {
+            GeneralHAService::DefaultHAService(service) => service.get_connection_count(),
+            GeneralHAService::AutoSwitchHAService(service) => service.get_connection_count(),
+        }
     }
 
     async fn put_request(&self, request: ArcMut<GroupCommitRequest>) {
-        match (&self.default_ha_service, &self.auto_switch_ha_service) {
-            (Some(default_ha_service), _) => {
-                default_ha_service.put_request(request).await;
-            }
-            (_, Some(auto_switch_service)) => {
-                auto_switch_service.put_request(request).await;
-            }
-            (None, None) => {
-                error!("No HA service initialized to put request");
-            }
+        match self {
+            GeneralHAService::DefaultHAService(service) => service.put_request(request).await,
+            GeneralHAService::AutoSwitchHAService(service) => service.put_request(request).await,
         }
     }
 
     fn put_group_connection_state_request(&self, request: HAConnectionStateNotificationRequest) {
-        todo!()
+        match self {
+            GeneralHAService::DefaultHAService(service) => {
+                service.put_group_connection_state_request(request)
+            }
+            GeneralHAService::AutoSwitchHAService(service) => {
+                service.put_group_connection_state_request(request)
+            }
+        }
     }
 
     async fn get_connection_list(&self) -> Vec<ArcMut<GeneralHAConnection>> {
-        match (&self.default_ha_service, &self.auto_switch_ha_service) {
-            (Some(default_ha_service), _) => default_ha_service.get_connection_list().await,
-            (_, Some(auto_switch_service)) => auto_switch_service.get_connection_list().await,
-            (None, None) => {
-                error!("No HA service initialized to get connection list");
-                Vec::new()
-            }
+        match self {
+            GeneralHAService::DefaultHAService(service) => service.get_connection_list().await,
+            GeneralHAService::AutoSwitchHAService(service) => service.get_connection_list().await,
         }
     }
 
     fn get_ha_client(&self) -> Option<&GeneralHAClient> {
-        match (&self.default_ha_service, &self.auto_switch_ha_service) {
-            (Some(default_ha_service), _) => default_ha_service.get_ha_client(),
-            (_, Some(auto_switch_service)) => auto_switch_service.get_ha_client(),
-            (None, None) => {
-                error!("No HA service initialized to get ha client");
-                None
-            }
+        match self {
+            GeneralHAService::DefaultHAService(service) => service.get_ha_client(),
+            GeneralHAService::AutoSwitchHAService(service) => service.get_ha_client(),
         }
     }
 
     fn get_ha_client_mut(&mut self) -> Option<&mut GeneralHAClient> {
-        match (
-            &mut self.default_ha_service,
-            &mut self.auto_switch_ha_service,
-        ) {
-            (Some(default_ha_service), _) => default_ha_service.get_ha_client_mut(),
-            (_, Some(auto_switch_service)) => auto_switch_service.get_ha_client_mut(),
-            (None, None) => {
-                error!("No HA service initialized to get ha client");
-                None
-            }
+        match self {
+            GeneralHAService::DefaultHAService(service) => service.get_ha_client_mut(),
+            GeneralHAService::AutoSwitchHAService(service) => service.get_ha_client_mut(),
         }
     }
 
     fn get_push_to_slave_max_offset(&self) -> i64 {
-        todo!()
-    }
-
-    fn get_runtime_info(&self, master_put_where: i64) -> HARuntimeInfo {
-        todo!()
-    }
-
-    fn get_wait_notify_object(&self) -> &Notify {
-        match (&self.default_ha_service, &self.auto_switch_ha_service) {
-            (Some(default_ha_service), _) => default_ha_service.get_wait_notify_object(),
-            (_, Some(auto_switch_service)) => auto_switch_service.get_wait_notify_object(),
-            (None, None) => {
-                error!("No HA service initialized to get wait notify object");
-                panic!("No HA service initialized to get wait notify object")
+        match self {
+            GeneralHAService::DefaultHAService(service) => service.get_push_to_slave_max_offset(),
+            GeneralHAService::AutoSwitchHAService(service) => {
+                service.get_push_to_slave_max_offset()
             }
         }
     }
 
-    async fn is_slave_ok(&self, master_put_where: i64) -> bool {
-        match (&self.default_ha_service, &self.auto_switch_ha_service) {
-            (Some(default_ha_service), _) => default_ha_service.is_slave_ok(master_put_where).await,
-            (_, Some(auto_switch_service)) => {
-                auto_switch_service.is_slave_ok(master_put_where).await
+    fn get_runtime_info(&self, master_put_where: i64) -> HARuntimeInfo {
+        match self {
+            GeneralHAService::DefaultHAService(service) => {
+                service.get_runtime_info(master_put_where)
             }
-            (None, None) => {
-                error!("No HA service initialized to check if slave is ok");
-                false
+            GeneralHAService::AutoSwitchHAService(service) => {
+                service.get_runtime_info(master_put_where)
+            }
+        }
+    }
+
+    fn get_wait_notify_object(&self) -> &Notify {
+        match self {
+            GeneralHAService::DefaultHAService(service) => service.get_wait_notify_object(),
+            GeneralHAService::AutoSwitchHAService(service) => service.get_wait_notify_object(),
+        }
+    }
+
+    async fn is_slave_ok(&self, master_put_where: i64) -> bool {
+        match self {
+            GeneralHAService::DefaultHAService(service) => {
+                service.is_slave_ok(master_put_where).await
+            }
+            GeneralHAService::AutoSwitchHAService(service) => {
+                service.is_slave_ok(master_put_where).await
             }
         }
     }
