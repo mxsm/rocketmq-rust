@@ -20,11 +20,13 @@ brokerRole = "ASYNC_MASTER"             # enum BrokerRole: ASYNC_MASTER/AsyncMas
 flushDiskType = "ASYNC_FLUSH"
 deleteWhen = 4
 fileReservedTime = 72
-listenPort = 10911
 haListenPort = 10912
 storePathRootDir = '/opt/rocketmq/store'
 haMasterAddress = "127.0.0.1:10912"  # For Slave to connect to Master
 
+[brokerServerConfig]
+listenPort = 10931
+bind_address = '127.0.0.1'
 
 # ======================
 # Broker Identity
