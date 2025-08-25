@@ -800,7 +800,7 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
                 }
                 store_checkpoint.set_logics_msg_timestamp(request.store_timestamp as u64);
 
-                if check_multi_dispatch_queue(message_store_config, &request) {
+                if check_multi_dispatch_queue(message_store_config, request) {
                     self.multi_dispatch_lmq_queue(request, max_retries);
                 }
 
