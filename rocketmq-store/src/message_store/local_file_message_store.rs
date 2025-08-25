@@ -2218,7 +2218,18 @@ impl ReputMessageServiceInner {
                             if !self.message_store_config.duplication_enable
                                 && self.message_store_config.broker_role == BrokerRole::Slave
                             {
-                                unimplemented!()
+                                self.message_store
+                                    .store_stats_service
+                                    .add_single_put_message_topic_times_total(
+                                        dispatch_request.topic.as_str(),
+                                        dispatch_request.batch_size as usize,
+                                    );
+                                self.message_store
+                                    .store_stats_service
+                                    .add_single_put_message_topic_size_total(
+                                        dispatch_request.topic.as_str(),
+                                        dispatch_request.msg_size as usize,
+                                    );
                             }
                         }
                         std::cmp::Ordering::Equal => {
