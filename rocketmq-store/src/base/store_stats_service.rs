@@ -499,6 +499,14 @@ impl StoreStatsService {
 
         format!("[ {days} days, {hours} hours, {minutes} minutes, {seconds} seconds ]")
     }
+
+    pub fn add_single_put_message_topic_times_total(&self, topic: &str, size: usize) {
+        error!("add_single_put_message_topic_times_total not implemented");
+    }
+
+    pub fn add_single_put_message_topic_size_total(&self, topic: &str, size: usize) {
+        error!("add_single_put_message_topic_times_total not implemented");
+    }
 }
 
 impl fmt::Display for StoreStatsService {

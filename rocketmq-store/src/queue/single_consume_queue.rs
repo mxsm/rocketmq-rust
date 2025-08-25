@@ -45,6 +45,7 @@ use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::consume_queue_ext::ConsumeQueueExt;
+use crate::queue::multi_dispatch_utils::check_multi_dispatch_queue;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
 use crate::queue::referred_iterator::ReferredIterator;
 use crate::queue::CqUnit;
@@ -345,6 +346,10 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
             }
         }
         None
+    }
+
+    fn multi_dispatch_lmq_queue(&self, request: &DispatchRequest, max_retries: i32) {
+        error!(" multi_dispatch_lmq_queue is not implemented yet ");
     }
 }
 
@@ -787,13 +792,18 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
                 request.consume_queue_offset,
             ) {
                 let message_store_config = self.message_store.get_message_store_config();
+                let store_checkpoint = self.message_store.get_store_checkpoint();
                 if message_store_config.broker_role == BrokerRole::Slave
                     || message_store_config.enable_dledger_commit_log
                 {
-                    unimplemented!("slave or dledger commit log not support")
+                    store_checkpoint.set_physic_msg_timestamp(request.store_timestamp as u64);
                 }
-                let store_checkpoint = self.message_store.get_store_checkpoint();
                 store_checkpoint.set_logics_msg_timestamp(request.store_timestamp as u64);
+
+                if check_multi_dispatch_queue(message_store_config, request) {
+                    self.multi_dispatch_lmq_queue(request, max_retries);
+                }
+
                 //if (MultiDispatchUtils.checkMultiDispatchQueue(this.messageStore.
                 // getMessageStoreConfig(), request)) {
                 // multiDispatchLmqQueue(request, maxRetries);                 }
