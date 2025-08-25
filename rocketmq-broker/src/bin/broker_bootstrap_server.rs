@@ -35,7 +35,15 @@ use tracing::info;
 async fn main() -> Result<()> {
     // init logger
     rocketmq_common::log::init_logger_with_level(rocketmq_common::log::Level::INFO);
-
+    const LOGO: &str = r#"
+      _____            _        _   __  __  ____         _____           _     ____            _
+     |  __ \          | |      | | |  \/  |/ __ \       |  __ \         | |   |  _ \          | |
+     | |__) |___   ___| | _____| |_| \  / | |  | |______| |__) |   _ ___| |_  | |_) |_ __ ___ | | _____ _ __
+     |  _  // _ \ / __| |/ / _ \ __| |\/| | |  | |______|  _  / | | / __| __| |  _ <| '__/ _ \| |/ / _ \ '__|
+     | | \ \ (_) | (__|   <  __/ |_| |  | | |__| |      | | \ \ |_| \__ \ |_  | |_) | | | (_) |   <  __/ |
+     |_|  \_\___/ \___|_|\_\___|\__|_|  |_|\___\_\      |_|  \_\__,_|___/\__| |____/|_|  \___/|_|\_\___|_|
+    "#;
+    info!("         {}", LOGO);
     EnvUtils::put_property(
         remoting_command::REMOTING_VERSION_KEY,
         (CURRENT_VERSION as u32).to_string(),
