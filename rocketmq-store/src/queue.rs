@@ -77,3 +77,141 @@ impl CqUnit {
         !ConsumeQueueExt::is_ext_addr(self.tags_code)
     }
 }
+
+pub(crate) mod multi_dispatch_utils {
+    use rocketmq_common::common::message::MessageConst;
+    use rocketmq_common::common::mix_all;
+    use rocketmq_common::common::topic::TopicValidator;
+
+    use crate::base::dispatch_request::DispatchRequest;
+    use crate::config::message_store_config::MessageStoreConfig;
+
+    pub fn lmq_queue_key(queue_name: &str) -> String {
+        format!("{queue_name}-0")
+    }
+
+    pub fn is_need_handle_multi_dispatch(cfg: &MessageStoreConfig, topic: &str) -> bool {
+        cfg.enable_multi_dispatch
+            && !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
+            && !topic.starts_with(TopicValidator::SYSTEM_TOPIC_PREFIX)
+            && topic != TopicValidator::RMQ_SYS_SCHEDULE_TOPIC
+    }
+
+    pub fn check_multi_dispatch_queue(cfg: &MessageStoreConfig, dr: &DispatchRequest) -> bool {
+        if !is_need_handle_multi_dispatch(cfg, dr.topic.as_str()) {
+            return false;
+        }
+        let Some(props) = &dr.properties_map else {
+            return false;
+        };
+        if props.is_empty() {
+            return false;
+        }
+
+        let mdq = props.get(MessageConst::PROPERTY_INNER_MULTI_DISPATCH);
+        let mqo = props.get(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET);
+
+        matches!((mdq, mqo), (Some(a), Some(b)) if !a.is_empty() && !b.is_empty())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rocketmq_common::common::message::MessageConst;
+    use rocketmq_common::common::topic::TopicValidator;
+
+    use super::*;
+    use crate::base::dispatch_request::DispatchRequest;
+    use crate::config::message_store_config::MessageStoreConfig;
+
+    #[test]
+    fn test_lmq_queue_key() {
+        assert_eq!(multi_dispatch_utils::lmq_queue_key("Q"), "Q-0");
+    }
+
+    #[test]
+    fn test_is_need_handle_multi_dispatch() {
+        let cfg = MessageStoreConfig {
+            enable_multi_dispatch: true,
+            ..Default::default()
+        };
+        assert!(multi_dispatch_utils::is_need_handle_multi_dispatch(
+            &cfg,
+            "user_topic"
+        ));
+        assert!(!multi_dispatch_utils::is_need_handle_multi_dispatch(
+            &cfg,
+            "%RETRY%group"
+        ));
+        assert!(multi_dispatch_utils::is_need_handle_multi_dispatch(
+            &cfg,
+            "RMQ_SYS_internal"
+        ));
+        assert!(!multi_dispatch_utils::is_need_handle_multi_dispatch(
+            &cfg,
+            TopicValidator::RMQ_SYS_SCHEDULE_TOPIC
+        ));
+        let cfg_off = MessageStoreConfig {
+            enable_multi_dispatch: false,
+            ..Default::default()
+        };
+        assert!(!multi_dispatch_utils::is_need_handle_multi_dispatch(
+            &cfg_off,
+            "user_topic"
+        ));
+    }
+
+    #[test]
+    fn test_check_multi_dispatch_queue() {
+        let cfg = MessageStoreConfig {
+            enable_multi_dispatch: true,
+            ..Default::default()
+        };
+
+        // Missing props
+        let dr = DispatchRequest {
+            properties_map: None,
+            ..Default::default()
+        };
+        assert!(!multi_dispatch_utils::check_multi_dispatch_queue(&cfg, &dr));
+
+        // Empty props
+        let dr = DispatchRequest {
+            properties_map: Some(HashMap::new()),
+            ..Default::default()
+        };
+        assert!(!multi_dispatch_utils::check_multi_dispatch_queue(&cfg, &dr));
+
+        // With required props
+        let mut props = HashMap::new();
+        props.insert(
+            MessageConst::PROPERTY_INNER_MULTI_DISPATCH.into(),
+            "q1,q2".into(),
+        );
+        props.insert(
+            MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET.into(),
+            "1,2".into(),
+        );
+        let dr = DispatchRequest {
+            properties_map: Some(props),
+            ..Default::default()
+        };
+        assert!(multi_dispatch_utils::check_multi_dispatch_queue(&cfg, &dr));
+
+        // Blank value fails
+        let mut props_blank = HashMap::new();
+        props_blank.insert(
+            MessageConst::PROPERTY_INNER_MULTI_DISPATCH.into(),
+            " ".into(),
+        );
+        props_blank.insert(
+            MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET.into(),
+            "2".into(),
+        );
+        let dr = DispatchRequest {
+            properties_map: Some(props_blank),
+            ..Default::default()
+        };
+        assert!(multi_dispatch_utils::check_multi_dispatch_queue(&cfg, &dr));
+    }
+}
