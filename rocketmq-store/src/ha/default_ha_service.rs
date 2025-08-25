@@ -108,33 +108,38 @@ impl DefaultHAService {
         }
     }
 
-    pub(crate) fn init(&mut self, this: ArcMut<Self>) -> HAResult<()> {
+    pub(crate) fn init(
+        this: &mut ArcMut<Self>,
+        general_ha_service: GeneralHAService,
+    ) -> HAResult<()> {
         // Initialize the DefaultHAService with the provided message store.
-        let config = self.default_message_store.get_message_store_config();
-        let service = GeneralHAService::new_with_default_ha_service(this.clone());
+        let config = this.default_message_store.get_message_store_config();
 
-        let group_transfer_service = GroupTransferService::new(service.clone());
-        self.group_transfer_service = Some(group_transfer_service);
+        let group_transfer_service = GroupTransferService::new(general_ha_service.clone());
+        this.group_transfer_service = Some(group_transfer_service);
 
         if config.broker_role == BrokerRole::Slave {
-            let default_message_store = self.default_message_store.clone();
+            let default_message_store = this.default_message_store.clone();
             let client = DefaultHAClient::new(default_message_store)
                 .map_err(|e| HAError::Service(format!("Failed to create DefaultHAClient: {e}")))?;
 
             let ha_client = GeneralHAClient::new_with_default_ha_client(client);
 
-            self.ha_client = Some(ha_client);
+            this.ha_client = Some(ha_client);
         }
 
-        let state_notification_service =
-            HAConnectionStateNotificationService::new(service, self.default_message_store.clone());
-        self.ha_connection_state_notification_service = Some(state_notification_service);
+        let state_notification_service = HAConnectionStateNotificationService::new(
+            general_ha_service,
+            this.default_message_store.clone(),
+        );
+        this.ha_connection_state_notification_service = Some(state_notification_service);
 
-        self.accept_socket_service = Some(AcceptSocketService::new(
-            self.default_message_store
+        let arc_mut = this.clone();
+        this.accept_socket_service = Some(AcceptSocketService::new(
+            this.default_message_store
                 .get_message_store_config()
                 .clone(),
-            this,
+            arc_mut,
             false,
         ));
         Ok(())

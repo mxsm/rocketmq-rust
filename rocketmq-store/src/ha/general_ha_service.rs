@@ -48,10 +48,10 @@ impl GeneralHAService {
     }
 
     pub(crate) fn init(&mut self) -> HAResult<()> {
+        let ha_service = self.clone();
         match self {
             GeneralHAService::DefaultHAService(service) => {
-                let this = service.clone();
-                service.init(this)
+                DefaultHAService::init(service, ha_service)
             }
             GeneralHAService::AutoSwitchHAService(service) => {
                 unimplemented!("AutoSwitchHAService init is not implemented yet")
