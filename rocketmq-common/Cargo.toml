@@ -60,7 +60,7 @@ regex = "1.11.2"
 thiserror = { workspace = true }
 
 reqwest = { version = "0.12", features = ["blocking", "json"] }
-url = "2.5.6"
+url = "2.5.7"
 form_urlencoded = "1.2.2"
 
 uuid = { workspace = true }
