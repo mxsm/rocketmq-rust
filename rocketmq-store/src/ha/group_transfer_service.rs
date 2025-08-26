@@ -119,6 +119,7 @@ impl GroupTransferServiceInner {
     async fn do_wait_transfer(&self) {
         let mut read_requests = self.requests_read.lock().await;
         if read_requests.is_empty() {
+            drop(read_requests);
             return;
         }
 
@@ -142,7 +143,8 @@ impl GroupTransferServiceInner {
                     );
                 }
                 index += 1;
-                if !all_ack_in_sync_state_set && request.get_ack_nums() <= 1 {
+                //handle only one slave ack, ackNums <= 2 means master + 1 slave
+                if !all_ack_in_sync_state_set && request.get_ack_nums() <= 2 {
                     transfer_ok =
                         self.ha_service.get_push_to_slave_max_offset() >= request.get_next_offset();
                     continue;
