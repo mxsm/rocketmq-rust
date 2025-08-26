@@ -47,12 +47,12 @@ impl GroupRetryPolicy {
         self.type_
     }
 
-    pub fn exponential_retry_policy(&self) -> &Option<ExponentialRetryPolicy> {
-        &self.exponential_retry_policy
+    pub fn exponential_retry_policy(&self) -> Option<&ExponentialRetryPolicy> {
+        self.exponential_retry_policy.as_ref()
     }
 
-    pub fn customized_retry_policy(&self) -> &Option<CustomizedRetryPolicy> {
-        &self.customized_retry_policy
+    pub fn customized_retry_policy(&self) -> Option<&CustomizedRetryPolicy> {
+        self.customized_retry_policy.as_ref()
     }
 
     pub fn set_type_(&mut self, type_: GroupRetryPolicyType) {
