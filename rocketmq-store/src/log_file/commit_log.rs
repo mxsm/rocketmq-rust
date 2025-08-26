@@ -377,7 +377,7 @@ impl CommitLog {
             std::sync::atomic::Ordering::Release,
         );
         let start_time = Instant::now();
-        // Here settings are stored timestamp, in order to ensure an orderly global
+        
         msg_batch
             .message_ext_broker_inner
             .message_ext_inner
@@ -409,11 +409,11 @@ impl CommitLog {
         );
         let put_message_result = match result.status {
             AppendMessageStatus::PutOk => {
-                //onCommitLogAppend(msg, result, mappedFile); in java not support this version
+                
                 PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
             }
             AppendMessageStatus::EndOfFile => {
-                //onCommitLogAppend(msg, result, mappedFile); in java not support this version
+                
                 unlock_mapped_file = mapped_file;
                 mapped_file = self
                     .mapped_file_queue
@@ -499,7 +499,7 @@ impl CommitLog {
     }
 
     pub async fn put_message(&mut self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
-        // Set the storage time
+        
         if !self.message_store_config.duplication_enable {
             msg.message_ext_inner.store_timestamp = time_utils::get_current_millis() as i64;
         }
@@ -512,14 +512,14 @@ impl CommitLog {
                 .unwrap_or(&Bytes::new()),
         );
         if self.enabled_append_prop_crc {
-            // delete crc32 properties if exist
+            
             msg.delete_property(MessageConst::PROPERTY_CRC32);
         }
 
-        //setting message version
+        
         msg.with_version(MessageVersion::V1);
         let topic = msg.topic();
-        // setting auto message on topic length
+        
         if self.message_store_config.auto_message_version_on_topic_len
             && topic.len() > i8::MAX as usize
         {
@@ -541,7 +541,7 @@ impl CommitLog {
 
         let mut unlock_mapped_file = None;
 
-        //get last mapped file from mapped file queue
+        
         let mut mapped_file = self.mapped_file_queue.get_last_mapped_file();
         // current offset is physical offset
         let curr_offset = if let Some(ref mapped_file_inner) = mapped_file {
@@ -577,7 +577,7 @@ impl CommitLog {
         self.begin_time_in_lock
             .store(begin_lock_timestamp, std::sync::atomic::Ordering::Release);
         let start_time = Instant::now();
-        // Here settings are stored timestamp, in order to ensure an orderly global
+        
         if !self.message_store_config.duplication_enable {
             msg.message_ext_inner.store_timestamp = begin_lock_timestamp as i64;
         }
@@ -608,11 +608,11 @@ impl CommitLog {
         );
         let put_message_result = match result.status {
             AppendMessageStatus::PutOk => {
-                //onCommitLogAppend(msg, result, mappedFile); in java not support this version
+                
                 PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
             }
             AppendMessageStatus::EndOfFile => {
-                //onCommitLogAppend(msg, result, mappedFile); in java not support this version
+                
                 unlock_mapped_file = mapped_file;
                 mapped_file = self
                     .mapped_file_queue
@@ -752,7 +752,7 @@ impl CommitLog {
             return PutMessageStatus::PutOk;
         }
         let next_offset = put_message_result.wrote_offset + put_message_result.wrote_bytes as i64;
-        //HA service to do unimplemented
+        
         let (request, mut response) = GroupCommitRequest::with_ack_nums(
             next_offset,
             self.message_store_config.slave_timeout as u64,
@@ -761,7 +761,7 @@ impl CommitLog {
         if let Some(local_file_message_store) = &self.local_file_message_store {
             let ha_service = local_file_message_store.get_ha_service();
             ha_service.put_request(request).await;
-            //Notify the HA service to handle the request
+            
             ha_service.get_wait_notify_object().notify_waiters();
         } else {
             error!("local file message store is not initialized for HA handling");
@@ -837,7 +837,7 @@ impl CommitLog {
         let check_dup_info = self.message_store_config.duplication_enable;
         let message_store_config = self.message_store_config.clone();
         let broker_config = self.broker_config.clone();
-        // let mut mapped_file_queue = mapped_files.write().await;
+        
         let mapped_files = self.mapped_file_queue.get_mapped_files();
         let mapped_files_inner = mapped_files.read();
         if !mapped_files_inner.is_empty() {
@@ -847,7 +847,7 @@ impl CommitLog {
                 index = 0;
             }
             let mut index = index as usize;
-            //let mut mapped_file = mapped_files_inner.get(index).unwrap().lock().await;
+            
             let mut mapped_file = mapped_files_inner.get(index).unwrap();
             let mut process_offset = mapped_file.get_file_from_offset();
             let mut mapped_file_offset = 0u64;
@@ -986,7 +986,7 @@ impl CommitLog {
         let check_crc_on_recover = self.message_store_config.check_crc_on_recover;
         let check_dup_info = self.message_store_config.duplication_enable;
         let broker_config = self.broker_config.clone();
-        // let mut mapped_file_queue = mapped_files.write().await;
+        
         let binding = self.mapped_file_queue.get_mapped_files();
         let mapped_files_inner = binding.read();
         if !mapped_files_inner.is_empty() {
@@ -1007,7 +1007,7 @@ impl CommitLog {
                 index = 0;
             }
             let mut index = index as usize;
-            //let mut mapped_file = mapped_files_inner.get(index).unwrap().lock().await;
+            
             let mut mapped_file = mapped_files_inner.get(index).unwrap();
             let mut process_offset = mapped_file.get_file_from_offset();
             let mut mapped_file_offset = 0u64;
@@ -1099,7 +1099,7 @@ impl CommitLog {
             }
 
             // only for rocksdb mode
-            // this.getMessageStore().finishCommitLogDispatch();
+            
 
             process_offset += mapped_file_offset;
             if broker_config.enable_controller_mode {
@@ -1285,14 +1285,14 @@ pub fn check_message_and_return_size(
     max_delay_level: i32,
     delay_level_table: &BTreeMap<i32 /* level */, i64 /* delay timeMillis */>,
 ) -> DispatchRequest {
-    // Total size
+    
     let total_size = bytes.get_i32();
 
-    // message magic code
+    
     let magic_code = bytes.get_i32();
     match magic_code {
         MESSAGE_MAGIC_CODE | MESSAGE_MAGIC_CODE_V2 => {
-            // Continue processing the message
+            
         }
         BLANK_MAGIC_CODE => {
             return DispatchRequest {
@@ -1349,7 +1349,7 @@ pub fn check_message_and_return_size(
     let body_len = bytes.get_i32();
     if body_len > 0 {
         if read_body {
-            //body content
+            
             let body = bytes.copy_to_bytes(body_len as usize);
             if check_crc && !message_store_config.force_verify_prop_crc {
                 let crc = crc32(body.as_ref());
@@ -1363,7 +1363,7 @@ pub fn check_message_and_return_size(
                 }
             }
         } else {
-            //skip body content
+            
             bytes.advance(body_len as usize);
         }
     }
@@ -1375,7 +1375,7 @@ pub fn check_message_and_return_size(
     let (tags_code, keys, uniq_key, properties_map) = if properties_length > 0 {
         let properties = bytes.copy_to_bytes(properties_length as usize);
         let properties_content = String::from_utf8_lossy(properties.as_ref()).to_string();
-        //need to optimize
+        
         let properties_map =
             string_to_message_properties(Some(&CheetahString::from_string(properties_content)));
         let keys = properties_map.get(MessageConst::PROPERTY_KEYS).cloned();
@@ -1530,7 +1530,7 @@ fn is_mapped_file_matched_recover(
         .unwrap_or(Bytes::from([0u8; mem::size_of::<i32>()].as_ref()))
         .get_i32();
 
-    //check magic code
+    
     if magic_code != MESSAGE_MAGIC_CODE && magic_code != MESSAGE_MAGIC_CODE_V2 {
         return false;
     }
