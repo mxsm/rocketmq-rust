@@ -753,21 +753,21 @@ impl CommitLog {
         }
         let next_offset = put_message_result.wrote_offset + put_message_result.wrote_bytes as i64;
         //HA service to do unimplemented
-        let mut request = ArcMut::new(GroupCommitRequest::with_ack_nums(
+        let (request, mut response) = GroupCommitRequest::with_ack_nums(
             next_offset,
             self.message_store_config.slave_timeout as u64,
             need_ack_nums,
-        ));
+        );
         if let Some(local_file_message_store) = &self.local_file_message_store {
             let ha_service = local_file_message_store.get_ha_service();
-            ha_service.put_request(request.clone()).await;
+            ha_service.put_request(request).await;
             //Notify the HA service to handle the request
             ha_service.get_wait_notify_object().notify_waiters();
         } else {
             error!("local file message store is not initialized for HA handling");
             return PutMessageStatus::UnknownError;
         }
-        match request.wait_for_result_with_timeout().await {
+        match response.wait_for_result_with_timeout().await {
             Ok(status) => status,
             Err(e) => {
                 error!("Failed to wait for HA result: {:?}", e);

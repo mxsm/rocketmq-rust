@@ -82,7 +82,7 @@ impl HAService for AutoSwitchHAService {
         todo!()
     }
 
-    async fn put_request(&self, request: ArcMut<GroupCommitRequest>) {
+    async fn put_request(&self, request: GroupCommitRequest) {
         todo!()
     }
 

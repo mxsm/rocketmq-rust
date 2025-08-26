@@ -122,7 +122,7 @@ pub trait RocketHAService: Sync {
     ///
     /// # Parameters
     /// * `request` - The commit request
-    async fn put_request(&self, request: ArcMut<GroupCommitRequest>);
+    async fn put_request(&self, request: GroupCommitRequest);
 
     /// Put a connection state notification request
     ///
