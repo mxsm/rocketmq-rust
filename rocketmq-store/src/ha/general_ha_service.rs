@@ -185,7 +185,7 @@ impl HAService for GeneralHAService {
         }
     }
 
-    async fn put_request(&self, request: ArcMut<GroupCommitRequest>) {
+    async fn put_request(&self, request: GroupCommitRequest) {
         match self {
             GeneralHAService::DefaultHAService(service) => service.put_request(request).await,
             GeneralHAService::AutoSwitchHAService(service) => service.put_request(request).await,

@@ -267,7 +267,7 @@ impl HAService for DefaultHAService {
         self.connection_count.as_ref()
     }
 
-    async fn put_request(&self, request: ArcMut<GroupCommitRequest>) {
+    async fn put_request(&self, request: GroupCommitRequest) {
         if let Some(ref group_transfer_service) = self.group_transfer_service {
             group_transfer_service.put_request(request).await;
         } else {

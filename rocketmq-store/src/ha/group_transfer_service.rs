@@ -24,7 +24,6 @@ use rocketmq_common::common::mix_all;
 use rocketmq_rust::task::service_task::ServiceContext;
 use rocketmq_rust::task::service_task::ServiceTask;
 use rocketmq_rust::task::ServiceManager;
-use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::time::timeout;
@@ -64,7 +63,7 @@ impl GroupTransferService {
         let _ = self.service_manager.shutdown().await;
     }
 
-    pub async fn put_request(&self, request: ArcMut<GroupCommitRequest>) {
+    pub async fn put_request(&self, request: GroupCommitRequest) {
         self.inner.put_request(request).await;
         self.service_manager.wakeup();
     }
@@ -90,8 +89,8 @@ impl GroupTransferService {
 struct GroupTransferServiceInner {
     ha_service: GeneralHAService,
     notified: (Arc<Notify>, AtomicBool),
-    requests_write: Arc<Mutex<LinkedList<ArcMut<GroupCommitRequest>>>>,
-    requests_read: Arc<Mutex<LinkedList<ArcMut<GroupCommitRequest>>>>,
+    requests_write: Arc<Mutex<LinkedList<GroupCommitRequest>>>,
+    requests_read: Arc<Mutex<LinkedList<GroupCommitRequest>>>,
 }
 
 impl GroupTransferServiceInner {
@@ -105,7 +104,7 @@ impl GroupTransferServiceInner {
     }
 
     #[inline]
-    async fn put_request(&self, request: ArcMut<GroupCommitRequest>) {
+    async fn put_request(&self, request: GroupCommitRequest) {
         let mut write_requests = self.requests_write.lock().await;
         write_requests.push_back(request);
     }
@@ -123,7 +122,7 @@ impl GroupTransferServiceInner {
             return;
         }
 
-        for request in read_requests.iter() {
+        for request in read_requests.iter_mut() {
             let mut transfer_ok = false;
             let deadline = request.get_deadline();
             let all_ack_in_sync_state_set =
@@ -170,7 +169,7 @@ impl GroupTransferServiceInner {
                     request.get_ack_nums()
                 );
             }
-            request.mut_from_ref().wakeup_customer(if transfer_ok {
+            request.wakeup_customer(if transfer_ok {
                 PutMessageStatus::PutOk
             } else {
                 PutMessageStatus::FlushSlaveTimeout
