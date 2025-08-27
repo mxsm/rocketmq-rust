@@ -93,8 +93,8 @@ impl ConsumeMessageDirectlyResult {
     }
 
     #[inline]
-    pub fn consume_result(&self) -> &Option<CMResult> {
-        &self.consume_result
+    pub fn consume_result(&self) -> Option<&CMResult> {
+        self.consume_result.as_ref()
     }
 
     #[inline]
@@ -153,7 +153,7 @@ mod tests {
         );
         assert!(result.order());
         assert!(!result.auto_commit());
-        assert_eq!(result.consume_result().as_ref().unwrap(), &consume_result);
+        assert_eq!(result.consume_result().unwrap(), &consume_result);
         assert_eq!(result.remark(), Some(&remark));
         assert_eq!(result.spent_time_mills(), 12345);
     }
@@ -171,7 +171,7 @@ mod tests {
 
         assert!(result.order());
         assert!(!result.auto_commit());
-        assert_eq!(result.consume_result().as_ref().unwrap(), &consume_result);
+        assert_eq!(result.consume_result().unwrap(), &consume_result);
         assert_eq!(result.remark(), Some(&remark));
         assert_eq!(result.spent_time_mills(), 67890);
     }
