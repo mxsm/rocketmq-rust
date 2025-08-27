@@ -30,6 +30,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+mod broker_error;
+mod cli_error;
+mod client_error;
+mod common_error;
+mod name_srv_error;
+mod remoting_error;
+mod store_error;
+mod tools_error;
+mod tui_error;
+
 use std::io;
 
 pub type RocketMQResult<T> = std::result::Result<T, RocketmqError>;
