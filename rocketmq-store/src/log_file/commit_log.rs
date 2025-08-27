@@ -752,7 +752,7 @@ impl CommitLog {
             return PutMessageStatus::PutOk;
         }
         let next_offset = put_message_result.wrote_offset + put_message_result.wrote_bytes as i64;
-        //HA service to do unimplemented
+
         let (request, mut response) = GroupCommitRequest::with_ack_nums(
             next_offset,
             self.message_store_config.slave_timeout as u64,
