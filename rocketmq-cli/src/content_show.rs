@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use bytes::Buf;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_decoder;
+use rocketmq_common::common::message::MessageConst;
 use rocketmq_store::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use rocketmq_store::log_file::mapped_file::MappedFile;
 use tabled::Table;
@@ -28,7 +29,7 @@ use tabled::Tabled;
 
 pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) {
     if path.is_none() {
-        println!("path is none");
+        eprintln!("File path is none");
         return;
     }
     let path_buf = path.unwrap().into_os_string();
@@ -77,7 +78,13 @@ pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) 
             None => {}
             Some(value) => {
                 table.push(MessagePrint {
-                    message_id: value.msg_id.to_string(),
+                    message_id: value.msg_id,
+                    client_message_id: value
+                        .message
+                        .get_property(&CheetahString::from_static_str(
+                            MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+                        ))
+                        .unwrap_or(CheetahString::empty()),
                 });
             }
         }
@@ -87,5 +94,6 @@ pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) 
 
 #[derive(Tabled)]
 struct MessagePrint {
-    message_id: String,
+    message_id: CheetahString,
+    client_message_id: CheetahString,
 }
