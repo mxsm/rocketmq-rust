@@ -57,9 +57,46 @@ where
     }
 
     pub async fn sync_all(&self) {
-        error!("SlaveSynchronize::sync_all is not implemented yet");
+        self.sync_topic_config().await;
+        self.sync_consumer_offset().await;
+        self.sync_delay_offset().await;
+        self.sync_subscription_group_config().await;
+        self.sync_message_request_mode().await;
+        if self
+            .broker_runtime_inner
+            .message_store_unchecked()
+            .get_message_store_config()
+            .timer_wheel_enable
+        {
+            self.sync_timer_metrics().await;
+        }
     }
+
     pub async fn sync_timer_check_point(&self) {
         error!("SlaveSynchronize::sync_timer_check_point is not implemented yet");
+    }
+
+    async fn sync_topic_config(&self) {
+        error!("SlaveSynchronize::syncTopicConfig is not implemented yet");
+    }
+
+    async fn sync_consumer_offset(&self) {
+        error!("SlaveSynchronize::syncTopicConfig is not implemented yet");
+    }
+
+    async fn sync_delay_offset(&self) {
+        error!("SlaveSynchronize::syncTopicConfig is not implemented yet");
+    }
+
+    async fn sync_subscription_group_config(&self) {
+        error!("SlaveSynchronize::syncTopicConfig is not implemented yet");
+    }
+
+    async fn sync_message_request_mode(&self) {
+        error!("SlaveSynchronize::syncTopicConfig is not implemented yet");
+    }
+
+    async fn sync_timer_metrics(&self) {
+        error!("SlaveSynchronize::syncTopicConfig is not implemented yet");
     }
 }
