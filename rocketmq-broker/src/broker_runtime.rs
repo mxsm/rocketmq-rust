@@ -215,7 +215,7 @@ impl BrokerRuntime {
             notification_processor: None,
             broker_attached_plugins: vec![],
             transactional_message_service: None,
-            slave_synchronize: SlaveSynchronize,
+            slave_synchronize: None,
             last_sync_time_ms: AtomicU64::new(get_current_millis()),
         });
         let mut stats_manager = BrokerStatsManager::new(inner.broker_config.clone());
@@ -242,7 +242,7 @@ impl BrokerRuntime {
             Some(ArcMut::new(ScheduleMessageService::new(inner.clone())));
         inner.client_housekeeping_service =
             Some(Arc::new(ClientHousekeepingService::new(inner.clone())));
-
+        inner.slave_synchronize = Some(SlaveSynchronize::new(inner.clone()));
         Self {
             inner,
             broker_runtime: Some(runtime),
@@ -754,13 +754,17 @@ impl BrokerRuntime {
                             - inner_clone.last_sync_time_ms.load(Ordering::Relaxed)
                             > 60_000
                         {
-                            inner_clone.slave_synchronize.sync_all().await;
+                            if let Some(slave_synchronize) = &inner_clone.slave_synchronize {
+                                slave_synchronize.sync_all().await;
+                            }
                             inner_clone
                                 .last_sync_time_ms
                                 .store(get_current_millis(), Ordering::Relaxed);
                         }
                         if inner_clone.message_store_config.timer_wheel_enable {
-                            inner_clone.slave_synchronize.sync_timer_check_point().await;
+                            if let Some(slave_synchronize) = &inner_clone.slave_synchronize {
+                                slave_synchronize.sync_timer_check_point().await
+                            }
                         }
                         Ok(())
                     },
@@ -1413,7 +1417,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     notification_processor: Option<ArcMut<NotificationProcessor<MS>>>,
     broker_attached_plugins: Vec<Arc<dyn BrokerAttachedPlugin>>,
     transactional_message_service: Option<ArcMut<DefaultTransactionalMessageService<MS>>>,
-    slave_synchronize: SlaveSynchronize,
+    slave_synchronize: Option<SlaveSynchronize<MS>>,
     last_sync_time_ms: AtomicU64,
 }
 
