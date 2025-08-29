@@ -48,7 +48,7 @@ tokio-util = { version = "0.7.16", features = ["full"] }
 tokio-stream = { version = "0.1.17", features = ["full"] }
 
 tracing = "0.1.41"
-tracing-subscriber = "0.3.19"
+tracing-subscriber = "0.3.20"
 tracing-appender = "0.2.3"
 
 thiserror = "2.0.16"
