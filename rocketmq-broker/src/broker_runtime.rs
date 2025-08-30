@@ -1311,6 +1311,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                     topic_config_manager.update_order_topic_config(result.kv_table);
                 }
             }
+            break;
         }
     }
 }
