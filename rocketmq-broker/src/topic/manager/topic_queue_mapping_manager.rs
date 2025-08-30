@@ -36,7 +36,7 @@ use crate::broker_path_config_helper::get_topic_queue_mapping_path;
 
 #[derive(Default)]
 pub(crate) struct TopicQueueMappingManager {
-    pub(crate) data_version: parking_lot::Mutex<DataVersion>,
+    pub(crate) data_version: Arc<parking_lot::Mutex<DataVersion>>,
     pub(crate) topic_queue_mapping_table:
         parking_lot::Mutex<HashMap<CheetahString /* topic */, TopicQueueMappingDetail>>,
     pub(crate) broker_config: Arc<BrokerConfig>,
@@ -48,6 +48,14 @@ impl TopicQueueMappingManager {
             broker_config,
             ..Default::default()
         }
+    }
+
+    pub fn data_version(&self) -> DataVersion {
+        self.data_version.lock().clone()
+    }
+
+    pub fn data_version_clone(&self) -> Arc<parking_lot::Mutex<DataVersion>> {
+        self.data_version.clone()
     }
 
     pub(crate) fn rewrite_request_for_static_topic(

@@ -30,6 +30,7 @@ use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::TopicAttributes::TopicAttributes;
+use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
@@ -607,9 +608,21 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         self.data_version.clone()
     }
 
+    pub fn data_version_ref(&self) -> &DataVersion {
+        self.data_version.as_ref()
+    }
+
+    pub fn data_version_ref_mut(&mut self) -> &mut DataVersion {
+        self.data_version.as_mut()
+    }
+
     #[inline]
     pub fn broker_runtime_inner(&self) -> &ArcMut<BrokerRuntimeInner<MS>> {
         &self.broker_runtime_inner
+    }
+
+    pub fn update_order_topic_config(&mut self, _order_kv_table_from_ns: KVTable) {
+        error!("update_order_topic_config unimplemented ");
     }
 }
 
