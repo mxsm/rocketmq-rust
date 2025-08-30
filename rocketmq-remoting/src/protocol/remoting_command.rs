@@ -614,8 +614,8 @@ impl RemotingCommand {
     }
 
     #[inline]
-    pub fn body(&self) -> &Option<Bytes> {
-        &self.body
+    pub fn body(&self) -> Option<&Bytes> {
+        self.body.as_ref()
     }
 
     #[inline]

@@ -437,7 +437,7 @@ impl DefaultRequestProcessor {
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let request_header =
             request.decode_command_custom_header::<RegisterTopicRequestHeader>()?;
-        if let Some(ref body) = request.body() {
+        if let Some(body) = request.body() {
             let topic_route_data = TopicRouteData::decode(body).unwrap_or_default();
             if !topic_route_data.queue_datas.is_empty() {
                 self.name_server_runtime_inner

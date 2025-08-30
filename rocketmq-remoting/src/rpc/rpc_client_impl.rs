@@ -102,7 +102,6 @@ impl RpcClientImpl {
                         response.decode_command_custom_header::<PullMessageResponseHeader>()?;
                     let body = response
                         .body()
-                        .as_ref()
                         .map(|value| Box::new(value.clone()) as Box<dyn Any>);
                     let rpc_response =
                         RpcResponse::new(response.code(), Box::new(response_header), body);
@@ -138,7 +137,6 @@ impl RpcClientImpl {
                         response.decode_command_custom_header::<GetMinOffsetResponseHeader>()?;
                     let body = response
                         .body()
-                        .as_ref()
                         .map(|value| Box::new(value.clone()) as Box<dyn Any>);
                     let rpc_response =
                         RpcResponse::new(response.code(), Box::new(response_header), body);
@@ -173,7 +171,6 @@ impl RpcClientImpl {
                         response.decode_command_custom_header::<GetMaxOffsetResponseHeader>()?;
                     let body = response
                         .body()
-                        .as_ref()
                         .map(|value| Box::new(value.clone()) as Box<dyn Any>);
                     let rpc_response =
                         RpcResponse::new(response.code(), Box::new(response_header), body);
@@ -208,7 +205,6 @@ impl RpcClientImpl {
                         response.decode_command_custom_header::<SearchOffsetResponseHeader>()?;
                     let body = response
                         .body()
-                        .as_ref()
                         .map(|value| Box::new(value.clone()) as Box<dyn Any>);
                     let rpc_response =
                         RpcResponse::new(response.code(), Box::new(response_header), body);
@@ -243,7 +239,6 @@ impl RpcClientImpl {
                         .decode_command_custom_header::<GetEarliestMsgStoretimeResponseHeader>()?;
                     let body = response
                         .body()
-                        .as_ref()
                         .map(|value| Box::new(value.clone()) as Box<dyn Any>);
                     let rpc_response =
                         RpcResponse::new(response.code(), Box::new(response_header), body);
@@ -278,7 +273,6 @@ impl RpcClientImpl {
                         .decode_command_custom_header::<QueryConsumerOffsetResponseHeader>()?;
                     let body = response
                         .body()
-                        .as_ref()
                         .map(|value| Box::new(value.clone()) as Box<dyn Any>);
                     let rpc_response =
                         RpcResponse::new(response.code(), Box::new(response_header), body);
@@ -317,7 +311,6 @@ impl RpcClientImpl {
                         .decode_command_custom_header::<UpdateConsumerOffsetResponseHeader>()?;
                     let body = response
                         .body()
-                        .as_ref()
                         .map(|value| Box::new(value.clone()) as Box<dyn Any>);
                     let rpc_response =
                         RpcResponse::new(response.code(), Box::new(response_header), body);
@@ -350,7 +343,6 @@ impl RpcClientImpl {
                 ResponseCode::Success => {
                     let body = response
                         .body()
-                        .as_ref()
                         .map(|value| Box::new(value.clone()) as Box<dyn Any>);
                     let rpc_response = RpcResponse::new_option(response.code(), body);
                     Ok(rpc_response)
