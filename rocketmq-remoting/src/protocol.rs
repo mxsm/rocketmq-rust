@@ -297,7 +297,7 @@ impl Clone for DataVersion {
         DataVersion {
             state_version: self.state_version,
             timestamp: self.timestamp,
-            counter: AtomicI64::new(self.counter.load(Ordering::Relaxed)),
+            counter: AtomicI64::new(self.counter.load(Ordering::SeqCst)),
         }
     }
 }
