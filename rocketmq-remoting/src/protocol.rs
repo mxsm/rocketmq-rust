@@ -20,7 +20,6 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::time::SystemTime;
 
 use cheetah_string::CheetahString;
@@ -255,7 +254,7 @@ impl SerializeType {
 pub struct DataVersion {
     state_version: i64,
     timestamp: i64,
-    counter: Arc<AtomicI64>,
+    counter: AtomicI64,
 }
 
 impl Serialize for DataVersion {
@@ -288,7 +287,7 @@ impl<'de> Deserialize<'de> for DataVersion {
         Ok(DataVersion {
             state_version: helper.state_version,
             timestamp: helper.timestamp,
-            counter: Arc::new(AtomicI64::new(helper.counter)),
+            counter: AtomicI64::new(helper.counter),
         })
     }
 }
@@ -298,7 +297,7 @@ impl Clone for DataVersion {
         DataVersion {
             state_version: self.state_version,
             timestamp: self.timestamp,
-            counter: self.counter.clone(),
+            counter: AtomicI64::new(self.counter.load(Ordering::SeqCst)),
         }
     }
 }
@@ -327,14 +326,14 @@ impl DataVersion {
         DataVersion {
             state_version: 0,
             timestamp,
-            counter: Arc::new(AtomicI64::new(0)),
+            counter: AtomicI64::new(0),
         }
     }
 
     pub fn assign_new_one(&mut self, data_version: &DataVersion) {
         self.timestamp = data_version.timestamp;
         self.state_version = data_version.state_version;
-        self.counter = Arc::new(AtomicI64::new(data_version.counter.load(Ordering::SeqCst)));
+        self.counter = AtomicI64::new(data_version.counter.load(Ordering::SeqCst));
     }
 
     pub fn get_state_version(&self) -> i64 {
