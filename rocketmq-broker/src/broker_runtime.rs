@@ -752,7 +752,7 @@ impl BrokerRuntime {
                     async move |_ctx| {
                         if get_current_millis()
                             - inner_clone.last_sync_time_ms.load(Ordering::Relaxed)
-                            > 60_000
+                            > 10_000
                         {
                             if let Some(slave_synchronize) = &inner_clone.slave_synchronize {
                                 slave_synchronize.sync_all().await;
@@ -1285,15 +1285,33 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 this.clone(),
             )
             .await;
-        this.handle_register_broker_result(result, check_order_config);
+        this.handle_register_broker_result(result, check_order_config)
+            .await;
     }
 
-    pub(self) fn handle_register_broker_result(
+    pub(self) async fn handle_register_broker_result(
         &mut self,
-        _register_broker_result: Vec<RegisterBrokerResult>,
-        _check_order_config: bool,
+        register_broker_result: Vec<RegisterBrokerResult>,
+        check_order_config: bool,
     ) {
-        warn!("handle_register_broker_result not implemented");
+        for result in register_broker_result {
+            if self.update_master_haserver_addr_periodically {
+                if let Some(message_store) = &self.message_store {
+                    message_store
+                        .update_ha_master_address(result.master_addr.as_str())
+                        .await;
+                    message_store.update_master_address(&result.master_addr);
+                }
+            }
+            if let Some(slave_synchronize) = &mut self.slave_synchronize {
+                slave_synchronize.set_master_addr(result.master_addr);
+            }
+            if check_order_config {
+                if let Some(topic_config_manager) = &mut self.topic_config_manager {
+                    topic_config_manager.update_order_topic_config(result.kv_table);
+                }
+            }
+        }
     }
 }
 

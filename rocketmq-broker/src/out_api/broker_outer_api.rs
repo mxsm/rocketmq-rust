@@ -615,6 +615,34 @@ impl BrokerOuterAPI {
             ))
         }
     }
+
+    pub async fn get_all_topic_config(
+        &self,
+        addr: &CheetahString,
+    ) -> rocketmq_error::RocketMQResult<Option<TopicConfigAndMappingSerializeWrapper>> {
+        let request = RemotingCommand::create_remoting_command(RequestCode::GetAllTopicConfig);
+        let response = self
+            .remoting_client
+            .invoke_async(
+                Some(mix_all::broker_vip_channel(true, addr).as_ref()),
+                request,
+                3000,
+            )
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.body() {
+                let topic_configs = TopicConfigAndMappingSerializeWrapper::decode(body)?;
+                return Ok(Some(topic_configs));
+            }
+            Ok(None)
+        } else {
+            Err(RocketmqError::MQBrokerError(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                addr.to_string(),
+            ))
+        }
+    }
 }
 
 fn process_pull_result(

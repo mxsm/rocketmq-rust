@@ -14,17 +14,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use cheetah_string::CheetahString;
+use rocketmq_common::common::config_manager::ConfigManager;
+use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 
 pub(crate) struct SlaveSynchronize<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    master_addr: Option<String>,
+    master_addr: Option<CheetahString>,
 }
 
 impl<MS> SlaveSynchronize<MS>
@@ -38,13 +41,14 @@ where
         }
     }
 
-    pub fn master_addr(&self) -> Option<&String> {
+    pub fn master_addr(&self) -> Option<&CheetahString> {
         self.master_addr.as_ref()
     }
 
-    pub fn set_master_addr(&mut self, addr: String) {
+    pub fn set_master_addr(&mut self, addr: impl Into<CheetahString>) {
+        let addr = addr.into();
         if let Some(current_addr) = &self.master_addr {
-            if current_addr == &addr {
+            if current_addr.as_str() == addr {
                 return;
             }
         }
@@ -77,26 +81,122 @@ where
     }
 
     async fn sync_topic_config(&self) {
-        error!("SlaveSynchronize::syncTopicConfig is not implemented yet");
+        let master_addr_bak = self.master_addr.clone();
+
+        if let Some(master_addr) = master_addr_bak {
+            if <CheetahString as AsRef<CheetahString>>::as_ref(&master_addr)
+                != self.broker_runtime_inner.get_broker_addr()
+            {
+                match self.sync_topic_config_internal(&master_addr).await {
+                    Ok(_) => {
+                        info!("Update slave topic config from master, {}", master_addr);
+                    }
+                    Err(e) => {
+                        error!("SyncTopicConfig Exception, {}: {:?}", master_addr, e);
+                    }
+                }
+            }
+        }
+    }
+
+    async fn sync_topic_config_internal(&self, master_addr: &CheetahString) -> RocketMQResult<()> {
+        let topic_wrapper = self
+            .broker_runtime_inner
+            .broker_outer_api()
+            .get_all_topic_config(master_addr)
+            .await?;
+        if topic_wrapper.is_none() {
+            warn!("GetAllTopicConfig return null, {}", master_addr);
+            return Ok(());
+        }
+
+        let topic_wrapper = topic_wrapper.unwrap();
+        // Sync topic config if data version differs
+        if self
+            .broker_runtime_inner
+            .topic_config_manager()
+            .data_version_ref()
+            != topic_wrapper.topic_config_serialize_wrapper.data_version()
+        {
+            let mut data_version = self
+                .broker_runtime_inner
+                .topic_config_manager()
+                .data_version();
+            data_version
+                .assign_new_one(topic_wrapper.topic_config_serialize_wrapper.data_version());
+
+            let new_topic_config_table = topic_wrapper
+                .topic_config_serialize_wrapper
+                .topic_config_table
+                .clone();
+            let topic_config_table = self
+                .broker_runtime_inner
+                .topic_config_manager()
+                .topic_config_table();
+
+            let mut topic_config_table = topic_config_table.lock();
+
+            // Delete entries not in new config
+            topic_config_table.retain(|key, _| new_topic_config_table.contains_key(key));
+
+            // Update with new entries
+            topic_config_table.extend(new_topic_config_table);
+            drop(topic_config_table);
+            self.broker_runtime_inner.topic_config_manager().persist();
+        }
+
+        // Sync topic queue mapping if present and data version differs
+        let new_topic_config_table = topic_wrapper
+            .topic_config_serialize_wrapper
+            .topic_config_table;
+        let version = topic_wrapper.mapping_data_version;
+        if version
+            != self
+                .broker_runtime_inner
+                .topic_queue_mapping_manager()
+                .data_version()
+        {
+            self.broker_runtime_inner
+                .topic_queue_mapping_manager()
+                .data_version_clone()
+                .lock()
+                .assign_new_one(&version);
+
+            let topic_config_table = self
+                .broker_runtime_inner
+                .topic_config_manager()
+                .topic_config_table();
+            let mut topic_config_table = topic_config_table.lock();
+            // Delete entries not in new config
+            topic_config_table.retain(|key, _| new_topic_config_table.contains_key(key));
+
+            // Update with new entries
+            topic_config_table.extend(new_topic_config_table);
+            drop(topic_config_table);
+            self.broker_runtime_inner
+                .topic_queue_mapping_manager()
+                .persist();
+        }
+        Ok(())
     }
 
     async fn sync_consumer_offset(&self) {
-        error!("SlaveSynchronize::syncTopicConfig is not implemented yet");
+        error!("SlaveSynchronize::sync_consumer_offset  is not implemented yet");
     }
 
     async fn sync_delay_offset(&self) {
-        error!("SlaveSynchronize::syncTopicConfig is not implemented yet");
+        error!("SlaveSynchronize::sync_delay_offset is not implemented yet");
     }
 
     async fn sync_subscription_group_config(&self) {
-        error!("SlaveSynchronize::syncTopicConfig is not implemented yet");
+        error!("SlaveSynchronize::sync_subscription_group_config is not implemented yet");
     }
 
     async fn sync_message_request_mode(&self) {
-        error!("SlaveSynchronize::syncTopicConfig is not implemented yet");
+        error!("SlaveSynchronize::sync_message_request_mode is not implemented yet");
     }
 
     async fn sync_timer_metrics(&self) {
-        error!("SlaveSynchronize::syncTopicConfig is not implemented yet");
+        error!("SlaveSynchronize::sync_timer_metrics is not implemented yet");
     }
 }

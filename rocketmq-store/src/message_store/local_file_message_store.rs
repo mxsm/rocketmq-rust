@@ -1495,7 +1495,7 @@ impl MessageStore for LocalFileMessageStore {
 
     async fn update_ha_master_address(&self, new_addr: &str) {
         if let Some(ha_service) = self.ha_service.as_ref() {
-            ha_service.update_master_address(new_addr).await;
+            ha_service.update_ha_master_address(new_addr).await;
         }
     }
 
