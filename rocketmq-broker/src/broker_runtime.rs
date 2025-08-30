@@ -1294,7 +1294,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         register_broker_result: Vec<RegisterBrokerResult>,
         check_order_config: bool,
     ) {
-        for result in register_broker_result {
+        if let Some(result) = register_broker_result.into_iter().next() {
             if self.update_master_haserver_addr_periodically {
                 if let Some(message_store) = &self.message_store {
                     message_store
@@ -1311,7 +1311,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                     topic_config_manager.update_order_topic_config(result.kv_table);
                 }
             }
-            break;
         }
     }
 }
