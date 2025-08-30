@@ -267,11 +267,7 @@ where
             .set_properties(string_to_message_properties(
                 request_header.properties.as_ref(),
             ));
-        message_ext
-            .message_ext_inner
-            .message
-            .body
-            .clone_from(request.body());
+        message_ext.message_ext_inner.message.body = request.body().cloned();
         message_ext.message_ext_inner.born_timestamp = request_header.born_timestamp;
         message_ext.message_ext_inner.born_host = channel.remote_address();
         message_ext.message_ext_inner.store_host = self.store_host;
@@ -483,11 +479,7 @@ where
         ) {
             return Ok(Some(response));
         }
-        message_ext
-            .message_ext_inner
-            .message
-            .body
-            .clone_from(request.body());
+        message_ext.message_ext_inner.message.body = request.body().cloned();
         message_ext.message_ext_inner.message.flag = request_header.flag;
 
         let uniq_key = ori_props.get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX);
