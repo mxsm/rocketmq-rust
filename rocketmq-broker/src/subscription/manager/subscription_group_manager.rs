@@ -40,7 +40,7 @@ pub const CHARACTER_MAX_LENGTH: usize = 255;
 pub const TOPIC_MAX_LENGTH: usize = 127;
 
 pub(crate) struct SubscriptionGroupManager<MS: MessageStore> {
-    pub(crate) subscription_group_wrapper: Arc<parking_lot::Mutex<SubscriptionGroupWrapper>>,
+    pub(crate) subscription_group_wrapper: Arc<parking_lot::Mutex<SubscriptionGroupWrapperInner>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     data_version: DataVersion,
 }
@@ -54,14 +54,16 @@ where
     ) -> SubscriptionGroupManager<MS> {
         Self {
             subscription_group_wrapper: Arc::new(parking_lot::Mutex::new(
-                SubscriptionGroupWrapper::default(),
+                SubscriptionGroupWrapperInner::default(),
             )),
             broker_runtime_inner,
             data_version: DataVersion::new(),
         }
     }
 
-    pub fn subscription_group_wrapper(&self) -> &Arc<parking_lot::Mutex<SubscriptionGroupWrapper>> {
+    pub fn subscription_group_wrapper(
+        &self,
+    ) -> &Arc<parking_lot::Mutex<SubscriptionGroupWrapperInner>> {
         &self.subscription_group_wrapper
     }
     pub(crate) fn update_subscription_group_config(
@@ -151,11 +153,17 @@ where
             .next_version_with(state_machine_version);
     }
 
-    fn date_version(&self) -> &DataVersion {
+    pub fn date_version(&self) -> &DataVersion {
         &self.data_version
     }
-    fn date_version_mut(&mut self) -> &mut DataVersion {
+    pub fn date_version_mut(&mut self) -> &mut DataVersion {
         &mut self.data_version
+    }
+
+    pub fn get_subscription_group_table(
+        &self,
+    ) -> Arc<parking_lot::Mutex<SubscriptionGroupWrapperInner>> {
+        self.subscription_group_wrapper.clone()
     }
 }
 
@@ -191,7 +199,7 @@ impl<MS: MessageStore> ConfigManager for SubscriptionGroupManager<MS> {
             return;
         }
         let wrapper =
-            serde_json::from_str::<SubscriptionGroupWrapper>(json_string).unwrap_or_default();
+            serde_json::from_str::<SubscriptionGroupWrapperInner>(json_string).unwrap_or_default();
         for (key, subscription_group_config) in wrapper.subscription_group_table.iter() {
             self.subscription_group_wrapper
                 .lock()
@@ -311,16 +319,22 @@ where
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct SubscriptionGroupWrapper {
+pub(crate) struct SubscriptionGroupWrapperInner {
     //todo dashmap to concurrent safe
     subscription_group_table: HashMap<CheetahString, SubscriptionGroupConfig>,
     forbidden_table: HashMap<CheetahString, HashMap<CheetahString, i32>>,
     data_version: DataVersion,
 }
 
-impl SubscriptionGroupWrapper {
+impl SubscriptionGroupWrapperInner {
     pub fn subscription_group_table(&self) -> &HashMap<CheetahString, SubscriptionGroupConfig> {
         &self.subscription_group_table
+    }
+
+    pub fn subscription_group_table_mut(
+        &mut self,
+    ) -> &mut HashMap<CheetahString, SubscriptionGroupConfig> {
+        &mut self.subscription_group_table
     }
 
     pub fn forbidden_table(&self) -> &HashMap<CheetahString, HashMap<CheetahString, i32>> {

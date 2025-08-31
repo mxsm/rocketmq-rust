@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use serde::Deserialize;
 use serde::Serialize;
@@ -24,7 +25,7 @@ use crate::protocol::DataVersion;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscriptionGroupWrapper {
-    pub subscription_group_table: DashMap<String, SubscriptionGroupConfig>,
+    pub subscription_group_table: DashMap<CheetahString, SubscriptionGroupConfig>,
 
     pub data_version: DataVersion,
 }
@@ -43,18 +44,18 @@ impl SubscriptionGroupWrapper {
         }
     }
 
-    pub fn get_subscription_group_table(&self) -> &DashMap<String, SubscriptionGroupConfig> {
+    pub fn get_subscription_group_table(&self) -> &DashMap<CheetahString, SubscriptionGroupConfig> {
         &self.subscription_group_table
     }
 
     pub fn set_subscription_group_table(
         &mut self,
-        table: DashMap<String, SubscriptionGroupConfig>,
+        table: DashMap<CheetahString, SubscriptionGroupConfig>,
     ) {
         self.subscription_group_table = table;
     }
 
-    pub fn get_data_version(&self) -> &DataVersion {
+    pub fn data_version(&self) -> &DataVersion {
         &self.data_version
     }
 
@@ -80,7 +81,7 @@ mod tests {
         let wrapper = SubscriptionGroupWrapper::new();
         wrapper
             .subscription_group_table
-            .insert("test_group".to_string(), SubscriptionGroupConfig::default());
+            .insert("test_group".into(), SubscriptionGroupConfig::default());
 
         let table = wrapper.get_subscription_group_table();
         assert_eq!(table.len(), 1);
