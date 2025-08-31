@@ -14,6 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::ops::Deref;
+use std::sync::LazyLock;
+
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -22,13 +25,17 @@ use crate::protocol::subscription::exponential_retry_policy::ExponentialRetryPol
 use crate::protocol::subscription::group_retry_policy_type::GroupRetryPolicyType;
 use crate::protocol::subscription::retry_policy::RetryPolicy;
 
+static DEFAULT_RETRY_POLICY: LazyLock<CustomizedRetryPolicy> =
+    LazyLock::new(CustomizedRetryPolicy::default);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupRetryPolicy {
+    #[serde(rename = "type")]
     type_: GroupRetryPolicyType,
     exponential_retry_policy: Option<ExponentialRetryPolicy>,
     customized_retry_policy: Option<CustomizedRetryPolicy>,
-    default_retry_policy: CustomizedRetryPolicy,
+    //default_retry_policy: CustomizedRetryPolicy,
 }
 
 impl Default for GroupRetryPolicy {
@@ -37,7 +44,7 @@ impl Default for GroupRetryPolicy {
             type_: GroupRetryPolicyType::Customized,
             exponential_retry_policy: None,
             customized_retry_policy: None,
-            default_retry_policy: CustomizedRetryPolicy::default(),
+            //default_retry_policy: CustomizedRetryPolicy::default(),
         }
     }
 }
@@ -79,12 +86,12 @@ impl GroupRetryPolicy {
                 .exponential_retry_policy
                 .as_ref()
                 .map(|p| p as &dyn RetryPolicy)
-                .unwrap_or(&self.default_retry_policy as &dyn RetryPolicy),
+                .unwrap_or(DEFAULT_RETRY_POLICY.deref() as &dyn RetryPolicy),
             GroupRetryPolicyType::Customized => self
                 .customized_retry_policy
                 .as_ref()
                 .map(|p| p as &dyn RetryPolicy)
-                .unwrap_or(&self.default_retry_policy as &dyn RetryPolicy),
+                .unwrap_or(DEFAULT_RETRY_POLICY.deref() as &dyn RetryPolicy),
         }
     }
 }
