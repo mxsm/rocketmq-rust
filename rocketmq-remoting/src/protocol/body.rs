@@ -35,6 +35,7 @@ pub mod connection;
 pub mod consume_message_directly_result;
 pub mod consume_queue_data;
 pub mod consume_status;
+pub mod consumer_offset_serialize_wrapper;
 pub mod epoch_entry_cache;
 pub mod group_list;
 pub mod ha_client_runtime_info;
