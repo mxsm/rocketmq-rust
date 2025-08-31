@@ -23,6 +23,7 @@ use serde::Serialize;
 use crate::protocol::DataVersion;
 
 #[derive(Serialize, Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct ConsumerOffsetSerializeWrapper {
     data_version: DataVersion,
     // Pop mode offset table
