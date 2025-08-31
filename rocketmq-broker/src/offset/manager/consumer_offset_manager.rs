@@ -235,6 +235,16 @@ where
         }
         topics
     }
+
+    pub fn offset_table(
+        &self,
+    ) -> Arc<parking_lot::RwLock<HashMap<CheetahString, HashMap<i32, i64>>>> {
+        self.consumer_offset_wrapper.offset_table.clone()
+    }
+
+    pub fn data_version(&self) -> ArcMut<DataVersion> {
+        self.consumer_offset_wrapper.data_version.clone()
+    }
 }
 
 impl<MS> ConfigManager for ConsumerOffsetManager<MS>

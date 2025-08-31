@@ -46,6 +46,7 @@ use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
+use rocketmq_remoting::protocol::body::consumer_offset_serialize_wrapper::ConsumerOffsetSerializeWrapper;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
@@ -632,6 +633,31 @@ impl BrokerOuterAPI {
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.body() {
                 let topic_configs = TopicConfigAndMappingSerializeWrapper::decode(body)?;
+                return Ok(Some(topic_configs));
+            }
+            Ok(None)
+        } else {
+            Err(RocketmqError::MQBrokerError(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                addr.to_string(),
+            ))
+        }
+    }
+
+    pub async fn get_all_consumer_offset(
+        &self,
+        addr: &CheetahString,
+    ) -> rocketmq_error::RocketMQResult<Option<ConsumerOffsetSerializeWrapper>> {
+        let request = RemotingCommand::create_remoting_command(RequestCode::GetAllConsumerOffset);
+        let addr_ = mix_all::broker_vip_channel(true, addr);
+        let response = self
+            .remoting_client
+            .invoke_async(Some(addr_.as_ref()), request, 3000)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.body() {
+                let topic_configs = ConsumerOffsetSerializeWrapper::decode(body)?;
                 return Ok(Some(topic_configs));
             }
             Ok(None)
