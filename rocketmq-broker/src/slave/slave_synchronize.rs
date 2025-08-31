@@ -16,9 +16,11 @@
  */
 use cheetah_string::CheetahString;
 use rocketmq_common::common::config_manager::ConfigManager;
+use rocketmq_common::FileUtils::string_to_file;
 use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::store_path_config_helper;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -231,7 +233,47 @@ where
     }
 
     async fn sync_delay_offset(&self) {
-        error!("SlaveSynchronize::sync_delay_offset is not implemented yet");
+        let (flag, master_addr) = self.check_master_addr();
+        if flag {
+            if let Some(master_addr) = master_addr {
+                match self
+                    .broker_runtime_inner
+                    .broker_outer_api()
+                    .get_delay_offset(&master_addr)
+                    .await
+                {
+                    Ok(offset) => {
+                        if let Some(offset) = offset {
+                            let file_name = store_path_config_helper::get_delay_offset_store_path(
+                                self.broker_runtime_inner
+                                    .message_store_config()
+                                    .store_path_root_dir
+                                    .as_str(),
+                            );
+                            match string_to_file(offset.as_str(), file_name.as_str()) {
+                                Ok(_) => {
+                                    if let Err(e) = self
+                                        .broker_runtime_inner
+                                        .schedule_message_service()
+                                        .load_when_sync_delay_offset()
+                                    {
+                                        error!("LoadWhenSyncDelayOffset error: {:?}", e);
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Write delay offset to file error: {:?}", e);
+                                }
+                            }
+                        } else {
+                            warn!("GetDelayOffset return null, {}", master_addr);
+                        }
+                    }
+                    Err(e) => {
+                        error!("SyncDelayOffset Exception, {}: {:?}", master_addr, e);
+                    }
+                }
+            }
+        }
     }
 
     async fn sync_subscription_group_config(&self) {
