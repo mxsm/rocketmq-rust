@@ -49,6 +49,7 @@ use rocketmq_remoting::protocol::body::broker_body::register_broker_body::Regist
 use rocketmq_remoting::protocol::body::consumer_offset_serialize_wrapper::ConsumerOffsetSerializeWrapper;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
+use rocketmq_remoting::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
@@ -682,6 +683,30 @@ impl BrokerOuterAPI {
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
                 return Ok(Some(String::from_utf8_lossy(body.as_ref()).to_string()));
+            }
+            Ok(None)
+        } else {
+            Err(RocketmqError::MQBrokerError(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                addr.to_string(),
+            ))
+        }
+    }
+
+    pub async fn get_all_subscription_group_config(
+        &self,
+        addr: &CheetahString,
+    ) -> rocketmq_error::RocketMQResult<Option<SubscriptionGroupWrapper>> {
+        let request =
+            RemotingCommand::create_remoting_command(RequestCode::GetAllSubscriptionGroupConfig);
+        let mut response = self
+            .remoting_client
+            .invoke_async(Some(addr), request, 3000)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.take_body() {
+                return Ok(Some(SubscriptionGroupWrapper::decode(body.as_ref())?));
             }
             Ok(None)
         } else {

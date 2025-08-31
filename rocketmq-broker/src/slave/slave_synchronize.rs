@@ -277,7 +277,57 @@ where
     }
 
     async fn sync_subscription_group_config(&self) {
-        error!("SlaveSynchronize::sync_subscription_group_config is not implemented yet");
+        let (flag, master_addr) = self.check_master_addr();
+        if flag {
+            if let Some(master_addr) = master_addr {
+                match self
+                    .broker_runtime_inner
+                    .broker_outer_api()
+                    .get_all_subscription_group_config(&master_addr)
+                    .await
+                {
+                    Ok(subscription_wrapper) => {
+                        if let Some(subscription_wrapper) = subscription_wrapper {
+                            let subscription_group_manager = self
+                                .broker_runtime_inner
+                                .mut_from_ref()
+                                .subscription_group_manager_mut();
+                            if subscription_group_manager.date_version()
+                                != subscription_wrapper.data_version()
+                            {
+                                let data_version = subscription_group_manager.date_version_mut();
+                                data_version.assign_new_one(subscription_wrapper.data_version());
+
+                                let new_subscription_table =
+                                    subscription_wrapper.subscription_group_table;
+                                let subscription_table =
+                                    subscription_group_manager.get_subscription_group_table();
+
+                                let mut subscription_table = subscription_table.lock();
+                                // Update with new entries
+                                subscription_table
+                                    .subscription_group_table_mut()
+                                    .extend(new_subscription_table);
+                                drop(subscription_table);
+                                subscription_group_manager.persist();
+                            }
+                            info!(
+                                "Update slave subscription group config from master, {}",
+                                master_addr
+                            );
+                        } else {
+                            warn!("GetAllSubscriptionGroupConfig return null, {}", master_addr);
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            "SyncSubscriptionGroupConfig Exception, {}: {:?}",
+                            master_addr, e
+                        );
+                    }
+                }
+            }
+        }
     }
 
     async fn sync_message_request_mode(&self) {
