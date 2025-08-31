@@ -183,6 +183,12 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .update_and_create_subscription_group(channel, ctx, request_code, request)
                     .await
             }
+
+            RequestCode::GetAllDelayOffset => {
+                self.offset_request_handler
+                    .get_all_delay_offset(channel, ctx, request_code, request)
+                    .await
+            }
             _ => Some(get_unknown_cmd_response(request_code)),
         }
     }
