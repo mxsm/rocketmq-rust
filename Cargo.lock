@@ -2327,6 +2327,7 @@ name = "rocketmq-error"
 version = "0.7.0"
 dependencies = [
  "anyhow",
+ "config",
  "serde_json",
  "thiserror 2.0.16",
 ]
