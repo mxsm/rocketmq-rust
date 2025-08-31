@@ -42,6 +42,8 @@ mod tui_error;
 
 use std::io;
 
+use config::ConfigError;
+
 pub type RocketMQResult<T> = std::result::Result<T, RocketmqError>;
 
 pub type Result<T> = anyhow::Result<T>;
@@ -125,7 +127,7 @@ pub enum RocketmqError {
     IllegalArgumentError(String),
 
     #[error("{0}")]
-    #[cfg(feature = "serde_json")]
+    #[cfg(feature = "with_serde")]
     SerdeJsonError(#[from] serde_json::Error),
 
     #[error("{0}")]
@@ -146,8 +148,9 @@ pub enum RocketmqError {
     #[error("{0}")]
     TokioHandlerError(String),
 
-    #[error("{0}")]
-    ConfigError(String),
+    #[error("Config parse error: {0}")]
+    #[cfg(feature = "with_config")]
+    ConfigError(#[from] ConfigError),
 
     #[error("{0} command failed , {1}")]
     SubCommand(String, String),

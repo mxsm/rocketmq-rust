@@ -30,27 +30,9 @@ pub fn parse_config_file<'de, C>(config_file: PathBuf) -> crate::error::RocketMQ
 where
     C: Debug + Deserialize<'de>,
 {
-    let config_file = match Config::builder()
+    let cfg = Config::builder()
         .add_source(config::File::from(config_file.as_path()))
-        .build()
-    {
-        Ok(cfg) => match cfg.try_deserialize::<C>() {
-            Ok(value) => value,
-            Err(err) => {
-                error!(
-                    "Failed to load config file: {:?}, error: {:?}",
-                    config_file, err
-                );
-                return Err(CommonError::ConfigError(err));
-            }
-        },
-        Err(err) => {
-            error!(
-                "Failed to load config file: {:?}, error: {:?}",
-                config_file, err
-            );
-            return Err(CommonError::ConfigError(err));
-        }
-    };
+        .build()?;
+    let config_file = cfg.try_deserialize::<C>()?;
     Ok(config_file)
 }

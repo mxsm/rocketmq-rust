@@ -13,7 +13,7 @@ rust-version.workspace = true
 
 [dependencies]
 rocketmq-rust = { workspace = true }
-rocketmq-error = { workspace = true, features = ["serde_json"] }
+rocketmq-error = { workspace = true, features = ["with_serde", "with_config"] }
 
 anyhow.workspace = true
 tokio.workspace = true
