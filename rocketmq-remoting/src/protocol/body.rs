@@ -56,6 +56,7 @@ pub mod request;
 pub mod response;
 pub mod set_message_request_mode_request_body;
 pub mod subscription_group_wrapper;
+pub mod timer_metrics_serialize_wrapper;
 pub mod topic;
 pub mod topic_info_wrapper;
 pub mod unlock_batch_request_body;
