@@ -76,17 +76,32 @@ where
         }
     }
 
+    fn check_master_addr(&self) -> (bool, Option<CheetahString>) {
+        let master_addr_bak = self.master_addr.clone();
+        match &master_addr_bak {
+            None => {
+                warn!("Master address is not set");
+                (false, None)
+            }
+            Some(addr) if addr.as_str() == self.broker_runtime_inner.get_broker_addr() => {
+                warn!(
+                    "Master address is the same as broker address: {}",
+                    self.broker_runtime_inner.get_broker_addr()
+                );
+                (false, None)
+            }
+            Some(addr) => (true, Some(addr.clone())),
+        }
+    }
+
     pub async fn sync_timer_check_point(&self) {
         error!("SlaveSynchronize::sync_timer_check_point is not implemented yet");
     }
 
     async fn sync_topic_config(&self) {
-        let master_addr_bak = self.master_addr.clone();
-
-        if let Some(master_addr) = master_addr_bak {
-            if <CheetahString as AsRef<CheetahString>>::as_ref(&master_addr)
-                != self.broker_runtime_inner.get_broker_addr()
-            {
+        let (flag, master_addr) = self.check_master_addr();
+        if flag {
+            if let Some(master_addr) = master_addr {
                 match self.sync_topic_config_internal(&master_addr).await {
                     Ok(_) => {
                         info!("Update slave topic config from master, {}", master_addr);
@@ -181,7 +196,38 @@ where
     }
 
     async fn sync_consumer_offset(&self) {
-        error!("SlaveSynchronize::sync_consumer_offset  is not implemented yet");
+        let (flag, master_addr) = self.check_master_addr();
+        if flag {
+            if let Some(master_addr) = master_addr {
+                match self
+                    .broker_runtime_inner
+                    .broker_outer_api()
+                    .get_all_consumer_offset(&master_addr)
+                    .await
+                {
+                    Ok(offset_wrapper) => {
+                        if let Some(offset_wrapper) = offset_wrapper {
+                            let consumer_offset_manager =
+                                self.broker_runtime_inner.consumer_offset_manager();
+                            consumer_offset_manager
+                                .data_version()
+                                .assign_new_one(offset_wrapper.data_version());
+                            let offset_table = consumer_offset_manager.offset_table();
+                            let mut consumer_offset_table = offset_table.write();
+                            consumer_offset_table.extend(offset_wrapper.offset_table());
+                            drop(consumer_offset_table);
+                            consumer_offset_manager.persist();
+                            info!("Update slave consumer offset from master, {}", master_addr);
+                        } else {
+                            warn!("GetAllConsumerOffset return null, {}", master_addr);
+                        }
+                    }
+                    Err(e) => {
+                        error!("SyncConsumerOffset Exception, {}: {:?}", master_addr, e);
+                    }
+                }
+            }
+        }
     }
 
     async fn sync_delay_offset(&self) {

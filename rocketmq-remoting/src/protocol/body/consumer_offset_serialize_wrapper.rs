@@ -40,8 +40,11 @@ impl ConsumerOffsetSerializeWrapper {
         self.data_version = data_version;
     }
     /// Returns a reference to the offset_table field.
-    pub fn offset_table(&self) -> &HashMap<CheetahString, HashMap<i32, i64>> {
+    pub fn offset_table_ref(&self) -> &HashMap<CheetahString, HashMap<i32, i64>> {
         &self.offset_table
+    }
+    pub fn offset_table(self) -> HashMap<CheetahString, HashMap<i32, i64>> {
+        self.offset_table
     }
     /// Returns a mutable reference to the offset_table field.
     pub fn offset_table_mut(&mut self) -> &mut HashMap<CheetahString, HashMap<i32, i64>> {
