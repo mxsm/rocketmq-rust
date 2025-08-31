@@ -213,6 +213,7 @@ impl BrokerRuntime {
             pop_message_processor: None,
             ack_message_processor: None,
             notification_processor: None,
+            query_assignment_processor: None,
             broker_attached_plugins: vec![],
             transactional_message_service: None,
             slave_synchronize: None,
@@ -609,6 +610,9 @@ impl BrokerRuntime {
             pop_message_processor.clone(),
         ));
         self.inner.ack_message_processor = Some(ack_message_processor.clone());
+        let query_assignment_processor =
+            ArcMut::new(QueryAssignmentProcessor::new(self.inner.clone()));
+        self.inner.query_assignment_processor = Some(query_assignment_processor.clone());
 
         let notification_processor = NotificationProcessor::new(self.inner.clone());
         self.inner.notification_processor = Some(notification_processor.clone());
@@ -628,9 +632,7 @@ impl BrokerRuntime {
             admin_broker_processor: ArcMut::new(admin_broker_processor),
             client_manage_processor: ArcMut::new(ClientManageProcessor::new(self.inner.clone())),
             consumer_manage_processor: ArcMut::new(consumer_manage_processor),
-            query_assignment_processor: ArcMut::new(QueryAssignmentProcessor::new(
-                self.inner.clone(),
-            )),
+            query_assignment_processor,
             query_message_processor: ArcMut::new(query_message_processor),
             end_transaction_processor: ArcMut::new(EndTransactionProcessor::new(
                 self.inner
@@ -1433,6 +1435,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     pop_message_processor: Option<ArcMut<PopMessageProcessor<MS>>>,
     ack_message_processor: Option<ArcMut<AckMessageProcessor<MS>>>,
     notification_processor: Option<ArcMut<NotificationProcessor<MS>>>,
+    query_assignment_processor: Option<ArcMut<QueryAssignmentProcessor<MS>>>,
     broker_attached_plugins: Vec<Arc<dyn BrokerAttachedPlugin>>,
     transactional_message_service: Option<ArcMut<DefaultTransactionalMessageService<MS>>>,
     slave_synchronize: Option<SlaveSynchronize<MS>>,
@@ -2279,6 +2282,26 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     pub fn notification_processor_unchecked(&self) -> &ArcMut<NotificationProcessor<MS>> {
         unsafe { self.notification_processor.as_ref().unwrap_unchecked() }
+    }
+
+    pub fn query_assignment_processor_unchecked(&self) -> &ArcMut<QueryAssignmentProcessor<MS>> {
+        unsafe { self.query_assignment_processor.as_ref().unwrap_unchecked() }
+    }
+
+    pub fn query_assignment_processor(&self) -> Option<&ArcMut<QueryAssignmentProcessor<MS>>> {
+        self.query_assignment_processor.as_ref()
+    }
+
+    pub fn query_assignment_processor_mut(
+        &mut self,
+    ) -> Option<&mut ArcMut<QueryAssignmentProcessor<MS>>> {
+        self.query_assignment_processor.as_mut()
+    }
+
+    pub fn query_assignment_processor_unchecked_mut(
+        &mut self,
+    ) -> &mut ArcMut<QueryAssignmentProcessor<MS>> {
+        unsafe { self.query_assignment_processor.as_mut().unwrap_unchecked() }
     }
 
     pub async fn change_special_service_status(&mut self, should_start: bool) {
