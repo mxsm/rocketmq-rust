@@ -29,6 +29,29 @@ pub struct ConsumerOffsetSerializeWrapper {
     offset_table: HashMap<CheetahString /* topic@group */, HashMap<i32 /* queue id */, i64>>,
 }
 
+impl ConsumerOffsetSerializeWrapper {
+    /// Returns a reference to the data_version field.
+    pub fn data_version(&self) -> &DataVersion {
+        &self.data_version
+    }
+    /// Sets the data_version field.
+    pub fn set_data_version(&mut self, data_version: DataVersion) {
+        self.data_version = data_version;
+    }
+    /// Returns a reference to the offset_table field.
+    pub fn offset_table(&self) -> &HashMap<CheetahString, HashMap<i32, i64>> {
+        &self.offset_table
+    }
+    /// Returns a mutable reference to the offset_table field.
+    pub fn offset_table_mut(&mut self) -> &mut HashMap<CheetahString, HashMap<i32, i64>> {
+        &mut self.offset_table
+    }
+    /// Sets the offset_table field.
+    pub fn set_offset_table(&mut self, offset_table: HashMap<CheetahString, HashMap<i32, i64>>) {
+        self.offset_table = offset_table;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
