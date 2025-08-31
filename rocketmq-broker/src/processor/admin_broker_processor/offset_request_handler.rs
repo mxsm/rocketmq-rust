@@ -31,6 +31,7 @@ use rocketmq_remoting::rpc::rpc_request::RpcRequest;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
+use tracing::error;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 
@@ -294,6 +295,33 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
                 response_command
                     .set_code(ResponseCode::SystemError)
                     .set_remark("No delay offset in this broker"),
+            );
+        }
+        response_command.set_body_mut_ref(content.into_bytes());
+        Some(response_command)
+    }
+
+    pub async fn get_all_subscription_group_config(
+        &mut self,
+        channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        _request: RemotingCommand,
+    ) -> Option<RemotingCommand> {
+        let mut response_command = RemotingCommand::create_response_command();
+        let content = self
+            .broker_runtime_inner
+            .subscription_group_manager()
+            .encode_pretty(false);
+        if content.is_empty() {
+            error!(
+                "No subscription group config in this broker,client:{}",
+                channel.remote_address()
+            );
+            return Some(
+                response_command
+                    .set_code(ResponseCode::SystemError)
+                    .set_remark("No subscription group config in this broker"),
             );
         }
         response_command.set_body_mut_ref(content.into_bytes());
