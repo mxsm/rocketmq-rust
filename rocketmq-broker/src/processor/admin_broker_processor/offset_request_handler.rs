@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -274,5 +275,28 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
                 offset: max_item.compute_static_queue_offset_strictly(max_physical_offset),
             },
         ))
+    }
+
+    pub async fn get_all_delay_offset(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        _request: RemotingCommand,
+    ) -> Option<RemotingCommand> {
+        let mut response_command = RemotingCommand::create_response_command();
+        let content = self
+            .broker_runtime_inner
+            .schedule_message_service()
+            .encode_pretty(false);
+        if content.is_empty() {
+            return Some(
+                response_command
+                    .set_code(ResponseCode::SystemError)
+                    .set_remark("No delay offset in this broker"),
+            );
+        }
+        response_command.set_body_mut_ref(content.into_bytes());
+        Some(response_command)
     }
 }
