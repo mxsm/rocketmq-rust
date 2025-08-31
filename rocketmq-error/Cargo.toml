@@ -14,3 +14,8 @@ rust-version.workspace = true
 [dependencies]
 thiserror.workspace = true
 anyhow = { workspace = true }
+serde_json = { workspace = true, optional = true }
+
+[features]
+default = []
+with_serde = ["serde_json"] # alias for downstreams already using serde_json

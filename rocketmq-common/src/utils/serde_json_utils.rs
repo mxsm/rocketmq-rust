@@ -22,56 +22,49 @@ impl SerdeJsonUtils {
     where
         T: serde::de::DeserializeOwned,
     {
-        serde_json::from_slice::<T>(bytes)
-            .map_err(|error| rocketmq_error::RocketmqError::JsonError(error.to_string()))
+        Ok(serde_json::from_slice::<T>(bytes)?)
     }
 
     pub fn from_json_str<T>(json: &str) -> rocketmq_error::RocketMQResult<T>
     where
         T: serde::de::DeserializeOwned,
     {
-        serde_json::from_str(json)
-            .map_err(|error| rocketmq_error::RocketmqError::JsonError(error.to_string()))
+        Ok(serde_json::from_str(json)?)
     }
 
     pub fn from_json_slice<T>(json: &[u8]) -> rocketmq_error::RocketMQResult<T>
     where
         T: serde::de::DeserializeOwned,
     {
-        serde_json::from_slice(json)
-            .map_err(|error| rocketmq_error::RocketmqError::JsonError(error.to_string()))
+        Ok(serde_json::from_slice(json)?)
     }
 
     pub fn to_json<T>(value: &T) -> rocketmq_error::RocketMQResult<String>
     where
         T: serde::Serialize,
     {
-        serde_json::to_string(value)
-            .map_err(|error| rocketmq_error::RocketmqError::JsonError(error.to_string()))
+        Ok(serde_json::to_string(value)?)
     }
 
     pub fn to_json_pretty<T>(value: &T) -> rocketmq_error::RocketMQResult<String>
     where
         T: serde::Serialize,
     {
-        serde_json::to_string_pretty(value)
-            .map_err(|error| rocketmq_error::RocketmqError::JsonError(error.to_string()))
+        Ok(serde_json::to_string_pretty(value)?)
     }
 
     pub fn to_json_vec<T>(value: &T) -> rocketmq_error::RocketMQResult<Vec<u8>>
     where
         T: serde::Serialize,
     {
-        serde_json::to_vec(value)
-            .map_err(|error| rocketmq_error::RocketmqError::JsonError(error.to_string()))
+        Ok(serde_json::to_vec(value)?)
     }
 
     pub fn to_json_vec_pretty<T>(value: &T) -> rocketmq_error::RocketMQResult<Vec<u8>>
     where
         T: serde::Serialize,
     {
-        serde_json::to_vec_pretty(value)
-            .map_err(|error| rocketmq_error::RocketmqError::JsonError(error.to_string()))
+        Ok(serde_json::to_vec_pretty(value)?)
     }
 }
 

@@ -124,8 +124,9 @@ pub enum RocketmqError {
     #[error("{0}")]
     IllegalArgumentError(String),
 
-    #[error("Serialization error: {0}")]
-    JsonError(String),
+    #[error("{0}")]
+    #[cfg(feature = "serde_json")]
+    SerdeJsonError(#[from] serde_json::Error),
 
     #[error("{0}")]
     UnsupportedOperationException(String),
