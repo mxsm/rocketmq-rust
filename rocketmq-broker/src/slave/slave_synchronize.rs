@@ -300,15 +300,16 @@ where
 
                                 let new_subscription_table =
                                     subscription_wrapper.subscription_group_table;
-                                let subscription_table =
+                                let subscription_table_inner =
                                     subscription_group_manager.get_subscription_group_table();
 
-                                let mut subscription_table = subscription_table.lock();
+                                let mut subscription_table_guard = subscription_table_inner.lock();
                                 // Update with new entries
-                                subscription_table
-                                    .subscription_group_table_mut()
-                                    .extend(new_subscription_table);
-                                drop(subscription_table);
+                                let subscription_table =
+                                    subscription_table_guard.subscription_group_table_mut();
+                                subscription_table.clear();
+                                subscription_table.extend(new_subscription_table);
+                                drop(subscription_table_guard);
                                 subscription_group_manager.persist();
                             }
                             info!(
@@ -331,7 +332,39 @@ where
     }
 
     async fn sync_message_request_mode(&self) {
-        error!("SlaveSynchronize::sync_message_request_mode is not implemented yet");
+        let (flag, master_addr) = self.check_master_addr();
+        if flag {
+            if let Some(master_addr) = master_addr {
+                match self
+                    .broker_runtime_inner
+                    .broker_outer_api()
+                    .get_message_request_mode(&master_addr)
+                    .await
+                {
+                    Ok(mode) => {
+                        if let Some(mode) = mode {
+                            let query_assignment_processor = self
+                                .broker_runtime_inner
+                                .query_assignment_processor_unchecked();
+                            let message_request_mode_manager =
+                                query_assignment_processor.message_request_mode_manager();
+                            let message_request_mode_map =
+                                message_request_mode_manager.message_request_mode_map();
+                            let mut message_request_mode_map = message_request_mode_map.lock();
+                            message_request_mode_map.clear();
+                            message_request_mode_map.extend(mode.into_inner());
+                            drop(message_request_mode_map);
+                            message_request_mode_manager.persist();
+                        } else {
+                            warn!("GetMessageRequestMode return null, {}", master_addr);
+                        }
+                    }
+                    Err(e) => {
+                        error!("SyncMessageRequestMode Exception, {}: {:?}", master_addr, e);
+                    }
+                }
+            }
+        }
     }
 
     async fn sync_timer_metrics(&self) {

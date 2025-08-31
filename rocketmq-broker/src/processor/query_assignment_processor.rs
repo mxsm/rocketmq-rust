@@ -92,6 +92,10 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
             broker_runtime_inner,
         }
     }
+
+    pub fn message_request_mode_manager(&self) -> &MessageRequestModeManager {
+        &self.message_request_mode_manager
+    }
 }
 
 impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
