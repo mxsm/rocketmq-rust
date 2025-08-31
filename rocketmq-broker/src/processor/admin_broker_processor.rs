@@ -189,6 +189,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .get_all_delay_offset(channel, ctx, request_code, request)
                     .await
             }
+            RequestCode::GetAllSubscriptionGroupConfig => {
+                self.offset_request_handler
+                    .get_all_subscription_group_config(channel, ctx, request_code, request)
+                    .await
+            }
             _ => Some(get_unknown_cmd_response(request_code)),
         }
     }
