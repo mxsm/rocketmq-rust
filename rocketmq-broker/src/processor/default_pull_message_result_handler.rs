@@ -21,7 +21,6 @@ use std::sync::Arc;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
-use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all::MASTER_ID;
@@ -107,7 +106,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
             .topic_config_manager()
             .select_topic_config(request_header.topic.as_ref());
         Self::compose_response_header(
-            &Arc::new(self.broker_runtime_inner.broker_config().clone()), //need optimization
+            &self.broker_runtime_inner, //need optimization
             &request_header,
             &get_message_result,
             topic_config.as_ref().unwrap().topic_sys_flag as i32,
@@ -428,7 +427,8 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
 
 impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
     fn compose_response_header(
-        broker_config: &Arc<BrokerConfig>,
+        //broker_config: &BrokerConfig,
+        broker_runtime_inner: &ArcMut<BrokerRuntimeInner<MS>>,
         request_header: &PullMessageRequestHeader,
         get_message_result: &GetMessageResult,
         topic_sys_flag: i32,
@@ -502,6 +502,7 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
             }
         }
 
+        let broker_config = broker_runtime_inner.broker_config();
         if broker_config.slave_read_enable && !broker_config.is_in_broker_container {
             if get_message_result.suggest_pulling_from_slave() {
                 response_header.suggest_which_broker_id =
@@ -515,6 +516,7 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
 
         if broker_config.broker_identity.broker_id != MASTER_ID
             && !get_message_result.suggest_pulling_from_slave()
+            && broker_runtime_inner.get_min_broker_id_in_group() == MASTER_ID
         {
             debug!(
                 "slave redirect pullRequest to master, topic: {}, queueId: {}, consumer group: \
