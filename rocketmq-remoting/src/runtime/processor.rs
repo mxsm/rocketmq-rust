@@ -19,6 +19,8 @@ use crate::net::channel::Channel;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::runtime::connection_handler_context::ConnectionHandlerContext;
 
+pub type RejectRequestResponse = (bool, Option<RemotingCommand>);
+
 /// Trait for processing requests.
 #[trait_variant::make(RequestProcessor: Send )]
 pub trait LocalRequestProcessor {
@@ -29,4 +31,8 @@ pub trait LocalRequestProcessor {
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>>;
+
+    fn reject_request(&self) -> RejectRequestResponse {
+        (false, None)
+    }
 }
