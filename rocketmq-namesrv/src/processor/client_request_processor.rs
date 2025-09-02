@@ -14,7 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -30,7 +29,9 @@ use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequ
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
+use tracing::info;
 use tracing::warn;
 
 use crate::bootstrap::NameServerRuntimeInner;
@@ -42,6 +43,23 @@ pub struct ClientRequestProcessor {
     startup_time_millis: u64,
 }
 
+impl RequestProcessor for ClientRequestProcessor {
+    #[inline]
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_code = RequestCode::from(request.code());
+        info!(
+            "Name server ClientRequestProcessor Received request code: {:?}",
+            request_code
+        );
+        self.process_request_inner(channel, ctx, request_code, request)
+    }
+}
+
 impl ClientRequestProcessor {
     pub(crate) fn new(name_server_runtime_inner: ArcMut<NameServerRuntimeInner>) -> Self {
         Self {
@@ -49,6 +67,17 @@ impl ClientRequestProcessor {
             startup_time_millis: TimeUtils::get_current_millis(),
             name_server_runtime_inner,
         }
+    }
+
+    #[inline]
+    fn process_request_inner(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        self.get_route_info_by_topic(request)
     }
 
     fn get_route_info_by_topic(
@@ -130,17 +159,5 @@ impl ClientRequestProcessor {
                 ))
             }
         }
-    }
-}
-
-impl ClientRequestProcessor {
-    pub fn process_request(
-        &mut self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        _request_code: RequestCode,
-        request: RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.get_route_info_by_topic(request)
     }
 }

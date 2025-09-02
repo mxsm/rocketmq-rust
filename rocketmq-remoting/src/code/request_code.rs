@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-#[derive(Debug, PartialEq, Clone, Copy, Hash)]
+#[derive(Debug, Eq, PartialEq, Clone, Copy, Hash)]
 pub enum RequestCode {
     SendMessage = 10,
     PullMessage = 11,

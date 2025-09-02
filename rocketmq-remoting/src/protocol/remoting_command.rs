@@ -580,6 +580,11 @@ impl RemotingCommand {
     }
 
     #[inline]
+    pub fn code_ref(&self) -> &i32 {
+        &self.code
+    }
+
+    #[inline]
     pub fn language(&self) -> LanguageCode {
         self.language
     }
