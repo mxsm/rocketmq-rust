@@ -127,8 +127,8 @@ impl BrokerData {
     }
 
     #[inline]
-    pub fn zone_name(&self) -> &Option<CheetahString> {
-        &self.zone_name
+    pub fn zone_name(&self) -> Option<&CheetahString> {
+        self.zone_name.as_ref()
     }
 
     #[inline]
