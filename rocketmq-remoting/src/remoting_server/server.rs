@@ -146,6 +146,25 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
             }
 
             let opaque = cmd.opaque();
+            let reject_request = self.request_processor.reject_request();
+            const REJECT_REQUEST_MSG: &str =
+                "[REJECT REQUEST]system busy, start flow control for a while";
+            if reject_request.0 {
+                let response = if let Some(response) = reject_request.1 {
+                    response
+                } else {
+                    RemotingCommand::create_response_command_with_code_remark(
+                        ResponseCode::SystemBusy,
+                        REJECT_REQUEST_MSG,
+                    )
+                };
+                self.channel_inner
+                    .0
+                    .connection
+                    .send_command(response.set_opaque(opaque))
+                    .await?;
+                continue;
+            }
             let oneway_rpc = cmd.is_oneway_rpc();
             //before handle request hooks
 
