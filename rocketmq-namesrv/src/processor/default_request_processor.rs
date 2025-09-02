@@ -57,7 +57,9 @@ use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
+use tracing::info;
 use tracing::warn;
 
 use crate::bootstrap::NameServerRuntimeInner;
@@ -67,8 +69,24 @@ pub struct DefaultRequestProcessor {
     name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
 }
 
+impl RequestProcessor for DefaultRequestProcessor {
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_code = RequestCode::from(request.code());
+        info!(
+            "Name server DefaultRequestProcessor Received request code: {:?}",
+            request_code
+        );
+        self.process_request_inner(channel, ctx, request_code, request)
+    }
+}
+
 impl DefaultRequestProcessor {
-    pub fn process_request(
+    pub fn process_request_inner(
         &mut self,
         channel: Channel,
         _ctx: ConnectionHandlerContext,

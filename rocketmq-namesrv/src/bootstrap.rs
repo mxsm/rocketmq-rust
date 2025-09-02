@@ -25,6 +25,7 @@ use rocketmq_common::utils::network_util::NetworkUtil;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
+use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::remoting::RemotingService;
 use rocketmq_remoting::remoting_server::server::RocketMQServer;
 use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
@@ -37,6 +38,7 @@ use tracing::info;
 
 use crate::processor::ClientRequestProcessor;
 use crate::processor::NameServerRequestProcessor;
+use crate::processor::NameServerRequestProcessorWrapper;
 use crate::route_info::broker_housekeeping_service::BrokerHousekeepingService;
 use crate::KVConfigManager;
 use crate::RouteInfoManager;
@@ -152,10 +154,19 @@ impl NameServerRuntime {
                 Some(Duration::from_secs(5)),
                 Duration::from_secs(5),
             );
-        NameServerRequestProcessor {
-            client_request_processor: ArcMut::new(client_request_processor),
-            default_request_processor: ArcMut::new(default_request_processor),
-        }
+        let mut name_server_request_processor = NameServerRequestProcessor::new();
+        name_server_request_processor.register_processor(
+            RequestCode::GetRouteinfoByTopic,
+            NameServerRequestProcessorWrapper::ClientRequestProcessor(ArcMut::new(
+                client_request_processor,
+            )),
+        );
+        name_server_request_processor.register_default_processor(
+            NameServerRequestProcessorWrapper::DefaultRequestProcessor(ArcMut::new(
+                default_request_processor,
+            )),
+        );
+        name_server_request_processor
     }
 }
 
