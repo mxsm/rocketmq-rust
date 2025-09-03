@@ -78,10 +78,6 @@ impl ConfigManager for ConsumerFilterManager {
         get_consumer_filter_path(self.message_store_config.store_path_root_dir.as_str())
     }
 
-    fn encode(&mut self) -> String {
-        todo!()
-    }
-
     fn encode_pretty(&self, pretty_format: bool) -> String {
         "".to_string()
     }
