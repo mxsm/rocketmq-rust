@@ -20,6 +20,7 @@ use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::warn;
@@ -50,6 +51,23 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
+impl<MS> RequestProcessor for AdminBrokerProcessor<MS>
+where
+    MS: MessageStore,
+{
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_code = RequestCode::from(request.code());
+        Ok(self
+            .process_request_inner(channel, ctx, request_code, request)
+            .await)
+    }
+}
+
 impl<MS: MessageStore> AdminBrokerProcessor<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         let topic_request_handler = TopicRequestHandler::new(broker_runtime_inner.clone());
@@ -73,7 +91,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
 }
 
 impl<MS: MessageStore> AdminBrokerProcessor<MS> {
-    pub async fn process_request(
+    async fn process_request_inner(
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,

@@ -146,7 +146,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
             }
 
             let opaque = cmd.opaque();
-            let reject_request = self.request_processor.reject_request();
+            let reject_request = self.request_processor.reject_request(cmd.code());
             const REJECT_REQUEST_MSG: &str =
                 "[REJECT REQUEST]system busy, start flow control for a while";
             if reject_request.0 {

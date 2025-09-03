@@ -42,6 +42,7 @@ use rocketmq_remoting::rpc::rpc_client::RpcClient;
 use rocketmq_remoting::rpc::rpc_client_utils::RpcClientUtils;
 use rocketmq_remoting::rpc::rpc_request::RpcRequest;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
@@ -50,6 +51,7 @@ use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::filter::MessageFilter;
 use tokio::sync::Mutex;
 use tracing::error;
+use tracing::info;
 use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
@@ -70,6 +72,43 @@ pub struct PullMessageProcessor<MS: MessageStore> {
     // write message to consume client lock
     write_message_lock: Arc<Mutex<()>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+}
+
+impl<MS> RequestProcessor for PullMessageProcessor<MS>
+where
+    MS: MessageStore,
+{
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_code = RequestCode::from(request.code());
+        info!(
+            "PullMessageProcessor received request code: {:?}",
+            request_code
+        );
+        match request_code {
+            RequestCode::PullMessage | RequestCode::LitePullMessage => Ok(self
+                .process_request_(channel, ctx, request_code, request)
+                .await),
+            _ => {
+                warn!(
+                    "PullMessageProcessor received unknown request code: {:?}",
+                    request_code
+                );
+                let response = RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::RequestCodeNotSupported,
+                    format!(
+                        "ClientManageProcessor request code {} not supported",
+                        request.code()
+                    ),
+                );
+                Ok(Some(response.set_opaque(request.opaque())))
+            }
+        }
+    }
 }
 
 impl<MS> PullMessageProcessor<MS>
@@ -317,7 +356,7 @@ impl<MS> PullMessageProcessor<MS>
 where
     MS: MessageStore + Send + Sync + 'static,
 {
-    pub async fn process_request(
+    pub async fn process_request_(
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,

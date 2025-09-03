@@ -14,14 +14,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use rocketmq_remoting::code::request_code::RequestCode;
+use std::collections::HashMap;
+
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::processor::RejectRequestResponse;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
-use tracing::info;
 
 use self::client_manage_processor::ClientManageProcessor;
 use crate::processor::ack_message_processor::AckMessageProcessor;
@@ -60,41 +61,142 @@ pub(crate) mod query_message_processor;
 pub(crate) mod reply_message_processor;
 pub(crate) mod send_message_processor;
 
-pub struct BrokerRequestProcessor<MS: MessageStore, TS> {
-    pub(crate) send_message_processor: ArcMut<SendMessageProcessor<MS, TS>>,
-    pub(crate) pull_message_processor: ArcMut<PullMessageProcessor<MS>>,
-    pub(crate) peek_message_processor: ArcMut<PeekMessageProcessor>,
-    pub(crate) pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
-    pub(crate) ack_message_processor: ArcMut<AckMessageProcessor<MS>>,
-    pub(crate) change_invisible_time_processor: ArcMut<ChangeInvisibleTimeProcessor<MS>>,
-    pub(crate) notification_processor: ArcMut<NotificationProcessor<MS>>,
-    pub(crate) polling_info_processor: ArcMut<PollingInfoProcessor>,
-    pub(crate) reply_message_processor: ArcMut<ReplyMessageProcessor<MS, TS>>,
-    pub(crate) query_message_processor: ArcMut<QueryMessageProcessor<MS>>,
-    pub(crate) client_manage_processor: ArcMut<ClientManageProcessor<MS>>,
-    pub(crate) consumer_manage_processor: ArcMut<ConsumerManageProcessor<MS>>,
-    pub(crate) query_assignment_processor: ArcMut<QueryAssignmentProcessor<MS>>,
-    pub(crate) end_transaction_processor: ArcMut<EndTransactionProcessor<TS, MS>>,
-    pub(crate) admin_broker_processor: ArcMut<AdminBrokerProcessor<MS>>,
+pub enum BrokerProcessorType<MS: MessageStore, TS> {
+    Send(ArcMut<SendMessageProcessor<MS, TS>>),
+    Pull(ArcMut<PullMessageProcessor<MS>>),
+    Peek(ArcMut<PeekMessageProcessor>),
+    Pop(ArcMut<PopMessageProcessor<MS>>),
+    Ack(ArcMut<AckMessageProcessor<MS>>),
+    ChangeInvisible(ArcMut<ChangeInvisibleTimeProcessor<MS>>),
+    Notification(ArcMut<NotificationProcessor<MS>>),
+    PollingInfo(ArcMut<PollingInfoProcessor>),
+    Reply(ArcMut<ReplyMessageProcessor<MS, TS>>),
+    QueryMessage(ArcMut<QueryMessageProcessor<MS>>),
+    ClientManage(ArcMut<ClientManageProcessor<MS>>),
+    ConsumerManage(ArcMut<ConsumerManageProcessor<MS>>),
+    QueryAssignment(ArcMut<QueryAssignmentProcessor<MS>>),
+    EndTransaction(ArcMut<EndTransactionProcessor<TS, MS>>),
+    AdminBroker(ArcMut<AdminBrokerProcessor<MS>>),
 }
+
+impl<MS, TS> RequestProcessor for BrokerProcessorType<MS, TS>
+where
+    MS: MessageStore,
+    TS: TransactionalMessageService,
+{
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        match self {
+            BrokerProcessorType::Send(processor) => {
+                processor.process_request(channel, ctx, request).await
+            }
+            BrokerProcessorType::Pull(processor) => {
+                processor.process_request(channel, ctx, request).await
+            }
+            BrokerProcessorType::Peek(processor) => {
+                processor.process_request(channel, ctx, request).await
+            }
+            BrokerProcessorType::Pop(processor) => {
+                processor.process_request(channel, ctx, request).await
+            }
+            BrokerProcessorType::Ack(processor) => {
+                processor.process_request(channel, ctx, request).await
+            }
+            BrokerProcessorType::ChangeInvisible(processor) => {
+                processor.process_request(channel, ctx, request).await
+            }
+            BrokerProcessorType::Notification(processor) => {
+                processor.process_request(channel, ctx, request).await
+            }
+            BrokerProcessorType::PollingInfo(processor) => {
+                processor.process_request(channel, ctx, request).await
+            }
+            BrokerProcessorType::Reply(processor) => {
+                processor.process_request(channel, ctx, request).await
+            }
+            BrokerProcessorType::QueryMessage(processor) => {
+                processor.process_request(channel, ctx, request).await
+            }
+            BrokerProcessorType::ClientManage(processor) => {
+                processor.process_request(channel, ctx, request).await
+            }
+            BrokerProcessorType::ConsumerManage(processor) => {
+                processor.process_request(channel, ctx, request).await
+            }
+            BrokerProcessorType::QueryAssignment(processor) => {
+                processor.process_request(channel, ctx, request).await
+            }
+            BrokerProcessorType::EndTransaction(processor) => {
+                processor.process_request(channel, ctx, request).await
+            }
+            BrokerProcessorType::AdminBroker(processor) => {
+                processor.process_request(channel, ctx, request).await
+            }
+        }
+    }
+
+    fn reject_request(&self, code: i32) -> RejectRequestResponse {
+        match self {
+            BrokerProcessorType::Send(processor) => processor.reject_request(code),
+            BrokerProcessorType::Pull(processor) => processor.reject_request(code),
+            BrokerProcessorType::Peek(processor) => processor.reject_request(code),
+            BrokerProcessorType::Pop(processor) => processor.reject_request(code),
+            BrokerProcessorType::Ack(processor) => processor.reject_request(code),
+            BrokerProcessorType::ChangeInvisible(processor) => processor.reject_request(code),
+            BrokerProcessorType::Notification(processor) => processor.reject_request(code),
+            BrokerProcessorType::PollingInfo(processor) => processor.reject_request(code),
+            BrokerProcessorType::Reply(processor) => processor.reject_request(code),
+            BrokerProcessorType::QueryMessage(processor) => processor.reject_request(code),
+            BrokerProcessorType::ClientManage(processor) => processor.reject_request(code),
+            BrokerProcessorType::ConsumerManage(processor) => processor.reject_request(code),
+            BrokerProcessorType::QueryAssignment(processor) => processor.reject_request(code),
+            BrokerProcessorType::EndTransaction(processor) => processor.reject_request(code),
+            BrokerProcessorType::AdminBroker(processor) => processor.reject_request(code),
+        }
+    }
+}
+
+pub(crate) type RequestCodeType = i32;
+
+pub struct BrokerRequestProcessor<MS: MessageStore, TS> {
+    process_table: ArcMut<HashMap<RequestCodeType, BrokerProcessorType<MS, TS>>>,
+    default_request_processor: Option<ArcMut<BrokerProcessorType<MS, TS>>>,
+}
+
+impl<MS, TS> BrokerRequestProcessor<MS, TS>
+where
+    MS: MessageStore,
+    TS: TransactionalMessageService,
+{
+    pub fn new() -> Self {
+        Self {
+            process_table: ArcMut::new(HashMap::new()),
+            default_request_processor: None,
+        }
+    }
+
+    pub fn register_processor(
+        &mut self,
+        request_code: RequestCodeType,
+        processor: BrokerProcessorType<MS, TS>,
+    ) {
+        self.process_table.insert(request_code, processor);
+    }
+
+    pub fn register_default_processor(&mut self, processor: BrokerProcessorType<MS, TS>) {
+        self.default_request_processor = Some(ArcMut::new(processor));
+    }
+}
+
 impl<MS: MessageStore, TS> Clone for BrokerRequestProcessor<MS, TS> {
     fn clone(&self) -> Self {
         Self {
-            send_message_processor: self.send_message_processor.clone(),
-            pull_message_processor: self.pull_message_processor.clone(),
-            peek_message_processor: self.peek_message_processor.clone(),
-            pop_message_processor: self.pop_message_processor.clone(),
-            ack_message_processor: self.ack_message_processor.clone(),
-            change_invisible_time_processor: self.change_invisible_time_processor.clone(),
-            notification_processor: self.notification_processor.clone(),
-            polling_info_processor: self.polling_info_processor.clone(),
-            reply_message_processor: self.reply_message_processor.clone(),
-            admin_broker_processor: self.admin_broker_processor.clone(),
-            client_manage_processor: self.client_manage_processor.clone(),
-            consumer_manage_processor: self.consumer_manage_processor.clone(),
-            query_assignment_processor: self.query_assignment_processor.clone(),
-            query_message_processor: self.query_message_processor.clone(),
-            end_transaction_processor: self.end_transaction_processor.clone(),
+            process_table: self.process_table.clone(),
+            default_request_processor: self.default_request_processor.clone(),
         }
     }
 }
@@ -110,96 +212,41 @@ where
         ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_code = RequestCode::from(request.code());
-        info!("process_request: {:?}", request_code);
-        let result = match request_code {
-            RequestCode::SendMessage
-            | RequestCode::SendMessageV2
-            | RequestCode::SendBatchMessage
-            | RequestCode::ConsumerSendMsgBack => {
-                return self
-                    .send_message_processor
-                    .process_request(channel, ctx, request_code, request)
-                    .await;
-            }
+        match self.process_table.get_mut(request.code_ref()) {
+            Some(processor) => processor.process_request(channel, ctx, request).await,
+            None => match self.default_request_processor.as_mut() {
+                Some(default_processor) => {
+                    default_processor
+                        .process_request(channel, ctx, request)
+                        .await
+                }
+                None => {
+                    let response_command =
+                        RemotingCommand::create_response_command_with_code_remark(
+                            rocketmq_remoting::code::response_code::ResponseCode::RequestCodeNotSupported,
+                            format!("The request code {} is not supported.", request.code_ref()),
+                        );
+                    Ok(Some(response_command.set_opaque(request.opaque())))
+                }
+            },
+        }
+    }
 
-            RequestCode::SendReplyMessage | RequestCode::SendReplyMessageV2 => {
-                self.reply_message_processor
-                    .process_request(channel, ctx, request_code, request)
-                    .await
+    fn reject_request(&self, code: i32) -> RejectRequestResponse {
+        match self.process_table.get(&code) {
+            Some(processor) => processor.reject_request(code),
+            None => {
+                if let Some(default_processor) = &self.default_request_processor {
+                    default_processor.reject_request(code)
+                } else {
+                    let response_command =
+                        RemotingCommand::create_response_command_with_code_remark(
+                            rocketmq_remoting::code::response_code::ResponseCode::RequestCodeNotSupported,
+                            format!("The request code {code} is not supported."),
+                        );
+                    (true, Some(response_command))
+                }
             }
-
-            RequestCode::HeartBeat
-            | RequestCode::UnregisterClient
-            | RequestCode::CheckClientConfig => {
-                return self
-                    .client_manage_processor
-                    .process_request(channel, ctx, request_code, request)
-                    .await;
-            }
-            RequestCode::PullMessage | RequestCode::LitePullMessage => {
-                self.pull_message_processor
-                    .process_request(channel, ctx, request_code, request)
-                    .await
-            }
-            RequestCode::GetConsumerListByGroup
-            | RequestCode::UpdateConsumerOffset
-            | RequestCode::QueryConsumerOffset => {
-                self.consumer_manage_processor
-                    .process_request(channel, ctx, request_code, request)
-                    .await
-            }
-
-            RequestCode::QueryMessage | RequestCode::ViewMessageById => {
-                self.query_message_processor
-                    .process_request(channel, ctx, request_code, request)
-                    .await
-            }
-
-            RequestCode::EndTransaction => {
-                self.end_transaction_processor
-                    .process_request(channel, ctx, request_code, request)
-                    .await
-            }
-
-            RequestCode::QueryAssignment | RequestCode::SetMessageRequestMode => {
-                return self
-                    .query_assignment_processor
-                    .process_request(channel, ctx, request_code, request)
-                    .await;
-            }
-
-            RequestCode::ChangeMessageInvisibleTime => {
-                return self
-                    .change_invisible_time_processor
-                    .process_request(channel, ctx, request_code, request)
-                    .await;
-            }
-
-            RequestCode::AckMessage | RequestCode::BatchAckMessage => {
-                return self
-                    .ack_message_processor
-                    .process_request(channel, ctx, request_code, request)
-                    .await;
-            }
-
-            RequestCode::PopMessage => {
-                /*return self
-                .pop_message_processor
-                .process_request(channel, ctx, request_code, request)
-                .await
-                .map_err(Into::into);*/
-                return self
-                    .pop_message_processor
-                    .process_request(channel, ctx, request)
-                    .await;
-            }
-            _ => {
-                self.admin_broker_processor
-                    .process_request(channel, ctx, request_code, request)
-                    .await
-            }
-        };
-        Ok(result)
+        }
     }
 }

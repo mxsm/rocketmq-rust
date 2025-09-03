@@ -33,9 +33,11 @@ use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
+use tracing::info;
 use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
@@ -46,6 +48,41 @@ use crate::transaction::transactional_message_service::TransactionalMessageServi
 pub struct EndTransactionProcessor<TM, MS: MessageStore> {
     transactional_message_service: ArcMut<TM>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+}
+
+impl<TM, MS> RequestProcessor for EndTransactionProcessor<TM, MS>
+where
+    TM: TransactionalMessageService,
+    MS: MessageStore,
+{
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_code = RequestCode::from(request.code());
+        info!(
+            "EndTransactionProcessor received request code: {:?}",
+            request_code
+        );
+        match request_code {
+            RequestCode::EndTransaction => Ok(self
+                .process_request_inner(channel, ctx, request_code, request)
+                .await),
+            _ => {
+                warn!(
+                    "EndTransactionProcessor received unknown request code: {:?}",
+                    request_code
+                );
+                let response = RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::RequestCodeNotSupported,
+                    format!("request code {} not supported", request.code()),
+                );
+                Ok(Some(response.set_opaque(request.opaque())))
+            }
+        }
+    }
 }
 
 impl<TM, MS: MessageStore> EndTransactionProcessor<TM, MS> {
@@ -65,7 +102,7 @@ where
     TM: TransactionalMessageService,
     MS: MessageStore,
 {
-    pub async fn process_request(
+    async fn process_request_inner(
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,

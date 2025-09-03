@@ -18,12 +18,24 @@ use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::processor::RequestProcessor;
 
 #[derive(Default)]
 pub struct PollingInfoProcessor {}
 
+impl RequestProcessor for PollingInfoProcessor {
+    async fn process_request(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        unimplemented!("RequestProcessor.process_request for PollingInfoProcessor not implemented")
+    }
+}
+
 impl PollingInfoProcessor {
-    pub async fn process_request(
+    async fn process_request_inner(
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,

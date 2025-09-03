@@ -56,13 +56,13 @@ impl RequestProcessor for NameServerRequestProcessorWrapper {
         }
     }
 
-    fn reject_request(&self) -> RejectRequestResponse {
+    fn reject_request(&self, code: i32) -> RejectRequestResponse {
         match self {
             NameServerRequestProcessorWrapper::ClientRequestProcessor(processor) => {
-                RequestProcessor::reject_request(processor.as_ref())
+                RequestProcessor::reject_request(processor.as_ref(), code)
             }
             NameServerRequestProcessorWrapper::DefaultRequestProcessor(processor) => {
-                RequestProcessor::reject_request(processor.as_ref())
+                RequestProcessor::reject_request(processor.as_ref(), code)
             }
         }
     }
