@@ -28,6 +28,7 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
@@ -37,6 +38,45 @@ use crate::broker_runtime::BrokerRuntimeInner;
 
 pub struct ConsumerManageProcessor<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+}
+
+impl<MS> RequestProcessor for ConsumerManageProcessor<MS>
+where
+    MS: MessageStore,
+{
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_code = RequestCode::from(request.code());
+        info!(
+            "ConsumerManageProcessor received request code: {:?}",
+            request_code
+        );
+        match request_code {
+            RequestCode::GetConsumerListByGroup
+            | RequestCode::UpdateConsumerOffset
+            | RequestCode::QueryConsumerOffset => Ok(self
+                .process_request_inner(channel, ctx, request_code, request)
+                .await),
+            _ => {
+                warn!(
+                    "ConsumerManageProcessor received unknown request code: {:?}",
+                    request_code
+                );
+                let response = RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::RequestCodeNotSupported,
+                    format!(
+                        "ConsumerManageProcessor request code {} not supported",
+                        request.code()
+                    ),
+                );
+                Ok(Some(response.set_opaque(request.opaque())))
+            }
+        }
+    }
 }
 
 impl<MS> ConsumerManageProcessor<MS>
@@ -55,7 +95,7 @@ impl<MS> ConsumerManageProcessor<MS>
 where
     MS: MessageStore,
 {
-    pub async fn process_request(
+    async fn process_request_inner(
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,

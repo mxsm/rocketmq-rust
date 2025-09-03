@@ -32,7 +32,7 @@ pub trait LocalRequestProcessor {
         request: RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>>;
 
-    fn reject_request(&self) -> RejectRequestResponse {
+    fn reject_request(&self, _code: i32) -> RejectRequestResponse {
         (false, None)
     }
 }

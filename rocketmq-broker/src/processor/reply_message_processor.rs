@@ -33,12 +33,14 @@ use rocketmq_remoting::protocol::header::message_operation_header::TopicRequestH
 use rocketmq_remoting::protocol::header::reply_message_request_header::ReplyMessageRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::stats::stats_type::StatsType;
+use tracing::info;
 use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
@@ -48,6 +50,44 @@ use crate::transaction::transactional_message_service::TransactionalMessageServi
 
 pub struct ReplyMessageProcessor<MS: MessageStore, TS> {
     inner: Inner<MS, TS>,
+}
+
+impl<MS, TS> RequestProcessor for ReplyMessageProcessor<MS, TS>
+where
+    MS: MessageStore,
+    TS: TransactionalMessageService,
+{
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_code = RequestCode::from(request.code());
+        info!(
+            "ReplyMessageProcessor received request code: {:?}",
+            request_code
+        );
+        match request_code {
+            RequestCode::SendReplyMessage | RequestCode::SendReplyMessageV2 => Ok(self
+                .process_request_inner(channel, ctx, request_code, request)
+                .await),
+            _ => {
+                warn!(
+                    "ReplyMessageProcessor received unknown request code: {:?}",
+                    request_code
+                );
+                let response = RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::RequestCodeNotSupported,
+                    format!(
+                        "ReplyMessageProcessor request code {} not supported",
+                        request.code()
+                    ),
+                );
+                Ok(Some(response.set_opaque(request.opaque())))
+            }
+        }
+    }
 }
 
 impl<MS, TS> ReplyMessageProcessor<MS, TS>
@@ -75,7 +115,7 @@ where
     MS: MessageStore,
     TS: TransactionalMessageService,
 {
-    pub async fn process_request(
+    async fn process_request_inner(
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,

@@ -65,6 +65,7 @@ use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
@@ -88,10 +89,50 @@ pub struct SendMessageProcessor<MS: MessageStore, TS> {
     store_host: SocketAddr,
 }
 
+impl<MS, TS> RequestProcessor for SendMessageProcessor<MS, TS>
+where
+    MS: MessageStore,
+    TS: TransactionalMessageService,
+{
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_code = RequestCode::from(request.code());
+        info!(
+            "SendMessageProcessor received request code: {:?}",
+            request_code
+        );
+        match request_code {
+            RequestCode::SendMessage
+            | RequestCode::SendMessageV2
+            | RequestCode::SendBatchMessage
+            | RequestCode::ConsumerSendMsgBack => {
+                return self
+                    .process_request_inner(channel, ctx, request_code, request)
+                    .await;
+            }
+            _ => {
+                warn!(
+                    "SendMessageProcessor received unknown request code: {:?}",
+                    request_code
+                );
+                let response = RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::RequestCodeNotSupported,
+                    format!("request code {} not supported", request.code()),
+                );
+                Ok(Some(response.set_opaque(request.opaque())))
+            }
+        }
+    }
+}
+
 // RequestProcessor implementation
 impl<MS, TS> SendMessageProcessor<MS, TS>
 where
-    MS: MessageStore + Send,
+    MS: MessageStore,
     TS: TransactionalMessageService,
 {
     pub fn has_send_message_hook(&self) -> bool {
@@ -107,7 +148,7 @@ where
         }
     }
 
-    pub async fn process_request(
+    pub async fn process_request_inner(
         &mut self,
         channel: Channel,
         mut ctx: ConnectionHandlerContext,

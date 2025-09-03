@@ -34,6 +34,7 @@ use rocketmq_common::common::statistics::state_getter::StateGetter;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::UtilAll::compute_next_morning_time_millis;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
+use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
@@ -98,6 +99,7 @@ use crate::processor::query_assignment_processor::QueryAssignmentProcessor;
 use crate::processor::query_message_processor::QueryMessageProcessor;
 use crate::processor::reply_message_processor::ReplyMessageProcessor;
 use crate::processor::send_message_processor::SendMessageProcessor;
+use crate::processor::BrokerProcessorType;
 use crate::processor::BrokerRequestProcessor;
 use crate::schedule::schedule_message_service::ScheduleMessageService;
 use crate::slave::slave_synchronize::SlaveSynchronize;
@@ -111,6 +113,16 @@ use crate::transaction::queue::default_transactional_message_service::DefaultTra
 use crate::transaction::queue::transactional_message_bridge::TransactionalMessageBridge;
 use crate::transaction::transaction_metrics_flush_service::TransactionMetricsFlushService;
 use crate::transaction::transactional_message_check_service::TransactionalMessageCheckService;
+
+type DefaultServerProcessor = BrokerRequestProcessor<
+    LocalFileMessageStore,
+    DefaultTransactionalMessageService<LocalFileMessageStore>,
+>;
+
+type FasterServerProcessor = BrokerRequestProcessor<
+    LocalFileMessageStore,
+    DefaultTransactionalMessageService<LocalFileMessageStore>,
+>;
 
 pub(crate) struct BrokerRuntime {
     #[cfg(feature = "local_file_store")]
@@ -554,12 +566,7 @@ impl BrokerRuntime {
         self.inner.topic_queue_mapping_clean_service = Some(TopicQueueMappingCleanService);
     }
 
-    fn init_processor(
-        &mut self,
-    ) -> BrokerRequestProcessor<
-        LocalFileMessageStore,
-        DefaultTransactionalMessageService<LocalFileMessageStore>,
-    > {
+    fn init_processor(&mut self) -> (DefaultServerProcessor, FasterServerProcessor) {
         let send_message_processor = SendMessageProcessor::new(
             self.inner
                 .transactional_message_service
@@ -600,9 +607,7 @@ impl BrokerRuntime {
             .set_message_arriving_listener(Some(Arc::new(Box::new(
                 NotifyMessageArrivingListener::new(inner),
             ))));
-        let query_message_processor = QueryMessageProcessor::new(self.inner.clone());
 
-        let admin_broker_processor = AdminBrokerProcessor::new(self.inner.clone());
         let pop_message_processor = PopMessageProcessor::new_arc_mut(self.inner.clone());
         self.inner.pop_message_processor = Some(pop_message_processor.clone());
         let ack_message_processor = ArcMut::new(AckMessageProcessor::new(
@@ -616,33 +621,157 @@ impl BrokerRuntime {
 
         let notification_processor = NotificationProcessor::new(self.inner.clone());
         self.inner.notification_processor = Some(notification_processor.clone());
-        BrokerRequestProcessor {
-            send_message_processor: ArcMut::new(send_message_processor),
-            pull_message_processor,
-            peek_message_processor: Default::default(),
-            pop_message_processor: pop_message_processor.clone(),
-            ack_message_processor,
-            change_invisible_time_processor: ArcMut::new(ChangeInvisibleTimeProcessor::new(
+        let mut broker_request_processor = BrokerRequestProcessor::new();
+        let send_message_processor = ArcMut::new(send_message_processor);
+
+        broker_request_processor.register_processor(
+            RequestCode::SendMessage as i32,
+            BrokerProcessorType::Send(send_message_processor.clone()),
+        );
+        broker_request_processor.register_processor(
+            RequestCode::SendMessageV2 as i32,
+            BrokerProcessorType::Send(send_message_processor.clone()),
+        );
+        broker_request_processor.register_processor(
+            RequestCode::SendBatchMessage as i32,
+            BrokerProcessorType::Send(send_message_processor.clone()),
+        );
+        broker_request_processor.register_processor(
+            RequestCode::ConsumerSendMsgBack as i32,
+            BrokerProcessorType::Send(send_message_processor),
+        );
+
+        //PullMessageProcessor
+        broker_request_processor.register_processor(
+            RequestCode::PullMessage as i32,
+            BrokerProcessorType::Pull(pull_message_processor.clone()),
+        );
+        broker_request_processor.register_processor(
+            RequestCode::LitePullMessage as i32,
+            BrokerProcessorType::Pull(pull_message_processor),
+        );
+
+        //PeekMessageProcessor
+        broker_request_processor.register_processor(
+            RequestCode::PeekMessage as i32,
+            BrokerProcessorType::Peek(Default::default()),
+        );
+
+        //PopMessageProcessor
+        broker_request_processor.register_processor(
+            RequestCode::PopMessage as i32,
+            BrokerProcessorType::Pop(pop_message_processor.clone()),
+        );
+
+        //AckMessageProcessor
+        broker_request_processor.register_processor(
+            RequestCode::AckMessage as i32,
+            BrokerProcessorType::Ack(ack_message_processor.clone()),
+        );
+        broker_request_processor.register_processor(
+            RequestCode::BatchAckMessage as i32,
+            BrokerProcessorType::Ack(ack_message_processor),
+        );
+        //ChangeInvisibleTimeProcessor
+        broker_request_processor.register_processor(
+            RequestCode::ChangeMessageInvisibleTime as i32,
+            BrokerProcessorType::ChangeInvisible(ArcMut::new(ChangeInvisibleTimeProcessor::new(
                 pop_message_processor,
                 self.inner.clone(),
-            )),
-            notification_processor,
-            polling_info_processor: Default::default(),
-            reply_message_processor: ArcMut::new(reply_message_processor),
-            admin_broker_processor: ArcMut::new(admin_broker_processor),
-            client_manage_processor: ArcMut::new(ClientManageProcessor::new(self.inner.clone())),
-            consumer_manage_processor: ArcMut::new(consumer_manage_processor),
-            query_assignment_processor,
-            query_message_processor: ArcMut::new(query_message_processor),
-            end_transaction_processor: ArcMut::new(EndTransactionProcessor::new(
+            ))),
+        );
+        //notificationProcessor
+        broker_request_processor.register_processor(
+            RequestCode::Notification as i32,
+            BrokerProcessorType::Notification(notification_processor),
+        );
+
+        //pollingInfoProcessor
+        broker_request_processor.register_processor(
+            RequestCode::PollingInfo as i32,
+            BrokerProcessorType::PollingInfo(Default::default()),
+        );
+
+        //ReplyMessageProcessor
+        let reply_message_processor = ArcMut::new(reply_message_processor);
+        broker_request_processor.register_processor(
+            RequestCode::SendReplyMessage as i32,
+            BrokerProcessorType::Reply(reply_message_processor.clone()),
+        );
+        broker_request_processor.register_processor(
+            RequestCode::SendReplyMessageV2 as i32,
+            BrokerProcessorType::Reply(reply_message_processor),
+        );
+
+        //QueryMessageProcessor
+        let query_message_processor = ArcMut::new(QueryMessageProcessor::new(self.inner.clone()));
+        broker_request_processor.register_processor(
+            RequestCode::QueryMessage as i32,
+            BrokerProcessorType::QueryMessage(query_message_processor.clone()),
+        );
+        broker_request_processor.register_processor(
+            RequestCode::ViewMessageById as i32,
+            BrokerProcessorType::QueryMessage(query_message_processor),
+        );
+        //ClientManageProcessor
+        let client_manage_processor = ArcMut::new(ClientManageProcessor::new(self.inner.clone()));
+        broker_request_processor.register_processor(
+            RequestCode::HeartBeat as i32,
+            BrokerProcessorType::ClientManage(client_manage_processor.clone()),
+        );
+        broker_request_processor.register_processor(
+            RequestCode::UnregisterClient as i32,
+            BrokerProcessorType::ClientManage(client_manage_processor.clone()),
+        );
+        broker_request_processor.register_processor(
+            RequestCode::CheckClientConfig as i32,
+            BrokerProcessorType::ClientManage(client_manage_processor),
+        );
+
+        //ConsumerManageProcessor
+        let consumer_manage_processor = ArcMut::new(consumer_manage_processor);
+
+        broker_request_processor.register_processor(
+            RequestCode::GetConsumerListByGroup as i32,
+            BrokerProcessorType::ConsumerManage(consumer_manage_processor.clone()),
+        );
+        broker_request_processor.register_processor(
+            RequestCode::UpdateConsumerOffset as i32,
+            BrokerProcessorType::ConsumerManage(consumer_manage_processor.clone()),
+        );
+
+        broker_request_processor.register_processor(
+            RequestCode::QueryConsumerOffset as i32,
+            BrokerProcessorType::ConsumerManage(consumer_manage_processor),
+        );
+
+        //QueryAssignmentProcessor
+        broker_request_processor.register_processor(
+            RequestCode::QueryAssignment as i32,
+            BrokerProcessorType::QueryAssignment(query_assignment_processor.clone()),
+        );
+        broker_request_processor.register_processor(
+            RequestCode::SetMessageRequestMode as i32,
+            BrokerProcessorType::QueryAssignment(query_assignment_processor),
+        );
+
+        //EndTransactionProcessor
+        broker_request_processor.register_processor(
+            RequestCode::EndTransaction as i32,
+            BrokerProcessorType::EndTransaction(ArcMut::new(EndTransactionProcessor::new(
                 self.inner
                     .transactional_message_service
                     .as_ref()
                     .unwrap()
                     .clone(),
                 self.inner.clone(),
-            )),
-        }
+            ))),
+        );
+        let admin_broker_processor = ArcMut::new(AdminBrokerProcessor::new(self.inner.clone()));
+        broker_request_processor
+            .register_default_processor(BrokerProcessorType::AdminBroker(admin_broker_processor));
+
+        (broker_request_processor.clone(), broker_request_processor)
     }
 
     async fn initialize_scheduled_tasks(&mut self) {
@@ -856,8 +985,7 @@ impl BrokerRuntime {
             replicas_manager.start();
         }
 
-        let request_processor = self.init_processor();
-        let fast_request_processor = request_processor.clone();
+        let (request_processor, fast_request_processor) = self.init_processor();
 
         let server = RocketMQServer::new(Arc::new(
             self.inner.broker_config.broker_server_config.clone(),

@@ -33,6 +33,7 @@ use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
@@ -41,6 +42,7 @@ use rocketmq_store::pop::ack_msg::AckMsg;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::processor::pop_message_processor::PopMessageProcessor;
@@ -49,6 +51,44 @@ pub struct ChangeInvisibleTimeProcessor<MS: MessageStore> {
     revive_topic: CheetahString,
     pop_message_processor: ArcMut<PopMessageProcessor<MS>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+}
+
+impl<MS> RequestProcessor for ChangeInvisibleTimeProcessor<MS>
+where
+    MS: MessageStore,
+{
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_code = RequestCode::from(request.code());
+        info!(
+            "ChangeInvisibleTimeProcessor received request code: {:?}",
+            request_code
+        );
+        match request_code {
+            RequestCode::ChangeMessageInvisibleTime => {
+                self.process_request_(channel, ctx, request_code, request)
+                    .await
+            }
+            _ => {
+                warn!(
+                    "ChangeInvisibleTimeProcessor received unknown request code: {:?}",
+                    request_code
+                );
+                let response = RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::RequestCodeNotSupported,
+                    format!(
+                        "ChangeInvisibleTimeProcessor request code {} not supported",
+                        request.code()
+                    ),
+                );
+                Ok(Some(response.set_opaque(request.opaque())))
+            }
+        }
+    }
 }
 
 impl<MS: MessageStore> ChangeInvisibleTimeProcessor<MS> {
@@ -75,7 +115,7 @@ impl<MS> ChangeInvisibleTimeProcessor<MS>
 where
     MS: MessageStore,
 {
-    pub async fn process_request(
+    async fn process_request_(
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,

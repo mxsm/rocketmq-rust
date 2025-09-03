@@ -26,15 +26,18 @@ use rocketmq_common::common::mix_all::IS_SUPPORT_HEART_BEAT_V2;
 use rocketmq_common::common::sys_flag::topic_sys_flag;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::info;
+use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::client::client_channel_info::ClientChannelInfo;
@@ -46,6 +49,46 @@ pub struct ClientManageProcessor<MS: MessageStore> {
         >,
     >,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+}
+
+impl<MS> RequestProcessor for ClientManageProcessor<MS>
+where
+    MS: MessageStore,
+{
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_code = RequestCode::from(request.code());
+        info!(
+            "ClientManageProcessor received request code: {:?}",
+            request_code
+        );
+        match request_code {
+            RequestCode::HeartBeat
+            | RequestCode::UnregisterClient
+            | RequestCode::CheckClientConfig => {
+                self.process_request_inner(channel, ctx, request_code, request)
+                    .await
+            }
+            _ => {
+                warn!(
+                    "ClientManageProcessor received unknown request code: {:?}",
+                    request_code
+                );
+                let response = RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::RequestCodeNotSupported,
+                    format!(
+                        "ClientManageProcessor request code {} not supported",
+                        request.code()
+                    ),
+                );
+                Ok(Some(response.set_opaque(request.opaque())))
+            }
+        }
+    }
 }
 
 impl<MS> ClientManageProcessor<MS>
@@ -64,7 +107,7 @@ impl<MS> ClientManageProcessor<MS>
 where
     MS: MessageStore,
 {
-    pub async fn process_request(
+    async fn process_request_inner(
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,

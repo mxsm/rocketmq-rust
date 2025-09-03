@@ -46,6 +46,7 @@ use rocketmq_store::base::message_store::MessageStore;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tracing::{info, warn};
+use rocketmq_remoting::runtime::processor::RequestProcessor;
 
 /// A processor for handling query assignments in the RocketMQ broker.
 ///
@@ -65,6 +66,44 @@ pub struct QueryAssignmentProcessor<MS: MessageStore> {
     load_strategy: HashMap<CheetahString, Arc<dyn AllocateMessageQueueStrategy>>,
 
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+}
+
+impl<MS> RequestProcessor for QueryAssignmentProcessor<MS>
+where
+    MS: MessageStore,
+{
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_code = RequestCode::from(request.code());
+        info!(
+            "QueryAssignmentProcessor received request code: {:?}",
+            request_code
+        );
+        match request_code {
+            RequestCode::QueryAssignment | RequestCode::SetMessageRequestMode => {
+                self.process_request_inner(channel, ctx, request_code, request)
+                    .await
+            }
+            _ => {
+                warn!(
+                    "QueryAssignmentProcessor received unknown request code: {:?}",
+                    request_code
+                );
+                let response = RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::RequestCodeNotSupported,
+                    format!(
+                        "QueryAssignmentProcessor request code {} not supported",
+                        request.code()
+                    ),
+                );
+                Ok(Some(response.set_opaque(request.opaque())))
+            }
+        }
+    }
 }
 
 impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
@@ -99,7 +138,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
 }
 
 impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
-    pub async fn process_request(
+    pub async fn process_request_inner(
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
