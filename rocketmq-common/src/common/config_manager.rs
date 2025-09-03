@@ -144,7 +144,7 @@ pub trait ConfigManager {
     ///
     /// # Returns
     /// A `String` representing the encoded configuration in a compact format.
-    fn encode(&mut self) -> String {
+    fn encode(&self) -> String {
         self.encode_pretty(false)
     }
 
