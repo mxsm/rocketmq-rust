@@ -1,6 +1,6 @@
 ---
 title: "Understanding Broker Naming in RocketMQ-Rust"
-permalink: /docs/broker-naming/
+permalink: /zh/docs/broker-naming/
 excerpt: "Understanding Broker Naming in RocketMQ-Rust"
 last_modified_at: 2025-09-05T21:43:05-04:00
 redirect_from:
