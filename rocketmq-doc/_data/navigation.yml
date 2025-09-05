@@ -106,6 +106,8 @@ docs:
   #        url: /docs/license/
   #      - title: "Terms &amp; Privacy Policy"
   #        url: /terms/
+  - title: Best practice
+
   - title: Contribution Guide
     children:
       - title: "Contribute Guide"
