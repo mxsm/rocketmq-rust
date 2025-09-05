@@ -107,7 +107,9 @@ docs:
   #      - title: "Terms &amp; Privacy Policy"
   #        url: /terms/
   - title: Best practice
-
+    children:
+      - title: "Broker Naming"
+        url: /docs/broker-naming/
   - title: Contribution Guide
     children:
       - title: "Contribute Guide"
