@@ -514,7 +514,11 @@ impl BrokerRuntime {
         if self.inner.message_store.is_some() {
             self.register_message_store_hook();
             // load message store
-            self.inner.message_store.as_mut().unwrap().load().await;
+            result &= self.inner.message_store.as_mut().unwrap().load().await;
+            if !result {
+                warn!("Load message store failed");
+                return false;
+            }
         }
 
         if self
@@ -541,9 +545,10 @@ impl BrokerRuntime {
         result
     }
 
+    #[inline(always)]
     pub fn register_message_store_hook(&mut self) {
         let config = self.inner.message_store_config.clone();
-        let arc = self.inner.topic_config_manager().topic_config_table();
+        let topic_config_table = self.inner.topic_config_manager().topic_config_table();
         let broker_runtime_inner = ArcMut::clone(&self.inner);
         if let Some(ref mut message_store) = self.inner.message_store {
             let message_store_clone = message_store.clone();
@@ -551,7 +556,9 @@ impl BrokerRuntime {
                 message_store_clone,
                 config,
             )));
-            message_store.set_put_message_hook(Box::new(BatchCheckBeforePutMessageHook::new(arc)));
+            message_store.set_put_message_hook(Box::new(BatchCheckBeforePutMessageHook::new(
+                topic_config_table,
+            )));
             message_store
                 .set_put_message_hook(Box::new(ScheduleMessageHook::new(broker_runtime_inner)))
         }
