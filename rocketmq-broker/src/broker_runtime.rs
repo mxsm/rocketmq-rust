@@ -527,12 +527,31 @@ impl BrokerRuntime {
             .timer_wheel_config
             .timer_wheel_enable
         {
-            result &= self.inner.timer_message_store.as_mut().unwrap().load();
+            if let Some(timer_message_store) = &mut self.inner.timer_message_store {
+                info!("Timer wheel is enabled, load timer message store");
+                result &= timer_message_store.load();
+                if !result {
+                    warn!("Load timer message store failed");
+                    return false;
+                }
+            } else {
+                warn!("Timer wheel is enabled, but timer message store is None");
+                return false;
+            }
         }
 
         //scheduleMessageService load after messageStore load success
-        result &= self.inner.schedule_message_service.as_ref().unwrap().load();
-
+        if let Some(schedule_message_service) = &mut self.inner.schedule_message_service {
+            info!("Load schedule message service");
+            result &= schedule_message_service.load();
+            if !result {
+                warn!("Load schedule message service failed");
+                return false;
+            }
+        } else {
+            warn!("Schedule message service is None");
+            return false;
+        }
         if result {
             self.initialize_remoting_server();
             self.initialize_resources();
