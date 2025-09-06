@@ -131,7 +131,6 @@ pub(crate) struct BrokerRuntime {
     shutdown_hook: Option<BrokerShutdownHook>,
     consumer_ids_change_listener: Arc<Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>>,
     topic_queue_mapping_clean_service: TopicQueueMappingCleanService,
-    broker_pre_online_service: BrokerPreOnlineService,
     // receiver for shutdown signal
     pub(crate) shutdown_rx: Option<tokio::sync::broadcast::Receiver<()>>,
     scheduled_task_manager: ScheduledTaskManager,
@@ -230,6 +229,7 @@ impl BrokerRuntime {
             transactional_message_service: None,
             slave_synchronize: None,
             last_sync_time_ms: AtomicU64::new(get_current_millis()),
+            broker_pre_online_service: None,
         });
         let mut stats_manager = BrokerStatsManager::new(inner.broker_config.clone());
         stats_manager.set_producer_state_getter(Arc::new(ProducerStateGetter {
@@ -262,7 +262,6 @@ impl BrokerRuntime {
             shutdown_hook: None,
             consumer_ids_change_listener,
             topic_queue_mapping_clean_service: TopicQueueMappingCleanService,
-            broker_pre_online_service: BrokerPreOnlineService,
             shutdown_rx: None,
             scheduled_task_manager: Default::default(),
         }
@@ -401,6 +400,10 @@ impl BrokerRuntime {
 
         if let Some(topic_route_info_manager) = self.inner.topic_route_info_manager.as_mut() {
             topic_route_info_manager.shutdown();
+        }
+
+        if let Some(broker_pre_online_service) = self.inner.broker_pre_online_service.as_mut() {
+            broker_pre_online_service.shutdown().await;
         }
 
         if let Some(cold_data_pull_request_hold_service) =
@@ -1075,7 +1078,10 @@ impl BrokerRuntime {
         if let Some(topic_route_info_manager) = self.inner.topic_route_info_manager.as_mut() {
             topic_route_info_manager.start();
         }
-        self.broker_pre_online_service.start();
+
+        if let Some(broker_pre_online_service) = self.inner.broker_pre_online_service.as_mut() {
+            broker_pre_online_service.start().await
+        }
 
         if let Some(cold_data_pull_request_hold_service) =
             self.inner.cold_data_pull_request_hold_service.as_mut()
@@ -1594,6 +1600,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     transactional_message_service: Option<ArcMut<DefaultTransactionalMessageService<MS>>>,
     slave_synchronize: Option<SlaveSynchronize<MS>>,
     last_sync_time_ms: AtomicU64,
+    broker_pre_online_service: Option<BrokerPreOnlineService<MS>>,
 }
 
 impl<MS: MessageStore> BrokerRuntimeInner<MS> {
