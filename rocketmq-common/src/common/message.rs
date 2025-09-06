@@ -429,16 +429,11 @@ pub trait MessageTrait: Any + Display + Debug {
 pub const MESSAGE_MAGIC_CODE_V1: i32 = -626843481;
 pub const MESSAGE_MAGIC_CODE_V2: i32 = -626843477;
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
 pub enum MessageVersion {
+    #[default]
     V1,
     V2,
-}
-
-impl Default for MessageVersion {
-    fn default() -> Self {
-        Self::V1
-    }
 }
 
 impl fmt::Display for MessageVersion {
