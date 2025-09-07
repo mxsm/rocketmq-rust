@@ -629,5 +629,5 @@ pub trait MessageStoreInner: Sync + 'static {
     ///
     /// # Returns
     /// A reference to the `GeneralHAService` instance.
-    fn get_ha_service(&self) -> &GeneralHAService;
+    fn get_ha_service(&self) -> Option<&GeneralHAService>;
 }

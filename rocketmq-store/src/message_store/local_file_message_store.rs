@@ -1932,12 +1932,8 @@ impl MessageStore for LocalFileMessageStore {
         self.put_message_hook_list.push(put_message_hook);
     }
 
-    fn get_ha_service(&self) -> &GeneralHAService {
-        if let Some(ha_service) = self.ha_service.as_ref() {
-            ha_service
-        } else {
-            panic!("HA service is not initialized");
-        }
+    fn get_ha_service(&self) -> Option<&GeneralHAService> {
+        self.ha_service.as_ref()
     }
 }
 
