@@ -54,6 +54,7 @@ use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockB
 use rocketmq_remoting::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+use rocketmq_remoting::protocol::header::exchange_ha_info_request_header::ExchangeHAInfoRequestHeader;
 use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
@@ -757,12 +758,33 @@ impl BrokerOuterAPI {
 
     pub async fn send_broker_ha_info(
         &self,
-        _broker_addr: &CheetahString,
-        _master_ha_addr: &CheetahString,
-        _broker_init_max_offset: i64,
-        _master_addr: &CheetahString,
+        broker_addr: &CheetahString,
+        master_ha_addr: &CheetahString,
+        broker_init_max_offset: i64,
+        master_addr: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        unimplemented!()
+        let request_header = ExchangeHAInfoRequestHeader {
+            master_ha_address: Some(master_ha_addr.clone()),
+            master_flush_offset: Some(broker_init_max_offset),
+            master_address: Some(master_addr.clone()),
+        };
+        let request = RemotingCommand::create_request_command(
+            RequestCode::ExchangeBrokerHaInfo,
+            request_header,
+        );
+        let response = self
+            .remoting_client
+            .invoke_async(Some(broker_addr), request, 3000)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            Ok(())
+        } else {
+            Err(RocketmqError::MQBrokerError(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                broker_addr.to_string(),
+            ))
+        }
     }
 }
 
