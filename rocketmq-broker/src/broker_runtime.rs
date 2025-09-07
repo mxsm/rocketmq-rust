@@ -640,6 +640,7 @@ impl BrokerRuntime {
                     .clone(),
                 self.inner.clone(),
             )),
+            notify_min_broker_id_processor: Default::default(),
         }
     }
 
