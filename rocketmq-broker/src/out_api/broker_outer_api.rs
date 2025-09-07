@@ -45,6 +45,7 @@ use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_remoting::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
 use rocketmq_remoting::protocol::body::consumer_offset_serialize_wrapper::ConsumerOffsetSerializeWrapper;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
@@ -743,6 +744,15 @@ impl BrokerOuterAPI {
                 addr.to_string(),
             ))
         }
+    }
+
+    pub async fn sync_broker_member_group(
+        &self,
+        _cluster_name: &CheetahString,
+        _broker_name: &CheetahString,
+        _is_compatible_with_old_name_srv: bool,
+    ) -> rocketmq_error::RocketMQResult<Option<BrokerMemberGroup>> {
+        unimplemented!()
     }
 }
 

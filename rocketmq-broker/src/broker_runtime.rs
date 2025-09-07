@@ -2526,7 +2526,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         }
     }
 
-    pub fn start_service(&mut self, _min_broker_id: u64, _min_broker_addr: CheetahString) {
+    pub fn start_service(&mut self, _min_broker_id: u64, _min_broker_addr: Option<CheetahString>) {
         unimplemented!("BrokerRuntimeInner#start_service");
     }
 
