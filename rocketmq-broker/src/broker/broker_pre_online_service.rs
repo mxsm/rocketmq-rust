@@ -23,12 +23,15 @@ use cheetah_string::CheetahString;
 use futures::future::BoxFuture;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_error::RocketMQResult;
+use rocketmq_remoting::common::remoting_helper::RemotingHelper;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_rust::task::service_task::ServiceContext;
 use rocketmq_rust::task::service_task::ServiceTask;
 use rocketmq_rust::task::ServiceManager;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
+use rocketmq_store::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
+use rocketmq_store::ha::ha_service::HAService;
 use tracing::error;
 use tracing::info;
 
@@ -265,14 +268,67 @@ where
 
     fn wait_for_ha_handshake_complete(&self, broker_addr: CheetahString) -> BoxFuture<'_, bool> {
         info!("wait for handshake completion with {}", broker_addr);
-        unimplemented!("wait_for_ha_handshake_complete unimplemented");
+
+        let (request, tx) = HAConnectionStateNotificationRequest::new(
+            rocketmq_store::ha::ha_connection_state::HAConnectionState::Transfer,
+            &RemotingHelper::parse_host_from_address(Some(broker_addr.as_str())),
+            true,
+        );
+        if let Some(ha_service) = self
+            .broker_runtime_inner
+            .message_store_unchecked()
+            .get_ha_service()
+        {
+            ha_service.put_group_connection_state_request(request);
+            let future = async move {
+                match tx.await {
+                    Ok(value) => value,
+                    Err(e) => {
+                        error!("wait for ha handshake complete error, {}", e);
+                        false
+                    }
+                }
+            };
+            Box::pin(future)
+        } else {
+            error!(
+                "HAService is null, maybe broker config is wrong. For example, duplicationEnable \
+                 is true"
+            );
+            Box::pin(async { false })
+        }
     }
     async fn future_wait_action(
         &self,
-        _result: BoxFuture<'_, bool>,
-        _broker_member_group: &BrokerMemberGroup,
+        result: BoxFuture<'_, bool>,
+        broker_member_group: &BrokerMemberGroup,
     ) -> bool {
-        unimplemented!()
+        match result.await {
+            true => {
+                if self
+                    .broker_runtime_inner
+                    .broker_config()
+                    .broker_identity
+                    .broker_id
+                    != MASTER_ID
+                {
+                    info!("slave preOnline complete, start service");
+                    let min_broker_id = self.get_min_broker_id(&broker_member_group.broker_addrs);
+                    let broker_addr = broker_member_group
+                        .broker_addrs
+                        .get(&min_broker_id)
+                        .cloned();
+                    self.broker_runtime_inner
+                        .mut_from_ref()
+                        .start_service(min_broker_id, broker_addr);
+                }
+                true
+            }
+            false => {
+                error!("wait for handshake completion failed, HA connection lost");
+                false
+            }
+        }
     }
 
     fn prepare_for_slave_online(&self, _broker_member_group: BrokerMemberGroup) -> bool {
