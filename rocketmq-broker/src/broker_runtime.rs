@@ -2427,9 +2427,25 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             .await;
     }
 
+    #[inline]
     pub fn get_broker_addr(&self) -> &CheetahString {
         &self.broker_addr
     }
+
+    #[inline]
+    pub fn get_ha_server_addr(&self) -> CheetahString {
+        const LOCALHOST: &str = "127.0.0.1";
+        let addr = format!(
+            "{}:{}",
+            self.broker_config
+                .broker_ip2
+                .as_ref()
+                .unwrap_or(&CheetahString::from_static_str(LOCALHOST)),
+            self.message_store_config.ha_listen_port
+        );
+        CheetahString::from_string(addr)
+    }
+
     pub fn sync_broker_member_group(&self) {
         warn!("sync_broker_member_group not implemented");
     }
