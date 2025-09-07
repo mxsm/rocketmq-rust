@@ -39,7 +39,7 @@ impl Error for BrokerControllerError {}
 
 type BrokerControllerResult<T> = Result<T, BrokerControllerError>;
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct BrokerController {
     broker_config: Option<BrokerConfig>,
 
@@ -56,7 +56,7 @@ impl BrokerController {
     }
 
     #[inline]
-    pub fn get_min_broker_in_group(&self) -> BrokerControllerResult<u64> {
+    pub fn get_current_broker_id(&self) -> BrokerControllerResult<u64> {
         if let Some(id) = &self.broker_config {
             Ok(id.broker_identity.broker_id)
         } else {
@@ -71,7 +71,14 @@ impl BrokerController {
         _offline_broker_addr: &Option<CheetahString>,
         _master_ha_addr: &Option<CheetahString>,
     ) {
-        // Missing update min broker implementation
-        todo!("");
+        // TODO(mx): implement min-broker state update/persist.
+        // Temporary no-op to avoid panics in production.
+        tracing::debug!(
+            ?_min_broker_id,
+            ?_min_broker_addr,
+            ?_offline_broker_addr,
+            ?_master_ha_addr,
+            "notifyMinBrokerIdChange received"
+        );
     }
 }

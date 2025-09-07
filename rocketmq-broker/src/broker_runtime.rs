@@ -125,7 +125,7 @@ pub(crate) struct BrokerRuntime {
     // receiver for shutdown signal
     pub(crate) shutdown_rx: Option<tokio::sync::broadcast::Receiver<()>>,
     scheduled_task_manager: ScheduledTaskManager,
-    broker_controller: BrokerController,
+    broker_controller: Option<BrokerController>,
 }
 
 impl BrokerRuntime {
@@ -255,7 +255,7 @@ impl BrokerRuntime {
             broker_pre_online_service: BrokerPreOnlineService,
             shutdown_rx: None,
             scheduled_task_manager: Default::default(),
-            broker_controller: Default::default(),
+            broker_controller: None,
         }
     }
 
@@ -564,7 +564,7 @@ impl BrokerRuntime {
             self.broker_config().clone(),
             self.message_store_config().clone(),
         );
-        self.broker_controller = broker_controller;
+        self.broker_controller = Some(broker_controller);
     }
 
     fn init_processor(

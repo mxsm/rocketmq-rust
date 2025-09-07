@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+use rocketmq_error::RocketmqError;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader;
@@ -27,12 +28,14 @@ use crate::broker_controller::BrokerController;
 
 #[derive(Default)]
 pub struct NotifyMinBrokerChangeIdProcessor {
-    broker_controller: BrokerController,
+    broker_controller: Option<BrokerController>,
 }
 
 impl NotifyMinBrokerChangeIdProcessor {
-    pub fn new(broker_controller: BrokerController) -> Self {
-        Self { broker_controller }
+    pub fn new(broker_controller: Option<BrokerController>) -> Self {
+        Self {
+            broker_controller: broker_controller,
+        }
     }
 
     pub async fn process_request(
@@ -44,30 +47,36 @@ impl NotifyMinBrokerChangeIdProcessor {
         let change_header =
             request.decode_command_custom_header::<NotifyMinBrokerIdChangeRequestHeader>()?;
 
-        match self.broker_controller.get_min_broker_in_group() {
-            Ok(id) => {
-                warn!(
-                    "min broker id changed, prev {}, new {}",
-                    id,
-                    change_header
-                        .min_broker_id
-                        .expect("min broker id not must be present")
-                );
+        if let Some(broker_controller) = self.broker_controller.as_ref() {
+            match broker_controller.get_current_broker_id() {
+                Ok(id) => {
+                    warn!(
+                        "min broker id changed, prev {}, new {}",
+                        id,
+                        change_header
+                            .min_broker_id
+                            .expect("min broker id not must be present")
+                    );
+                }
+                Err(err) => {
+                    error!("failed to get min broker id group, {}", err);
+                }
             }
-            Err(err) => {
-                error!("failed to get min broker id group, {}", err);
-            }
+
+            broker_controller.update_min_broker(
+                &change_header.get_min_broker_id(),
+                &change_header.get_broker_name(),
+                &change_header.get_offline_broker_addr(),
+                &change_header.get_ha_broker_addr(),
+            );
+
+            let mut response = RemotingCommand::default();
+            response.set_code_ref(ResponseCode::Success);
+            Ok(Some(response))
+        } else {
+            Err(RocketmqError::NoneError(String::from(
+                "broker controller not initialized",
+            )))
         }
-
-        self.broker_controller.update_min_broker(
-            &change_header.get_min_broker_id(),
-            &change_header.get_broker_name(),
-            &change_header.get_offline_broker_addr(),
-            &change_header.get_ha_broker_addr(),
-        );
-
-        let mut response = RemotingCommand::default();
-        response.set_code_ref(ResponseCode::Success);
-        Ok(Some(response))
     }
 }
