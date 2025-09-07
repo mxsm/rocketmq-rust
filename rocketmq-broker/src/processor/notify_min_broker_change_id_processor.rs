@@ -60,10 +60,10 @@ impl NotifyMinBrokerChangeIdProcessor {
         }
 
         self.broker_controller.update_min_broker(
-            &change_header.min_broker_id,
-            &change_header.min_broker_addr,
-            &change_header.offline_broker_addr,
-            &change_header.ha_broker_addr,
+            &change_header.get_min_broker_id(),
+            &change_header.get_broker_name(),
+            &change_header.get_offline_broker_addr(),
+            &change_header.get_ha_broker_addr(),
         );
 
         let mut response = RemotingCommand::default();

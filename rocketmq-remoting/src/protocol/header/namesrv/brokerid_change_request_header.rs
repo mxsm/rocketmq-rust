@@ -50,6 +50,31 @@ impl NotifyMinBrokerIdChangeRequestHeader {
             ha_broker_addr,
         }
     }
+
+    #[inline]
+    pub fn get_min_broker_id(&self) -> &Option<u64> {
+        &self.min_broker_id
+    }
+
+    #[inline]
+    pub fn get_broker_name(&self) -> &Option<CheetahString> {
+        &self.broker_name
+    }
+
+    #[inline]
+    pub fn get_min_broker_addr(&self) -> &Option<CheetahString> {
+        &self.min_broker_addr
+    }
+
+    #[inline]
+    pub fn get_offline_broker_addr(&self) -> &Option<CheetahString> {
+        &self.offline_broker_addr
+    }
+
+    #[inline]
+    pub fn get_ha_broker_addr(&self) -> &Option<CheetahString> {
+        &self.ha_broker_addr
+    }
 }
 
 #[cfg(test)]
