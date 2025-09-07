@@ -67,7 +67,7 @@ impl BrokerController {
     pub fn update_min_broker(
         &self,
         _min_broker_id: &Option<u64>,
-        _min_broket_addr: &Option<CheetahString>,
+        _min_broker_addr: &Option<CheetahString>,
         _offline_broker_addr: &Option<CheetahString>,
         _master_ha_addr: &Option<CheetahString>,
     ) {
