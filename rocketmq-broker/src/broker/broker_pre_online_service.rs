@@ -195,7 +195,7 @@ where
         let mut broker_id_list = broker_member_group
             .broker_addrs
             .keys()
-            .map(|broker_id| *broker_id)
+            .copied()
             .collect::<Vec<u64>>();
         broker_id_list.sort();
         loop {
