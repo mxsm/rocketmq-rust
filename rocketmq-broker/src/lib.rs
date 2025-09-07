@@ -27,6 +27,7 @@ pub mod command;
 
 pub(crate) mod broker;
 pub(crate) mod broker_bootstrap;
+pub(crate) mod broker_controller;
 pub(crate) mod broker_path_config_helper;
 pub(crate) mod broker_runtime;
 pub(crate) mod client;

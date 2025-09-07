@@ -21,20 +21,16 @@ use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodec)]
+#[serde(rename_all = "camelCase")]
 pub struct NotifyMinBrokerIdChangeRequestHeader {
-    #[serde(rename = "minBrokerId")]
     pub min_broker_id: Option<u64>,
 
-    #[serde(rename = "brokerName")]
     pub broker_name: Option<CheetahString>,
 
-    #[serde(rename = "minBrokerAddr")]
     pub min_broker_addr: Option<CheetahString>,
 
-    #[serde(rename = "offlineBrokerAddr")]
     pub offline_broker_addr: Option<CheetahString>,
 
-    #[serde(rename = "haBrokerAddr")]
     pub ha_broker_addr: Option<CheetahString>,
 }
 

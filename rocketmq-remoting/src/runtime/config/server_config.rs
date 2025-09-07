@@ -17,7 +17,7 @@
 use crate::runtime::config::net_system_config::NetSystemConfig;
 
 #[derive(Debug, Clone)]
-struct NettyServerConfig {
+pub struct NettyServerConfig {
     bind_address: String,
     listen_port: i32,
     server_worker_threads: i32,

@@ -1,16 +1,72 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
+use rocketmq_remoting::protocol::header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use tracing::warn;
+
+use crate::broker_controller::BrokerController;
+
 #[derive(Default)]
-pub struct NotifyMinBrokerChangeIdProcessor {}
+pub struct NotifyMinBrokerChangeIdProcessor {
+    broker_controller: BrokerController,
+}
 
 impl NotifyMinBrokerChangeIdProcessor {
+    pub fn new(broker_controller: BrokerController) -> Self {
+        Self { broker_controller }
+    }
+
     pub async fn process_request(
         &mut self,
         _channel: Channel,
-        ctx: ConnectionHandlerContext,
-        mut request: RemotingCommand,
+        _ctx: ConnectionHandlerContext,
+        request: RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        unimplemented!("CheckClientConfig")
+        let notify_change_header =
+            request.decode_command_custom_header::<NotifyMinBrokerIdChangeRequestHeader>()?;
+
+        match self.broker_controller.get_min_broker_in_group() {
+            Ok(id) => {
+                warn!(
+                    "min broker id changed, prev {}, new {}",
+                    id,
+                    notify_change_header
+                        .min_broker_id
+                        .expect("min_broker_id not must be present")
+                );
+            }
+            Err(err) => {
+                warn!("failed to get min broker id group, {}", err);
+            }
+        }
+
+        self.broker_controller.update_min_broker(
+            &notify_change_header.min_broker_id,
+            &notify_change_header.min_broker_addr,
+            &notify_change_header.offline_broker_addr,
+            &notify_change_header.ha_broker_addr,
+        );
+
+        let mut response = RemotingCommand::default();
+        response.set_code_ref(ResponseCode::Success);
+        Ok(Some(response))
     }
 }

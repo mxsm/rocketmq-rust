@@ -17,4 +17,4 @@
 
 pub mod client_config;
 mod net_system_config;
-mod server_config;
+pub mod server_config;
