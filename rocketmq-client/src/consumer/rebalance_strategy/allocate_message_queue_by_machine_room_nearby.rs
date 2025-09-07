@@ -352,10 +352,10 @@ mod tests {
     fn test_run_10_random_case() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         for _ in 0..10 {
-            let consumer_size = rng.gen_range(1..=200);
-            let queue_size = rng.gen_range(1..=100);
-            let broker_idc_size = rng.gen_range(1..=10);
-            let consumer_idc_size = rng.gen_range(1..=10);
+            let consumer_size = rng.random_range(1..=200);
+            let queue_size = rng.random_range(1..=100);
+            let broker_idc_size = rng.random_range(1..=10);
+            let consumer_idc_size = rng.random_range(1..=10);
 
             if broker_idc_size == consumer_idc_size {
                 test_when_idc_size_equals(broker_idc_size, queue_size, consumer_size);

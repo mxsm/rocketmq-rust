@@ -20,7 +20,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_rust::DelayTrigger;
 use rocketmq_rust::DelayedIntervalTrigger;
 use rocketmq_rust::IntervalTrigger;
 use rocketmq_rust::SchedulerConfig;
