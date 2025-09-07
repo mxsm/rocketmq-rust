@@ -15,10 +15,12 @@
  * limitations under the License.
  */
 use std::collections::HashMap;
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use futures::future::BoxFuture;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
@@ -40,6 +42,7 @@ impl<MS: MessageStore> BrokerPreOnlineService<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         let inner = BrokerPreOnlineServiceInner {
             broker_runtime_inner,
+            wait_broker_index: AtomicU32::new(0),
         };
         let service_manager = ServiceManager::new(inner);
         BrokerPreOnlineService { service_manager }
@@ -48,6 +51,7 @@ impl<MS: MessageStore> BrokerPreOnlineService<MS> {
 
 struct BrokerPreOnlineServiceInner<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    wait_broker_index: AtomicU32,
 }
 
 impl<MS> ServiceTask for BrokerPreOnlineServiceInner<MS>
@@ -141,7 +145,7 @@ where
             let min_broker_id = self.get_min_broker_id(&broker_member_group.broker_addrs);
             if !broker_member_group.broker_addrs.is_empty() {
                 if broker_id == MASTER_ID {
-                    return Ok(self.prepare_for_master_online(broker_member_group));
+                    return Ok(self.prepare_for_master_online(broker_member_group).await);
                 } else if min_broker_id == MASTER_ID {
                     return Ok(self.prepare_for_slave_online(broker_member_group));
                 } else {
@@ -167,17 +171,110 @@ where
 
     fn get_min_broker_id(
         &self,
-        _broker_addr_map: &HashMap<
-            u64,           /* brokerId */
-            CheetahString, /* broker address */
-        >,
+        broker_addr_map: &HashMap<u64 /* brokerId */, CheetahString /* broker address */>,
     ) -> u64 {
-        unimplemented!("get_min_broker_id unimplemented")
+        let mut local_broker_addr_map = broker_addr_map.clone();
+        local_broker_addr_map.remove(
+            &self
+                .broker_runtime_inner
+                .broker_config()
+                .broker_identity
+                .broker_id,
+        );
+        if !local_broker_addr_map.is_empty() {
+            *local_broker_addr_map.keys().min().unwrap()
+        } else {
+            self.broker_runtime_inner
+                .broker_config()
+                .broker_identity
+                .broker_id
+        }
     }
 
-    fn prepare_for_master_online(&self, _broker_member_group: BrokerMemberGroup) -> bool {
-        unimplemented!("prepare_for_master_online unimplemented")
+    async fn prepare_for_master_online(&self, broker_member_group: BrokerMemberGroup) -> bool {
+        let mut broker_id_list = broker_member_group
+            .broker_addrs
+            .keys()
+            .copied()
+            .collect::<Vec<u64>>();
+        broker_id_list.sort();
+        loop {
+            let wait_index = self.wait_broker_index.load(Ordering::SeqCst);
+            if (wait_index as usize) >= broker_id_list.len() {
+                info!("master preOnline complete, start service");
+                let broker_addr = self.broker_runtime_inner.get_broker_addr().clone();
+                self.broker_runtime_inner
+                    .mut_from_ref()
+                    .start_service(MASTER_ID, Some(broker_addr));
+                return true;
+            }
+            let wait_broker_id = broker_id_list[wait_index as usize];
+            let broker_addr_to_wait = broker_member_group
+                .broker_addrs
+                .get(&wait_broker_id)
+                .cloned();
+            if broker_addr_to_wait.is_none() {
+                self.wait_broker_index.fetch_add(1, Ordering::SeqCst);
+                continue;
+            }
+            let broker_addr_to_wait = broker_addr_to_wait.unwrap();
+            if let Err(e) = self
+                .broker_runtime_inner
+                .broker_outer_api()
+                .send_broker_ha_info(
+                    &broker_addr_to_wait,
+                    &self.broker_runtime_inner.get_ha_server_addr(),
+                    self.broker_runtime_inner
+                        .message_store_unchecked()
+                        .get_broker_init_max_offset(),
+                    self.broker_runtime_inner.get_broker_addr(),
+                )
+                .await
+            {
+                error!(
+                    "sendBrokerHaInfo to broker {} error, will retry later, {}",
+                    broker_addr_to_wait, e
+                );
+                return false;
+            }
+
+            let ha_handshake_future =
+                self.wait_for_ha_handshake_complete(broker_addr_to_wait.clone());
+            let is_success = self
+                .future_wait_action(ha_handshake_future, &broker_member_group)
+                .await;
+            if !is_success {
+                return false;
+            }
+            if !self
+                .sync_metadata_reverse(broker_addr_to_wait.clone())
+                .await
+            {
+                error!(
+                    "syncMetadataReverse to broker {} error, will retry later",
+                    broker_addr_to_wait
+                );
+                return false;
+            }
+            self.wait_broker_index.fetch_add(1, Ordering::SeqCst);
+        }
     }
+    async fn sync_metadata_reverse(&self, _broker_addr: CheetahString) -> bool {
+        unimplemented!("syncMetadataReverse unimplemented")
+    }
+
+    fn wait_for_ha_handshake_complete(&self, broker_addr: CheetahString) -> BoxFuture<'_, bool> {
+        info!("wait for handshake completion with {}", broker_addr);
+        unimplemented!("wait_for_ha_handshake_complete unimplemented");
+    }
+    async fn future_wait_action(
+        &self,
+        _result: BoxFuture<'_, bool>,
+        _broker_member_group: &BrokerMemberGroup,
+    ) -> bool {
+        unimplemented!()
+    }
+
     fn prepare_for_slave_online(&self, _broker_member_group: BrokerMemberGroup) -> bool {
         unimplemented!("prepare_for_slave_online unimplemented")
     }

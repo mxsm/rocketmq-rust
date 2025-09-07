@@ -754,6 +754,16 @@ impl BrokerOuterAPI {
     ) -> rocketmq_error::RocketMQResult<Option<BrokerMemberGroup>> {
         unimplemented!()
     }
+
+    pub async fn send_broker_ha_info(
+        &self,
+        _broker_addr: &CheetahString,
+        _master_ha_addr: &CheetahString,
+        _broker_init_max_offset: i64,
+        _master_addr: &CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        unimplemented!()
+    }
 }
 
 fn process_pull_result(
