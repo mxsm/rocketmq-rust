@@ -256,6 +256,7 @@ impl BrokerRuntime {
         inner.client_housekeeping_service =
             Some(Arc::new(ClientHousekeepingService::new(inner.clone())));
         inner.slave_synchronize = Some(SlaveSynchronize::new(inner.clone()));
+        inner.broker_pre_online_service = Some(BrokerPreOnlineService::new(inner.clone()));
         Self {
             inner,
             broker_runtime: Some(runtime),
