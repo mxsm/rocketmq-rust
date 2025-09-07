@@ -71,6 +71,7 @@ impl BrokerController {
         _offline_broker_addr: &Option<CheetahString>,
         _master_ha_addr: &Option<CheetahString>,
     ) {
+        // Missing update min broker implementation
         todo!("");
     }
 }

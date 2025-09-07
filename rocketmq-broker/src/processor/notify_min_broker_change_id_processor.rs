@@ -20,6 +20,7 @@ use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::namesrv::brokerid_change_request_header::NotifyMinBrokerIdChangeRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use tracing::error;
 use tracing::warn;
 
 use crate::broker_controller::BrokerController;
@@ -40,7 +41,7 @@ impl NotifyMinBrokerChangeIdProcessor {
         _ctx: ConnectionHandlerContext,
         request: RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let notify_change_header =
+        let change_header =
             request.decode_command_custom_header::<NotifyMinBrokerIdChangeRequestHeader>()?;
 
         match self.broker_controller.get_min_broker_in_group() {
@@ -48,21 +49,21 @@ impl NotifyMinBrokerChangeIdProcessor {
                 warn!(
                     "min broker id changed, prev {}, new {}",
                     id,
-                    notify_change_header
+                    change_header
                         .min_broker_id
-                        .expect("min_broker_id not must be present")
+                        .expect("min broker id not must be present")
                 );
             }
             Err(err) => {
-                warn!("failed to get min broker id group, {}", err);
+                error!("failed to get min broker id group, {}", err);
             }
         }
 
         self.broker_controller.update_min_broker(
-            &notify_change_header.min_broker_id,
-            &notify_change_header.min_broker_addr,
-            &notify_change_header.offline_broker_addr,
-            &notify_change_header.ha_broker_addr,
+            &change_header.min_broker_id,
+            &change_header.min_broker_addr,
+            &change_header.offline_broker_addr,
+            &change_header.ha_broker_addr,
         );
 
         let mut response = RemotingCommand::default();
