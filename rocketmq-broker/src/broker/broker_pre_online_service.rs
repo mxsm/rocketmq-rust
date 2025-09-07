@@ -36,6 +36,16 @@ pub struct BrokerPreOnlineService<MS: MessageStore> {
     service_manager: ServiceManager<BrokerPreOnlineServiceInner<MS>>,
 }
 
+impl<MS: MessageStore> BrokerPreOnlineService<MS> {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+        let inner = BrokerPreOnlineServiceInner {
+            broker_runtime_inner,
+        };
+        let service_manager = ServiceManager::new(inner);
+        BrokerPreOnlineService { service_manager }
+    }
+}
+
 struct BrokerPreOnlineServiceInner<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
