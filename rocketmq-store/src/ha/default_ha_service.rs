@@ -275,8 +275,19 @@ impl HAService for DefaultHAService {
         }
     }
 
-    fn put_group_connection_state_request(&self, request: HAConnectionStateNotificationRequest) {
-        todo!()
+    async fn put_group_connection_state_request(
+        &self,
+        request: HAConnectionStateNotificationRequest,
+    ) {
+        if let Some(ref ha_connection_state_notification_service) =
+            self.ha_connection_state_notification_service
+        {
+            ha_connection_state_notification_service
+                .set_request(request)
+                .await;
+        } else {
+            error!("No HAConnectionStateNotificationService initialized to put state request");
+        }
     }
 
     async fn get_connection_list(&self) -> Vec<ArcMut<GeneralHAConnection>> {
@@ -368,7 +379,7 @@ impl AcceptSocketService {
                                if is_auto_switch {
                                     unimplemented!("Auto-switching is not implemented yet");
                                 }else{
-                                    let default_conn = DefaultHAConnection::new(default_ha_service.clone(), stream,message_store_config.clone()).await.expect("Error creating HAConnection");
+                                    let default_conn = DefaultHAConnection::new(default_ha_service.clone(), stream,message_store_config.clone(),addr).await.expect("Error creating HAConnection");
                                     let mut general_conn = ArcMut::new(GeneralHAConnection::new_with_default_ha_connection(default_conn));
                                     let  conn_weak= ArcMut::downgrade(&general_conn);
                                     if  let Err(e) =  general_conn.start(conn_weak).await {

@@ -20,7 +20,6 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use futures::future::BoxFuture;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::common::remoting_helper::RemotingHelper;
@@ -32,6 +31,7 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use rocketmq_store::ha::ha_service::HAService;
+use tokio::select;
 use tracing::error;
 use tracing::info;
 
@@ -241,8 +241,9 @@ where
                 return false;
             }
 
-            let ha_handshake_future =
-                self.wait_for_ha_handshake_complete(broker_addr_to_wait.clone());
+            let ha_handshake_future = self
+                .wait_for_ha_handshake_complete(broker_addr_to_wait.clone())
+                .await;
             let is_success = self
                 .future_wait_action(ha_handshake_future, &broker_member_group)
                 .await;
@@ -266,7 +267,7 @@ where
         unimplemented!("syncMetadataReverse unimplemented")
     }
 
-    fn wait_for_ha_handshake_complete(&self, broker_addr: CheetahString) -> BoxFuture<'_, bool> {
+    async fn wait_for_ha_handshake_complete(&self, broker_addr: CheetahString) -> bool {
         info!("wait for handshake completion with {}", broker_addr);
 
         let (request, tx) = HAConnectionStateNotificationRequest::new(
@@ -279,31 +280,26 @@ where
             .message_store_unchecked()
             .get_ha_service()
         {
-            ha_service.put_group_connection_state_request(request);
-            let future = async move {
-                match tx.await {
-                    Ok(value) => value,
-                    Err(e) => {
-                        error!("wait for ha handshake complete error, {}", e);
-                        false
-                    }
+            ha_service.put_group_connection_state_request(request).await;
+            select! {
+                result = tx => {
+                    result.unwrap_or(false)
                 }
-            };
-            Box::pin(future)
+            }
         } else {
             error!(
                 "HAService is null, maybe broker config is wrong. For example, duplicationEnable \
                  is true"
             );
-            Box::pin(async { false })
+            false
         }
     }
     async fn future_wait_action(
         &self,
-        result: BoxFuture<'_, bool>,
+        result: bool,
         broker_member_group: &BrokerMemberGroup,
     ) -> bool {
-        match result.await {
+        match result {
             true => {
                 if self
                     .broker_runtime_inner

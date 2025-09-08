@@ -70,7 +70,7 @@ impl HAConnection for AutoSwitchHAConnection {
         todo!()
     }
 
-    fn remote_address(&self) -> &str {
+    fn remote_address(&self) -> String {
         todo!()
     }
 }

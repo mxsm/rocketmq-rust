@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
@@ -77,6 +77,7 @@ pub struct DefaultHAConnection {
     message_store_config: Arc<MessageStoreConfig>,
     next_transfer_from_where: Arc<AtomicI64>,
     id: HAConnectionId,
+    remote_addr: SocketAddr,
 }
 
 impl DefaultHAConnection {
@@ -85,6 +86,7 @@ impl DefaultHAConnection {
         ha_service: ArcMut<DefaultHAService>,
         socket_stream: TcpStream,
         message_store_config: Arc<MessageStoreConfig>,
+        remote_addr: SocketAddr,
     ) -> Result<Self, HAConnectionError> {
         // Configure socket options early
         socket_stream
@@ -126,6 +128,7 @@ impl DefaultHAConnection {
             message_store_config,
             next_transfer_from_where: Arc::new(AtomicI64::new(-1)),
             id: HAConnectionId::default(),
+            remote_addr,
         })
     }
 
@@ -269,8 +272,8 @@ impl HAConnection for DefaultHAConnection {
         &self.id
     }
 
-    fn remote_address(&self) -> &str {
-        todo!()
+    fn remote_address(&self) -> String {
+        self.remote_addr.to_string()
     }
 }
 

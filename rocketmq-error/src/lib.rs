@@ -42,8 +42,6 @@ mod tui_error;
 
 use std::io;
 
-use config::ConfigError;
-
 pub type RocketMQResult<T> = std::result::Result<T, RocketmqError>;
 
 pub type Result<T> = anyhow::Result<T>;
@@ -150,7 +148,7 @@ pub enum RocketmqError {
 
     #[error("Config parse error: {0}")]
     #[cfg(feature = "with_config")]
-    ConfigError(#[from] ConfigError),
+    ConfigError(#[from] config::ConfigError),
 
     #[error("{0} command failed , {1}")]
     SubCommand(String, String),
