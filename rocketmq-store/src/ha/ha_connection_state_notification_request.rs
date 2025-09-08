@@ -93,6 +93,20 @@ impl HAConnectionStateNotificationRequest {
             false // Sender was already consumed
         }
     }
+
+    /// Check if the request has already been completed
+    ///
+    ///
+    /// # Returns
+    /// `true` if the request has been completed, `false` otherwise
+    ///
+    /// # Notes
+    /// This method is not async and does not require locking
+    pub fn is_completed(&self) -> bool {
+        self.notification_sender
+            .try_lock()
+            .is_ok_and(|guard| guard.is_none())
+    }
 }
 
 // Example usage:

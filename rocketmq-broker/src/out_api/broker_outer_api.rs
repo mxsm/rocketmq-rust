@@ -45,6 +45,7 @@ use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_remoting::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
 use rocketmq_remoting::protocol::body::consumer_offset_serialize_wrapper::ConsumerOffsetSerializeWrapper;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
@@ -53,6 +54,7 @@ use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockB
 use rocketmq_remoting::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+use rocketmq_remoting::protocol::header::exchange_ha_info_request_header::ExchangeHAInfoRequestHeader;
 use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
@@ -741,6 +743,46 @@ impl BrokerOuterAPI {
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string()),
                 addr.to_string(),
+            ))
+        }
+    }
+
+    pub async fn sync_broker_member_group(
+        &self,
+        _cluster_name: &CheetahString,
+        _broker_name: &CheetahString,
+        _is_compatible_with_old_name_srv: bool,
+    ) -> rocketmq_error::RocketMQResult<Option<BrokerMemberGroup>> {
+        unimplemented!()
+    }
+
+    pub async fn send_broker_ha_info(
+        &self,
+        broker_addr: &CheetahString,
+        master_ha_addr: &CheetahString,
+        broker_init_max_offset: i64,
+        master_addr: &CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let request_header = ExchangeHAInfoRequestHeader {
+            master_ha_address: Some(master_ha_addr.clone()),
+            master_flush_offset: Some(broker_init_max_offset),
+            master_address: Some(master_addr.clone()),
+        };
+        let request = RemotingCommand::create_request_command(
+            RequestCode::ExchangeBrokerHaInfo,
+            request_header,
+        );
+        let response = self
+            .remoting_client
+            .invoke_async(Some(broker_addr), request, 3000)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            Ok(())
+        } else {
+            Err(RocketmqError::MQBrokerError(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                broker_addr.to_string(),
             ))
         }
     }

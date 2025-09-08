@@ -362,6 +362,10 @@ mod defaults {
     pub fn transaction_op_batch_interval() -> u64 {
         3000
     }
+
+    pub fn compatible_with_old_name_srv() -> bool {
+        true
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -754,6 +758,9 @@ pub struct BrokerConfig {
 
     #[serde(default = "defaults::transaction_op_batch_interval")]
     pub transaction_op_batch_interval: u64,
+
+    #[serde(default = "defaults::compatible_with_old_name_srv")]
+    pub compatible_with_old_name_srv: bool,
 }
 
 impl Default for BrokerConfig {
@@ -873,6 +880,7 @@ impl Default for BrokerConfig {
             transaction_check_interval: 30_000,
             transaction_check_max: 15,
             transaction_op_batch_interval: 3_000,
+            compatible_with_old_name_srv: true,
         }
     }
 }

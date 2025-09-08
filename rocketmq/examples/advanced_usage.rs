@@ -30,7 +30,6 @@ use rocketmq_rust::TaskScheduler;
 use tokio::time::sleep;
 use tracing::error;
 use tracing::info;
-use tracing::warn;
 use tracing::Level;
 
 #[tokio::main]
@@ -122,7 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let counter_c = counter.clone();
     // 4. Report generation task
     let report_task = Arc::new(
-        Task::new("report_generator", "Report Generator", move |ctx| {
+        Task::new("report_generator", "Report Generator", move |_| {
             let value = counter_c.clone();
             async move {
                 let count = value.load(Ordering::Relaxed);

@@ -256,6 +256,7 @@ impl BrokerRuntime {
         inner.client_housekeeping_service =
             Some(Arc::new(ClientHousekeepingService::new(inner.clone())));
         inner.slave_synchronize = Some(SlaveSynchronize::new(inner.clone()));
+        inner.broker_pre_online_service = Some(BrokerPreOnlineService::new(inner.clone()));
         Self {
             inner,
             broker_runtime: Some(runtime),
@@ -2426,9 +2427,25 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             .await;
     }
 
+    #[inline]
     pub fn get_broker_addr(&self) -> &CheetahString {
         &self.broker_addr
     }
+
+    #[inline]
+    pub fn get_ha_server_addr(&self) -> CheetahString {
+        const LOCALHOST: &str = "127.0.0.1";
+        let addr = format!(
+            "{}:{}",
+            self.broker_config
+                .broker_ip2
+                .as_ref()
+                .unwrap_or(&CheetahString::from_static_str(LOCALHOST)),
+            self.message_store_config.ha_listen_port
+        );
+        CheetahString::from_string(addr)
+    }
+
     pub fn sync_broker_member_group(&self) {
         warn!("sync_broker_member_group not implemented");
     }
@@ -2526,7 +2543,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         }
     }
 
-    pub fn start_service(&mut self, _min_broker_id: u64, _min_broker_addr: CheetahString) {
+    pub fn start_service(&mut self, _min_broker_id: u64, _min_broker_addr: Option<CheetahString>) {
         unimplemented!("BrokerRuntimeInner#start_service");
     }
 

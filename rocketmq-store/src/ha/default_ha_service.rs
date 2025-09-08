@@ -214,7 +214,7 @@ impl HAService for DefaultHAService {
         if let Some(ref ha_connection_state_notification_service) =
             self.ha_connection_state_notification_service
         {
-            ha_connection_state_notification_service.shutdown();
+            ha_connection_state_notification_service.shutdown().await;
         }
     }
 

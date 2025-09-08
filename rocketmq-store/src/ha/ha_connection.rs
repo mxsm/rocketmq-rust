@@ -88,6 +88,12 @@ pub trait RocketmqHAConnection: Sync {
     /// # Returns
     /// A reference to the `HAConnectionId` instance.
     fn get_ha_connection_id(&self) -> &HAConnectionId;
+
+    /// Get the remote address of the connection
+    ///
+    /// # Returns
+    /// Remote socket address as a string
+    fn remote_address(&self) -> &str;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

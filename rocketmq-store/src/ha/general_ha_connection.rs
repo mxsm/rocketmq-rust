@@ -178,4 +178,8 @@ impl HAConnection for GeneralHAConnection {
             }
         }
     }
+
+    fn remote_address(&self) -> &str {
+        todo!()
+    }
 }
