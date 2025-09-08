@@ -275,8 +275,19 @@ impl HAService for DefaultHAService {
         }
     }
 
-    fn put_group_connection_state_request(&self, request: HAConnectionStateNotificationRequest) {
-        todo!()
+    async fn put_group_connection_state_request(
+        &self,
+        request: HAConnectionStateNotificationRequest,
+    ) {
+        if let Some(ref ha_connection_state_notification_service) =
+            self.ha_connection_state_notification_service
+        {
+            ha_connection_state_notification_service
+                .set_request(request)
+                .await;
+        } else {
+            error!("No HAConnectionStateNotificationService initialized to put state request");
+        }
     }
 
     async fn get_connection_list(&self) -> Vec<ArcMut<GeneralHAConnection>> {
