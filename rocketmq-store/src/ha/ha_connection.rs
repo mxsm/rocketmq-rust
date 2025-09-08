@@ -93,7 +93,7 @@ pub trait RocketmqHAConnection: Sync {
     ///
     /// # Returns
     /// Remote socket address as a string
-    fn remote_address(&self) -> &str;
+    fn remote_address(&self) -> String;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
