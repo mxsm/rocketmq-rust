@@ -306,7 +306,29 @@ impl PartialEq for DataVersion {
     fn eq(&self, other: &Self) -> bool {
         self.state_version == other.state_version
             && self.timestamp == other.timestamp
-            && self.counter.load(Ordering::Relaxed) == other.counter.load(Ordering::Relaxed)
+            && self.get_counter() == other.get_counter()
+    }
+}
+
+impl Eq for DataVersion {}
+
+impl PartialOrd for DataVersion {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(
+            self.state_version
+                .cmp(&other.state_version)
+                .then_with(|| self.timestamp.cmp(&other.timestamp))
+                .then_with(|| self.get_counter().cmp(&other.get_counter())),
+        )
+    }
+}
+
+impl Ord for DataVersion {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.state_version
+            .cmp(&other.state_version)
+            .then_with(|| self.timestamp.cmp(&other.timestamp))
+            .then_with(|| self.get_counter().cmp(&other.get_counter()))
     }
 }
 
@@ -635,5 +657,51 @@ mod tests {
                 data_version.counter.load(Ordering::SeqCst)
             );
         }
+    }
+
+    #[test]
+    fn data_version_equality() {
+        let data_version1 = DataVersion::new();
+        let mut data_version2 = data_version1.clone();
+        assert_eq!(data_version1, data_version2);
+
+        data_version2.increment_counter();
+        assert_ne!(data_version1, data_version2);
+    }
+
+    #[test]
+    fn data_version_partial_ordering() {
+        let mut data_version1 = DataVersion::new();
+        let mut data_version2 = data_version1.clone();
+
+        assert_eq!(
+            data_version1.partial_cmp(&data_version2),
+            Some(std::cmp::Ordering::Equal)
+        );
+
+        data_version2.set_state_version(data_version1.get_state_version() + 1);
+        assert_eq!(
+            data_version1.partial_cmp(&data_version2),
+            Some(std::cmp::Ordering::Less)
+        );
+        assert_eq!(
+            data_version2.partial_cmp(&data_version1),
+            Some(std::cmp::Ordering::Greater)
+        );
+    }
+
+    #[test]
+    fn data_version_total_ordering() {
+        let mut data_version1 = DataVersion::new();
+        let mut data_version2 = data_version1.clone();
+
+        assert_eq!(data_version1.cmp(&data_version2), std::cmp::Ordering::Equal);
+
+        data_version2.set_state_version(data_version1.get_state_version() + 1);
+        assert_eq!(data_version1.cmp(&data_version2), std::cmp::Ordering::Less);
+        assert_eq!(
+            data_version2.cmp(&data_version1),
+            std::cmp::Ordering::Greater
+        );
     }
 }
