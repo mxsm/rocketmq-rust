@@ -281,11 +281,7 @@ where
             .get_ha_service()
         {
             ha_service.put_group_connection_state_request(request).await;
-            select! {
-                result = tx => {
-                    result.unwrap_or(false)
-                }
-            }
+            tx.await.unwrap_or(false)
         } else {
             error!(
                 "HAService is null, maybe broker config is wrong. For example, duplicationEnable \
