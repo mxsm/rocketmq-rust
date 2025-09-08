@@ -69,4 +69,8 @@ impl HAConnection for AutoSwitchHAConnection {
     fn get_ha_connection_id(&self) -> &HAConnectionId {
         todo!()
     }
+
+    fn remote_address(&self) -> &str {
+        todo!()
+    }
 }
