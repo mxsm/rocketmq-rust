@@ -268,6 +268,10 @@ impl HAConnection for DefaultHAConnection {
     fn get_ha_connection_id(&self) -> &HAConnectionId {
         &self.id
     }
+
+    fn remote_address(&self) -> &str {
+        todo!()
+    }
 }
 
 const READ_MAX_BUFFER_SIZE: usize = 1024 * 1024; // 1 MB
