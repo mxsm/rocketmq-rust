@@ -192,13 +192,16 @@ impl HAService for GeneralHAService {
         }
     }
 
-    fn put_group_connection_state_request(&self, request: HAConnectionStateNotificationRequest) {
+    async fn put_group_connection_state_request(
+        &self,
+        request: HAConnectionStateNotificationRequest,
+    ) {
         match self {
             GeneralHAService::DefaultHAService(service) => {
-                service.put_group_connection_state_request(request)
+                service.put_group_connection_state_request(request).await
             }
             GeneralHAService::AutoSwitchHAService(service) => {
-                service.put_group_connection_state_request(request)
+                service.put_group_connection_state_request(request).await
             }
         }
     }

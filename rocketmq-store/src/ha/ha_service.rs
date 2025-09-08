@@ -128,7 +128,10 @@ pub trait RocketHAService: Sync {
     ///
     /// # Parameters
     /// * `request` - The connection state request
-    fn put_group_connection_state_request(&self, request: HAConnectionStateNotificationRequest);
+    async fn put_group_connection_state_request(
+        &self,
+        request: HAConnectionStateNotificationRequest,
+    );
 
     /// Get the list of HA connections
     ///
