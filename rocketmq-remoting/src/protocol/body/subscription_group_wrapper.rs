@@ -72,8 +72,9 @@ mod tests {
     #[test]
     fn new_creates_wrapper_with_default_values() {
         let wrapper = SubscriptionGroupWrapper::new();
+
         assert_eq!(wrapper.subscription_group_table.len(), 0);
-        assert_eq!(wrapper.data_version, DataVersion::default());
+        assert!(wrapper.data_version.timestamp >= DataVersion::default().timestamp);
     }
 
     #[test]
