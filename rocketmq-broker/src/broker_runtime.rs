@@ -59,7 +59,6 @@ use tracing::warn;
 
 use crate::broker::broker_hook::BrokerShutdownHook;
 use crate::broker::broker_pre_online_service::BrokerPreOnlineService;
-use crate::broker_controller::BrokerController;
 use crate::client::client_housekeeping_service::ClientHousekeepingService;
 use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
 use crate::client::default_consumer_ids_change_listener::DefaultConsumerIdsChangeListener;
@@ -92,7 +91,6 @@ use crate::processor::consumer_manage_processor::ConsumerManageProcessor;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
 use crate::processor::end_transaction_processor::EndTransactionProcessor;
 use crate::processor::notification_processor::NotificationProcessor;
-use crate::processor::notify_min_broker_change_id_processor::NotifyMinBrokerChangeIdProcessor;
 use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::pull_message_processor::PullMessageProcessor;
@@ -125,7 +123,6 @@ pub(crate) struct BrokerRuntime {
     // receiver for shutdown signal
     pub(crate) shutdown_rx: Option<tokio::sync::broadcast::Receiver<()>>,
     scheduled_task_manager: ScheduledTaskManager,
-    broker_controller: Option<BrokerController>,
 }
 
 impl BrokerRuntime {
@@ -255,7 +252,6 @@ impl BrokerRuntime {
             broker_pre_online_service: BrokerPreOnlineService,
             shutdown_rx: None,
             scheduled_task_manager: Default::default(),
-            broker_controller: None,
         }
     }
 
@@ -559,12 +555,7 @@ impl BrokerRuntime {
     }
 
     fn register_processor(&mut self) {
-        // build broker controller
-        let broker_controller = BrokerController::new(
-            self.broker_config().clone(),
-            self.message_store_config().clone(),
-        );
-        self.broker_controller = Some(broker_controller);
+        unimplemented!("");
     }
 
     fn init_processor(
@@ -626,8 +617,6 @@ impl BrokerRuntime {
 
         let notification_processor = NotificationProcessor::new(self.inner.clone());
 
-        let broker_controller = self.broker_controller.clone();
-
         self.inner.notification_processor = Some(notification_processor.clone());
         BrokerRequestProcessor {
             send_message_processor: ArcMut::new(send_message_processor),
@@ -656,10 +645,6 @@ impl BrokerRuntime {
                     .unwrap()
                     .clone(),
                 self.inner.clone(),
-            )),
-
-            notify_min_broker_id_processor: ArcMut::new(NotifyMinBrokerChangeIdProcessor::new(
-                broker_controller,
             )),
         }
     }

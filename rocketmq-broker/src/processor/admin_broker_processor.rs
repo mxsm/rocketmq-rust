@@ -28,6 +28,7 @@ use crate::broker_runtime::BrokerRuntimeInner;
 use crate::processor::admin_broker_processor::batch_mq_handler::BatchMqHandler;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 use crate::processor::admin_broker_processor::consumer_request_handler::ConsumerRequestHandler;
+use crate::processor::admin_broker_processor::notify_min_broker_id_handler::NotifyMinBrokerChangeIdHandler;
 use crate::processor::admin_broker_processor::offset_request_handler::OffsetRequestHandler;
 use crate::processor::admin_broker_processor::subscription_group_handler::SubscriptionGroupHandler;
 use crate::processor::admin_broker_processor::topic_request_handler::TopicRequestHandler;
@@ -35,6 +36,7 @@ use crate::processor::admin_broker_processor::topic_request_handler::TopicReques
 mod batch_mq_handler;
 mod broker_config_request_handler;
 mod consumer_request_handler;
+mod notify_min_broker_id_handler;
 mod offset_request_handler;
 mod subscription_group_handler;
 mod topic_request_handler;
@@ -48,6 +50,8 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     subscription_group_handler: SubscriptionGroupHandler<MS>,
 
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+
+    notify_min_broker_handler: NotifyMinBrokerChangeIdHandler<MS>,
 }
 
 impl<MS: MessageStore> AdminBrokerProcessor<MS> {
@@ -60,6 +64,10 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
         let batch_mq_handler = BatchMqHandler::new(broker_runtime_inner.clone());
         let subscription_group_handler =
             SubscriptionGroupHandler::new(broker_runtime_inner.clone());
+
+        let notify_min_broker_handler =
+            NotifyMinBrokerChangeIdHandler::new(broker_runtime_inner.clone());
+
         AdminBrokerProcessor {
             topic_request_handler,
             broker_config_request_handler,
@@ -68,6 +76,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             batch_mq_handler,
             subscription_group_handler,
             broker_runtime_inner,
+            notify_min_broker_handler,
         }
     }
 }
@@ -181,6 +190,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             RequestCode::UpdateAndCreateSubscriptionGroup => {
                 self.subscription_group_handler
                     .update_and_create_subscription_group(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::NotifyMinBrokerIdChange => {
+                self.notify_min_broker_handler
+                    .notify_min_broker_id_change(channel, ctx, request_code, request)
                     .await
             }
             _ => Some(get_unknown_cmd_response(request_code)),

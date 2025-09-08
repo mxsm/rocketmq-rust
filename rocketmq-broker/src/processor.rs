@@ -30,7 +30,6 @@ use crate::processor::change_invisible_time_processor::ChangeInvisibleTimeProces
 use crate::processor::consumer_manage_processor::ConsumerManageProcessor;
 use crate::processor::end_transaction_processor::EndTransactionProcessor;
 use crate::processor::notification_processor::NotificationProcessor;
-use crate::processor::notify_min_broker_change_id_processor::NotifyMinBrokerChangeIdProcessor;
 use crate::processor::peek_message_processor::PeekMessageProcessor;
 use crate::processor::polling_info_processor::PollingInfoProcessor;
 use crate::processor::pop_message_processor::PopMessageProcessor;
@@ -49,7 +48,6 @@ pub(crate) mod consumer_manage_processor;
 pub(crate) mod default_pull_message_result_handler;
 pub(crate) mod end_transaction_processor;
 pub(crate) mod notification_processor;
-pub(crate) mod notify_min_broker_change_id_processor;
 pub(crate) mod peek_message_processor;
 pub(crate) mod polling_info_processor;
 pub(crate) mod pop_inflight_message_counter;
@@ -78,7 +76,6 @@ pub struct BrokerRequestProcessor<MS: MessageStore, TS> {
     pub(crate) query_assignment_processor: ArcMut<QueryAssignmentProcessor<MS>>,
     pub(crate) end_transaction_processor: ArcMut<EndTransactionProcessor<TS, MS>>,
     pub(crate) admin_broker_processor: ArcMut<AdminBrokerProcessor<MS>>,
-    pub(crate) notify_min_broker_id_processor: ArcMut<NotifyMinBrokerChangeIdProcessor>,
 }
 impl<MS: MessageStore, TS> Clone for BrokerRequestProcessor<MS, TS> {
     fn clone(&self) -> Self {
@@ -98,7 +95,6 @@ impl<MS: MessageStore, TS> Clone for BrokerRequestProcessor<MS, TS> {
             query_assignment_processor: self.query_assignment_processor.clone(),
             query_message_processor: self.query_message_processor.clone(),
             end_transaction_processor: self.end_transaction_processor.clone(),
-            notify_min_broker_id_processor: self.notify_min_broker_id_processor.clone(),
         }
     }
 }
@@ -195,12 +191,6 @@ where
                 .map_err(Into::into);*/
                 return self
                     .pop_message_processor
-                    .process_request(channel, ctx, request)
-                    .await;
-            }
-            RequestCode::NotifyMinBrokerIdChange => {
-                return self
-                    .notify_min_broker_id_processor
                     .process_request(channel, ctx, request)
                     .await;
             }
