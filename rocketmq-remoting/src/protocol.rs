@@ -314,12 +314,7 @@ impl Eq for DataVersion {}
 
 impl PartialOrd for DataVersion {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(
-            self.state_version
-                .cmp(&other.state_version)
-                .then_with(|| self.timestamp.cmp(&other.timestamp))
-                .then_with(|| self.get_counter().cmp(&other.get_counter())),
-        )
+        Some(self.cmp(other))
     }
 }
 
