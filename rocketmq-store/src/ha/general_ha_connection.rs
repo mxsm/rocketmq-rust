@@ -179,7 +179,14 @@ impl HAConnection for GeneralHAConnection {
         }
     }
 
-    fn remote_address(&self) -> &str {
-        todo!()
+    fn remote_address(&self) -> String {
+        match (&self.default_ha_connection, &self.auto_switch_ha_connection) {
+            (Some(connection), _) => connection.remote_address(),
+            (_, Some(connection)) => connection.remote_address(),
+            (None, None) => {
+                tracing::warn!("No HA connection to get remote address from");
+                panic!("No HA connection available");
+            }
+        }
     }
 }
