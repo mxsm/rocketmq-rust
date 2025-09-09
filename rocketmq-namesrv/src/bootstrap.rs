@@ -30,11 +30,12 @@ use rocketmq_remoting::remoting::RemotingService;
 use rocketmq_remoting::remoting_server::server::RocketMQServer;
 use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
-use rocketmq_runtime::RocketMQRuntime;
+use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_rust::wait_for_signal;
 use rocketmq_rust::ArcMut;
 use tokio::sync::broadcast;
 use tracing::info;
+use tracing::warn;
 
 use crate::processor::ClientRequestProcessor;
 use crate::processor::NameServerRequestProcessor;
@@ -53,8 +54,9 @@ pub struct Builder {
 }
 
 struct NameServerRuntime {
-    name_server_runtime: Option<RocketMQRuntime>,
+    //name_server_runtime: Option<RocketMQRuntime>,
     inner: ArcMut<NameServerRuntimeInner>,
+    scheduled_task_manager: ScheduledTaskManager,
     // receiver for shutdown signal
     shutdown_rx: Option<tokio::sync::broadcast::Receiver<()>>,
 }
@@ -82,6 +84,53 @@ async fn wait_for_signal_inner(shutdown_tx: broadcast::Sender<()>) {
 }
 
 impl NameServerRuntime {
+    pub async fn initialize(&mut self) {
+        self.load_config().await;
+        self.initiate_network_components();
+        self.register_processor();
+        self.start_schedule_service();
+        self.initiate_ssl_context();
+        self.initiate_rpc_hooks();
+    }
+
+    async fn load_config(&mut self) {
+        if let Some(kv_config_manager) = self.inner.kvconfig_manager.as_mut() {
+            kv_config_manager.load();
+        }
+    }
+    fn initiate_network_components(&mut self) {
+        //nothing to do
+    }
+
+    fn register_processor(&mut self) {
+        //nothing to do
+    }
+    fn start_schedule_service(&self) {
+        let scan_not_active_broker_interval = self
+            .inner
+            .name_server_config
+            .scan_not_active_broker_interval;
+        let mut name_server_runtime_inner = self.inner.clone();
+        self.scheduled_task_manager.add_fixed_rate_task_async(
+            Duration::from_secs(5),
+            Duration::from_millis(scan_not_active_broker_interval),
+            async move |_ctx| {
+                if let Some(route_info_manager) =
+                    name_server_runtime_inner.route_info_manager.as_mut()
+                {
+                    route_info_manager.scan_not_active_broker();
+                }
+                Ok(())
+            },
+        );
+    }
+    fn initiate_ssl_context(&mut self) {
+        warn!("SSL is not supported yet");
+    }
+    fn initiate_rpc_hooks(&mut self) {
+        warn!("RPC hooks are not supported yet");
+    }
+
     pub async fn start(&mut self) {
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
         let receiver = notify_conn_disconnect.subscribe();
@@ -118,13 +167,14 @@ impl NameServerRuntime {
 
     #[inline]
     fn shutdown(&mut self) {
-        if let Some(runtime) = self.name_server_runtime.take() {
-            runtime.shutdown();
-        }
+        self.scheduled_task_manager.cancel_all();
         self.inner
             .route_info_manager_mut()
             .un_register_service
             .shutdown();
+        /*if let Some(runtime) = self.name_server_runtime.take() {
+            runtime.shutdown();
+        }*/
         info!("Rocketmq NameServer(Rust) gracefully shutdown completed");
     }
 
@@ -139,20 +189,6 @@ impl NameServerRuntime {
         let default_request_processor =
             crate::processor::default_request_processor::DefaultRequestProcessor::new(
                 self.inner.clone(),
-            );
-
-        let mut inner = self.inner.clone();
-        self.name_server_runtime
-            .as_ref()
-            .unwrap()
-            .schedule_at_fixed_rate_mut(
-                move || {
-                    if let Some(route_info_manager) = inner.route_info_manager.as_mut() {
-                        route_info_manager.scan_not_active_broker();
-                    }
-                },
-                Some(Duration::from_secs(5)),
-                Duration::from_secs(5),
             );
         let mut name_server_request_processor = NameServerRequestProcessor::new();
         name_server_request_processor.register_processor(
@@ -173,9 +209,9 @@ impl NameServerRuntime {
 impl Drop for NameServerRuntime {
     #[inline]
     fn drop(&mut self) {
-        if let Some(runtime) = self.name_server_runtime.take() {
+        /*if let Some(runtime) = self.name_server_runtime.take() {
             runtime.shutdown();
-        }
+        }*/
     }
 }
 
@@ -210,7 +246,7 @@ impl Builder {
     #[inline]
     pub fn build(self) -> NameServerBootstrap {
         let name_server_config = self.name_server_config.unwrap_or_default();
-        let runtime = RocketMQRuntime::new_multi(10, "namesrv-thread");
+        //let runtime = RocketMQRuntime::new_multi(10, "namesrv-thread");
         let tokio_client_config = TokioClientConfig::default();
         let remoting_client = ArcMut::new(RocketmqDefaultClient::new(
             Arc::new(tokio_client_config.clone()),
@@ -237,8 +273,9 @@ impl Builder {
 
         NameServerBootstrap {
             name_server_runtime: NameServerRuntime {
-                name_server_runtime: Some(runtime),
+                //name_server_runtime: Some(runtime),
                 inner,
+                scheduled_task_manager: ScheduledTaskManager::new(),
                 shutdown_rx: None,
             },
         }
