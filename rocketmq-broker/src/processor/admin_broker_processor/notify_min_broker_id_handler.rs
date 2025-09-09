@@ -15,6 +15,10 @@
  * limitations under the License.
  */
 
+use std::sync::Arc;
+use std::time::Duration;
+
+use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -22,20 +26,23 @@ use rocketmq_remoting::protocol::header::namesrv::brokerid_change_request_header
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
+use rocketmq_rust::RocketMQTokioMutex;
 use rocketmq_store::base::message_store::MessageStore;
+use tracing::error;
 use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
-
 #[derive(Clone)]
 pub struct NotifyMinBrokerChangeIdHandler<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+    lock: Arc<RocketMQTokioMutex<()>>,
 }
 
 impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         Self {
-            broker_runtime_inner,
+            broker_runtime_inner: broker_runtime_inner,
+            lock: Arc::new(RocketMQTokioMutex::new(())),
         }
     }
 
@@ -50,24 +57,49 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
             .decode_command_custom_header::<NotifyMinBrokerIdChangeRequestHeader>()
             .unwrap();
 
-        let current_broker_id = self
-            .broker_runtime_inner
-            .broker_config()
-            .broker_identity
-            .broker_id;
+        let broker_config = self.broker_runtime_inner.broker_config();
+
+        let latest_broker_id = change_header
+            .min_broker_id
+            .expect("min broker id not must be present");
 
         warn!(
             "min broker id changed, prev {}, new {}",
-            current_broker_id,
-            change_header
-                .min_broker_id
-                .expect("min broker id not must be present")
+            broker_config.broker_identity.broker_id, latest_broker_id
         );
 
-        // TODO Implement update broker id method in the near future
+        self.update_min_broker(change_header).await;
 
         let mut response = RemotingCommand::default();
         response.set_code_ref(ResponseCode::Success);
         Some(response)
+    }
+
+    async fn update_min_broker(&self, change_header: NotifyMinBrokerIdChangeRequestHeader) {
+        let broker_config = self.broker_runtime_inner.broker_config();
+
+        if broker_config.enable_slave_acting_master
+            && broker_config.broker_identity.broker_id != MASTER_ID
+        {
+            let lock = self
+                .lock
+                .try_lock_timeout(Duration::from_millis(3000))
+                .await;
+
+            if let Some(_) = lock {
+                if let Some(min_broker_id) = change_header.min_broker_id {
+                    if min_broker_id != self.broker_runtime_inner.get_min_broker_id_in_group() {
+                        // on min broker change
+                        self.on_min_broker_change(&change_header);
+                    }
+                }
+            } else {
+                error!("Update min broker failed");
+            }
+        }
+    }
+
+    fn on_min_broker_change(&self, _change_header: &NotifyMinBrokerIdChangeRequestHeader) {
+        // data update specific logic
     }
 }
