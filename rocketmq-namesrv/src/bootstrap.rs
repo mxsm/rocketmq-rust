@@ -173,9 +173,9 @@ impl NameServerRuntime {
 impl Drop for NameServerRuntime {
     #[inline]
     fn drop(&mut self) {
-        // if let Some(runtime) = self.name_server_runtime.take() {
-        //     runtime.shutdown();
-        // }
+        if let Some(runtime) = self.name_server_runtime.take() {
+            runtime.shutdown();
+        }
     }
 }
 
