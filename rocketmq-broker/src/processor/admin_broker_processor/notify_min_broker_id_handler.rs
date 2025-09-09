@@ -15,9 +15,11 @@
  * limitations under the License.
  */
 
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -29,6 +31,7 @@ use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioMutex;
 use rocketmq_store::base::message_store::MessageStore;
 use tracing::error;
+use tracing::info;
 use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
@@ -36,6 +39,8 @@ use crate::broker_runtime::BrokerRuntimeInner;
 pub struct NotifyMinBrokerChangeIdHandler<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
     lock: Arc<RocketMQTokioMutex<()>>,
+    min_broker_id_in_group: Arc<Option<u64>>,
+    min_broker_addr_in_group: Arc<CheetahString>,
 }
 
 impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
@@ -43,6 +48,8 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         Self {
             broker_runtime_inner: broker_runtime_inner,
             lock: Arc::new(RocketMQTokioMutex::new(())),
+            min_broker_id_in_group: Arc::new(Some(MASTER_ID)),
+            min_broker_addr_in_group: Arc::new(CheetahString::empty()),
         }
     }
 
@@ -75,21 +82,36 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         Some(response)
     }
 
-    async fn update_min_broker(&self, change_header: NotifyMinBrokerIdChangeRequestHeader) {
+    async fn update_min_broker(&mut self, change_header: NotifyMinBrokerIdChangeRequestHeader) {
         let broker_config = self.broker_runtime_inner.broker_config();
 
         if broker_config.enable_slave_acting_master
             && broker_config.broker_identity.broker_id != MASTER_ID
         {
-            let lock = self
+            if let Some(_) = self
                 .lock
                 .try_lock_timeout(Duration::from_millis(3000))
-                .await;
-
-            if let Some(_) = lock {
+                .await
+            {
                 if let Some(min_broker_id) = change_header.min_broker_id {
                     if min_broker_id != self.broker_runtime_inner.get_min_broker_id_in_group() {
                         // on min broker change
+                        //
+                        let latest_broker_id = change_header.min_broker_id.unwrap();
+                        let latest_broker_addr = change_header.min_broker_addr.as_deref().unwrap();
+
+                        info!(
+                            "Min broker changed, old: {}-{}, new {}-{}",
+                            self.broker_runtime_inner.get_min_broker_id_in_group(),
+                            self.broker_runtime_inner.get_broker_addr(),
+                            latest_broker_id,
+                            latest_broker_addr
+                        );
+
+                        self.min_broker_id_in_group = Arc::new(Some(latest_broker_id));
+                        self.min_broker_addr_in_group =
+                            Arc::new(CheetahString::from_string(latest_broker_addr.to_string()));
+
                         self.on_min_broker_change(&change_header);
                     }
                 }
@@ -100,6 +122,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
     }
 
     fn on_min_broker_change(&self, _change_header: &NotifyMinBrokerIdChangeRequestHeader) {
+
         // data update specific logic
     }
 }
