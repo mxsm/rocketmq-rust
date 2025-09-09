@@ -31,7 +31,6 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::ha::ha_connection_state_notification_request::HAConnectionStateNotificationRequest;
 use rocketmq_store::ha::ha_service::HAService;
-use tokio::select;
 use tracing::error;
 use tracing::info;
 
@@ -281,11 +280,7 @@ where
             .get_ha_service()
         {
             ha_service.put_group_connection_state_request(request).await;
-            select! {
-                result = tx => {
-                    result.unwrap_or(false)
-                }
-            }
+            tx.await.unwrap_or(false)
         } else {
             error!(
                 "HAService is null, maybe broker config is wrong. For example, duplicationEnable \
