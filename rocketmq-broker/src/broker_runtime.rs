@@ -136,6 +136,14 @@ pub(crate) struct BrokerRuntime {
     scheduled_task_manager: ScheduledTaskManager,
 }
 
+impl Drop for BrokerRuntime {
+    fn drop(&mut self) {
+        if let Some(broker_runtime) = self.broker_runtime.take() {
+            broker_runtime.shutdown();
+        }
+    }
+}
+
 impl BrokerRuntime {
     pub(crate) fn new(
         broker_config: Arc<BrokerConfig>,
