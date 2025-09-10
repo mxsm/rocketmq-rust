@@ -182,11 +182,8 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         let broker_runtime_inner = self.broker_runtime_inner.mut_from_ref();
 
         if let Some(slave_synchronize) = broker_runtime_inner.slave_synchronize() {
-            match slave_synchronize.master_addr() {
-                Some(_master_addr) => {
-                    // Call the close client method
-                }
-                None => {}
+            if let Some(_master_addr) = slave_synchronize.master_addr() {
+                // Call the close client method
             }
         }
 
