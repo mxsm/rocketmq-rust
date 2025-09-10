@@ -2063,7 +2063,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn set_master_addr(&mut self, master_addr: CheetahString) {
+    pub fn update_slave_master_addr(&mut self, master_addr: CheetahString) {
         if let Some(ref mut slave) = self.slave_synchronize {
             slave.set_master_addr(master_addr);
         };

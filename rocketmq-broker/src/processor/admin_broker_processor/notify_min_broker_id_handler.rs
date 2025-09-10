@@ -190,7 +190,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
             }
         }
 
-        broker_runtime_inner.set_master_addr(CheetahString::empty());
+        broker_runtime_inner.update_slave_master_addr(CheetahString::empty());
         if let Some(message_store) = broker_runtime_inner.message_store() {
             message_store.update_master_address(&CheetahString::empty());
         }
