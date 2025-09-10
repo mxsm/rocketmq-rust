@@ -52,24 +52,27 @@ pub trait RPCHook: Send + Sync + 'static {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<()>;
 
-    /// Executes custom logic after an RPC response has been prepared.
+    /// Executes custom logic after an RPC response is processed.
     ///
-    /// This method allows for actions such as logging, metrics collection, or cleanup activities
-    /// to be performed after a request has been processed and a response is ready to be sent back.
-    /// It takes a mutable reference to the `RemotingCommand` allowing for the response to be
-    /// modified before sending.
+    /// This method allows for actions such as logging, metrics collection, or
+    /// post-processing tasks to be performed after the response is generated.
+    /// It takes references to the remote caller's address, the original request,
+    /// and a mutable reference to the response, enabling modifications to the response
+    /// before it is sent back to the caller.
     ///
     /// # Arguments
     /// * `remote_addr` - The socket address of the remote caller.
+    /// * `request` - A reference to the `RemotingCommand` representing the original request.
     /// * `response` - A mutable reference to the `RemotingCommand` representing the response to be
-    ///   sent back.
+    ///   sent back to the caller.
     ///
     /// # Returns
     /// A `Result` indicating the outcome of the post-processing step. Returning an `Err`
-    /// value can be used to indicate an issue with the response preparation.
+    /// value can be used to signal a failure in the post-processing logic.
     fn do_after_response(
         &self,
         remote_addr: SocketAddr,
+        request: &RemotingCommand,
         response: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<()>;
 }

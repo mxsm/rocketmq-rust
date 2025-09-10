@@ -99,11 +99,12 @@ impl<RP> ConnectionHandler<RP> {
     pub fn do_after_rpc_hooks(
         &self,
         channel: &Channel,
+        request: &RemotingCommand,
         response: Option<&mut RemotingCommand>,
     ) -> rocketmq_error::RocketMQResult<()> {
         if let Some(response) = response {
             for hook in self.rpc_hooks.iter() {
-                hook.do_after_response(channel.remote_address(), response)?;
+                hook.do_after_response(channel.remote_address(), request, response)?;
             }
         }
         Ok(())
@@ -194,7 +195,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
             };
 
             let exception = self
-                .do_after_rpc_hooks(&self.channel_inner.1, response.as_mut())
+                .do_after_rpc_hooks(&self.channel_inner.1, &cmd, response.as_mut())
                 .err();
 
             match self.handle_error(oneway_rpc, opaque, exception).await {
