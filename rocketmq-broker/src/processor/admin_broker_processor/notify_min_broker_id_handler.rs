@@ -203,16 +203,11 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
     ) {
         let need_sync_master_flush_offset =
             if let Some(message_store) = self.broker_runtime_inner.message_store() {
-                if message_store.get_master_flushed_offset() == 0x000
+                message_store.get_master_flushed_offset() == 0x000
                     && self
                         .broker_runtime_inner
                         .message_store_config()
                         .sync_master_flush_offset_when_startup
-                {
-                    true
-                } else {
-                    false
-                }
             } else {
                 false
             };
