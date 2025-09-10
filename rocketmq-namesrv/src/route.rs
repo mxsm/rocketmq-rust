@@ -17,3 +17,4 @@
 
 pub(crate) mod batch_unregistration_service;
 pub mod route_info_manager;
+pub(crate) mod zone_route_rpc_hook;
