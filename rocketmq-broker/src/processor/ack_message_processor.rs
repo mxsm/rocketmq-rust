@@ -68,7 +68,7 @@ where
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!(
@@ -140,7 +140,7 @@ where
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match request_code {
             RequestCode::AckMessage => self.process_ack(channel, ctx, request, true).await,
@@ -186,7 +186,7 @@ where
         &mut self,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
         _broker_allow_suspend: bool,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<AckMessageRequestHeader>()?;
@@ -262,7 +262,7 @@ where
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
         _broker_allow_suspend: bool,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         if request.get_body().is_none() {

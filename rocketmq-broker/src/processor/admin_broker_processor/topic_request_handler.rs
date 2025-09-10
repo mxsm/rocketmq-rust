@@ -72,7 +72,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let response = RemotingCommand::create_response_command();
         let request_header = request
@@ -205,7 +205,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut request_body =
             CreateTopicListRequestBody::decode(request.body().as_ref().unwrap().as_ref()).unwrap();
@@ -308,7 +308,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let response = RemotingCommand::create_response_command();
         let request_header = request
@@ -379,7 +379,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        _request: RemotingCommand,
+        _request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut response = RemotingCommand::create_response_command();
         let topic_config_and_mapping_serialize_wrapper = TopicConfigAndMappingSerializeWrapper {
@@ -425,7 +425,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        _request: RemotingCommand,
+        _request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut response = RemotingCommand::create_response_command();
         let topics = TopicValidator::get_system_topic_set();
@@ -442,7 +442,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request
@@ -521,7 +521,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request
@@ -568,7 +568,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request
@@ -594,7 +594,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request

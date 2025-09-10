@@ -62,7 +62,7 @@ impl RequestProcessor for ClientRemotingProcessor {
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!("process_request: {:?}", request_code);
@@ -100,7 +100,7 @@ impl ClientRemotingProcessor {
     async fn receive_reply_message(
         &mut self,
         ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let receive_time = get_current_millis();
         let response = RemotingCommand::create_response_command();
@@ -197,7 +197,7 @@ impl ClientRemotingProcessor {
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request
             .decode_command_custom_header::<NotifyConsumerIdsChangedRequestHeader>()
@@ -219,7 +219,7 @@ impl ClientRemotingProcessor {
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        mut request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request
             .decode_command_custom_header::<CheckTransactionStateRequestHeader>()
@@ -276,7 +276,7 @@ impl ClientRemotingProcessor {
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        mut request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header =
             request.decode_command_custom_header::<ConsumeMessageDirectlyResultRequestHeader>()?;

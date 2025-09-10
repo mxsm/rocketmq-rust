@@ -49,7 +49,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        _request: RemotingCommand,
+        _request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         todo!()
     }
@@ -59,7 +59,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        _request: RemotingCommand,
+        _request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut response = RemotingCommand::create_response_command();
         // broker config => broker config
@@ -93,7 +93,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        _request: RemotingCommand,
+        _request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut response = RemotingCommand::create_response_command();
         let runtime_info = self.prepare_runtime_info();

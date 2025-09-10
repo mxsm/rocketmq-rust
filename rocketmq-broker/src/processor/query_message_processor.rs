@@ -45,7 +45,7 @@ where
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!(
@@ -96,7 +96,7 @@ where
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         match request_code {
             RequestCode::QueryMessage => self.query_message(channel, ctx, request).await,
@@ -109,7 +109,7 @@ where
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut response = RemotingCommand::create_response_command_with_header(
             QueryMessageResponseHeader::default(),
@@ -165,7 +165,7 @@ where
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request

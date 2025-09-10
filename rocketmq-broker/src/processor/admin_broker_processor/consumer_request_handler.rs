@@ -56,7 +56,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request
@@ -109,7 +109,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request
@@ -239,7 +239,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        _request: RemotingCommand,
+        _request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut response = RemotingCommand::create_response_command();
         let content = self

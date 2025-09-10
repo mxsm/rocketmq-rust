@@ -82,7 +82,7 @@ where
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!(
@@ -361,7 +361,7 @@ where
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         self.process_request_inner(request_code, channel, ctx, request, true, true)
             .await
@@ -372,7 +372,7 @@ where
         request_code: RequestCode,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
         broker_allow_suspend: bool,
         broker_allow_flow_ctr_suspend: bool,
     ) -> Option<RemotingCommand> {
@@ -888,7 +888,7 @@ where
         mut pull_message_processor: ArcMut<PullMessageProcessor<MS>>,
         channel: Channel,
         mut ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        mut request: RemotingCommand,
     ) {
         let lock = Arc::clone(&self.write_message_lock);
         self.write_message_runtime.get_handle().spawn(async move {
@@ -901,7 +901,7 @@ where
                     RequestCode::from(request.code()),
                     channel,
                     ctx.clone(),
-                    request,
+                    &mut request,
                     false,
                     broker_allow_flow_ctr_suspend,
                 )

@@ -98,7 +98,7 @@ where
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!(
@@ -153,16 +153,16 @@ where
         channel: Channel,
         mut ctx: ConnectionHandlerContext,
         request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match request_code {
             RequestCode::ConsumerSendMsgBack => {
                 self.inner
-                    .consumer_send_msg_back(&channel, &ctx, &request)
+                    .consumer_send_msg_back(&channel, &ctx, request)
                     .await
             }
             _ => {
-                let mut request_header = parse_request_header(&request, request_code)?;
+                let mut request_header = parse_request_header(request, request_code)?;
                 let mapping_context = self
                     .inner
                     .broker_runtime_inner
@@ -178,7 +178,7 @@ where
 
                 let send_message_context =
                     self.inner
-                        .build_msg_context(&channel, &ctx, &mut request_header, &request);
+                        .build_msg_context(&channel, &ctx, &mut request_header, request);
                 self.inner
                     .execute_send_message_hook_before(&send_message_context);
                 SendMessageProcessor::<MS, TS>::clear_reserved_properties(&mut request_header);
@@ -243,7 +243,7 @@ where
         &mut self,
         channel: &Channel,
         ctx: &mut ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
         mut send_message_context: SendMessageContext,
         request_header: SendMessageRequestHeader,
         mut mapping_context: TopicQueueMappingContext,
@@ -414,7 +414,7 @@ where
                 .handle_put_message_result(
                     put_message_result,
                     &mut response,
-                    &request,
+                    request,
                     topic.as_ref(),
                     transaction_id,
                     &mut send_message_context,
@@ -451,7 +451,7 @@ where
                 .handle_put_message_result(
                     put_message_result,
                     &mut response,
-                    &request,
+                    request,
                     topic.as_str(),
                     transaction_id,
                     &mut send_message_context,
@@ -477,7 +477,7 @@ where
         &mut self,
         channel: &Channel,
         ctx: &mut ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
         mut send_message_context: SendMessageContext,
         request_header: SendMessageRequestHeader,
         mut mapping_context: TopicQueueMappingContext,
@@ -513,7 +513,7 @@ where
         if !self.handle_retry_and_dlq(
             &request_header,
             &mut response,
-            &request,
+            request,
             &mut message_ext.message_ext_inner,
             &mut topic_config,
             &mut ori_props,
@@ -636,7 +636,7 @@ where
                 .handle_put_message_result(
                     put_message_result,
                     &mut response,
-                    &request,
+                    request,
                     topic.as_str(),
                     transaction_id,
                     &mut send_message_context,
@@ -672,7 +672,7 @@ where
                 .handle_put_message_result(
                     put_message_result,
                     &mut response,
-                    &request,
+                    request,
                     topic.as_str(),
                     transaction_id,
                     &mut send_message_context,
