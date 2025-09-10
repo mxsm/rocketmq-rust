@@ -44,7 +44,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let change_header = request
             .decode_command_custom_header::<NotifyMinBrokerIdChangeRequestHeader>()

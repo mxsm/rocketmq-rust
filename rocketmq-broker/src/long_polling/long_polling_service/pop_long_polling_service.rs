@@ -399,7 +399,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
     pub fn polling_(
         &self,
         ctx: ConnectionHandlerContext,
-        remoting_command: RemotingCommand,
+        remoting_command: &mut RemotingCommand,
         request_header: PollingHeader,
     ) -> PollingResult {
         self.polling(ctx, remoting_command, request_header, None, None)
@@ -408,7 +408,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
     pub fn polling(
         &self,
         ctx: ConnectionHandlerContext,
-        remoting_command: RemotingCommand,
+        remoting_command: &mut RemotingCommand,
         request_header: PollingHeader,
         subscription_data: Option<SubscriptionData>,
         message_filter: Option<Arc<Box<dyn MessageFilter>>>,
@@ -459,7 +459,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
 
         queue.insert(request);
 
-        remoting_command.set_suspended(true);
+        remoting_command.set_suspended_ref(true);
         self.total_polling_num.fetch_add(1, Ordering::SeqCst);
         PollingResult::PollingSuc
     }
@@ -477,7 +477,11 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                     let ctx = pop_request.get_ctx().clone();
                     let opaque = pop_request.get_remoting_command().opaque();
                     let response = processor
-                        .process_request(channel, ctx, pop_request.get_remoting_command().clone())
+                        .process_request(
+                            channel,
+                            ctx,
+                            &mut pop_request.get_remoting_command().clone(),
+                        ) // maybe can optimize
                         .await;
                     match response {
                         Ok(result) => {

@@ -205,7 +205,7 @@ where
         &mut self,
         _channel: Channel,
         ctx: ConnectionHandlerContext,
-        mut request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let now = get_current_millis();
         request.add_ext_field_if_not_exist(NotificationProcessor::<MS>::BORN_TIME, now.to_string());

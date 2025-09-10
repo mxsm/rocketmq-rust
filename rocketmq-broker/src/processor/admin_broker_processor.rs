@@ -63,7 +63,7 @@ where
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         Ok(self
@@ -104,7 +104,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         match request_code {
             RequestCode::UpdateAndCreateTopic => {

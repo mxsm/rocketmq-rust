@@ -61,7 +61,7 @@ pub trait PullMessageResultHandler: Sync + Send + Any + 'static {
     async fn handle(
         &self,
         get_message_result: GetMessageResult,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
         request_header: PullMessageRequestHeader,
         channel: Channel,
         ctx: ConnectionHandlerContext,

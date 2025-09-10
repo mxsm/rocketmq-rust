@@ -73,12 +73,12 @@ async fn run_send(mut client: ArcMut<ClientInner>, mut rx: Receiver<SendMessage>
 async fn run_recv<PR: RequestProcessor>(mut client: ArcMut<ClientInner>, mut processor: PR) {
     while let Some(response) = client.channel.0.connection.receive_command().await {
         match response {
-            Ok(msg) => match msg.get_type() {
+            Ok(mut msg) => match msg.get_type() {
                 // handle request
                 RemotingCommandType::REQUEST => {
                     let opaque = msg.opaque();
                     let process_result = processor
-                        .process_request(client.channel.1.clone(), client.ctx.clone(), msg)
+                        .process_request(client.channel.1.clone(), client.ctx.clone(), &mut msg)
                         .await;
                     match process_result {
                         Ok(response) => {

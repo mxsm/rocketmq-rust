@@ -75,6 +75,10 @@ impl PopRequest {
         &self.remoting_command
     }
 
+    pub fn remoting_command_mut(&mut self) -> &mut RemotingCommand {
+        &mut self.remoting_command
+    }
+
     pub fn is_timeout(&self) -> bool {
         let now = get_current_millis();
         now > (self.expired - 50)

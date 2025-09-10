@@ -183,7 +183,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                 let ctx = self.connection_handler_context.clone();
                 let result = self
                     .request_processor
-                    .process_request(channel, ctx, cmd)
+                    .process_request(channel, ctx, &mut cmd)
                     .await
                     .unwrap_or_else(|_err| {
                         Some(RemotingCommand::create_response_command_with_code(

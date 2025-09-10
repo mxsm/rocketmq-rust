@@ -59,7 +59,7 @@ where
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!(
@@ -107,7 +107,7 @@ where
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let request_header = request
             .decode_command_custom_header::<EndTransactionRequestHeader>()

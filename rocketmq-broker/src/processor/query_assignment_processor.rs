@@ -76,7 +76,7 @@ where
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!(
@@ -143,7 +143,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match request_code {
             RequestCode::QueryAssignment => self.query_assignment(channel, ctx, request).await,
@@ -158,7 +158,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         &mut self,
         channel: Channel,
         _ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         if request.get_body().is_none() {
             return Ok(Some(
@@ -434,7 +434,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         if request.get_body().is_none() {
             return Ok(Some(

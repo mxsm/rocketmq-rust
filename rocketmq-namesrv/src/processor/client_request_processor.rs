@@ -49,7 +49,7 @@ impl RequestProcessor for ClientRequestProcessor {
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!(
@@ -75,14 +75,14 @@ impl ClientRequestProcessor {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         self.get_route_info_by_topic(request)
     }
 
     fn get_route_info_by_topic(
         &self,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<GetRouteInfoRequestHeader>()?;
         let namesrv_ready = self.need_check_namesrv_ready.load(Ordering::Relaxed)
