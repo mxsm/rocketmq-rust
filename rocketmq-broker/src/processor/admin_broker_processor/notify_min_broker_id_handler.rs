@@ -100,10 +100,11 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         if broker_config.enable_slave_acting_master
             && broker_config.broker_identity.broker_id != MASTER_ID
         {
-            if let Some(_) = self
+            if self
                 .lock
                 .try_write_timeout(Duration::from_millis(3000))
                 .await
+                .is_some()
             {
                 if let Some(min_broker_id) = change_header.min_broker_id {
                     if min_broker_id != self.broker_runtime_inner.get_min_broker_id_in_group() {
@@ -143,9 +144,9 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
             min_broker_addr
         );
 
-        self.lock.write().await.min_broker_id_in_group = Some(min_broker_id);
-        self.lock.write().await.min_broker_addr_in_group =
-            CheetahString::from_slice(min_broker_addr);
+        let mut lock_guard = self.lock.write().await;
+        lock_guard.min_broker_id_in_group = Some(min_broker_id);
+        lock_guard.min_broker_addr_in_group = CheetahString::from_slice(min_broker_addr);
 
         let should_start = self.broker_runtime_inner.get_min_broker_id_in_group()
             == self.lock.read().await.min_broker_id_in_group.unwrap();
@@ -155,13 +156,10 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         // master offline
         if let Some(offline_broker_addr) = offline_broker_addr {
             if let Some(slave_sync) = self.broker_runtime_inner.slave_synchronize() {
-                match slave_sync.master_addr() {
-                    Some(master_addr) => {
-                        if offline_broker_addr.eq(master_addr.deref()) {
-                            self.on_master_offline().await;
-                        }
+                if let Some(master_addr) = slave_sync.master_addr() {
+                    if offline_broker_addr.eq(master_addr.deref()) {
+                        self.on_master_offline().await;
                     }
-                    None => {}
                 }
             }
         }
