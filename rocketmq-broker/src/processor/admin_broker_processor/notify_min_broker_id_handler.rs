@@ -16,7 +16,6 @@
  */
 
 use std::ops::Deref;
-use std::ops::DerefMut;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -36,7 +35,6 @@ use tracing::info;
 use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
-use crate::slave::slave_synchronize::SlaveSynchronize;
 
 #[derive(Clone)]
 pub struct NotifyMinBrokerChangeIdHandler<MS: MessageStore> {
@@ -53,7 +51,7 @@ struct MinBrokerIngroup {
 impl MinBrokerIngroup {
     fn new() -> Self {
         Self {
-            min_broker_id_in_group: None,
+            min_broker_id_in_group: Some(MASTER_ID),
             min_broker_addr_in_group: CheetahString::empty(),
         }
     }
@@ -110,7 +108,18 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
                 if let Some(min_broker_id) = change_header.min_broker_id {
                     if min_broker_id != self.broker_runtime_inner.get_min_broker_id_in_group() {
                         // on min broker change
-                        self.on_min_broker_change(&change_header).await;
+                        let min_broker_id = change_header.min_broker_id.unwrap();
+                        let min_broker_addr = change_header.min_broker_addr.as_deref().unwrap();
+                        let offline_broker_addr = &change_header.offline_broker_addr;
+                        let master_ha_addr = &change_header.ha_broker_addr;
+
+                        self.on_min_broker_change(
+                            min_broker_id,
+                            min_broker_addr,
+                            offline_broker_addr,
+                            master_ha_addr,
+                        )
+                        .await;
                     }
                 }
             } else {
@@ -119,10 +128,13 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         }
     }
 
-    async fn on_min_broker_change(&self, change_header: &NotifyMinBrokerIdChangeRequestHeader) {
-        let min_broker_id = change_header.min_broker_id.unwrap();
-        let min_broker_addr = change_header.min_broker_addr.as_deref().unwrap();
-
+    async fn on_min_broker_change(
+        &self,
+        min_broker_id: u64,
+        min_broker_addr: &str,
+        offline_broker_addr: &Option<CheetahString>,
+        master_ha_addr: &Option<CheetahString>,
+    ) {
         info!(
             "Min broker changed, old: {}-{}, new {}-{}",
             self.broker_runtime_inner.get_min_broker_id_in_group(),
@@ -141,7 +153,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         self.change_special_service_status(should_start).await;
 
         // master offline
-        if let Some(offline_broker_addr) = change_header.offline_broker_addr.as_deref() {
+        if let Some(offline_broker_addr) = offline_broker_addr {
             if let Some(slave_sync) = self.broker_runtime_inner.slave_synchronize() {
                 match slave_sync.master_addr() {
                     Some(master_addr) => {
@@ -149,7 +161,6 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
                             self.on_master_offline().await;
                         }
                     }
-
                     None => {}
                 }
             }
@@ -157,21 +168,70 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
 
         //master online
         if min_broker_id == MASTER_ID {
-            self.on_master_on_line().await;
+            self.on_master_on_line(min_broker_addr, master_ha_addr)
+                .await;
         }
     }
 
-    async fn change_special_service_status(&self, _should_start: bool) {}
-
-    async fn on_master_offline(&self) {
-        let broker_runtime_inner = self.broker_runtime_inner.clone();
-
-        let _slave_synchronize = SlaveSynchronize::new(broker_runtime_inner);
-
-        self.lock.write().await.min_broker_id_in_group = Some(123);
+    async fn change_special_service_status(&self, should_start: bool) {
+        self.broker_runtime_inner
+            .mut_from_ref()
+            .change_special_service_status(should_start)
+            .await;
     }
 
-    async fn on_master_on_line(&self) {}
+    async fn on_master_offline(&self) {
+        let broker_runtime_inner = self.broker_runtime_inner.mut_from_ref();
+
+        if let Some(slave_synchronize) = broker_runtime_inner.slave_synchronize() {
+            match slave_synchronize.master_addr() {
+                Some(_master_addr) => {
+                    // Call the close client method
+                }
+                None => {}
+            }
+        }
+
+        broker_runtime_inner.set_master_addr(CheetahString::empty());
+        if let Some(message_store) = broker_runtime_inner.message_store() {
+            message_store.update_master_address(&CheetahString::empty());
+        }
+    }
+
+    async fn on_master_on_line(
+        &self,
+        _min_broker_addr: &str,
+        master_ha_addr: &Option<CheetahString>,
+    ) {
+        let need_sync_master_flush_offset =
+            if let Some(message_store) = self.broker_runtime_inner.message_store() {
+                if message_store.get_master_flushed_offset() == 0x000
+                    && self
+                        .broker_runtime_inner
+                        .message_store_config()
+                        .sync_master_flush_offset_when_startup
+                {
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+        if master_ha_addr.is_none() || need_sync_master_flush_offset {
+            if need_sync_master_flush_offset {
+                unimplemented!();
+            }
+
+            if master_ha_addr.is_none() {
+                let broker_runtime_inner = self.broker_runtime_inner.mut_from_ref();
+                if let Some(_message_store) = broker_runtime_inner.message_store() {
+                    unimplemented!("");
+                }
+            }
+        }
+    }
 
     pub async fn get_min_broker_id_in_group(&self) -> Option<u64> {
         self.lock.read().await.min_broker_id_in_group
