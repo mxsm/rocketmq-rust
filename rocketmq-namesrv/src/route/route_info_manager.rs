@@ -438,7 +438,10 @@ impl RouteInfoManager {
         // Acquire read lock
         let lock = self.lock.read();
         if let Some(queue_data_map) = self.topic_queue_table.get(topic) {
-            topic_route_data.queue_datas = queue_data_map.values().cloned().collect();
+            topic_route_data
+                .queue_datas
+                .extend(queue_data_map.values().cloned().collect::<Vec<_>>());
+
             found_queue_data = true;
 
             for broker_name in queue_data_map.keys() {
@@ -511,9 +514,8 @@ impl RouteInfoManager {
                 for queue_data in &topic_route_data.queue_datas {
                     if queue_data.broker_name() == broker_data.broker_name() {
                         if !PermName::is_writeable(queue_data.perm()) {
-                            if let Some(min_broker_id) =
-                                broker_data.broker_addrs().keys().cloned().min()
-                            {
+                            if let Some(min_broker_id) = broker_data.broker_addrs().keys().min() {
+                                let min_broker_id = *min_broker_id;
                                 if let Some(acting_master_addr) =
                                     broker_data.broker_addrs_mut().remove(&min_broker_id)
                                 {
