@@ -1025,7 +1025,7 @@ impl BrokerRuntime {
 
         let (request_processor, fast_request_processor) = self.init_processor();
 
-        let server = RocketMQServer::new(Arc::new(
+        let mut server = RocketMQServer::new(Arc::new(
             self.inner.broker_config.broker_server_config.clone(),
         ));
         //start nomarl broker remoting_server
@@ -1044,7 +1044,7 @@ impl BrokerRuntime {
         let mut fast_server_config = self.inner.broker_config.broker_server_config.clone();
         fast_server_config.listen_port =
             self.inner.broker_config.broker_server_config.listen_port - 2;
-        let fast_server = RocketMQServer::new(Arc::new(fast_server_config));
+        let mut fast_server = RocketMQServer::new(Arc::new(fast_server_config));
         tokio::spawn(async move {
             fast_server
                 .run(fast_request_processor, client_housekeeping_service_fast)

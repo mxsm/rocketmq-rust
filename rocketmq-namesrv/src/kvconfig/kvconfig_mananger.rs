@@ -91,6 +91,9 @@ impl KVConfigManager {
                 .as_str(),
         );
         if let Ok(content) = result {
+            if content.is_empty() {
+                return Ok(());
+            }
             let wrapper = KVConfigSerializeWrapper::decode(content.as_bytes())?;
             if let Some(config_table) = wrapper.config_table {
                 for (key, value) in config_table {
