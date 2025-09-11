@@ -60,7 +60,7 @@ async fn main() -> Result<()> {
         })
         .build()
         .boot()
-        .await;
+        .await?;
 
     Ok(())
 }
