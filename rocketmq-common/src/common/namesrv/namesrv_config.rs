@@ -37,25 +37,17 @@ mod defaults {
     }
 
     pub fn kv_config_path() -> String {
-        format!(
-            "{}{}{}{}{}",
-            dirs::home_dir().unwrap().to_str().unwrap(),
-            MAIN_SEPARATOR,
-            "rocketmq-namesrv",
-            MAIN_SEPARATOR,
-            "kvConfig.json"
-        )
+        let mut kv_config_path = dirs::home_dir().unwrap_or_default();
+        kv_config_path.push("namesrv");
+        kv_config_path.push("kvConfig.json");
+        kv_config_path.to_str().unwrap_or_default().to_string()
     }
 
     pub fn config_store_path() -> String {
-        format!(
-            "{}{}{}{}{}",
-            dirs::home_dir().unwrap().to_str().unwrap(),
-            MAIN_SEPARATOR,
-            "rocketmq-namesrv",
-            MAIN_SEPARATOR,
-            "rocketmq-namesrv.properties"
-        )
+        let mut kv_config_path = dirs::home_dir().unwrap_or_default();
+        kv_config_path.push("namesrv");
+        kv_config_path.push("namesrv.properties");
+        kv_config_path.to_str().unwrap_or_default().to_string()
     }
 
     pub fn product_env_name() -> String {
