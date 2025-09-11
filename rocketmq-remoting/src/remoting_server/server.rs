@@ -441,6 +441,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
 
 pub struct RocketMQServer<RP> {
     config: Arc<ServerConfig>,
+    rpc_hooks: Option<Vec<Box<dyn RPCHook>>>,
     _phantom_data: std::marker::PhantomData<RP>,
 }
 
@@ -448,19 +449,29 @@ impl<RP> RocketMQServer<RP> {
     pub fn new(config: Arc<ServerConfig>) -> Self {
         Self {
             config,
+            rpc_hooks: Some(vec![]),
             _phantom_data: std::marker::PhantomData,
+        }
+    }
+
+    pub fn register_rpc_hook(&mut self, hook: Box<dyn RPCHook>) {
+        if let Some(ref mut hooks) = self.rpc_hooks {
+            hooks.push(hook);
+        } else {
+            self.rpc_hooks = Some(vec![hook]);
         }
     }
 }
 
 impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
     pub async fn run(
-        &self,
+        &mut self,
         request_processor: RP,
         channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
     ) {
         let addr = format!("{}:{}", self.config.bind_address, self.config.listen_port);
         let listener = TcpListener::bind(&addr).await.unwrap();
+        let rpc_hooks = self.rpc_hooks.take().unwrap_or_default();
         info!("Starting remoting_server at: {}", addr);
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
         run(
@@ -468,7 +479,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
             wait_for_signal(),
             request_processor,
             Some(notify_conn_disconnect),
-            vec![],
+            rpc_hooks,
             channel_event_listener,
         )
         .await;

@@ -41,6 +41,7 @@ use tracing::warn;
 use crate::processor::ClientRequestProcessor;
 use crate::processor::NameServerRequestProcessor;
 use crate::processor::NameServerRequestProcessorWrapper;
+use crate::route::zone_route_rpc_hook::ZoneRouteRPCHook;
 use crate::route_info::broker_housekeeping_service::BrokerHousekeepingService;
 use crate::KVConfigManager;
 use crate::RouteInfoManager;
@@ -60,6 +61,7 @@ struct NameServerRuntime {
     scheduled_task_manager: ScheduledTaskManager,
     // receiver for shutdown signal
     shutdown_rx: Option<tokio::sync::broadcast::Receiver<()>>,
+    server_inner: Option<RocketMQServer<NameServerRequestProcessor>>,
 }
 
 impl NameServerBootstrap {
@@ -105,6 +107,8 @@ impl NameServerRuntime {
     }
     fn initiate_network_components(&mut self) {
         //nothing to do
+        let server = RocketMQServer::new(Arc::new(self.inner.server_config.clone()));
+        self.server_inner = Some(server);
     }
 
     fn register_processor(&mut self) {
@@ -133,14 +137,16 @@ impl NameServerRuntime {
         warn!("SSL is not supported yet");
     }
     fn initiate_rpc_hooks(&mut self) {
-        warn!("RPC hooks are not supported yet");
+        if let Some(server) = self.server_inner.as_mut() {
+            server.register_rpc_hook(Box::new(ZoneRouteRPCHook));
+        }
     }
 
     pub async fn start(&mut self) {
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
         let receiver = notify_conn_disconnect.subscribe();
         let request_processor = self.init_processors(receiver);
-        let server = RocketMQServer::new(Arc::new(self.inner.server_config.clone()));
+        let mut server = self.server_inner.take().unwrap();
         let channel_event_listener = self
             .inner
             .broker_housekeeping_service
@@ -282,6 +288,7 @@ impl Builder {
                 inner,
                 scheduled_task_manager: ScheduledTaskManager::new(),
                 shutdown_rx: None,
+                server_inner: None,
             },
         }
     }
