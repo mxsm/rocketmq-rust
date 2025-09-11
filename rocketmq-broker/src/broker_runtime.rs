@@ -2066,6 +2066,18 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
+    pub fn slave_synchronize(&self) -> &Option<SlaveSynchronize<MS>> {
+        &self.slave_synchronize
+    }
+
+    #[inline]
+    pub fn update_slave_master_addr(&mut self, master_addr: CheetahString) {
+        if let Some(ref mut slave) = self.slave_synchronize {
+            slave.set_master_addr(master_addr);
+        };
+    }
+
+    #[inline]
     pub fn set_store_host(&mut self, store_host: SocketAddr) {
         self.store_host = store_host;
     }
