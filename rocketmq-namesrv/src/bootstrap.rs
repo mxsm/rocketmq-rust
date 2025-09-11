@@ -22,6 +22,7 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::utils::network_util::NetworkUtil;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
@@ -62,13 +63,15 @@ struct NameServerRuntime {
 }
 
 impl NameServerBootstrap {
-    pub async fn boot(mut self) {
+    pub async fn boot(mut self) -> RocketMQResult<()> {
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         self.name_server_runtime.shutdown_rx = Some(shutdown_rx);
+        self.name_server_runtime.initialize().await?;
         tokio::join!(
             self.name_server_runtime.start(),
             wait_for_signal_inner(shutdown_tx)
         );
+        Ok(())
     }
 }
 
@@ -84,19 +87,21 @@ async fn wait_for_signal_inner(shutdown_tx: broadcast::Sender<()>) {
 }
 
 impl NameServerRuntime {
-    pub async fn initialize(&mut self) {
-        self.load_config().await;
+    pub async fn initialize(&mut self) -> RocketMQResult<()> {
+        self.load_config().await?;
         self.initiate_network_components();
         self.register_processor();
         self.start_schedule_service();
         self.initiate_ssl_context();
         self.initiate_rpc_hooks();
+        Ok(())
     }
 
-    async fn load_config(&mut self) {
+    async fn load_config(&mut self) -> RocketMQResult<()> {
         if let Some(kv_config_manager) = self.inner.kvconfig_manager.as_mut() {
-            kv_config_manager.load();
+            kv_config_manager.load()?;
         }
+        Ok(())
     }
     fn initiate_network_components(&mut self) {
         //nothing to do
