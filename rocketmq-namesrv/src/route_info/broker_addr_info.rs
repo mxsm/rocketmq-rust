@@ -158,7 +158,7 @@ mod tests {
     use std::net::IpAddr;
     use std::net::Ipv4Addr;
     use std::net::SocketAddr;
-
+    use rocketmq_common::utils::correlation_id_util::CorrelationIdUtil;
     use super::*;
 
     #[test]
@@ -192,6 +192,7 @@ mod tests {
             data_version.clone(),
             "192.168.1.4".into(),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)), 8080),
+            CorrelationIdUtil::create_correlation_id().into()
         );
         assert_eq!(broker_live_info.last_update_timestamp(), 1000);
         assert_eq!(broker_live_info.heartbeat_timeout_millis(), 2000);
