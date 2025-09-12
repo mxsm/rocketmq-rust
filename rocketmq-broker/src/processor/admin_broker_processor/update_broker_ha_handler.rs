@@ -53,7 +53,7 @@ impl<MS: MessageStore> UpdateBrokerHaHandler<MS> {
 
         let mut response = RemotingCommand::default();
 
-        if let Some(master_ha_addr) = exchange_request_header.master_ha_address {
+        if let Some(master_ha_addr) = exchange_request_header.master_ha_address.as_ref() {
             if !master_ha_addr.is_empty() {
                 if let Some(message_store) = self.broker_runtime_inner.message_store() {
                     message_store
@@ -63,12 +63,12 @@ impl<MS: MessageStore> UpdateBrokerHaHandler<MS> {
                     let master_address = exchange_request_header.master_address.unwrap_or_default();
                     message_store.update_master_address(&master_address);
 
-                    let is_sync_master_flush_offset_when_startip = self
+                    let should_sync_master_flush_offset_on_startup = self
                         .broker_runtime_inner
                         .message_store_config()
                         .sync_master_flush_offset_when_startup;
-                    if message_store.get_master_flushed_offset() == 0x000
-                        && is_sync_master_flush_offset_when_startip
+                    if message_store.get_master_flushed_offset() == 0x0000
+                        && should_sync_master_flush_offset_on_startup
                     {
                         let master_flush_offset =
                             exchange_request_header.master_flush_offset.unwrap();
