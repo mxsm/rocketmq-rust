@@ -1195,7 +1195,7 @@ impl RouteInfoManager {
         let mut broker_addr_found = None;
         let mut need_un_register = false;
         for (broker_addr_info, broker_live_info) in self.broker_live_table.as_ref() {
-            if broker_live_info.channel_id == channel.channel_id() {
+            if broker_live_info.channel_id.as_str() == channel.channel_id() {
                 broker_addr_found = Some(broker_addr_info.clone());
                 break;
             }
