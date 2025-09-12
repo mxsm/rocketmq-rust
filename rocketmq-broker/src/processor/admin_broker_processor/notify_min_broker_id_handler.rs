@@ -162,7 +162,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         }
 
         //master online
-        if min_broker_id == MASTER_ID || !min_broker_addr.is_empty() {
+        if min_broker_id == MASTER_ID && !min_broker_addr.is_empty() {
             self.on_master_on_line(min_broker_addr, master_ha_addr)
                 .await;
         }
