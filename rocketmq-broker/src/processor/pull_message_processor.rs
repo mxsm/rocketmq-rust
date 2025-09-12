@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
@@ -42,6 +43,7 @@ use rocketmq_remoting::rpc::rpc_client::RpcClient;
 use rocketmq_remoting::rpc::rpc_client_utils::RpcClientUtils;
 use rocketmq_remoting::rpc::rpc_request::RpcRequest;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::processor::RejectRequestResponse;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
@@ -108,6 +110,21 @@ where
                 Ok(Some(response.set_opaque(request.opaque())))
             }
         }
+    }
+
+    fn reject_request(&self, _code: i32) -> RejectRequestResponse {
+        if !self.broker_runtime_inner.broker_config().slave_read_enable
+            && self.broker_runtime_inner.message_store_config().broker_role == BrokerRole::Slave
+        {
+            return (
+                true,
+                Some(RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SlaveNotAvailable,
+                    "the slave broker not allow to read",
+                )),
+            );
+        }
+        (false, None)
     }
 }
 
