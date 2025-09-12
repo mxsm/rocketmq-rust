@@ -45,7 +45,7 @@ impl<MS: MessageStore> UpdateBrokerHaHandler<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let exchange_request_header = request
             .decode_command_custom_header::<ExchangeHAInfoRequestHeader>()
