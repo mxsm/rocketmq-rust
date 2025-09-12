@@ -33,6 +33,7 @@ use crate::processor::admin_broker_processor::notify_min_broker_id_handler::Noti
 use crate::processor::admin_broker_processor::offset_request_handler::OffsetRequestHandler;
 use crate::processor::admin_broker_processor::subscription_group_handler::SubscriptionGroupHandler;
 use crate::processor::admin_broker_processor::topic_request_handler::TopicRequestHandler;
+use crate::processor::admin_broker_processor::update_broker_ha_handler::UpdateBrokerHaHandler;
 
 mod batch_mq_handler;
 mod broker_config_request_handler;
@@ -41,6 +42,7 @@ mod notify_min_broker_id_handler;
 mod offset_request_handler;
 mod subscription_group_handler;
 mod topic_request_handler;
+mod update_broker_ha_handler;
 
 pub struct AdminBrokerProcessor<MS: MessageStore> {
     topic_request_handler: TopicRequestHandler<MS>,
@@ -53,6 +55,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 
     notify_min_broker_handler: NotifyMinBrokerChangeIdHandler<MS>,
+    update_broker_ha_handler: UpdateBrokerHaHandler<MS>,
 }
 
 impl<MS> RequestProcessor for AdminBrokerProcessor<MS>
@@ -85,6 +88,9 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
 
         let notify_min_broker_handler =
             NotifyMinBrokerChangeIdHandler::new(broker_runtime_inner.clone());
+
+        let update_broker_ha_handler = UpdateBrokerHaHandler::new(broker_runtime_inner.clone());
+
         AdminBrokerProcessor {
             topic_request_handler,
             broker_config_request_handler,
@@ -94,6 +100,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             subscription_group_handler,
             broker_runtime_inner,
             notify_min_broker_handler,
+            update_broker_ha_handler,
         }
     }
 }
@@ -223,6 +230,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             RequestCode::NotifyMinBrokerIdChange => {
                 self.notify_min_broker_handler
                     .notify_min_broker_id_change(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::ExchangeBrokerHaInfo => {
+                self.update_broker_ha_handler
+                    .update_broker_ha_info(channel, ctx, request_code, request)
                     .await
             }
             _ => Some(get_unknown_cmd_response(request_code)),
