@@ -90,6 +90,10 @@ impl Channel {
         self.channel_id.as_str()
     }
 
+    pub fn channel_id_owned(&self) -> CheetahString {
+        self.channel_id.clone()
+    }
+
     #[inline]
     pub fn upgrade(&self) -> Option<ArcMut<ChannelInner>> {
         self.inner.upgrade()

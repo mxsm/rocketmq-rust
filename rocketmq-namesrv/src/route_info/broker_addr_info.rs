@@ -4,6 +4,7 @@ use std::fmt::Formatter;
 use std::net::SocketAddr;
 
 use cheetah_string::CheetahString;
+use rocketmq_remoting::net::channel::ChannelId;
 use rocketmq_remoting::protocol::DataVersion;
 use serde::Deserialize;
 use serde::Serialize;
@@ -108,6 +109,7 @@ pub(crate) struct BrokerLiveInfo {
     pub data_version: DataVersion,
     pub ha_server_addr: CheetahString,
     pub remote_addr: SocketAddr,
+    pub channel_id: ChannelId,
 }
 
 impl BrokerLiveInfo {
@@ -117,6 +119,7 @@ impl BrokerLiveInfo {
         data_version: DataVersion,
         ha_server_addr: CheetahString,
         remote_addr: SocketAddr,
+        channel_id: ChannelId,
     ) -> Self {
         Self {
             last_update_timestamp,
@@ -124,6 +127,7 @@ impl BrokerLiveInfo {
             data_version,
             ha_server_addr,
             remote_addr,
+            channel_id,
         }
     }
 
@@ -141,6 +145,10 @@ impl BrokerLiveInfo {
 
     pub fn ha_server_addr(&self) -> &CheetahString {
         &self.ha_server_addr
+    }
+
+    pub fn channel_id(&self) -> &ChannelId {
+        &self.channel_id
     }
 }
 
