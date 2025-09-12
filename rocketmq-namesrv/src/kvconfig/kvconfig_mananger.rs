@@ -19,9 +19,10 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
-use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::FileUtils;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
+use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_rust::ArcMut;
 use tracing::error;
@@ -82,7 +83,7 @@ impl KVConfigManager {
 
 impl KVConfigManager {
     /// Loads key-value configurations from a file.
-    pub fn load(&mut self) {
+    pub fn load(&mut self) -> RocketMQResult<()> {
         let result = FileUtils::file_to_string(
             self.name_server_runtime_inner
                 .name_server_config()
@@ -90,8 +91,10 @@ impl KVConfigManager {
                 .as_str(),
         );
         if let Ok(content) = result {
-            let wrapper =
-                SerdeJsonUtils::decode::<KVConfigSerializeWrapper>(content.as_bytes()).unwrap();
+            if content.is_empty() {
+                return Ok(());
+            }
+            let wrapper = KVConfigSerializeWrapper::decode(content.as_bytes())?;
             if let Some(config_table) = wrapper.config_table {
                 for (key, value) in config_table {
                     self.config_table.insert(key, value);
@@ -99,6 +102,7 @@ impl KVConfigManager {
                 info!("load KV config success");
             }
         }
+        Ok(())
     }
 
     /// Updates the Namesrv configuration.

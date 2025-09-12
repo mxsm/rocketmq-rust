@@ -61,7 +61,7 @@ where
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!(
@@ -120,13 +120,13 @@ where
         channel: Channel,
         ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
-        let request_header = parse_request_header(&request);
+        let request_header = parse_request_header(request);
         let mut request_header = request_header.unwrap(); //need to optimize
         let mut mqtrace_context =
             self.inner
-                .build_msg_context(&channel, &ctx, &mut request_header, &request);
+                .build_msg_context(&channel, &ctx, &mut request_header, request);
         self.inner
             .execute_send_message_hook_before(&mqtrace_context);
 
@@ -149,7 +149,7 @@ where
         &mut self,
         ctx: &ConnectionHandlerContext,
         channel: &Channel,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
         send_message_context: &mut SendMessageContext,
         request_header: SendMessageRequestHeader,
     ) -> RemotingCommand {
@@ -184,7 +184,7 @@ where
         }
         response.set_code_mut(-1);
         self.inner
-            .msg_check(channel, ctx, &request, &request_header, &mut response);
+            .msg_check(channel, ctx, request, &request_header, &mut response);
         if response.code() != -1 {
             return response;
         }
@@ -243,7 +243,7 @@ where
                 .await;
             self.handle_put_message_result(
                 put_message_result,
-                &request,
+                request,
                 &mut response_header,
                 send_message_context,
                 queue_id_int,

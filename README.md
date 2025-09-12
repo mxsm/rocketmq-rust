@@ -47,7 +47,7 @@ language.
 
 ### Document
 
-- **`Manual official documentation`**：[Rocketmq-rust website](https://rocketmq-rust.ljbmxsm.com/)
+- **`Manual official documentation`**：[Rocketmq-rust website](https://rocketmqrust.com)
 - **`AI documentation`**: [Rocketmq-rust Deepwiki](https://deepwiki.com/mxsm/rocketmq-rust)
 
 ## Getting Started
@@ -179,7 +179,7 @@ will be carried out sequentially in the following order.
 
 Contributions to code, issue reporting, and suggestions are welcome. The development of RocketMQ-Rust relies on the
 support of developers. Let's collaborate to advance Rust in the message middleware
-domain. [**`Contribute Guide`**](https://rocketmq-rust.ljbmxsm.com/docs/contribute-guide/)
+domain. [**`Contribute Guide`**](https://rocketmqrust.com/docs/contribute-guide/)
 
 ![](https://repobeats.axiom.co/api/embed/6ca125de92b36e1f78c6681d0a1296b8958adea1.svg "Repobeats analytics image")
 

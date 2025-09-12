@@ -70,6 +70,7 @@ use rocketmq_common::TimeUtils;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_remoting::protocol::body::topic::topic_list::TopicList;
@@ -163,7 +164,7 @@ impl RouteInfoManager {
         enable_acting_master: Option<bool>,
         topic_config_serialize_wrapper: TopicConfigAndMappingSerializeWrapper,
         filter_server_list: Vec<CheetahString>,
-        remote_addr: SocketAddr,
+        channel: Channel,
     ) -> Option<RegisterBrokerResult> {
         let mut result = RegisterBrokerResult::default();
         let _write = self.lock.write();
@@ -367,7 +368,8 @@ impl RouteInfoManager {
                     .data_version()
                     .clone(),
                 ha_server_addr,
-                remote_addr,
+                channel.remote_address(),
+                channel.channel_id_owned(),
             ),
         );
         if filter_server_list.is_empty() {
@@ -438,7 +440,10 @@ impl RouteInfoManager {
         // Acquire read lock
         let lock = self.lock.read();
         if let Some(queue_data_map) = self.topic_queue_table.get(topic) {
-            topic_route_data.queue_datas = queue_data_map.values().cloned().collect();
+            topic_route_data
+                .queue_datas
+                .extend(queue_data_map.values().cloned().collect::<Vec<_>>());
+
             found_queue_data = true;
 
             for broker_name in queue_data_map.keys() {
@@ -511,9 +516,8 @@ impl RouteInfoManager {
                 for queue_data in &topic_route_data.queue_datas {
                     if queue_data.broker_name() == broker_data.broker_name() {
                         if !PermName::is_writeable(queue_data.perm()) {
-                            if let Some(min_broker_id) =
-                                broker_data.broker_addrs().keys().cloned().min()
-                            {
+                            if let Some(min_broker_id) = broker_data.broker_addrs().keys().min() {
+                                let min_broker_id = *min_broker_id;
                                 if let Some(acting_master_addr) =
                                     broker_data.broker_addrs_mut().remove(&min_broker_id)
                                 {
@@ -1182,6 +1186,32 @@ impl RouteInfoManager {
             if need_un_register {
                 self.un_register_broker(vec![request_header]);
             }
+        }
+    }
+
+    pub fn on_channel_destroy(&self, channel: &Channel) {
+        let lock = self.lock.read();
+        let mut un_register_request = UnRegisterBrokerRequestHeader::default();
+        let mut broker_addr_found = None;
+        let mut need_un_register = false;
+        for (broker_addr_info, broker_live_info) in self.broker_live_table.as_ref() {
+            if broker_live_info.channel_id.as_str() == channel.channel_id() {
+                broker_addr_found = Some(broker_addr_info.clone());
+                break;
+            }
+        }
+        if let Some(broker_addr_info) = &mut broker_addr_found {
+            need_un_register =
+                self.setup_un_register_request(&mut un_register_request, broker_addr_info);
+        }
+        drop(lock);
+        if need_un_register {
+            let result = self.submit_unregister_broker_request(un_register_request.clone());
+            info!(
+                "the broker's channel destroyed, submit the unregister request at once, broker \
+                 info: {}, submit result: {}",
+                un_register_request, result
+            );
         }
     }
 }

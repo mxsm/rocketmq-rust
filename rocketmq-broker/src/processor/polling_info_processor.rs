@@ -28,7 +28,7 @@ impl RequestProcessor for PollingInfoProcessor {
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
-        _request: RemotingCommand,
+        _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         unimplemented!("RequestProcessor.process_request for PollingInfoProcessor not implemented")
     }
@@ -40,7 +40,7 @@ impl PollingInfoProcessor {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        _request: RemotingCommand,
+        _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         todo!()
     }

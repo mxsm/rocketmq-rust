@@ -4,6 +4,7 @@ use std::fmt::Formatter;
 use std::net::SocketAddr;
 
 use cheetah_string::CheetahString;
+use rocketmq_remoting::net::channel::ChannelId;
 use rocketmq_remoting::protocol::DataVersion;
 use serde::Deserialize;
 use serde::Serialize;
@@ -108,6 +109,7 @@ pub(crate) struct BrokerLiveInfo {
     pub data_version: DataVersion,
     pub ha_server_addr: CheetahString,
     pub remote_addr: SocketAddr,
+    pub channel_id: ChannelId,
 }
 
 impl BrokerLiveInfo {
@@ -117,6 +119,7 @@ impl BrokerLiveInfo {
         data_version: DataVersion,
         ha_server_addr: CheetahString,
         remote_addr: SocketAddr,
+        channel_id: ChannelId,
     ) -> Self {
         Self {
             last_update_timestamp,
@@ -124,6 +127,7 @@ impl BrokerLiveInfo {
             data_version,
             ha_server_addr,
             remote_addr,
+            channel_id,
         }
     }
 
@@ -142,6 +146,10 @@ impl BrokerLiveInfo {
     pub fn ha_server_addr(&self) -> &CheetahString {
         &self.ha_server_addr
     }
+
+    pub fn channel_id(&self) -> &ChannelId {
+        &self.channel_id
+    }
 }
 
 #[cfg(test)]
@@ -150,6 +158,8 @@ mod tests {
     use std::net::IpAddr;
     use std::net::Ipv4Addr;
     use std::net::SocketAddr;
+
+    use rocketmq_common::utils::correlation_id_util::CorrelationIdUtil;
 
     use super::*;
 
@@ -184,6 +194,7 @@ mod tests {
             data_version.clone(),
             "192.168.1.4".into(),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 5)), 8080),
+            CorrelationIdUtil::create_correlation_id().into(),
         );
         assert_eq!(broker_live_info.last_update_timestamp(), 1000);
         assert_eq!(broker_live_info.heartbeat_timeout_millis(), 2000);

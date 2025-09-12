@@ -88,7 +88,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
     async fn handle(
         &self,
         mut get_message_result: GetMessageResult,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
         request_header: PullMessageRequestHeader,
         channel: Channel,
         ctx: ConnectionHandlerContext,
@@ -116,7 +116,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
         );
         let code = From::from(response.code());
         self.execute_consume_message_hook_before(
-            &request,
+            request,
             &request_header,
             &get_message_result,
             broker_allow_suspend,
@@ -232,7 +232,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                     let offset = request_header.queue_offset;
 
                     let pull_request = PullRequest::new(
-                        request,
+                        request.clone(),
                         channel,
                         ctx,
                         polling_time_mills,

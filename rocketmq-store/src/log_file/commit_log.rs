@@ -255,7 +255,11 @@ impl CommitLog {
     pub fn load(&mut self) -> bool {
         let result = self.mapped_file_queue.load();
         self.mapped_file_queue.check_self();
-        info!("load commit log {}", if result { "OK" } else { "Failed" });
+        if result {
+            info!("load commit log Ok");
+        } else {
+            error!("load commit log failed");
+        }
         result
     }
 

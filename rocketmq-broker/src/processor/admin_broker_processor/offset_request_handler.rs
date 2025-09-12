@@ -54,7 +54,7 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let request_header = request
             .decode_command_custom_header::<GetMaxOffsetRequestHeader>()
@@ -89,7 +89,7 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let request_header = request
             .decode_command_custom_header::<GetMinOffsetRequestHeader>()
@@ -283,7 +283,7 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        _request: RemotingCommand,
+        _request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut response_command = RemotingCommand::create_response_command();
         let content = self
@@ -306,7 +306,7 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        _request: RemotingCommand,
+        _request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut response_command = RemotingCommand::create_response_command();
         let content = self

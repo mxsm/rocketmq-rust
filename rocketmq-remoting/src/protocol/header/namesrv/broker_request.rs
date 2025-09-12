@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::fmt::Display;
 
 use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodec;
@@ -34,6 +35,17 @@ pub struct UnRegisterBrokerRequestHeader {
 
     #[required]
     pub broker_id: u64,
+}
+
+impl Display for UnRegisterBrokerRequestHeader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "UnRegisterBrokerRequestHeader {{ brokerName: {}, brokerAddr: {}, clusterName: {}, \
+             brokerId: {} }}",
+            self.broker_name, self.broker_addr, self.cluster_name, self.broker_id
+        )
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]

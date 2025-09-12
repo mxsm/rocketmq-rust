@@ -44,7 +44,7 @@ impl RequestProcessor for NameServerRequestProcessorWrapper {
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match self {
             NameServerRequestProcessorWrapper::ClientRequestProcessor(processor) => {
@@ -102,7 +102,7 @@ impl RequestProcessor for NameServerRequestProcessor {
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match self.processor_table.get_mut(request.code_ref()) {
             None => match self.default_request_processor.as_mut() {

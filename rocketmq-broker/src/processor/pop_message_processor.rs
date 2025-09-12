@@ -168,7 +168,7 @@ where
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         self._process_request(channel, ctx, request_code, request)
@@ -185,7 +185,7 @@ where
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
-        mut request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let begin_time_mills = get_current_millis();
         request.add_ext_field_if_not_exist(

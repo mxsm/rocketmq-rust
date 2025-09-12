@@ -54,7 +54,7 @@ impl<MS: MessageStore> BatchMqHandler<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut request_body = LockBatchRequestBody::decode(request.get_body().unwrap()).unwrap();
         let mut lock_ok_mqset = HashSet::new();
@@ -154,7 +154,7 @@ impl<MS: MessageStore> BatchMqHandler<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let mut request_body = UnlockBatchRequestBody::decode(request.get_body().unwrap()).unwrap();
         if request_body.only_this_broker

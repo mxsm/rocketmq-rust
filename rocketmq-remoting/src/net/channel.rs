@@ -35,12 +35,14 @@ use crate::base::response_future::ResponseFuture;
 use crate::connection::Connection;
 use crate::protocol::remoting_command::RemotingCommand;
 
+pub type ChannelId = CheetahString;
+
 #[derive(Clone)]
 pub struct Channel {
     inner: WeakArcMut<ChannelInner>,
     local_address: SocketAddr,
     remote_address: SocketAddr,
-    channel_id: CheetahString,
+    channel_id: ChannelId,
 }
 
 impl Channel {
@@ -86,6 +88,10 @@ impl Channel {
     #[inline]
     pub fn channel_id(&self) -> &str {
         self.channel_id.as_str()
+    }
+
+    pub fn channel_id_owned(&self) -> CheetahString {
+        self.channel_id.clone()
     }
 
     #[inline]

@@ -16,7 +16,6 @@
  */
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::FAQUrl;
@@ -47,16 +46,17 @@ impl RequestProcessor for ClientRequestProcessor {
     #[inline]
     async fn process_request(
         &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!(
             "Name server ClientRequestProcessor Received request code: {:?}",
             request_code
         );
-        self.process_request_inner(channel, ctx, request_code, request)
+
+        self.get_route_info_by_topic(request)
     }
 }
 
@@ -69,45 +69,31 @@ impl ClientRequestProcessor {
         }
     }
 
-    #[inline]
-    fn process_request_inner(
-        &mut self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        _request_code: RequestCode,
-        request: RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.get_route_info_by_topic(request)
-    }
-
     fn get_route_info_by_topic(
         &self,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<GetRouteInfoRequestHeader>()?;
-        let namesrv_ready = self.need_check_namesrv_ready.load(Ordering::Relaxed)
-            && TimeUtils::get_current_millis() - self.startup_time_millis
-                >= Duration::from_secs(
-                    self.name_server_runtime_inner
-                        .name_server_config()
-                        .wait_seconds_for_service as u64,
-                )
-                .as_millis() as u64;
-        if self
+        let wait_seconds = self
             .name_server_runtime_inner
             .name_server_config()
-            .need_wait_for_service
-            && !namesrv_ready
-        {
-            warn!(
-                "name remoting_server not ready. request code {} ",
-                request.code()
-            );
+            .wait_seconds_for_service as u64;
+        let elapsed_millis =
+            TimeUtils::get_current_millis().saturating_sub(self.startup_time_millis);
+        let namesrv_ready = self.need_check_namesrv_ready.load(Ordering::Relaxed)
+            && elapsed_millis >= wait_seconds * 1000;
+
+        let need_wait_for_service = self
+            .name_server_runtime_inner
+            .name_server_config()
+            .need_wait_for_service;
+        if need_wait_for_service && !namesrv_ready {
+            warn!("name server not ready. request code {} ", request.code());
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code(
                     RemotingSysResponseCode::SystemError,
                 )
-                .set_remark("name remoting_server not ready"),
+                .set_remark("name server not ready"),
             ));
         }
         match self
@@ -118,7 +104,7 @@ impl ClientRequestProcessor {
             None => Ok(Some(
                 RemotingCommand::create_response_command_with_code(ResponseCode::TopicNotExist)
                     .set_remark(format!(
-                        "No topic route info in name remoting_server for the topic:{}{}",
+                        "No topic route info in name server for the topic:{}{}",
                         request_header.topic,
                         FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
                     )),
@@ -143,15 +129,7 @@ impl ClientRequestProcessor {
                         );
                     topic_route_data.order_topic_conf = order_topic_config;
                 };
-                /*let standard_json_only = request_header.accept_standard_json_only.unwrap_or(false);
-                let content = if request.version() >= RocketMqVersion::into(RocketMqVersion::V494)
-                    || standard_json_only
-                {
-                    //topic_route_data.encode()
-                    topic_route_data.encode()
-                } else {
-                    topic_route_data.encode()
-                };*/
+                //Rust only support standard JSON serialization
                 let content = topic_route_data.encode()?;
                 Ok(Some(
                     RemotingCommand::create_response_command_with_code(ResponseCode::Success)

@@ -29,7 +29,7 @@ pub trait LocalRequestProcessor {
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>>;
 
     fn reject_request(&self, _code: i32) -> RejectRequestResponse {

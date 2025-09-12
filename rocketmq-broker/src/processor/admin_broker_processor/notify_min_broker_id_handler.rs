@@ -70,7 +70,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
         let change_header = request
             .decode_command_custom_header::<NotifyMinBrokerIdChangeRequestHeader>()
@@ -180,7 +180,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
 
         if let Some(slave_synchronize) = broker_runtime_inner.slave_synchronize() {
             if let Some(_master_addr) = slave_synchronize.master_addr() {
-                unimplemented!("Call the close client method")
+                // Call the close client method
             }
         }
 

@@ -22,6 +22,7 @@ use std::time::Instant;
 use cheetah_string::CheetahString;
 use rand::Rng;
 use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
+use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
@@ -65,6 +66,7 @@ use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::processor::RejectRequestResponse;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
@@ -98,7 +100,7 @@ where
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
         info!(
@@ -127,6 +129,42 @@ where
             }
         }
     }
+
+    fn reject_request(&self, _code: i32) -> RejectRequestResponse {
+        let enable_slave_acting_master = self
+            .inner
+            .broker_runtime_inner
+            .broker_config()
+            .enable_slave_acting_master;
+        let broker_role = self
+            .inner
+            .broker_runtime_inner
+            .message_store_config()
+            .broker_role;
+        if !enable_slave_acting_master && broker_role == BrokerRole::Slave {
+            return (
+                true,
+                Some(RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SlaveNotAvailable,
+                    "The broker is slave mode, not allowed to accept message",
+                )),
+            );
+        }
+        let message_store = self.inner.broker_runtime_inner.message_store_unchecked();
+        if message_store.is_os_page_cache_busy()
+            || message_store.is_transient_store_pool_deficient()
+        {
+            return (
+                true,
+                Some(RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemBusy,
+                    "The broker message store is busy, please try again later",
+                )),
+            );
+        }
+
+        (false, None)
+    }
 }
 
 // RequestProcessor implementation
@@ -153,16 +191,16 @@ where
         channel: Channel,
         mut ctx: ConnectionHandlerContext,
         request_code: RequestCode,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match request_code {
             RequestCode::ConsumerSendMsgBack => {
                 self.inner
-                    .consumer_send_msg_back(&channel, &ctx, &request)
+                    .consumer_send_msg_back(&channel, &ctx, request)
                     .await
             }
             _ => {
-                let mut request_header = parse_request_header(&request, request_code)?;
+                let mut request_header = parse_request_header(request, request_code)?;
                 let mapping_context = self
                     .inner
                     .broker_runtime_inner
@@ -178,7 +216,7 @@ where
 
                 let send_message_context =
                     self.inner
-                        .build_msg_context(&channel, &ctx, &mut request_header, &request);
+                        .build_msg_context(&channel, &ctx, &mut request_header, request);
                 self.inner
                     .execute_send_message_hook_before(&send_message_context);
                 SendMessageProcessor::<MS, TS>::clear_reserved_properties(&mut request_header);
@@ -243,7 +281,7 @@ where
         &mut self,
         channel: &Channel,
         ctx: &mut ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
         mut send_message_context: SendMessageContext,
         request_header: SendMessageRequestHeader,
         mut mapping_context: TopicQueueMappingContext,
@@ -414,7 +452,7 @@ where
                 .handle_put_message_result(
                     put_message_result,
                     &mut response,
-                    &request,
+                    request,
                     topic.as_ref(),
                     transaction_id,
                     &mut send_message_context,
@@ -451,7 +489,7 @@ where
                 .handle_put_message_result(
                     put_message_result,
                     &mut response,
-                    &request,
+                    request,
                     topic.as_str(),
                     transaction_id,
                     &mut send_message_context,
@@ -477,7 +515,7 @@ where
         &mut self,
         channel: &Channel,
         ctx: &mut ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
         mut send_message_context: SendMessageContext,
         request_header: SendMessageRequestHeader,
         mut mapping_context: TopicQueueMappingContext,
@@ -513,7 +551,7 @@ where
         if !self.handle_retry_and_dlq(
             &request_header,
             &mut response,
-            &request,
+            request,
             &mut message_ext.message_ext_inner,
             &mut topic_config,
             &mut ori_props,
@@ -636,7 +674,7 @@ where
                 .handle_put_message_result(
                     put_message_result,
                     &mut response,
-                    &request,
+                    request,
                     topic.as_str(),
                     transaction_id,
                     &mut send_message_context,
@@ -672,7 +710,7 @@ where
                 .handle_put_message_result(
                     put_message_result,
                     &mut response,
-                    &request,
+                    request,
                     topic.as_str(),
                     transaction_id,
                     &mut send_message_context,

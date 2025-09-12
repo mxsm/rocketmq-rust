@@ -29,8 +29,8 @@ impl RequestProcessor for DefaultRemotingRequestProcessor {
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
-        request: RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        Ok(Some(request))
+        Ok(Some(request.clone()))
     }
 }
