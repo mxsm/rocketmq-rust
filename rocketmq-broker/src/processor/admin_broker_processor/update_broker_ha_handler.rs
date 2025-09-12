@@ -29,6 +29,7 @@ use tracing::info;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 
+#[derive(Clone)]
 pub struct UpdateBrokerHaHandler<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
