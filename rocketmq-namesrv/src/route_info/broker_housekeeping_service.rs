@@ -17,7 +17,6 @@
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_rust::ArcMut;
-use tracing::warn;
 
 use crate::bootstrap::NameServerRuntimeInner;
 
@@ -40,18 +39,24 @@ impl ChannelEventListener for BrokerHousekeepingService {
     }
 
     #[inline]
-    fn on_channel_close(&self, _remote_addr: &str, _channel: &Channel) {
-        warn!("warning: on_channel_close is not implemented(Controller mode)");
+    fn on_channel_close(&self, _remote_addr: &str, channel: &Channel) {
+        self.name_server_runtime_inner
+            .route_info_manager()
+            .on_channel_destroy(channel)
     }
 
     #[inline]
-    fn on_channel_exception(&self, _remote_addr: &str, _channel: &Channel) {
-        warn!("warning: on_channel_exception is not implemented(Controller mode)");
+    fn on_channel_exception(&self, _remote_addr: &str, channel: &Channel) {
+        self.name_server_runtime_inner
+            .route_info_manager()
+            .on_channel_destroy(channel)
     }
 
     #[inline]
-    fn on_channel_idle(&self, _remote_addr: &str, _channel: &Channel) {
-        warn!("warning: on_channel_idle is not implemented(Controller mode)");
+    fn on_channel_idle(&self, _remote_addr: &str, channel: &Channel) {
+        self.name_server_runtime_inner
+            .route_info_manager()
+            .on_channel_destroy(channel)
     }
 
     #[inline]

@@ -17,7 +17,6 @@
 
 use core::str;
 use std::collections::HashMap;
-use std::net::SocketAddr;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::mix_all;
@@ -99,9 +98,7 @@ impl DefaultRequestProcessor {
             RequestCode::DeleteKvConfig => self.delete_kv_config(request),
             RequestCode::QueryDataVersion => self.query_broker_topic_config(request),
             //handle register broker
-            RequestCode::RegisterBroker => {
-                self.process_register_broker(channel.remote_address(), request)
-            }
+            RequestCode::RegisterBroker => self.process_register_broker(channel, request),
             RequestCode::UnregisterBroker => self.process_unregister_broker(request),
             RequestCode::BrokerHeartbeat => self.process_broker_heartbeat(request),
             RequestCode::GetBrokerMemberGroup => self.get_broker_member_group(request),
@@ -241,7 +238,7 @@ impl DefaultRequestProcessor {
 impl DefaultRequestProcessor {
     fn process_register_broker(
         &mut self,
-        remote_addr: SocketAddr,
+        channel: Channel,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let request_header =
@@ -282,7 +279,7 @@ impl DefaultRequestProcessor {
                 request_header.enable_acting_master,
                 topic_config_wrapper,
                 filter_server_list,
-                remote_addr,
+                channel,
             );
         if result.is_none() {
             return Ok(response_command
