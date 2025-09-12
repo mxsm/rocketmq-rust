@@ -46,8 +46,8 @@ impl RequestProcessor for ClientRequestProcessor {
     #[inline]
     async fn process_request(
         &mut self,
-        channel: Channel,
-        ctx: ConnectionHandlerContext,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
@@ -55,7 +55,8 @@ impl RequestProcessor for ClientRequestProcessor {
             "Name server ClientRequestProcessor Received request code: {:?}",
             request_code
         );
-        self.process_request_inner(channel, ctx, request_code, request)
+
+        self.get_route_info_by_topic(request)
     }
 }
 
@@ -66,17 +67,6 @@ impl ClientRequestProcessor {
             startup_time_millis: TimeUtils::get_current_millis(),
             name_server_runtime_inner,
         }
-    }
-
-    #[inline]
-    fn process_request_inner(
-        &mut self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        _request_code: RequestCode,
-        request: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.get_route_info_by_topic(request)
     }
 
     fn get_route_info_by_topic(
