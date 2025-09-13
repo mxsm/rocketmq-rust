@@ -45,14 +45,14 @@ pub struct NotifyMinBrokerChangeIdHandler<MS: MessageStore> {
 #[derive(Clone)]
 struct MinBrokerIngroup {
     min_broker_id_in_group: Option<u64>,
-    min_broker_addr_in_group: CheetahString,
+    min_broker_addr_in_group: Arc<CheetahString>,
 }
 
 impl MinBrokerIngroup {
     fn new() -> Self {
         Self {
             min_broker_id_in_group: Some(MASTER_ID),
-            min_broker_addr_in_group: CheetahString::empty(),
+            min_broker_addr_in_group: Arc::new(CheetahString::empty()),
         }
     }
 }
@@ -109,16 +109,13 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
                 if let Some(min_broker_id) = change_header.min_broker_id {
                     if min_broker_id != self.broker_runtime_inner.get_min_broker_id_in_group() {
                         // on min broker change
-                        let min_broker_id = change_header.min_broker_id.unwrap();
                         let min_broker_addr = change_header.min_broker_addr.as_deref().unwrap();
-                        let offline_broker_addr = &change_header.offline_broker_addr;
-                        let master_ha_addr = &change_header.ha_broker_addr;
 
                         self.on_min_broker_change(
                             min_broker_id,
                             min_broker_addr,
-                            offline_broker_addr,
-                            master_ha_addr,
+                            &change_header.offline_broker_addr,
+                            &change_header.ha_broker_addr,
                         )
                         .await;
                     }
@@ -146,7 +143,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
 
         let mut lock_guard = self.lock.write().await;
         lock_guard.min_broker_id_in_group = Some(min_broker_id);
-        lock_guard.min_broker_addr_in_group = CheetahString::from_slice(min_broker_addr);
+        lock_guard.min_broker_addr_in_group = Arc::new(CheetahString::from_slice(min_broker_addr));
 
         let should_start = self.broker_runtime_inner.get_min_broker_id_in_group()
             == self.lock.read().await.min_broker_id_in_group.unwrap();
@@ -157,7 +154,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         if let Some(offline_broker_addr) = offline_broker_addr {
             if let Some(slave_sync) = self.broker_runtime_inner.slave_synchronize() {
                 if let Some(master_addr) = slave_sync.master_addr() {
-                    if offline_broker_addr.eq(master_addr.deref()) {
+                    if !master_addr.is_empty() && offline_broker_addr.eq(master_addr.deref()) {
                         self.on_master_offline().await;
                     }
                 }
@@ -165,7 +162,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         }
 
         //master online
-        if min_broker_id == MASTER_ID || !min_broker_addr.is_empty() {
+        if min_broker_id == MASTER_ID && !min_broker_addr.is_empty() {
             self.on_master_on_line(min_broker_addr, master_ha_addr)
                 .await;
         }
@@ -227,7 +224,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         self.lock.read().await.min_broker_id_in_group
     }
 
-    pub async fn get_min_broker_addr_in_group(&self) -> CheetahString {
+    pub async fn get_min_broker_addr_in_group(&self) -> Arc<CheetahString> {
         self.lock.read().await.min_broker_addr_in_group.clone()
     }
 }
