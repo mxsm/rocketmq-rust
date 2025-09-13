@@ -14,9 +14,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  */
-use std::ffi::c_void;
 
-use libc::c_uchar;
 use rocketmq_error::RocketMQResult;
 use rocketmq_error::RocketmqError;
 
@@ -34,10 +32,20 @@ pub fn get_page_size() -> usize {
 pub fn mlock(addr: *const u8, len: usize) -> RocketMQResult<()> {
     #[cfg(unix)]
     {
+        use std::ffi::c_void;
         let result = unsafe { libc::mlock(addr as *const c_void, len) };
         if result != 0 {
             return Err(RocketmqError::StoreCustomError("mlock failed".to_string()));
         }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::Memory::VirtualLock;
+        // Windows does not have mlock, so we just return Ok
+        let result = unsafe { VirtualLock(addr as _, len) };
+        result.map_err(|e| RocketmqError::StoreCustomError(e.to_string()))?;
         Ok(())
     }
 }
@@ -46,6 +54,8 @@ pub fn mlock(addr: *const u8, len: usize) -> RocketMQResult<()> {
 pub fn munlock(addr: *const u8, len: usize) -> RocketMQResult<()> {
     #[cfg(unix)]
     {
+        use std::ffi::c_void;
+
         let result = unsafe { libc::munlock(addr as *const c_void, len) };
         if result != 0 {
             return Err(RocketmqError::StoreCustomError(
@@ -54,18 +64,42 @@ pub fn munlock(addr: *const u8, len: usize) -> RocketMQResult<()> {
         }
         Ok(())
     }
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::Memory::VirtualUnlock;
+
+        // Windows does not have munlock, so we just return Ok
+        let result = unsafe { VirtualUnlock(addr as _, len) };
+        result.map_err(|e| RocketmqError::StoreCustomError(e.to_string()))?;
+        Ok(())
+    }
 }
 
 pub fn madvise(addr: *const u8, len: usize, advice: i32) -> i32 {
     #[cfg(unix)]
     {
+        use std::ffi::c_void;
         unsafe { libc::madvise(addr as *mut c_void, len, advice) }
+    }
+    #[cfg(windows)]
+    {
+        // Windows does not have madvise, so we just return 0
+        0
     }
 }
 
 pub fn mincore(addr: *const u8, len: usize, vec: *const u8) -> i32 {
     #[cfg(unix)]
     {
+        use std::ffi::c_void;
+
+        use libc::c_uchar;
+
         unsafe { libc::mincore(addr as *mut c_void, len, vec as *mut c_uchar) }
+    }
+    #[cfg(windows)]
+    {
+        // Windows does not have mincore, so we just return 0
+        0
     }
 }
