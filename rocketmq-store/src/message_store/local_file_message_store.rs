@@ -66,6 +66,7 @@ use rocketmq_common::FileUtils::string_to_file;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::UtilAll::ensure_dir_ok;
+use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
@@ -702,7 +703,10 @@ impl MessageStore for LocalFileMessageStore {
         }
 
         if self.is_transient_store_pool_enable() {
-            self.transient_store_pool.init();
+            match self.transient_store_pool.init() {
+                Ok(_) => {}
+                Err(e) => return Err(StoreError::General(e.to_string())),
+            }
         }
         Ok(())
     }
@@ -744,7 +748,7 @@ impl MessageStore for LocalFileMessageStore {
             }
         }
 
-        self.transient_store_pool.destroy();
+        let _ = self.transient_store_pool.destroy();
     }
 
     fn destroy(&mut self) {

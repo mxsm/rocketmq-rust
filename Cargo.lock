@@ -1788,6 +1788,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "page_size"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30d5b2194ed13191c1999ae0704b7839fb18384fa22e49b57eeaa97d79ce40da"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "papergrid"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2451,9 +2461,11 @@ dependencies = [
  "libc",
  "memmap2",
  "once_cell",
+ "page_size",
  "parking_lot",
  "rand",
  "rocketmq-common",
+ "rocketmq-error",
  "rocketmq-remoting",
  "rocketmq-rust",
  "serde",

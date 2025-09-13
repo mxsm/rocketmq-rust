@@ -155,6 +155,9 @@ pub enum RocketmqError {
 
     #[error("{0}")]
     ServiceTaskError(#[from] ServiceError),
+
+    #[error("{0}")]
+    StoreCustomError(String),
 }
 
 #[derive(Error, Debug)]
