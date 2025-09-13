@@ -15,4 +15,5 @@
  * limitations under the License.
  */
 
+pub(crate) mod ffi;
 pub(crate) mod store_util;

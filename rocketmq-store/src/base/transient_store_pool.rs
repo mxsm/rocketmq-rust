@@ -17,15 +17,19 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::Mutex;
 
+use parking_lot::Mutex;
+use rocketmq_error::RocketMQResult;
 use tracing::warn;
+
+use crate::utils::ffi::mlock;
+use crate::utils::ffi::munlock;
 
 pub struct TransientStorePool {
     pool_size: usize,
     file_size: usize,
-    available_buffers: Arc<Mutex<VecDeque<Vec<u8>>>>,
-    is_real_commit: Arc<Mutex<bool>>,
+    available_buffers: Arc<parking_lot::Mutex<VecDeque<Vec<u8>>>>,
+    is_real_commit: Arc<parking_lot::Mutex<bool>>,
 }
 
 impl TransientStorePool {
@@ -40,26 +44,31 @@ impl TransientStorePool {
         }
     }
 
-    pub fn init(&self) {
-        let mut available_buffers = self.available_buffers.lock().unwrap();
+    pub fn init(&self) -> RocketMQResult<()> {
+        let mut available_buffers = self.available_buffers.lock();
         for _ in 0..self.pool_size {
             let buffer = vec![0u8; self.file_size];
+            mlock(buffer.as_ptr(), self.file_size)?;
             available_buffers.push_back(buffer);
         }
+        Ok(())
     }
 
-    pub fn destroy(&self) {
-        let mut available_buffers = self.available_buffers.lock().unwrap();
-        available_buffers.clear();
+    pub fn destroy(&self) -> RocketMQResult<()> {
+        let mut available_buffers = self.available_buffers.lock();
+        for available_buffer in available_buffers.drain(0..) {
+            munlock(available_buffer.as_ptr(), self.file_size)?;
+        }
+        Ok(())
     }
 
     pub fn return_buffer(&self, buffer: Vec<u8>) {
-        let mut available_buffers = self.available_buffers.lock().unwrap();
+        let mut available_buffers = self.available_buffers.lock();
         available_buffers.push_front(buffer);
     }
 
     pub fn borrow_buffer(&self) -> Option<Vec<u8>> {
-        let mut available_buffers = self.available_buffers.lock().unwrap();
+        let mut available_buffers = self.available_buffers.lock();
         let buffer = available_buffers.pop_front();
         if available_buffers.len() < self.pool_size / 10 * 4 {
             warn!(
@@ -71,28 +80,17 @@ impl TransientStorePool {
     }
 
     pub fn available_buffer_nums(&self) -> usize {
-        let available_buffers = self.available_buffers.lock().unwrap();
+        let available_buffers = self.available_buffers.lock();
         available_buffers.len()
     }
 
     pub fn is_real_commit(&self) -> bool {
-        let is_real_commit = self.is_real_commit.lock().unwrap();
+        let is_real_commit = self.is_real_commit.lock();
         *is_real_commit
     }
 
     pub fn set_real_commit(&self, real_commit: bool) {
-        let mut is_real_commit = self.is_real_commit.lock().unwrap();
+        let mut is_real_commit = self.is_real_commit.lock();
         *is_real_commit = real_commit;
-    }
-}
-
-impl Clone for TransientStorePool {
-    fn clone(&self) -> Self {
-        TransientStorePool {
-            pool_size: self.pool_size,
-            file_size: self.file_size,
-            available_buffers: self.available_buffers.clone(),
-            is_real_commit: self.is_real_commit.clone(),
-        }
     }
 }
