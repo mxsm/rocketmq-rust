@@ -49,13 +49,12 @@ impl<MS: MessageStore> ResetMasterFlushOffsetHandler<MS> {
     ) -> Option<RemotingCommand> {
         let mut response = RemotingCommand::default();
 
-        if self
+        let broker_id = self
             .broker_runtime_inner
             .broker_config()
             .broker_identity
-            .broker_id
-            != MASTER_ID
-        {
+            .broker_id;
+        if broker_id != MASTER_ID {
             let request_header = request
                 .decode_command_custom_header::<ResetMasterFlushOffsetHeader>()
                 .unwrap();
