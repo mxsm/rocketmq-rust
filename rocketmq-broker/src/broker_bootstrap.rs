@@ -39,11 +39,11 @@ impl BrokerBootstrap {
 
         tokio::join!(self.start(), wait_for_signal_inner(shutdown_tx));
     }
-
+    #[inline]
     async fn initialize(&mut self) -> bool {
         self.broker_runtime.initialize().await
     }
-
+    #[inline]
     async fn start(&mut self) {
         self.broker_runtime.start().await;
     }
