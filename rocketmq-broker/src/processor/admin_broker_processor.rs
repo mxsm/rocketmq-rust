@@ -31,6 +31,7 @@ use crate::processor::admin_broker_processor::broker_config_request_handler::Bro
 use crate::processor::admin_broker_processor::consumer_request_handler::ConsumerRequestHandler;
 use crate::processor::admin_broker_processor::notify_min_broker_id_handler::NotifyMinBrokerChangeIdHandler;
 use crate::processor::admin_broker_processor::offset_request_handler::OffsetRequestHandler;
+use crate::processor::admin_broker_processor::reset_master_flusg_offset_handler::ResetMasterFlushOffsetHandler;
 use crate::processor::admin_broker_processor::subscription_group_handler::SubscriptionGroupHandler;
 use crate::processor::admin_broker_processor::topic_request_handler::TopicRequestHandler;
 use crate::processor::admin_broker_processor::update_broker_ha_handler::UpdateBrokerHaHandler;
@@ -40,6 +41,7 @@ mod broker_config_request_handler;
 mod consumer_request_handler;
 mod notify_min_broker_id_handler;
 mod offset_request_handler;
+mod reset_master_flusg_offset_handler;
 mod subscription_group_handler;
 mod topic_request_handler;
 mod update_broker_ha_handler;
@@ -56,6 +58,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
 
     notify_min_broker_handler: NotifyMinBrokerChangeIdHandler<MS>,
     update_broker_ha_handler: UpdateBrokerHaHandler<MS>,
+    reset_master_flusg_offset_handler: ResetMasterFlushOffsetHandler<MS>,
 }
 
 impl<MS> RequestProcessor for AdminBrokerProcessor<MS>
@@ -91,6 +94,9 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
 
         let update_broker_ha_handler = UpdateBrokerHaHandler::new(broker_runtime_inner.clone());
 
+        let reset_master_flusg_offset_handler =
+            ResetMasterFlushOffsetHandler::new(broker_runtime_inner.clone());
+
         AdminBrokerProcessor {
             topic_request_handler,
             broker_config_request_handler,
@@ -101,6 +107,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             broker_runtime_inner,
             notify_min_broker_handler,
             update_broker_ha_handler,
+            reset_master_flusg_offset_handler,
         }
     }
 }
@@ -235,6 +242,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             RequestCode::ExchangeBrokerHaInfo => {
                 self.update_broker_ha_handler
                     .update_broker_ha_info(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::ResetMasterFlushOffset => {
+                self.reset_master_flusg_offset_handler
+                    .reset_master_flush_offset(channel, ctx, request_code, request)
                     .await
             }
             _ => Some(get_unknown_cmd_response(request_code)),
