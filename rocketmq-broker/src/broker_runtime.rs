@@ -1844,6 +1844,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
+    pub fn replicas_manager(&self) -> &Option<ReplicasManager> {
+        &self.replicas_manager
+    }
+
+    #[inline]
     pub fn store_host(&self) -> SocketAddr {
         self.store_host
     }

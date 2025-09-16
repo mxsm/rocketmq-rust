@@ -1,3 +1,4 @@
+use rocketmq_remoting::protocol::body::epoch_entry_cache::EpochEntry;
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -15,7 +16,6 @@
  * limitations under the License.
  */
 use tracing::warn;
-
 #[derive(Default)]
 pub struct ReplicasManager {}
 
@@ -26,5 +26,9 @@ impl ReplicasManager {
 
     pub fn shutdown(&mut self) {
         warn!("ReplicasManager shutdown not implemented");
+    }
+
+    pub fn get_epoch_entries(&self) -> Vec<EpochEntry> {
+        unimplemented!("")
     }
 }

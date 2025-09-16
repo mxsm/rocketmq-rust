@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 
-use cheetah_string::CheetahString;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -47,7 +46,7 @@ impl<MS: MessageStore> ResetMasterFlushOffsetHandler<MS> {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> Option<RemotingCommand> {
-        let mut response = RemotingCommand::default();
+        let response = RemotingCommand::create_response_command();
 
         let broker_id = self
             .broker_runtime_inner
@@ -66,8 +65,6 @@ impl<MS: MessageStore> ResetMasterFlushOffsetHandler<MS> {
             }
         }
 
-        response.set_code_ref(ResponseCode::Success);
-        response.set_remark_mut(CheetahString::empty());
-        Some(response)
+        Some(response.set_code(ResponseCode::Success))
     }
 }

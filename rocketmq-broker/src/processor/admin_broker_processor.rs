@@ -28,6 +28,7 @@ use tracing::warn;
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::processor::admin_broker_processor::batch_mq_handler::BatchMqHandler;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
+use crate::processor::admin_broker_processor::broker_epoch_cache_handler::BrokerEpochCacheHandler;
 use crate::processor::admin_broker_processor::consumer_request_handler::ConsumerRequestHandler;
 use crate::processor::admin_broker_processor::notify_min_broker_id_handler::NotifyMinBrokerChangeIdHandler;
 use crate::processor::admin_broker_processor::offset_request_handler::OffsetRequestHandler;
@@ -38,6 +39,7 @@ use crate::processor::admin_broker_processor::update_broker_ha_handler::UpdateBr
 
 mod batch_mq_handler;
 mod broker_config_request_handler;
+mod broker_epoch_cache_handler;
 mod consumer_request_handler;
 mod notify_min_broker_id_handler;
 mod offset_request_handler;
@@ -59,6 +61,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     notify_min_broker_handler: NotifyMinBrokerChangeIdHandler<MS>,
     update_broker_ha_handler: UpdateBrokerHaHandler<MS>,
     reset_master_flusg_offset_handler: ResetMasterFlushOffsetHandler<MS>,
+    broker_epoch_cache_handler: BrokerEpochCacheHandler<MS>,
 }
 
 impl<MS> RequestProcessor for AdminBrokerProcessor<MS>
@@ -97,6 +100,8 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
         let reset_master_flusg_offset_handler =
             ResetMasterFlushOffsetHandler::new(broker_runtime_inner.clone());
 
+        let broker_epoch_cache_handler = BrokerEpochCacheHandler::new(broker_runtime_inner.clone());
+
         AdminBrokerProcessor {
             topic_request_handler,
             broker_config_request_handler,
@@ -108,6 +113,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             notify_min_broker_handler,
             update_broker_ha_handler,
             reset_master_flusg_offset_handler,
+            broker_epoch_cache_handler,
         }
     }
 }
@@ -247,6 +253,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             RequestCode::ResetMasterFlushOffset => {
                 self.reset_master_flusg_offset_handler
                     .reset_master_flush_offset(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::GetBrokerEpochCache => {
+                self.broker_epoch_cache_handler
+                    .get_broker_epoch_cache(channel, ctx, request_code, request)
                     .await
             }
             _ => Some(get_unknown_cmd_response(request_code)),
