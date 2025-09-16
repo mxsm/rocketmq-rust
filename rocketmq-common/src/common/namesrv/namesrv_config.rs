@@ -38,15 +38,15 @@ mod defaults {
 
     pub fn kv_config_path() -> String {
         let mut kv_config_path = dirs::home_dir().unwrap_or_default();
-        kv_config_path.push("namesrv");
+        kv_config_path.push("rocketmq-namesrv");
         kv_config_path.push("kvConfig.json");
         kv_config_path.to_str().unwrap_or_default().to_string()
     }
 
     pub fn config_store_path() -> String {
         let mut kv_config_path = dirs::home_dir().unwrap_or_default();
-        kv_config_path.push("namesrv");
-        kv_config_path.push("namesrv.properties");
+        kv_config_path.push("rocketmq-namesrv");
+        kv_config_path.push("rocketmq-namesrv.properties");
         kv_config_path.to_str().unwrap_or_default().to_string()
     }
 
@@ -197,30 +197,10 @@ pub struct NamesrvConfig {
 
 impl Default for NamesrvConfig {
     fn default() -> Self {
-        let rocketmq_home = env::var(ROCKETMQ_HOME_PROPERTY)
-            .unwrap_or_else(|_| env::var(ROCKETMQ_HOME_ENV).unwrap_or_default());
-        let kv_config_path = format!(
-            "{}{}{}{}{}",
-            dirs::home_dir().unwrap().to_str().unwrap(),
-            std::path::MAIN_SEPARATOR,
-            "rocketmq-namesrv",
-            std::path::MAIN_SEPARATOR,
-            "kvConfig.json"
-        );
-
-        let config_store_path = format!(
-            "{}{}{}{}{}",
-            dirs::home_dir().unwrap().to_str().unwrap(),
-            std::path::MAIN_SEPARATOR,
-            "rocketmq-namesrv",
-            std::path::MAIN_SEPARATOR,
-            "rocketmq-namesrv.properties"
-        );
-
         NamesrvConfig {
-            rocketmq_home,
-            kv_config_path,
-            config_store_path,
+            rocketmq_home: defaults::rocketmq_home(),
+            kv_config_path: defaults::kv_config_path(),
+            config_store_path: defaults::config_store_path(),
             product_env_name: "center".to_string(),
             cluster_test: false,
             order_message_enable: false,
