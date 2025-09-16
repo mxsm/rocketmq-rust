@@ -74,7 +74,7 @@ impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
         let epoch_list = replicas_manage.get_epoch_entries();
 
         let message_store = broker_runtime_inner.message_store().as_ref().unwrap();
-        let max_offset = message_store.get_max_phy_offset().cast_unsigned();
+        let max_offset = message_store.get_max_phy_offset() as u64;
 
         let entry_code = EpochEntryCache::new(
             broker_cluster_name,
