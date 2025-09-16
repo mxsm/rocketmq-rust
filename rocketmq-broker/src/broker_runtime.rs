@@ -55,6 +55,7 @@ use rocketmq_store::message_store::local_file_message_store::LocalFileMessageSto
 use rocketmq_store::stats::broker_stats::BrokerStats;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::timer::timer_message_store::TimerMessageStore;
+use tracing::error;
 use tracing::info;
 use tracing::warn;
 
@@ -1262,7 +1263,18 @@ impl BrokerRuntime {
         }
     }
 
-    pub(crate) fn schedule_send_heartbeat(&mut self) {}
+    pub(crate) fn schedule_send_heartbeat(&mut self) {
+        let broker_heartbeat_interval = self.inner.broker_config.broker_heartbeat_interval;
+        let inner_ = self.inner.clone();
+        self.scheduled_task_manager.add_fixed_rate_task_async(
+            Duration::from_millis(1000),
+            Duration::from_millis(broker_heartbeat_interval),
+            async move |_ctx| {
+                inner_.send_heartbeat().await;
+                Ok(())
+            },
+        );
+    }
 
     pub(crate) async fn start_service_without_condition(&mut self) {
         info!(
@@ -2575,6 +2587,10 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         _master_ha_addr: Option<CheetahString>,
     ) {
         unimplemented!("BrokerRuntimeInner#on_min_broker_change");
+    }
+
+    async fn send_heartbeat(&self) {
+        error!("unimplemented")
     }
 }
 
