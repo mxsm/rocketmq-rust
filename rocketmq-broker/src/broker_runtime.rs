@@ -1190,33 +1190,17 @@ impl BrokerRuntime {
 
         if self.inner.broker_config.enable_slave_acting_master {
             self.schedule_send_heartbeat();
-            let broker_runtime_inner = self.inner.clone();
-            self.broker_runtime
-                .as_ref()
-                .unwrap()
-                .get_handle()
-                .spawn(async move {
-                    let period = Duration::from_secs(1);
-                    let initial_delay = Duration::from_millis(
-                        broker_runtime_inner
-                            .broker_config
-                            .sync_broker_member_group_period,
-                    );
-                    tokio::time::sleep(initial_delay).await;
-                    loop {
-                        // record current execution time
-                        let current_execution_time = tokio::time::Instant::now();
-                        // execute task
-                        broker_runtime_inner.sync_broker_member_group();
-                        // Calculate the time of the next execution
-                        let next_execution_time = current_execution_time + period;
-
-                        // Wait until the next execution
-                        let delay = next_execution_time
-                            .saturating_duration_since(tokio::time::Instant::now());
-                        tokio::time::sleep(delay).await;
-                    }
-                });
+            let sync_broker_member_group_period =
+                self.inner.broker_config.sync_broker_member_group_period;
+            let inner_ = self.inner.clone();
+            self.scheduled_task_manager.add_fixed_rate_task_async(
+                Duration::from_millis(1000),
+                Duration::from_millis(sync_broker_member_group_period),
+                async move |_ctx| {
+                    inner_.sync_broker_member_group().await;
+                    Ok(())
+                },
+            );
         }
 
         if self.inner.broker_config.enable_controller_mode {
@@ -1270,6 +1254,10 @@ impl BrokerRuntime {
             Duration::from_millis(1000),
             Duration::from_millis(broker_heartbeat_interval),
             async move |_ctx| {
+                if inner_.is_isolated.load(Ordering::Acquire) {
+                    info!("Skip send heartbeat for broker is isolated");
+                    return Ok(());
+                }
                 inner_.send_heartbeat().await;
                 Ok(())
             },
