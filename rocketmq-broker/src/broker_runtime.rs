@@ -2466,7 +2466,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         CheetahString::from_string(addr)
     }
 
-    pub fn sync_broker_member_group(&self) {
+    async fn sync_broker_member_group(&self) {
         warn!("sync_broker_member_group not implemented");
     }
 
