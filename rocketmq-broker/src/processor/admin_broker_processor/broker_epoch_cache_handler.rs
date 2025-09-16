@@ -84,10 +84,7 @@ impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
             max_offset,
         );
 
-        let cache = match entry_code.encode() {
-            Ok(cache) => cache,
-            Err(_) => Vec::new(),
-        };
+        let cache = entry_code.encode().unwrap_or_default();
         Some(response.set_body(cache).set_code(ResponseCode::Success))
     }
 }

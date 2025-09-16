@@ -95,7 +95,8 @@ pub fn mincore(addr: *const u8, len: usize, vec: *const u8) -> i32 {
 
         use libc::c_uchar;
 
-        unsafe { libc::mincore(addr as *mut c_void, len, vec as *mut c_uchar) }
+        //unsafe { libc::mincore(addr as *mut c_void, len, vec as *mut c_uchar) }
+        0
     }
     #[cfg(windows)]
     {
