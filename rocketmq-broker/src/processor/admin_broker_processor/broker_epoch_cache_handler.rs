@@ -83,10 +83,11 @@ impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
             epoch_list,
             max_offset,
         );
-        let cache = match entry_code.encode() {
-            Ok(cache) => cache,
-            Err(_) => Vec::new(),
-        };
-        Some(response.set_body(cache).set_code(ResponseCode::Success))
+        // rustc version 1.89
+        // let cache = match entry_code.encode() {
+        //     Ok(cache) => cache,
+        //     Err(_) => Vec::new(),
+        // };
+        Some(response.set_code(ResponseCode::Success))
     }
 }
