@@ -366,6 +366,11 @@ mod defaults {
     pub fn compatible_with_old_name_srv() -> bool {
         true
     }
+
+    #[inline]
+    pub fn broker_heartbeat_interval() -> u64 {
+        1000
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -761,6 +766,9 @@ pub struct BrokerConfig {
 
     #[serde(default = "defaults::compatible_with_old_name_srv")]
     pub compatible_with_old_name_srv: bool,
+
+    #[serde(default = "defaults::broker_heartbeat_interval")]
+    pub broker_heartbeat_interval: u64,
 }
 
 impl Default for BrokerConfig {
@@ -881,6 +889,7 @@ impl Default for BrokerConfig {
             transaction_check_max: 15,
             transaction_op_batch_interval: 3_000,
             compatible_with_old_name_srv: true,
+            broker_heartbeat_interval: 1000,
         }
     }
 }
