@@ -20,6 +20,7 @@ use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::epoch_entry_cache::EpochEntryCache;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
@@ -75,18 +76,18 @@ impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
         let message_store = broker_runtime_inner.message_store().as_ref().unwrap();
         let max_offset = message_store.get_max_phy_offset() as u64;
 
-        let _entry_code = EpochEntryCache::new(
+        let entry_code = EpochEntryCache::new(
             broker_cluster_name,
             broker_name,
             broker_id,
             epoch_list,
             max_offset,
         );
-        // rustc version 1.89
-        // let cache = match entry_code.encode() {
-        //     Ok(cache) => cache,
-        //     Err(_) => Vec::new(),
-        // };
-        Some(response.set_code(ResponseCode::Success))
+
+        let cache = match entry_code.encode() {
+            Ok(cache) => cache,
+            Err(_) => Vec::new(),
+        };
+        Some(response.set_body(cache).set_code(ResponseCode::Success))
     }
 }
