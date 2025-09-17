@@ -30,6 +30,7 @@ use crate::processor::admin_broker_processor::batch_mq_handler::BatchMqHandler;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 use crate::processor::admin_broker_processor::broker_epoch_cache_handler::BrokerEpochCacheHandler;
 use crate::processor::admin_broker_processor::consumer_request_handler::ConsumerRequestHandler;
+use crate::processor::admin_broker_processor::notify_broker_role_change_handler::NotifyBrokerRoleChangeHandler;
 use crate::processor::admin_broker_processor::notify_min_broker_id_handler::NotifyMinBrokerChangeIdHandler;
 use crate::processor::admin_broker_processor::offset_request_handler::OffsetRequestHandler;
 use crate::processor::admin_broker_processor::reset_master_flusg_offset_handler::ResetMasterFlushOffsetHandler;
@@ -41,6 +42,7 @@ mod batch_mq_handler;
 mod broker_config_request_handler;
 mod broker_epoch_cache_handler;
 mod consumer_request_handler;
+mod notify_broker_role_change_handler;
 mod notify_min_broker_id_handler;
 mod offset_request_handler;
 mod reset_master_flusg_offset_handler;
@@ -62,6 +64,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     update_broker_ha_handler: UpdateBrokerHaHandler<MS>,
     reset_master_flusg_offset_handler: ResetMasterFlushOffsetHandler<MS>,
     broker_epoch_cache_handler: BrokerEpochCacheHandler<MS>,
+    notify_broker_role_change_handler: NotifyBrokerRoleChangeHandler<MS>,
 }
 
 impl<MS> RequestProcessor for AdminBrokerProcessor<MS>
@@ -102,6 +105,9 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
 
         let broker_epoch_cache_handler = BrokerEpochCacheHandler::new(broker_runtime_inner.clone());
 
+        let notify_broker_role_change_handler =
+            NotifyBrokerRoleChangeHandler::new(broker_runtime_inner.clone());
+
         AdminBrokerProcessor {
             topic_request_handler,
             broker_config_request_handler,
@@ -114,6 +120,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             update_broker_ha_handler,
             reset_master_flusg_offset_handler,
             broker_epoch_cache_handler,
+            notify_broker_role_change_handler,
         }
     }
 }
@@ -258,6 +265,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             RequestCode::GetBrokerEpochCache => {
                 self.broker_epoch_cache_handler
                     .get_broker_epoch_cache(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::NotifyBrokerRoleChanged => {
+                self.notify_broker_role_change_handler
+                    .notify_broker_role_changed(channel, ctx, request_code, request)
                     .await
             }
             _ => Some(get_unknown_cmd_response(request_code)),

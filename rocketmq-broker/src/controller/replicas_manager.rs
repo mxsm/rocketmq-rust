@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+
+use cheetah_string::CheetahString;
 use rocketmq_remoting::protocol::body::epoch_entry_cache::EpochEntry;
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
@@ -30,5 +33,16 @@ impl ReplicasManager {
 
     pub fn get_epoch_entries(&self) -> Vec<EpochEntry> {
         unimplemented!("")
+    }
+
+    pub async fn change_broker_role(
+        &mut self,
+        _new_master_broker_id: Option<u64>,
+        _new_master_address: Option<CheetahString>,
+        _new_master_epoch: Option<i32>,
+        _sync_state_set_epoch: Option<i32>,
+        _sync_state_set: Option<HashSet<i64>>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        Ok(())
     }
 }
