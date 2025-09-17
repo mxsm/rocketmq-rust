@@ -89,9 +89,8 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
 
         self.update_min_broker(change_header).await;
 
-        let mut response = RemotingCommand::default();
-        response.set_code_ref(ResponseCode::Success);
-        Some(response)
+        let response = RemotingCommand::create_response_command();
+        Some(response.set_code(ResponseCode::Success))
     }
 
     async fn update_min_broker(&mut self, change_header: NotifyMinBrokerIdChangeRequestHeader) {
