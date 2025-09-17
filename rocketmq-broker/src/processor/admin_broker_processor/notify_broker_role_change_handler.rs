@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 
-use cheetah_string::CheetahString;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
