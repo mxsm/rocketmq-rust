@@ -243,6 +243,7 @@ impl BrokerRuntime {
             broker_pre_online_service: None,
             min_broker_id_in_group: AtomicU64::new(0),
             min_broker_addr_in_group: Default::default(),
+            lock: Default::default(),
         });
         let mut stats_manager = BrokerStatsManager::new(inner.broker_config.clone());
         stats_manager.set_producer_state_getter(Arc::new(ProducerStateGetter {
@@ -1201,7 +1202,7 @@ impl BrokerRuntime {
                 Duration::from_millis(1000),
                 Duration::from_millis(sync_broker_member_group_period),
                 async move |_ctx| {
-                    inner_.sync_broker_member_group().await;
+                    BrokerRuntimeInner::sync_broker_member_group(&inner_).await;
                     Ok(())
                 },
             );
@@ -1616,6 +1617,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     broker_pre_online_service: Option<BrokerPreOnlineService<MS>>,
     min_broker_id_in_group: AtomicU64,
     min_broker_addr_in_group: Mutex<Option<CheetahString>>,
+    lock: Mutex<()>,
 }
 
 impl<MS: MessageStore> BrokerRuntimeInner<MS> {
@@ -2082,8 +2084,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn slave_synchronize(&self) -> &Option<SlaveSynchronize<MS>> {
-        &self.slave_synchronize
+    pub fn slave_synchronize(&self) -> Option<&SlaveSynchronize<MS>> {
+        self.slave_synchronize.as_ref()
     }
 
     #[inline]
@@ -2482,11 +2484,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         CheetahString::from_string(addr)
     }
 
-    async fn sync_broker_member_group(&self) {
-        let broker_cluster_name = &self.broker_config.broker_identity.broker_cluster_name;
-        let broker_name = &self.broker_config.broker_identity.broker_name;
-        let compatible_with_old_name_srv = self.broker_config.compatible_with_old_name_srv;
-        let broker_member_group = self
+    async fn sync_broker_member_group(this: &ArcMut<Self>) {
+        let broker_cluster_name = &this.broker_config.broker_identity.broker_cluster_name;
+        let broker_name = &this.broker_config.broker_identity.broker_name;
+        let compatible_with_old_name_srv = this.broker_config.compatible_with_old_name_srv;
+        let broker_member_group = this
             .broker_outer_api
             .sync_broker_member_group(
                 broker_cluster_name,
@@ -2527,33 +2529,48 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             }
         }
         let broker_member_group = broker_member_group.unwrap();
-        self.message_store_unchecked()
+        this.message_store_unchecked()
             .set_alive_replica_num_in_group(calc_alive_broker_num_in_group(
                 &broker_member_group.broker_addrs,
-                self.broker_config.broker_identity.broker_id,
+                this.broker_config.broker_identity.broker_id,
             ) as i32);
-        if !self.is_isolated.load(Ordering::Acquire) {
+        if !this.is_isolated.load(Ordering::Acquire) {
             let min_broker_id = broker_member_group.minimum_broker_id();
             let min_broker_addr = broker_member_group
                 .broker_addrs
                 .get(&min_broker_id)
                 .cloned()
                 .unwrap_or_default();
-            self.update_min_broker(min_broker_id, min_broker_addr).await;
+            BrokerRuntimeInner::update_min_broker(this, min_broker_id, min_broker_addr).await;
         }
     }
 
-    pub async fn update_min_broker(&self, min_broker_id: u64, min_broker_addr: CheetahString) {
-        if self.broker_config.enable_slave_acting_master
-            && self.broker_config.broker_identity.broker_id != MASTER_ID
+    pub async fn update_min_broker(
+        this: &ArcMut<Self>,
+        min_broker_id: u64,
+        min_broker_addr: CheetahString,
+    ) {
+        if this.broker_config.enable_slave_acting_master
+            && this.broker_config.broker_identity.broker_id != MASTER_ID
         {
-            let min_broker_id_in_group = self.min_broker_id_in_group.load(Ordering::SeqCst);
-            if min_broker_id != min_broker_id_in_group {
-                let mut offline_broker_addr = None;
-                if min_broker_id > min_broker_id_in_group {
-                    offline_broker_addr = self.min_broker_addr_in_group.lock().await.clone();
+            let mut this_clone = this.clone();
+            if let Ok(lock) = this.lock.try_lock() {
+                let min_broker_id_in_group = this.min_broker_id_in_group.load(Ordering::SeqCst);
+                if min_broker_id != min_broker_id_in_group {
+                    let mut offline_broker_addr = None;
+                    if min_broker_id > min_broker_id_in_group {
+                        offline_broker_addr = this.min_broker_addr_in_group.lock().await.clone();
+                    }
+                    this_clone
+                        .on_min_broker_change(
+                            min_broker_id,
+                            min_broker_addr,
+                            offline_broker_addr,
+                            None,
+                        )
+                        .await;
                 }
-                self.on_min_broker_change(min_broker_id, min_broker_addr, offline_broker_addr, None)
+                drop(lock);
             }
         }
     }
@@ -2655,14 +2672,62 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         unimplemented!("BrokerRuntimeInner#start_service");
     }
 
-    fn on_min_broker_change(
-        &self,
-        _min_broker_id: u64,
+    async fn on_min_broker_change(
+        &mut self,
+        min_broker_id: u64,
+        min_broker_addr: CheetahString,
+        offline_broker_addr: Option<CheetahString>,
+        master_ha_addr: Option<CheetahString>,
+    ) {
+        let min_broker_id_in_group_old = self.min_broker_id_in_group.load(Ordering::SeqCst);
+        let mut min_broker_addr_in_group_old = self.min_broker_addr_in_group.lock().await;
+        info!(
+            "Min broker changed, old: {}-{:?}, new {}-{}",
+            min_broker_id_in_group_old,
+            min_broker_addr_in_group_old,
+            min_broker_id,
+            min_broker_addr
+        );
+        self.min_broker_id_in_group
+            .store(min_broker_id, Ordering::SeqCst);
+        *min_broker_addr_in_group_old = Some(min_broker_addr.clone());
+        drop(min_broker_addr_in_group_old);
+        self.change_special_service_status(
+            self.broker_config.broker_identity.broker_id
+                == self.min_broker_id_in_group.load(Ordering::SeqCst),
+        )
+        .await;
+        if offline_broker_addr.is_some()
+            && offline_broker_addr.as_ref() == self.slave_synchronize().unwrap().master_addr()
+        {
+            //master offline
+            self.on_master_offline().await;
+        }
+
+        if min_broker_id == MASTER_ID && !min_broker_addr.is_empty() {
+            //master online
+            self.on_master_on_line(min_broker_addr, master_ha_addr)
+                .await;
+        }
+
+        // notify PullRequest on hold to pull from master.
+        if self.min_broker_id_in_group.load(Ordering::SeqCst) == MASTER_ID {
+            self.pull_request_hold_service_unchecked()
+                .notify_master_online()
+                .await;
+        }
+    }
+
+    async fn on_master_on_line(
+        &mut self,
         _min_broker_addr: CheetahString,
-        _offline_broker_addr: Option<CheetahString>,
         _master_ha_addr: Option<CheetahString>,
     ) {
-        unimplemented!("BrokerRuntimeInner#on_min_broker_change");
+        error!("unimplemented")
+    }
+
+    async fn on_master_offline(&mut self) {
+        error!("unimplemented")
     }
 
     async fn send_heartbeat(&self) {
