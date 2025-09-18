@@ -63,18 +63,13 @@ impl<MS: MessageStore> NotifyBrokerRoleChangeHandler<MS> {
 
         if let Some(replicas_mangesr) = self.broker_runtime_inner.replicas_manager_mut() {
             if let Ok(request_header) = request_header {
-                let master_broker_id = request_header.master_broker_id;
-                let master_address = request_header.master_address;
-                let master_epoch = request_header.master_epoch;
-                let sync_state_set_epoch = request_header.sync_state_set_epoch;
-                let sync_state_set = sync_state_set_info.get_sync_state_set();
                 match replicas_mangesr
                     .change_broker_role(
-                        master_broker_id,
-                        master_address,
-                        master_epoch,
-                        sync_state_set_epoch,
-                        sync_state_set,
+                        request_header.master_broker_id,
+                        request_header.master_address,
+                        request_header.master_epoch,
+                        request_header.sync_state_set_epoch,
+                        sync_state_set_info.get_sync_state_set(),
                     )
                     .await
                 {
