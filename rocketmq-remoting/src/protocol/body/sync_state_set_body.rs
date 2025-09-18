@@ -17,34 +17,22 @@
 
 use std::collections::HashSet;
 
-use cheetah_string::CheetahString;
-use rocketmq_remoting::protocol::body::epoch_entry_cache::EpochEntry;
-use tracing::warn;
+use serde::Deserialize;
+use serde::Serialize;
 
-#[derive(Default)]
-pub struct ReplicasManager {}
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStateSet {
+    sync_state_set: Option<HashSet<i64>>,
+    sync_state_set_epoch: i32,
+}
 
-impl ReplicasManager {
-    pub fn start(&mut self) {
-        warn!("ReplicasManager started not implemented");
+impl SyncStateSet {
+    pub fn get_sync_state_set(&self) -> Option<&HashSet<i64>> {
+        self.sync_state_set.as_ref()
     }
 
-    pub fn shutdown(&mut self) {
-        warn!("ReplicasManager shutdown not implemented");
-    }
-
-    pub fn get_epoch_entries(&self) -> Vec<EpochEntry> {
-        unimplemented!("")
-    }
-
-    pub async fn change_broker_role(
-        &mut self,
-        _new_master_broker_id: Option<u64>,
-        _new_master_address: Option<CheetahString>,
-        _new_master_epoch: Option<i32>,
-        _sync_state_set_epoch: Option<i32>,
-        _sync_state_set: Option<&HashSet<i64>>,
-    ) -> rocketmq_error::RocketMQResult<()> {
-        Ok(())
+    pub fn get_sync_state_set_epoch(&self) -> i32 {
+        self.sync_state_set_epoch
     }
 }
