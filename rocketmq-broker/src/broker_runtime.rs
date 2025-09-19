@@ -526,7 +526,6 @@ impl BrokerRuntime {
         let mut result: bool = true;
 
         if self.inner.broker_config().enable_controller_mode {
-            info!("Start controller mode(Support for future versions)");
             unimplemented!("Start controller mode(Support for future versions)");
         }
         if self.inner.message_store.is_some() {
