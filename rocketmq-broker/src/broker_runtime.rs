@@ -1480,7 +1480,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 }
             }
             if let Some(slave_synchronize) = &mut self.slave_synchronize {
-                slave_synchronize.set_master_addr(result.master_addr);
+                slave_synchronize.set_master_addr(Some(result.master_addr));
             }
             if check_order_config {
                 if let Some(topic_config_manager) = &mut self.topic_config_manager {
@@ -2089,7 +2089,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn update_slave_master_addr(&mut self, master_addr: CheetahString) {
+    pub fn update_slave_master_addr(&mut self, master_addr: Option<CheetahString>) {
         if let Some(ref mut slave) = self.slave_synchronize {
             slave.set_master_addr(master_addr);
         };
