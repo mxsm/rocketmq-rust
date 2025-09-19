@@ -56,3 +56,17 @@ impl ServerConfig {
         self.listen_port
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_server_config() {
+        let config = ServerConfig::default();
+
+        assert_eq!(config.listen_port(), 10911);
+
+        assert_eq!(config.bind_address(), "0.0.0.0".to_string());
+    }
+}
