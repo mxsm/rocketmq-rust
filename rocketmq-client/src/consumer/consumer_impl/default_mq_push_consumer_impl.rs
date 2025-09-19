@@ -1375,14 +1375,14 @@ impl DefaultMQPushConsumerImpl {
         }
         let extra_info_strs = extra_info_strs.unwrap();*/
         let queue_id = ExtraInfoUtil::get_queue_id(extra_info_strs.as_slice());
-        if queue_id.is_err() {
-            error!("ackAsync error: {}", queue_id.unwrap_err());
+        if let Err(e) = queue_id {
+            error!("ackAsync error: {}", e);
             return;
         }
         let queue_id = queue_id.unwrap();
         let queue_offset = ExtraInfoUtil::get_queue_offset(extra_info_strs.as_slice());
-        if queue_offset.is_err() {
-            error!("ackAsync error: {}", queue_offset.unwrap_err());
+        if let Err(e) = queue_offset {
+            error!("ackAsync error: {}", e);
             return;
         }
         let queue_offset = queue_offset.unwrap();
