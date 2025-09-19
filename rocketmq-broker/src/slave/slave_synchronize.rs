@@ -47,19 +47,16 @@ where
         self.master_addr.as_ref()
     }
 
-    pub fn set_master_addr(&mut self, addr: impl Into<CheetahString>) {
-        let addr = addr.into();
-        if let Some(current_addr) = &self.master_addr {
-            if current_addr.as_str() == addr {
-                return;
-            }
+    pub fn set_master_addr(&mut self, addr: Option<impl Into<CheetahString>>) {
+        let addr = addr.map(|addr| addr.into());
+        if self.master_addr == addr {
+            return;
         }
         info!(
-            "Update master address from {} to {}",
-            self.master_addr.as_deref().unwrap_or("None"),
-            addr
+            "Update master address from {:?} to {:?}",
+            self.master_addr, addr
         );
-        self.master_addr = Some(addr);
+        self.master_addr = addr;
     }
 
     pub async fn sync_all(&self) {
