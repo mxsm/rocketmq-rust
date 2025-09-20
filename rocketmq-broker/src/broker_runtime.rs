@@ -1215,29 +1215,17 @@ impl BrokerRuntime {
             self.start_service_without_condition().await;
         }
 
-        let broker_out_api_inner = self.inner.clone();
-        self.broker_runtime
-            .as_ref()
-            .unwrap()
-            .get_handle()
-            .spawn(async move {
-                let period = Duration::from_secs(5);
-                let initial_delay = Duration::from_secs(10);
-                tokio::time::sleep(initial_delay).await;
-                loop {
-                    // record current execution time
-                    let current_execution_time = tokio::time::Instant::now();
-                    // execute task
-                    broker_out_api_inner.broker_outer_api.refresh_metadata();
-                    // Calculate the time of the next execution
-                    let next_execution_time = current_execution_time + period;
-
-                    // Wait until the next execution
-                    let delay =
-                        next_execution_time.saturating_duration_since(tokio::time::Instant::now());
-                    tokio::time::sleep(delay).await;
-                }
-            });
+        let inner = self.inner.clone();
+        let period = Duration::from_secs(5);
+        let initial_delay = Duration::from_secs(10);
+        self.scheduled_task_manager.add_fixed_rate_task_async(
+            initial_delay,
+            period,
+            async move |_ctx| {
+                inner.broker_outer_api.refresh_metadata();
+                Ok(())
+            },
+        );
         info!(
             "Rocketmq Broker({} ----Rust) start success",
             self.inner.broker_config.broker_identity.broker_name
