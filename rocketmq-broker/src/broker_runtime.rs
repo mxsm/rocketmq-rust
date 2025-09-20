@@ -1142,55 +1142,43 @@ impl BrokerRuntime {
 
         //start register broker to name server scheduled task
         let broker_runtime_inner = self.inner.clone();
-        self.broker_runtime
-            .as_ref()
-            .unwrap()
-            .get_handle()
-            .spawn(async move {
-                let period = Duration::from_millis(
-                    10000.max(
-                        60000.min(
-                            broker_runtime_inner
-                                .broker_config
-                                .register_name_server_period,
-                        ),
-                    ),
-                );
-                let initial_delay = Duration::from_secs(10);
-                tokio::time::sleep(initial_delay).await;
-                loop {
-                    let start_time = broker_runtime_inner
-                        .should_start_time
-                        .load(Ordering::Relaxed);
-                    if get_current_millis() < start_time {
-                        info!("Register to namesrv after {}", start_time);
-                        continue;
-                    }
-                    if broker_runtime_inner.is_isolated.load(Ordering::Relaxed) {
-                        info!("Skip register for broker is isolated");
-                        continue;
-                    }
-                    // record current execution time
-                    let current_execution_time = tokio::time::Instant::now();
-                    // execute task
-                    let this = broker_runtime_inner.clone();
+        let period = Duration::from_millis(
+            10000.max(
+                60000.min(
                     broker_runtime_inner
-                        .register_broker_all_inner(
-                            this,
-                            true,
-                            false,
-                            broker_runtime_inner.broker_config.force_register,
-                        )
-                        .await;
-                    // Calculate the time of the next execution
-                    let next_execution_time = current_execution_time + period;
-
-                    // Wait until the next execution
-                    let delay =
-                        next_execution_time.saturating_duration_since(tokio::time::Instant::now());
-                    tokio::time::sleep(delay).await;
+                        .broker_config
+                        .register_name_server_period,
+                ),
+            ),
+        );
+        let initial_delay = Duration::from_secs(10);
+        self.scheduled_task_manager.add_fixed_rate_task_async(
+            initial_delay,
+            period,
+            async move |_ctx| {
+                let start_time = broker_runtime_inner
+                    .should_start_time
+                    .load(Ordering::Relaxed);
+                if get_current_millis() < start_time {
+                    info!("Register to namesrv after {}", start_time);
+                    return Ok(());
                 }
-            });
+                if broker_runtime_inner.is_isolated.load(Ordering::Relaxed) {
+                    info!("Skip register for broker is isolated");
+                    return Ok(());
+                }
+                let this = broker_runtime_inner.clone();
+                broker_runtime_inner
+                    .register_broker_all_inner(
+                        this,
+                        true,
+                        false,
+                        broker_runtime_inner.broker_config.force_register,
+                    )
+                    .await;
+                Ok(())
+            },
+        );
 
         if self.inner.broker_config.enable_slave_acting_master {
             self.schedule_send_heartbeat();
