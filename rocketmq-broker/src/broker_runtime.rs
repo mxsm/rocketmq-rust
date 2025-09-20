@@ -1455,7 +1455,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 }
             }
             if let Some(slave_synchronize) = &mut self.slave_synchronize {
-                slave_synchronize.set_master_addr(Some(result.master_addr));
+                slave_synchronize.set_master_addr(Some(&result.master_addr));
             }
             if check_order_config {
                 if let Some(topic_config_manager) = &mut self.topic_config_manager {
@@ -2064,9 +2064,24 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
+    pub fn slave_synchronize_unchecked(&self) -> &SlaveSynchronize<MS> {
+        unsafe { self.slave_synchronize.as_ref().unwrap_unchecked() }
+    }
+
+    #[inline]
+    pub fn slave_synchronize_mut(&mut self) -> Option<&mut SlaveSynchronize<MS>> {
+        self.slave_synchronize.as_mut()
+    }
+
+    #[inline]
+    pub fn slave_synchronize_mut_unchecked(&mut self) -> &mut SlaveSynchronize<MS> {
+        unsafe { self.slave_synchronize.as_mut().unwrap_unchecked() }
+    }
+
+    #[inline]
     pub fn update_slave_master_addr(&mut self, master_addr: Option<CheetahString>) {
         if let Some(ref mut slave) = self.slave_synchronize {
-            slave.set_master_addr(master_addr);
+            slave.set_master_addr(master_addr.as_ref());
         };
     }
 
@@ -2702,7 +2717,16 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     async fn on_master_offline(&mut self) {
-        error!("unimplemented")
+        let slave_synchronize = self.slave_synchronize_unchecked();
+        if let Some(master_addr) = slave_synchronize.master_addr() {
+            if !master_addr.is_empty() {
+                //close channels
+            }
+        }
+        self.slave_synchronize_mut_unchecked().set_master_addr(None);
+        self.message_store_unchecked_mut()
+            .update_ha_master_address("")
+            .await
     }
 
     async fn send_heartbeat(&self) {

@@ -47,8 +47,8 @@ where
         self.master_addr.as_ref()
     }
 
-    pub fn set_master_addr(&mut self, addr: Option<impl Into<CheetahString>>) {
-        let addr = addr.map(|addr| addr.into());
+    pub fn set_master_addr(&mut self, addr: Option<&CheetahString>) {
+        let addr = addr.cloned();
         if self.master_addr == addr {
             return;
         }
