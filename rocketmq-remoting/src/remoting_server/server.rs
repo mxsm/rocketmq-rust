@@ -327,28 +327,33 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
     async fn run(&mut self) -> anyhow::Result<()> {
         info!("Prepare accepting connection");
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<TokioEvent>();
-        let listener = self.channel_event_listener.take().unwrap();
 
-        tokio::spawn(async move {
-            loop {
-                if let Some(event) = rx.recv().await {
-                    info!("Accepting connection event: {:?}", event);
-                    let addr = event.remote_addr();
-                    match event.type_() {
-                        ConnectionNetEvent::CONNECTED(_) => {
-                            listener.on_channel_connect(addr.to_string().as_str(), event.channel());
-                        }
-                        ConnectionNetEvent::DISCONNECTED => {
-                            listener.on_channel_close(addr.to_string().as_str(), event.channel());
-                        }
-                        ConnectionNetEvent::EXCEPTION => {
-                            listener
-                                .on_channel_exception(addr.to_string().as_str(), event.channel());
+        if let Some(listener) = self.channel_event_listener.take() {
+            tokio::spawn(async move {
+                loop {
+                    if let Some(event) = rx.recv().await {
+                        info!("Accepting connection event: {:?}", event);
+                        let addr = event.remote_addr();
+                        match event.type_() {
+                            ConnectionNetEvent::CONNECTED(_) => {
+                                listener
+                                    .on_channel_connect(addr.to_string().as_str(), event.channel());
+                            }
+                            ConnectionNetEvent::DISCONNECTED => {
+                                listener
+                                    .on_channel_close(addr.to_string().as_str(), event.channel());
+                            }
+                            ConnectionNetEvent::EXCEPTION => {
+                                listener.on_channel_exception(
+                                    addr.to_string().as_str(),
+                                    event.channel(),
+                                );
+                            }
                         }
                     }
                 }
-            }
-        });
+            });
+        }
 
         loop {
             let permit = self
