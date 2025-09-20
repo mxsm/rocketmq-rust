@@ -726,7 +726,7 @@ impl BrokerOuterAPI {
         addr: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<Option<MessageRequestModeSerializeWrapper>> {
         let request =
-            RemotingCommand::create_remoting_command(RequestCode::GetAllSubscriptionGroupConfig);
+            RemotingCommand::create_remoting_command(RequestCode::GetAllMessageRequestMode);
         let mut response = self
             .remoting_client
             .invoke_async(Some(addr), request, 3000)
