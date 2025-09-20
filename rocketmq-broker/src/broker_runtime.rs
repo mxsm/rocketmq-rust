@@ -461,8 +461,21 @@ impl BrokerRuntime {
         self.recover_initialize_service().await
     }
 
-    ///Load the original configuration data from the corresponding configuration files located
-    /// under the ${HOME}\config directory.
+    /// Load the original configuration data from the corresponding configuration files
+    /// located under the `${HOME}\config` directory.
+    ///
+    /// This function initializes broker metadata by loading several manager components
+    /// in sequence:
+    /// - Topic configuration manager
+    /// - Topic queue mapping manager
+    /// - Consumer offset manager
+    /// - Subscription group manager
+    /// - Consumer filter manager
+    /// - Consumer order information manager
+    ///
+    /// The loaders are invoked in order and combined using logical AND. If all loaders
+    /// return `true`, the function returns `true`. If any loader fails (returns `false`),
+    /// the whole initialization is considered failed and the function returns `false`.
     fn initialize_metadata(&self) -> bool {
         info!("======Starting initialize metadata========");
         self.inner.topic_config_manager().load()
