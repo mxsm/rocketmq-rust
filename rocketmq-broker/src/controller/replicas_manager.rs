@@ -1,7 +1,3 @@
-use std::collections::HashSet;
-
-use cheetah_string::CheetahString;
-use rocketmq_remoting::protocol::body::epoch_entry_cache::EpochEntry;
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -18,7 +14,13 @@ use rocketmq_remoting::protocol::body::epoch_entry_cache::EpochEntry;
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+use std::collections::HashSet;
+
+use cheetah_string::CheetahString;
+use rocketmq_remoting::protocol::body::epoch_entry_cache::EpochEntry;
 use tracing::warn;
+
 #[derive(Default)]
 pub struct ReplicasManager {}
 
@@ -41,7 +43,7 @@ impl ReplicasManager {
         _new_master_address: Option<CheetahString>,
         _new_master_epoch: Option<i32>,
         _sync_state_set_epoch: Option<i32>,
-        _sync_state_set: Option<HashSet<i64>>,
+        _sync_state_set: Option<&HashSet<i64>>,
     ) -> rocketmq_error::RocketMQResult<()> {
         Ok(())
     }

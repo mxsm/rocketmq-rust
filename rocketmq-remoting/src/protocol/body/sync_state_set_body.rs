@@ -28,8 +28,8 @@ pub struct SyncStateSet {
 }
 
 impl SyncStateSet {
-    pub fn get_sync_state_set(&self) -> Option<HashSet<i64>> {
-        self.sync_state_set.clone()
+    pub fn get_sync_state_set(&self) -> Option<&HashSet<i64>> {
+        self.sync_state_set.as_ref()
     }
 
     pub fn get_sync_state_set_epoch(&self) -> i32 {
