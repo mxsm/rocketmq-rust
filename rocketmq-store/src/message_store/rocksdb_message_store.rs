@@ -14,14 +14,4 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-pub mod local_file_message_store;
-
-pub mod rocksdb_message_store;
-
-pub enum GenericMessageStore {
-    #[cfg(feature = "local_file_store")]
-    LocalFileStore(local_file_message_store::LocalFileMessageStore),
-
-    #[cfg(feature = "rocksdb_store")]
-    RocksDBStore(rocksdb_message_store::RocksDBMessageStore),
-}
+pub struct RocksDBMessageStore;

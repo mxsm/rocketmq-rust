@@ -15,6 +15,7 @@ rust-version.workspace = true
 [features]
 default = ["local_file_store"]
 local_file_store = []
+rocksdb_store = []
 data_store = ["local_file_store"]
 
 
@@ -22,7 +23,7 @@ data_store = ["local_file_store"]
 rocketmq-common = { workspace = true }
 rocketmq-rust = { workspace = true }
 rocketmq-remoting = { workspace = true }
-rocketmq-error = {workspace = true}
+rocketmq-error = { workspace = true }
 
 #tools
 dirs.workspace = true
