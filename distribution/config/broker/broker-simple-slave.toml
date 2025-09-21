@@ -16,7 +16,7 @@
 # ======================
 # Core Broker Settings
 # ======================
-brokerRole = "ASYNC_MASTER"             # enum BrokerRole: ASYNC_MASTER/AsyncMaster|SYNC_MASTER/SyncMaster|SLAVE/Slave
+brokerRole = "SLAVE"                    # enum BrokerRole: ASYNC_MASTER/AsyncMaster|SYNC_MASTER/SyncMaster|SLAVE/Slave
 flushDiskType = "ASYNC_FLUSH"
 deleteWhen = 4
 fileReservedTime = 72
