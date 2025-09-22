@@ -53,8 +53,10 @@ use rocketmq_remoting::protocol::body::message_request_mode_serialize_wrapper::M
 use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
 use rocketmq_remoting::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
+use rocketmq_remoting::protocol::broker_sync_info::BrokerSyncInfo;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::header::exchange_ha_info_request_header::ExchangeHAInfoRequestHeader;
+use rocketmq_remoting::protocol::header::exchange_ha_info_response_header::ExchangeHaInfoResponseHeader;
 use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
@@ -785,6 +787,36 @@ impl BrokerOuterAPI {
                 broker_addr.to_string(),
             ))
         }
+    }
+
+    pub async fn retrieve_broker_ha_info(
+        &self,
+        master_broker_addr: Option<&CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<BrokerSyncInfo> {
+        let request_header = ExchangeHAInfoRequestHeader::default();
+        let request = RemotingCommand::create_request_command(
+            RequestCode::ExchangeBrokerHaInfo,
+            request_header,
+        );
+        let response = self
+            .remoting_client
+            .invoke_async(master_broker_addr, request, 3000)
+            .await?;
+
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            let header = response.decode_command_custom_header::<ExchangeHaInfoResponseHeader>()?;
+            return Ok(BrokerSyncInfo {
+                master_address: header.master_address,
+                master_ha_address: header.master_ha_address,
+                master_flush_offset: header.master_flush_offset.unwrap_or(0),
+            });
+        }
+
+        Err(RocketmqError::MQBrokerError(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string()),
+            master_broker_addr.map_or("".to_string(), |s| s.to_string()),
+        ))
     }
 }
 
