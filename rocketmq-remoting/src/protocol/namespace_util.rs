@@ -229,18 +229,18 @@ mod tests {
 
     #[test]
     fn is_already_with_namespace_returns_false_when_empty() {
-        assert_eq!(
-            NamespaceUtil::is_already_with_namespace("", "my_namespace"),
-            false
-        );
+        assert!(!NamespaceUtil::is_already_with_namespace(
+            "",
+            "my_namespace"
+        ));
     }
 
     #[test]
     fn is_already_with_namespace_returns_true_when_with_namespace() {
-        assert_eq!(
-            NamespaceUtil::is_already_with_namespace("my_namespace%my_resource", "my_namespace"),
-            true
-        );
+        assert!(NamespaceUtil::is_already_with_namespace(
+            "my_namespace%my_resource",
+            "my_namespace"
+        ));
     }
 
     #[test]
@@ -291,46 +291,42 @@ mod tests {
 
     #[test]
     fn is_system_resource_returns_false_when_empty() {
-        assert_eq!(NamespaceUtil::is_system_resource(""), false);
+        assert!(!NamespaceUtil::is_system_resource(""));
     }
 
     #[test]
     fn is_system_resource_returns_true_when_system_resource() {
-        assert_eq!(NamespaceUtil::is_system_resource("CID_RMQ_SYS_"), true);
-        assert_eq!(NamespaceUtil::is_system_resource("TBW102"), true);
+        assert!(NamespaceUtil::is_system_resource("CID_RMQ_SYS_"));
+        assert!(NamespaceUtil::is_system_resource("TBW102"));
     }
 
     #[test]
     fn is_retry_topic_returns_false_when_empty() {
-        assert_eq!(NamespaceUtil::is_retry_topic(""), false);
+        assert!(!NamespaceUtil::is_retry_topic(""));
     }
 
     #[test]
     fn is_retry_topic_returns_true_when_retry_topic() {
-        assert_eq!(
-            NamespaceUtil::is_retry_topic("RETRY_GROUP_TOPIC_PREFIXmy_topic"),
-            false
-        );
-        assert_eq!(
-            NamespaceUtil::is_retry_topic("%RETRY%RETRY_GROUP_TOPIC_PREFIXmy_topic"),
-            true
-        );
+        assert!(!NamespaceUtil::is_retry_topic(
+            "RETRY_GROUP_TOPIC_PREFIXmy_topic"
+        ));
+        assert!(NamespaceUtil::is_retry_topic(
+            "%RETRY%RETRY_GROUP_TOPIC_PREFIXmy_topic"
+        ));
     }
 
     #[test]
     fn is_dlq_topic_returns_false_when_empty() {
-        assert_eq!(NamespaceUtil::is_dlq_topic(""), false);
+        assert!(!NamespaceUtil::is_dlq_topic(""));
     }
 
     #[test]
     fn is_dlq_topic_returns_true_when_dlq_topic() {
-        assert_eq!(
-            NamespaceUtil::is_dlq_topic("DLQ_GROUP_TOPIC_PREFIXmy_topic"),
-            false
-        );
-        assert_eq!(
-            NamespaceUtil::is_dlq_topic("%DLQ%DLQ_GROUP_TOPIC_PREFIXmy_topic"),
-            true
-        );
+        assert!(!NamespaceUtil::is_dlq_topic(
+            "DLQ_GROUP_TOPIC_PREFIXmy_topic"
+        ));
+        assert!(NamespaceUtil::is_dlq_topic(
+            "%DLQ%DLQ_GROUP_TOPIC_PREFIXmy_topic"
+        ));
     }
 }

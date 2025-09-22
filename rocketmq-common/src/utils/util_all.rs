@@ -412,13 +412,13 @@ mod tests {
     #[test]
     fn is_it_time_to_do_returns_true_when_current_hour_is_in_input() {
         let current_hour = Local::now().hour();
-        assert_eq!(is_it_time_to_do(&current_hour.to_string()), true);
+        assert!(is_it_time_to_do(&current_hour.to_string()));
     }
 
     #[test]
     fn is_it_time_to_do_returns_false_when_current_hour_is_not_in_input() {
         let current_hour = (Local::now().hour() + 1) % 24;
-        assert_eq!(is_it_time_to_do(&current_hour.to_string()), false);
+        assert!(!is_it_time_to_do(&current_hour.to_string()));
     }
 
     #[test]
@@ -434,12 +434,12 @@ mod tests {
 
     #[test]
     fn is_path_exists_returns_true_for_existing_path() {
-        assert_eq!(is_path_exists("."), true);
+        assert!(is_path_exists("."));
     }
 
     #[test]
     fn is_path_exists_returns_false_for_non_existing_path() {
-        assert_eq!(is_path_exists("./non_existing_path"), false);
+        assert!(!is_path_exists("./non_existing_path"));
     }
 
     #[test]
@@ -457,7 +457,7 @@ mod tests {
     fn ensure_dir_ok_creates_directory_if_not_exists() {
         let dir_name = "./test_dir";
         ensure_dir_ok(dir_name);
-        assert_eq!(is_path_exists(dir_name), true);
+        assert!(is_path_exists(dir_name));
         std::fs::remove_dir(dir_name).unwrap();
     }
 

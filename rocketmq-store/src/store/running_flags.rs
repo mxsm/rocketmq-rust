@@ -207,37 +207,37 @@ mod tests {
     #[test]
     fn test_get_and_make_readable() {
         let running_flags = RunningFlags::new();
-        assert_eq!(running_flags.get_and_make_readable(), true);
-        assert_eq!(running_flags.is_readable(), true);
-        assert_eq!(running_flags.get_and_make_readable(), true);
-        assert_eq!(running_flags.is_readable(), true);
+        assert!(running_flags.get_and_make_readable());
+        assert!(running_flags.is_readable());
+        assert!(running_flags.get_and_make_readable());
+        assert!(running_flags.is_readable());
     }
 
     #[test]
     fn test_is_readable() {
         let running_flags = RunningFlags::new();
-        assert_eq!(running_flags.is_readable(), true);
+        assert!(running_flags.is_readable());
         running_flags
             .flag_bits
             .store(NOT_READABLE_BIT, Ordering::Relaxed);
-        assert_eq!(running_flags.is_readable(), false);
+        assert!(!running_flags.is_readable());
     }
 
     #[test]
     fn test_is_fenced() {
         let running_flags = RunningFlags::new();
-        assert_eq!(running_flags.is_fenced(), false);
+        assert!(!running_flags.is_fenced());
         running_flags.flag_bits.store(FENCED_BIT, Ordering::Relaxed);
-        assert_eq!(running_flags.is_fenced(), true);
+        assert!(running_flags.is_fenced());
     }
 
     #[test]
     fn test_get_and_make_not_readable() {
         let running_flags = RunningFlags::new();
-        assert_eq!(running_flags.get_and_make_not_readable(), true);
-        assert_eq!(running_flags.is_readable(), false);
-        assert_eq!(running_flags.get_and_make_not_readable(), false);
-        assert_eq!(running_flags.is_readable(), false);
+        assert!(running_flags.get_and_make_not_readable());
+        assert!(!running_flags.is_readable());
+        assert!(!running_flags.get_and_make_not_readable());
+        assert!(!running_flags.is_readable());
     }
 
     #[test]
@@ -247,111 +247,111 @@ mod tests {
             .flag_bits
             .store(WRITE_LOGICS_QUEUE_ERROR_BIT, Ordering::Relaxed);
         running_flags.clear_logics_queue_error();
-        assert_eq!(running_flags.is_logics_queue_error(), false);
+        assert!(!running_flags.is_logics_queue_error());
     }
 
     #[test]
     fn test_get_and_make_writeable() {
         let running_flags = RunningFlags::new();
-        assert_eq!(running_flags.get_and_make_writeable(), true);
-        assert_eq!(running_flags.is_writeable(), true);
-        assert_eq!(running_flags.is_cq_writeable(), true);
+        assert!(running_flags.get_and_make_writeable());
+        assert!(running_flags.is_writeable());
+        assert!(running_flags.is_cq_writeable());
     }
 
     #[test]
     fn test_is_writeable() {
         let running_flags = RunningFlags::new();
-        assert_eq!(running_flags.is_writeable(), true);
+        assert!(running_flags.is_writeable());
         running_flags
             .flag_bits
             .store(NOT_WRITEABLE_BIT, Ordering::Relaxed);
-        assert_eq!(running_flags.is_writeable(), false);
+        assert!(!running_flags.is_writeable());
     }
 
     #[test]
     fn test_is_cq_writeable() {
         let running_flags = RunningFlags::new();
-        assert_eq!(running_flags.is_cq_writeable(), true);
+        assert!(running_flags.is_cq_writeable());
         running_flags.flag_bits.store(
             NOT_WRITEABLE_BIT | WRITE_LOGICS_QUEUE_ERROR_BIT,
             Ordering::Relaxed,
         );
-        assert_eq!(running_flags.is_cq_writeable(), false);
+        assert!(!running_flags.is_cq_writeable());
     }
 
     #[test]
     fn test_get_and_make_not_writeable() {
         let running_flags = RunningFlags::new();
-        assert_eq!(running_flags.get_and_make_not_writeable(), true);
-        assert_eq!(running_flags.is_writeable(), false);
-        assert_eq!(running_flags.get_and_make_not_writeable(), false);
-        assert_eq!(running_flags.is_writeable(), false);
+        assert!(running_flags.get_and_make_not_writeable());
+        assert!(!running_flags.is_writeable());
+        assert!(!running_flags.get_and_make_not_writeable());
+        assert!(!running_flags.is_writeable());
     }
 
     #[test]
     fn test_make_logics_queue_error() {
         let running_flags = RunningFlags::new();
         running_flags.make_logics_queue_error();
-        assert_eq!(running_flags.is_logics_queue_error(), true);
+        assert!(running_flags.is_logics_queue_error());
     }
 
     #[test]
     fn test_make_fenced() {
         let running_flags = RunningFlags::new();
         running_flags.make_fenced(true);
-        assert_eq!(running_flags.is_fenced(), true);
+        assert!(running_flags.is_fenced());
         running_flags.make_fenced(false);
-        assert_eq!(running_flags.is_fenced(), false);
+        assert!(!running_flags.is_fenced());
     }
 
     #[test]
     fn test_is_logics_queue_error() {
         let running_flags = RunningFlags::new();
-        assert_eq!(running_flags.is_logics_queue_error(), false);
+        assert!(!running_flags.is_logics_queue_error());
         running_flags
             .flag_bits
             .store(WRITE_LOGICS_QUEUE_ERROR_BIT, Ordering::Relaxed);
-        assert_eq!(running_flags.is_logics_queue_error(), true);
+        assert!(running_flags.is_logics_queue_error());
     }
 
     #[test]
     fn test_make_index_file_error() {
         let running_flags = RunningFlags::new();
         running_flags.make_index_file_error();
-        assert_eq!(running_flags.is_index_file_error(), true);
+        assert!(running_flags.is_index_file_error());
     }
 
     #[test]
     fn test_is_index_file_error() {
         let running_flags = RunningFlags::new();
-        assert_eq!(running_flags.is_index_file_error(), false);
+        assert!(!running_flags.is_index_file_error());
         running_flags
             .flag_bits
             .store(WRITE_INDEX_FILE_ERROR_BIT, Ordering::Relaxed);
-        assert_eq!(running_flags.is_index_file_error(), true);
+        assert!(running_flags.is_index_file_error());
     }
 
     #[test]
     fn test_get_and_make_disk_full() {
         let running_flags = RunningFlags::new();
-        assert_eq!(running_flags.get_and_make_disk_full(), true);
+        assert!(running_flags.get_and_make_disk_full());
     }
 
     #[test]
     fn test_get_and_make_disk_ok() {
         let running_flags = RunningFlags::new();
-        assert_eq!(running_flags.get_and_make_disk_ok(), true);
+        assert!(running_flags.get_and_make_disk_ok());
     }
 
     #[test]
     fn test_get_and_make_logic_disk_full() {
         let running_flags = RunningFlags::new();
-        assert_eq!(running_flags.get_and_make_logic_disk_full(), true);
+        assert!(running_flags.get_and_make_logic_disk_full());
     }
 
     #[test]
     fn test_get_and_make_logic_disk_ok() {
         let running_flags = RunningFlags::new();
-        assert_eq!(running_flags.get_and_make_logic_disk_ok(), true);
+        assert!(running_flags.get_and_make_logic_disk_ok());
     }
 }

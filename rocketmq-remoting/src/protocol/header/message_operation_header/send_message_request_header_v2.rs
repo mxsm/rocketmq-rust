@@ -614,9 +614,9 @@ mod tests {
         assert_eq!(header.h, 0);
         assert_eq!(header.i.unwrap(), "test_properties");
         assert_eq!(header.j.unwrap(), 3);
-        assert_eq!(header.k.unwrap(), true);
+        assert!(header.k.unwrap());
         assert_eq!(header.l.unwrap(), 5);
-        assert_eq!(header.m.unwrap(), false);
+        assert!(!header.m.unwrap());
         assert_eq!(header.n.unwrap(), "test_broker_name");
     }
 

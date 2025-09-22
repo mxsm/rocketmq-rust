@@ -576,8 +576,8 @@ mod tests {
         assert_eq!(header.flag, 0);
         assert_eq!(header.properties.unwrap(), "test_properties");
         assert_eq!(header.reconsume_times.unwrap(), 3);
-        assert_eq!(header.unit_mode.unwrap(), true);
-        assert_eq!(header.batch.unwrap(), false);
+        assert!(header.unit_mode.unwrap());
+        assert!(!header.batch.unwrap());
         assert_eq!(header.max_reconsume_times.unwrap(), 5);
     }
 

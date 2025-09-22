@@ -61,7 +61,7 @@ mod tests {
             TopicAttributes::cleanup_policy_attribute().name().into(),
             CleanupPolicy::COMPACTION.to_string().into(),
         );
-        assert_eq!(is_compaction(Some(&topic_config)), true);
+        assert!(is_compaction(Some(&topic_config)));
     }
 
     #[test]
@@ -74,12 +74,12 @@ mod tests {
                 .into(),
             CleanupPolicy::DELETE.to_string().into(),
         );
-        assert_eq!(is_compaction(Some(&topic_config)), false);
+        assert!(!is_compaction(Some(&topic_config)));
     }
 
     #[test]
     fn is_compaction_returns_false_when_topic_config_is_none() {
-        assert_eq!(is_compaction(None), false);
+        assert!(!is_compaction(None));
     }
 
     #[test]

@@ -266,7 +266,7 @@ mod tests {
         let broker_config = Arc::new(BrokerConfig::default());
         let manager = TopicQueueMappingManager::new(broker_config.clone());
 
-        assert_eq!(Arc::ptr_eq(&manager.broker_config, &broker_config), true);
+        assert!(Arc::ptr_eq(&manager.broker_config, &broker_config));
         assert_eq!(manager.data_version.lock().get_state_version(), 0);
         assert_eq!(manager.topic_queue_mapping_table.lock().len(), 0);
     }
