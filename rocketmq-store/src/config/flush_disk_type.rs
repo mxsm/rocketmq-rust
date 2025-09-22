@@ -124,8 +124,8 @@ mod tests {
     #[test]
     fn test_copy_clone_traits() {
         let sync_flush = FlushDiskType::SyncFlush;
-        let copied = sync_flush;
-        let cloned = sync_flush.clone();
+        let copied = sync_flush; // copy
+        let cloned: FlushDiskType = sync_flush; // clone
 
         assert_eq!(sync_flush, copied);
         assert_eq!(sync_flush, cloned);
