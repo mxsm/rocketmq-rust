@@ -62,6 +62,12 @@ pub struct MyMessageListener {
     consume_times: Arc<AtomicI64>,
 }
 
+impl Default for MyMessageListener {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MyMessageListener {
     pub fn new() -> Self {
         Self {

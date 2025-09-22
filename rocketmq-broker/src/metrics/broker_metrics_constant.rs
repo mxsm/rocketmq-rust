@@ -341,15 +341,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_constants_not_empty() {
-        assert!(!BrokerMetricsConstant::OPEN_TELEMETRY_METER_NAME.is_empty());
-        assert!(!BrokerMetricsConstant::GAUGE_PROCESSOR_WATERMARK.is_empty());
-        assert!(!BrokerMetricsConstant::COUNTER_MESSAGES_IN_TOTAL.is_empty());
-        assert!(!BrokerMetricsConstant::HISTOGRAM_MESSAGE_SIZE.is_empty());
-        assert!(!BrokerMetricsConstant::LABEL_CLUSTER_NAME.is_empty());
-    }
-
-    #[test]
     fn test_organized_modules() {
         // Test organized gauge constants
         assert_eq!(

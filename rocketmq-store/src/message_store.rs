@@ -20,7 +20,7 @@ pub mod rocksdb_message_store;
 
 pub enum GenericMessageStore {
     #[cfg(feature = "local_file_store")]
-    LocalFileStore(local_file_message_store::LocalFileMessageStore),
+    LocalFileStore(Box<local_file_message_store::LocalFileMessageStore>),
 
     #[cfg(feature = "rocksdb_store")]
     RocksDBStore(rocksdb_message_store::RocksDBMessageStore),

@@ -27,6 +27,12 @@ pub struct Test {
     pub b: parking_lot::Mutex<HashSet<String>>,
 }
 
+impl Default for Test {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Test {
     pub fn new() -> Self {
         Test {
