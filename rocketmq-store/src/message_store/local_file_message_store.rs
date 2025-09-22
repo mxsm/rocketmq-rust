@@ -290,14 +290,17 @@ impl LocalFileMessageStore {
             .set_message_store(message_store_arc);
     }
 
+    #[inline]
     pub fn delay_level_table(&self) -> &ArcMut<BTreeMap<i32, i64>> {
         &self.delay_level_table
     }
 
+    #[inline]
     pub fn delay_level_table_ref(&self) -> &BTreeMap<i32, i64> {
         self.delay_level_table.as_ref()
     }
 
+    #[inline]
     pub fn max_delay_level(&self) -> i32 {
         self.max_delay_level
     }
