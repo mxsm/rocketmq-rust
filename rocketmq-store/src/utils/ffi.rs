@@ -89,7 +89,7 @@ pub fn madvise(addr: *const u8, len: usize, advice: i32) -> i32 {
 }
 
 pub fn mincore(addr: *const u8, len: usize, vec: *const u8) -> i32 {
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
         use std::ffi::c_void;
 
@@ -97,7 +97,12 @@ pub fn mincore(addr: *const u8, len: usize, vec: *const u8) -> i32 {
 
         unsafe { libc::mincore(addr as *mut c_void, len, vec as *mut c_uchar) }
     }
-    #[cfg(windows)]
+
+    #[cfg(target_os = "macos")]
+    {
+        0
+    }
+    #[cfg(target_os = "windows")]
     {
         // Windows does not have mincore, so we just return 0
         0
