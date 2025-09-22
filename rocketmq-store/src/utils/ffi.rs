@@ -100,6 +100,7 @@ pub fn mincore(addr: *const u8, len: usize, vec: *const u8) -> i32 {
 
     #[cfg(target_os = "macos")]
     {
+        // macos does not have mincore, so we just return 0
         0
     }
     #[cfg(target_os = "windows")]
