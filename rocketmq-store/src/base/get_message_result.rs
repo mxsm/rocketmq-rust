@@ -342,7 +342,7 @@ mod tests {
 
         //result.set_message_buffer_list(buffer_list);
         result.set_message_queue_offset(queue_offset);
-        result.set_status(status.clone());
+        result.set_status(status);
         result.set_next_begin_offset(next_begin_offset);
         result.set_min_offset(min_offset);
         result.set_max_offset(max_offset);

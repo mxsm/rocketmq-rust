@@ -101,10 +101,10 @@ mod tests {
         let rocks_db = StoreType::RocksDB;
 
         assert_eq!(
-            serde_json::to_value(&local_file).unwrap(),
+            serde_json::to_value(local_file).unwrap(),
             json!("LocalFile")
         );
-        assert_eq!(serde_json::to_value(&rocks_db).unwrap(), json!("RocksDB"));
+        assert_eq!(serde_json::to_value(rocks_db).unwrap(), json!("RocksDB"));
     }
 
     #[test]

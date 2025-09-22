@@ -144,13 +144,8 @@ mod tests {
     fn consume_message_directly_result_new_initializes_correctly() {
         let consume_result = CMResult::default();
         let remark = CheetahString::from_static_str("test remark");
-        let result = ConsumeMessageDirectlyResult::new(
-            true,
-            false,
-            consume_result.clone(),
-            remark.clone(),
-            12345,
-        );
+        let result =
+            ConsumeMessageDirectlyResult::new(true, false, consume_result, remark.clone(), 12345);
         assert!(result.order());
         assert!(!result.auto_commit());
         assert_eq!(result.consume_result().unwrap(), &consume_result);
@@ -164,7 +159,7 @@ mod tests {
         result.set_order(true);
         result.set_auto_commit(false);
         let consume_result = CMResult::default();
-        result.set_consume_result(consume_result.clone());
+        result.set_consume_result(consume_result);
         let remark = CheetahString::from_static_str("updated remark");
         result.set_remark(remark.clone());
         result.set_spent_time_mills(67890);
@@ -180,13 +175,8 @@ mod tests {
     fn consume_message_directly_result_display_formats_correctly() {
         let consume_result = CMResult::default();
         let remark = CheetahString::from_static_str("test remark");
-        let result = ConsumeMessageDirectlyResult::new(
-            true,
-            false,
-            consume_result.clone(),
-            remark.clone(),
-            12345,
-        );
+        let result =
+            ConsumeMessageDirectlyResult::new(true, false, consume_result, remark.clone(), 12345);
         let display = format!("{}", result);
         let expected = format!(
             "ConsumeMessageDirectlyResult [order=true, auto_commit=false, consume_result={:?}, \

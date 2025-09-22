@@ -157,7 +157,7 @@ mod tests {
     fn create_message_queue_list(machine_room: &str, size: usize) -> Vec<MessageQueue> {
         (0..size)
             .map(|i| {
-                MessageQueue::from_parts(TOPIC, &format!("{}-brokerName", machine_room), i as i32)
+                MessageQueue::from_parts(TOPIC, format!("{}-brokerName", machine_room), i as i32)
             })
             .collect()
     }
