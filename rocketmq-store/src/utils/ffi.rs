@@ -88,7 +88,7 @@ pub fn madvise(addr: *const u8, len: usize, advice: i32) -> i32 {
     }
 }
 
-pub fn mincore(addr: *const u8, len: usize, vec: *const i8) -> i32 {
+pub fn mincore(addr: *const u8, len: usize, vec: *const u8) -> i32 {
     #[cfg(unix)]
     {
         use std::ffi::c_void;
