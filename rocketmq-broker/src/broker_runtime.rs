@@ -2542,8 +2542,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             let min_broker_addr = broker_member_group
                 .broker_addrs
                 .get(&min_broker_id)
-                .cloned()
-                .unwrap_or_default();
+                .cloned();
             BrokerRuntimeInner::update_min_broker(this, min_broker_id, min_broker_addr).await;
         }
     }
@@ -2551,7 +2550,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     pub async fn update_min_broker(
         this: &ArcMut<Self>,
         min_broker_id: u64,
-        min_broker_addr: CheetahString,
+        min_broker_addr: Option<CheetahString>,
     ) {
         if this.broker_config.enable_slave_acting_master
             && this.broker_config.broker_identity.broker_id != MASTER_ID
@@ -2678,14 +2677,14 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     async fn on_min_broker_change(
         &mut self,
         min_broker_id: u64,
-        min_broker_addr: CheetahString,
+        min_broker_addr: Option<CheetahString>,
         offline_broker_addr: Option<CheetahString>,
         master_ha_addr: Option<CheetahString>,
     ) {
         let min_broker_id_in_group_old = self.min_broker_id_in_group.load(Ordering::SeqCst);
         let mut min_broker_addr_in_group_old = self.min_broker_addr_in_group.lock().await;
         info!(
-            "Min broker changed, old: {}-{:?}, new {}-{}",
+            "Min broker changed, old: {}-{:?}, new {}-{:?}",
             min_broker_id_in_group_old,
             min_broker_addr_in_group_old,
             min_broker_id,
@@ -2693,7 +2692,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         );
         self.min_broker_id_in_group
             .store(min_broker_id, Ordering::SeqCst);
-        *min_broker_addr_in_group_old = Some(min_broker_addr.clone());
+        *min_broker_addr_in_group_old = min_broker_addr.clone();
         drop(min_broker_addr_in_group_old);
         self.change_special_service_status(
             self.broker_config.broker_identity.broker_id
@@ -2707,7 +2706,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             self.on_master_offline().await;
         }
 
-        if min_broker_id == MASTER_ID && !min_broker_addr.is_empty() {
+        if min_broker_id == MASTER_ID && min_broker_addr.is_some() {
             //master online
             self.on_master_on_line(min_broker_addr, master_ha_addr)
                 .await;
@@ -2723,10 +2722,50 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     async fn on_master_on_line(
         &mut self,
-        _min_broker_addr: CheetahString,
-        _master_ha_addr: Option<CheetahString>,
+        min_broker_addr: Option<CheetahString>,
+        master_ha_addr: Option<CheetahString>,
     ) {
-        error!("unimplemented")
+        let need_sync_master_flush_offset =
+            self.message_store_unchecked().get_master_flushed_offset() == 0
+                && self.message_store_config.all_ack_in_sync_state_set;
+        if master_ha_addr.is_none() || need_sync_master_flush_offset {
+            match self
+                .broker_outer_api
+                .retrieve_broker_ha_info(min_broker_addr.as_ref())
+                .await
+            {
+                Ok(broker_sync_info) => {
+                    if need_sync_master_flush_offset {
+                        info!(
+                            "Set master flush offset in slave to {}",
+                            broker_sync_info.master_flush_offset,
+                        );
+                        self.message_store_unchecked()
+                            .set_master_flushed_offset(broker_sync_info.master_flush_offset);
+                    }
+                    if master_ha_addr.is_none() {
+                        let message_store = self.message_store_unchecked();
+                        if let Some(master_ha_address) = &broker_sync_info.master_ha_address {
+                            message_store
+                                .update_ha_master_address(master_ha_address.as_str())
+                                .await;
+                        }
+                        if let Some(master_address) = &broker_sync_info.master_address {
+                            message_store.update_master_address(master_address);
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("retrieve master ha info exception, {}", e);
+                }
+            }
+        }
+        if let Some(master_ha_addr_) = master_ha_addr {
+            self.message_store_unchecked_mut()
+                .update_ha_master_address(master_ha_addr_.as_str())
+                .await;
+        }
+        self.message_store_unchecked().wakeup_ha_client();
     }
 
     async fn on_master_offline(&mut self) {
