@@ -1786,8 +1786,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn transactional_message_check_service_mut(
         &mut self,
-    ) -> &mut Option<TransactionalMessageCheckService<MS>> {
-        &mut self.transactional_message_check_service
+    ) -> Option<&mut TransactionalMessageCheckService<MS>> {
+        self.transactional_message_check_service.as_mut()
     }
 
     #[inline]
@@ -1804,8 +1804,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn transaction_metrics_flush_service_mut(
         &mut self,
-    ) -> &mut Option<TransactionMetricsFlushService> {
-        &mut self.transaction_metrics_flush_service
+    ) -> Option<&mut TransactionMetricsFlushService> {
+        self.transaction_metrics_flush_service.as_mut()
     }
 
     #[inline]
