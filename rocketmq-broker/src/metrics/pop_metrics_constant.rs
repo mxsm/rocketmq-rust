@@ -332,14 +332,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_constants_not_empty() {
-        assert!(!PopMetricsConstant::HISTOGRAM_POP_BUFFER_SCAN_TIME_CONSUME.is_empty());
-        assert!(!PopMetricsConstant::COUNTER_POP_REVIVE_IN_MESSAGE_TOTAL.is_empty());
-        assert!(!PopMetricsConstant::GAUGE_POP_REVIVE_LAG.is_empty());
-        assert!(!PopMetricsConstant::LABEL_REVIVE_MESSAGE_TYPE.is_empty());
-    }
-
-    #[test]
     fn test_organized_modules() {
         // Test organized metric constants
         assert_eq!(

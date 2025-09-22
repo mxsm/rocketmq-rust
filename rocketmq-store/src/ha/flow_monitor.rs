@@ -168,9 +168,11 @@ mod tests {
 
     #[test]
     fn can_transfer_max_byte_num_returns_correct_value_when_flow_control_enabled() {
-        let mut config = MessageStoreConfig::default();
-        config.ha_flow_control_enable = true;
-        config.max_ha_transfer_byte_in_second = 200;
+        let config = MessageStoreConfig {
+            ha_flow_control_enable: true,
+            max_ha_transfer_byte_in_second: 200,
+            ..Default::default()
+        };
         let inner = FlowMonitorInner::new(Arc::new(config));
         inner.add_byte_count_transferred(150);
         assert_eq!(inner.can_transfer_max_byte_num(), 50);
@@ -178,8 +180,10 @@ mod tests {
 
     #[test]
     fn can_transfer_max_byte_num_returns_max_value_when_flow_control_disabled() {
-        let mut config = MessageStoreConfig::default();
-        config.ha_flow_control_enable = false;
+        let config = MessageStoreConfig {
+            ha_flow_control_enable: false,
+            ..Default::default()
+        };
         let inner = FlowMonitorInner::new(Arc::new(config));
         assert_eq!(inner.can_transfer_max_byte_num(), i32::MAX);
     }

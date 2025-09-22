@@ -773,8 +773,10 @@ mod tests {
         let body = vec![/* some valid data */];
         let crc32 = CRC32Utils::crc32(&body);
         let request = RemotingCommand::new_request(0, body);
-        let mut request_header = RegisterBrokerRequestHeader::default();
-        request_header.body_crc32 = crc32;
+        let request_header = RegisterBrokerRequestHeader {
+            body_crc32: crc32,
+            ..Default::default()
+        };
         let result = check_sum_crc32(&request, &request_header);
         assert!(result);
     }
@@ -783,8 +785,10 @@ mod tests {
     fn check_sum_crc32_invalid_crc() {
         let body = vec![/* some valid data */];
         let request = RemotingCommand::new_request(0, body);
-        let mut request_header = RegisterBrokerRequestHeader::default();
-        request_header.body_crc32 = 12345; // some invalid crc32
+        let request_header = RegisterBrokerRequestHeader {
+            body_crc32: 12345, // some invalid crc32
+            ..Default::default()
+        };
         let result = check_sum_crc32(&request, &request_header);
         assert!(!result);
     }
@@ -793,8 +797,10 @@ mod tests {
     fn check_sum_crc32_zero_crc() {
         let body = vec![/* some valid data */];
         let request = RemotingCommand::new_request(0, body);
-        let mut request_header = RegisterBrokerRequestHeader::default();
-        request_header.body_crc32 = 0;
+        let request_header = RegisterBrokerRequestHeader {
+            body_crc32: 0,
+            ..Default::default()
+        };
         let result = check_sum_crc32(&request, &request_header);
         assert!(result);
     }
