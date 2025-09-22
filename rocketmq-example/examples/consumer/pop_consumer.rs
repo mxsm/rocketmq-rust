@@ -74,7 +74,6 @@ async fn switch_pop_consumer() -> RocketMQResult<()> {
             .broker_addrs()
             .values()
             .cloned()
-            .into_iter()
             .collect::<HashSet<CheetahString>>();
         for broker_addr in broker_addrs {
             MQAdminExt::set_message_request_mode(

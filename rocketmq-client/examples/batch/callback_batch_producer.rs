@@ -44,25 +44,11 @@ pub async fn main() -> RocketMQResult<()> {
         .build();
     producer.start().await?;
 
-    let mut messages = Vec::new();
-    messages.push(Message::with_keys(
-        TOPIC,
-        TAG,
-        "OrderID001",
-        "Hello world 0".as_bytes(),
-    ));
-    messages.push(Message::with_keys(
-        TOPIC,
-        TAG,
-        "OrderID002",
-        "Hello world 1".as_bytes(),
-    ));
-    messages.push(Message::with_keys(
-        TOPIC,
-        TAG,
-        "OrderID003",
-        "Hello world 2".as_bytes(),
-    ));
+    let messages = vec![
+        Message::with_keys(TOPIC, TAG, "OrderID001", "Hello world 0".as_bytes()),
+        Message::with_keys(TOPIC, TAG, "OrderID002", "Hello world 1".as_bytes()),
+        Message::with_keys(TOPIC, TAG, "OrderID003", "Hello world 2".as_bytes()),
+    ];
     let counter = Arc::new(AtomicI32::new(0));
     for _ in 0..100 {
         let vec = messages.clone();

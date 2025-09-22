@@ -36,8 +36,8 @@ pub fn delivery2() -> i32 {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    c.bench_function("delivery1", |b| b.iter(|| delivery1()));
-    c.bench_function("delivery2", |b| b.iter(|| delivery2()));
+    c.bench_function("delivery1", |b| b.iter(delivery1));
+    c.bench_function("delivery2", |b| b.iter(delivery2));
 }
 
 criterion_group!(benches, criterion_benchmark);

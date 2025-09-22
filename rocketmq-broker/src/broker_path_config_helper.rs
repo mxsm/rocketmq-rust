@@ -146,7 +146,7 @@ mod test {
     fn test_get_broker_config_path() {
         let path = get_broker_config_path();
         let home_dir = dirs::home_dir().unwrap();
-        let mut path_ = PathBuf::from(home_dir);
+        let mut path_ = home_dir;
         path_.push("store");
         path_.push("config");
         path_.push("broker.properties");
