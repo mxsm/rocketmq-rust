@@ -100,8 +100,11 @@ pub fn mincore(addr: *const u8, len: usize, vec: *const u8) -> i32 {
 
     #[cfg(target_os = "macos")]
     {
-        // macos does not have mincore, so we just return 0
-        0
+        use std::ffi::c_void;
+
+        use libc::c_char;
+
+        unsafe { libc::mincore(addr as *mut c_void, len, vec as *mut c_char) }
     }
     #[cfg(target_os = "windows")]
     {
