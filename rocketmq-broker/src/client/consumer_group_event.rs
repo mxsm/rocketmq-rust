@@ -39,29 +39,16 @@ mod tests {
         let client_register = ConsumerGroupEvent::ClientRegister;
         let client_unregister = ConsumerGroupEvent::ClientUnregister;
 
-        match change {
-            ConsumerGroupEvent::Change => assert!(true),
-            _ => assert!(false),
-        }
-
-        match unregister {
-            ConsumerGroupEvent::Unregister => assert!(true),
-            _ => assert!(false),
-        }
-
-        match register {
-            ConsumerGroupEvent::Register => assert!(true),
-            _ => assert!(false),
-        }
-
-        match client_register {
-            ConsumerGroupEvent::ClientRegister => assert!(true),
-            _ => assert!(false),
-        }
-
-        match client_unregister {
-            ConsumerGroupEvent::ClientUnregister => assert!(true),
-            _ => assert!(false),
-        }
+        assert!(matches!(change, ConsumerGroupEvent::Change));
+        assert!(matches!(unregister, ConsumerGroupEvent::Unregister));
+        assert!(matches!(register, ConsumerGroupEvent::Register));
+        assert!(matches!(
+            client_register,
+            ConsumerGroupEvent::ClientRegister
+        ));
+        assert!(matches!(
+            client_unregister,
+            ConsumerGroupEvent::ClientUnregister
+        ));
     }
 }

@@ -213,7 +213,7 @@ mod tests {
         assert_eq!(header.perm, 6);
         assert_eq!(header.topic_filter_type, CheetahString::from("filter_type"));
         assert_eq!(header.topic_sys_flag, Some(1));
-        assert_eq!(header.order, true);
+        assert!(header.order);
         assert_eq!(header.attributes, Some(CheetahString::from("attributes")));
         assert_eq!(header.force, Some(true));
     }
@@ -258,7 +258,7 @@ mod tests {
         assert_eq!(header.perm, 6);
         assert_eq!(header.topic_filter_type, CheetahString::from("filter_type"));
         assert_eq!(header.topic_sys_flag, None);
-        assert_eq!(header.order, true);
+        assert!(header.order);
         assert_eq!(header.attributes, None);
         assert_eq!(header.force, None);
     }

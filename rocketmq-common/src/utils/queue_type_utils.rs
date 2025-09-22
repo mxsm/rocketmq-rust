@@ -40,13 +40,13 @@ mod tests {
     #[test]
     fn test_is_batch_cq() {
         let topic_config = None;
-        assert_eq!(QueueTypeUtils::is_batch_cq(topic_config), false);
+        assert!(!QueueTypeUtils::is_batch_cq(topic_config));
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::new(),
             ..TopicConfig::default()
         });
-        assert_eq!(QueueTypeUtils::is_batch_cq(topic_config.as_ref()), false);
+        assert!(!QueueTypeUtils::is_batch_cq(topic_config.as_ref()));
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::from_iter([(
@@ -58,7 +58,7 @@ mod tests {
             )]),
             ..TopicConfig::default()
         });
-        assert_eq!(QueueTypeUtils::is_batch_cq(topic_config.as_ref()), true);
+        assert!(QueueTypeUtils::is_batch_cq(topic_config.as_ref()));
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::from_iter([(
@@ -70,7 +70,7 @@ mod tests {
             )]),
             ..TopicConfig::default()
         });
-        assert_eq!(QueueTypeUtils::is_batch_cq(topic_config.as_ref()), false);
+        assert!(!QueueTypeUtils::is_batch_cq(topic_config.as_ref()));
     }
 
     #[test]

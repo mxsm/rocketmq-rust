@@ -127,14 +127,14 @@ mod tests {
     fn parse_bool_true() {
         let result = BooleanAttribute::parse_bool("true");
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), true);
+        assert!(result.unwrap());
     }
 
     #[test]
     fn parse_bool_false() {
         let result = BooleanAttribute::parse_bool("false");
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), false);
+        assert!(!result.unwrap());
     }
 
     #[test]

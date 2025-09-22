@@ -127,13 +127,13 @@ mod tests {
         // Check getters
         assert_eq!(request.expect_state(), HAConnectionState::Transfer);
         assert_eq!(request.remote_addr(), "127.0.0.1:9876");
-        assert_eq!(request.notify_when_shutdown(), true);
+        assert!(request.notify_when_shutdown());
 
         // Complete the request
         assert!(request.complete(true).await);
 
         // Verify the result was received
-        assert_eq!(receiver.await.unwrap(), true);
+        assert!(receiver.await.unwrap());
 
         // Completing again should fail
         assert!(!request.complete(false).await);

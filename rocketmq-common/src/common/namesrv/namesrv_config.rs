@@ -478,23 +478,23 @@ mod tests {
             )
         );
         assert_eq!(config.product_env_name, "center");
-        assert_eq!(config.cluster_test, false);
-        assert_eq!(config.order_message_enable, false);
-        assert_eq!(config.return_order_topic_config_to_broker, true);
+        assert!(!config.cluster_test);
+        assert!(!config.order_message_enable);
+        assert!(config.return_order_topic_config_to_broker);
         assert_eq!(config.client_request_thread_pool_nums, 8);
         assert_eq!(config.default_thread_pool_nums, 16);
         assert_eq!(config.client_request_thread_pool_queue_capacity, 50000);
         assert_eq!(config.default_thread_pool_queue_capacity, 10000);
         assert_eq!(config.scan_not_active_broker_interval, 5 * 1000);
         assert_eq!(config.unregister_broker_queue_capacity, 3000);
-        assert_eq!(config.support_acting_master, false);
-        assert_eq!(config.enable_all_topic_list, true);
-        assert_eq!(config.enable_topic_list, true);
-        assert_eq!(config.notify_min_broker_id_changed, false);
-        assert_eq!(config.enable_controller_in_namesrv, false);
-        assert_eq!(config.need_wait_for_service, false);
+        assert!(!config.support_acting_master);
+        assert!(config.enable_all_topic_list);
+        assert!(config.enable_topic_list);
+        assert!(!config.notify_min_broker_id_changed);
+        assert!(!config.enable_controller_in_namesrv);
+        assert!(!config.need_wait_for_service);
         assert_eq!(config.wait_seconds_for_service, 45);
-        assert_eq!(config.delete_topic_with_broker_registration, false);
+        assert!(!config.delete_topic_with_broker_registration);
         assert_eq!(
             config.config_black_list,
             "configBlackList;configStorePath;kvConfigPath".to_string()
@@ -598,22 +598,22 @@ mod tests {
         assert_eq!(config.kv_config_path, "/new/kvConfigPath");
         assert_eq!(config.config_store_path, "/new/configStorePath");
         assert_eq!(config.product_env_name, "new_env");
-        assert_eq!(config.cluster_test, true);
-        assert_eq!(config.order_message_enable, true);
+        assert!(config.cluster_test);
+        assert!(config.order_message_enable);
         assert_eq!(config.client_request_thread_pool_nums, 10);
         assert_eq!(config.default_thread_pool_nums, 20);
         assert_eq!(config.client_request_thread_pool_queue_capacity, 10000);
         assert_eq!(config.default_thread_pool_queue_capacity, 20000);
         assert_eq!(config.scan_not_active_broker_interval, 15000);
         assert_eq!(config.unregister_broker_queue_capacity, 4000);
-        assert_eq!(config.support_acting_master, true);
-        assert_eq!(config.enable_all_topic_list, false);
-        assert_eq!(config.enable_topic_list, false);
-        assert_eq!(config.notify_min_broker_id_changed, true);
-        assert_eq!(config.enable_controller_in_namesrv, true);
-        assert_eq!(config.need_wait_for_service, true);
+        assert!(config.support_acting_master);
+        assert!(!config.enable_all_topic_list);
+        assert!(!config.enable_topic_list);
+        assert!(config.notify_min_broker_id_changed);
+        assert!(config.enable_controller_in_namesrv);
+        assert!(config.need_wait_for_service);
         assert_eq!(config.wait_seconds_for_service, 30);
-        assert_eq!(config.delete_topic_with_broker_registration, true);
+        assert!(config.delete_topic_with_broker_registration);
         assert_eq!(config.config_black_list, "newBlackList");
     }
 

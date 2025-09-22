@@ -210,7 +210,7 @@ mod tests {
         assert_eq!(config.perm, PermName::PERM_READ | PermName::PERM_WRITE);
         assert_eq!(config.topic_filter_type, TopicFilterType::SingleTag);
         assert_eq!(config.topic_sys_flag, 0);
-        assert_eq!(config.order, false);
+        assert!(!config.order);
         assert!(config.attributes.is_empty());
     }
 
