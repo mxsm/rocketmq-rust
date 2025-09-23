@@ -72,6 +72,9 @@ pub trait InvokeCallback {
 
 #[allow(unused_variables)]
 mod inner {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
     use crate::base::response_future::ResponseFuture;
     use crate::net::channel::Channel;
     use crate::protocol::remoting_command::RemotingCommand;
@@ -80,8 +83,6 @@ mod inner {
     use crate::runtime::connection_handler_context::ConnectionHandlerContext;
     use crate::runtime::processor::RequestProcessor;
     use crate::runtime::RPCHook;
-    use std::collections::HashMap;
-    use std::sync::Arc;
 
     struct RemotingGeneral<RP> {
         request_processor: RP,
@@ -90,11 +91,16 @@ mod inner {
         response_table: HashMap<i32, ResponseFuture>,
     }
 
-    impl<RP> RemotingGeneral<RP> where RP: RequestProcessor + Sync + 'static + Clone {
-
-        pub fn process_message_received(&mut self, channel: Channel,
-                                        ctx: ConnectionHandlerContext,
-                                        cmd: &mut RemotingCommand,) {
+    impl<RP> RemotingGeneral<RP>
+    where
+        RP: RequestProcessor + Sync + 'static + Clone,
+    {
+        pub fn process_message_received(
+            &mut self,
+            channel: Channel,
+            ctx: ConnectionHandlerContext,
+            cmd: &mut RemotingCommand,
+        ) {
             match cmd.get_type() {
                 RemotingCommandType::REQUEST => {
                     self.process_request_command(channel, ctx, cmd);
@@ -103,22 +109,25 @@ mod inner {
                     self.process_response_command(channel, ctx, cmd);
                 }
             }
-
         }
 
-        fn process_request_command(&mut self, channel: Channel,
-                                   ctx: ConnectionHandlerContext,
-                                   cmd: &mut RemotingCommand,) {
-
+        fn process_request_command(
+            &mut self,
+            channel: Channel,
+            ctx: ConnectionHandlerContext,
+            cmd: &mut RemotingCommand,
+        ) {
         }
 
-        fn process_response_command(&mut self, channel: Channel,
-                                   ctx: ConnectionHandlerContext,
-                                   cmd: &mut RemotingCommand,) {
-
+        fn process_response_command(
+            &mut self,
+            channel: Channel,
+            ctx: ConnectionHandlerContext,
+            cmd: &mut RemotingCommand,
+        ) {
         }
 
-         fn do_after_rpc_hooks(
+        fn do_after_rpc_hooks(
             &self,
             channel: &Channel,
             request: &RemotingCommand,
