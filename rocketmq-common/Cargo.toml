@@ -51,7 +51,7 @@ chrono = "0.4.42"
 
 parking_lot = { workspace = true }
 once_cell = { workspace = true }
-tempfile = "3.22.0"
+tempfile = "3.23.0"
 trait-variant.workspace = true
 
 dashmap = "6.1.0"
