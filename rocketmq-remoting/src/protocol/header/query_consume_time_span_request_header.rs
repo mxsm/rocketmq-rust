@@ -58,7 +58,7 @@ mod tests {
         let header: QueryConsumeTimeSpanRequestHeader = serde_json::from_str(data).unwrap();
         assert_eq!(header.topic, CheetahString::from_static_str("test_topic"));
         assert_eq!(header.group, CheetahString::from_static_str("test_group"));
-        assert!(!header.topic_request_header.is_none());
+        assert!(header.topic_request_header.is_some());
     }
 
     #[test]
@@ -67,7 +67,7 @@ mod tests {
         let header: QueryConsumeTimeSpanRequestHeader = serde_json::from_str(data).unwrap();
         assert_eq!(header.topic, CheetahString::from_static_str("test_topic"));
         assert_eq!(header.group, CheetahString::from_static_str("test_group"));
-        assert!(!header.topic_request_header.is_none());
+        assert!(header.topic_request_header.is_some());
     }
 
     #[test]

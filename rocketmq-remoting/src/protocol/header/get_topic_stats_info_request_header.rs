@@ -53,7 +53,7 @@ mod tests {
         let data = r#"{"topic":"test_topic"}"#;
         let header: GetTopicStatsInfoRequestHeader = serde_json::from_str(data).unwrap();
         assert_eq!(header.topic, CheetahString::from_static_str("test_topic"));
-        assert!(!header.topic_request_header.is_none());
+        assert!(header.topic_request_header.is_some());
     }
 
     #[test]
@@ -61,7 +61,7 @@ mod tests {
         let data = r#"{"topic":"test_topic"}"#;
         let header: GetTopicStatsInfoRequestHeader = serde_json::from_str(data).unwrap();
         assert_eq!(header.topic, CheetahString::from_static_str("test_topic"));
-        assert!(!header.topic_request_header.is_none());
+        assert!(header.topic_request_header.is_some());
     }
 
     #[test]

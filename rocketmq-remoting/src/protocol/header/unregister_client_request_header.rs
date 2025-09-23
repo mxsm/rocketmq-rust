@@ -125,6 +125,6 @@ mod tests {
             CheetahString::from_static_str("test_client_id")
         );
         assert_eq!(header.consumer_group.as_deref(), None);
-        assert!(!header.rpc_request_header.is_none());
+        assert!(header.rpc_request_header.is_some());
     }
 }

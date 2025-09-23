@@ -89,7 +89,7 @@ mod tests {
 
         let header = <DeleteTopicRequestHeader as FromMap>::from(&map).unwrap();
         assert_eq!(header.topic, CheetahString::from("test_topic"));
-        assert!(!header.topic_request_header.is_none());
+        assert!(header.topic_request_header.is_some());
     }
 
     #[test]

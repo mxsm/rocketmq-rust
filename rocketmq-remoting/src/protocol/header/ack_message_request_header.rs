@@ -84,7 +84,7 @@ mod tests {
         assert_eq!(header.queue_id, 1);
         assert_eq!(header.extra_info, CheetahString::from("extra_info"));
         assert_eq!(header.offset, 12345);
-        assert!(!header.topic_request_header.is_none());
+        assert!(header.topic_request_header.is_some());
     }
 
     #[test]

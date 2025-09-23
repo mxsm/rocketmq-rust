@@ -594,71 +594,64 @@ mod tests {
         );
     }
 
-    #[cfg(test)]
-    mod tests {
-        use std::sync::atomic::Ordering;
+    #[test]
+    fn data_version_serialization_deserialization() {
+        let mut data_version = DataVersion::new();
+        data_version.set_state_version(10);
+        let serialized = serde_json::to_string(&data_version).unwrap();
+        let deserialized: DataVersion = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(data_version.state_version, deserialized.state_version);
+        assert_eq!(data_version.timestamp, deserialized.timestamp);
+        assert_eq!(
+            data_version.counter.load(Ordering::SeqCst),
+            deserialized.counter.load(Ordering::SeqCst)
+        );
+    }
 
-        use super::*;
+    #[test]
+    fn data_version_counter_increment() {
+        let data_version = DataVersion::new();
+        let initial_counter = data_version.counter.load(Ordering::SeqCst);
+        data_version.increment_counter();
+        assert_eq!(
+            initial_counter + 1,
+            data_version.counter.load(Ordering::SeqCst)
+        );
+    }
 
-        #[test]
-        fn data_version_serialization_deserialization() {
-            let mut data_version = DataVersion::new();
-            data_version.set_state_version(10);
-            let serialized = serde_json::to_string(&data_version).unwrap();
-            let deserialized: DataVersion = serde_json::from_str(&serialized).unwrap();
-            assert_eq!(data_version.state_version, deserialized.state_version);
-            assert_eq!(data_version.timestamp, deserialized.timestamp);
-            assert_eq!(
-                data_version.counter.load(Ordering::SeqCst),
-                deserialized.counter.load(Ordering::SeqCst)
-            );
-        }
+    #[test]
+    fn data_version_next_version() {
+        let mut data_version = DataVersion::new();
+        let initial_state_version = data_version.state_version;
+        let initial_timestamp = data_version.timestamp;
+        let initial_counter = data_version.counter.load(Ordering::SeqCst);
+        data_version.next_version();
+        assert_eq!(initial_state_version, data_version.state_version);
+        assert!(data_version.timestamp >= initial_timestamp);
+        assert_eq!(
+            initial_counter + 1,
+            data_version.counter.load(Ordering::SeqCst)
+        );
+    }
 
-        #[test]
-        fn data_version_counter_increment() {
-            let data_version = DataVersion::new();
-            let initial_counter = data_version.counter.load(Ordering::SeqCst);
-            data_version.increment_counter();
-            assert_eq!(
-                initial_counter + 1,
-                data_version.counter.load(Ordering::SeqCst)
-            );
-        }
-
-        #[test]
-        fn data_version_next_version() {
-            let mut data_version = DataVersion::new();
-            let initial_state_version = data_version.state_version;
-            let initial_timestamp = data_version.timestamp;
-            let initial_counter = data_version.counter.load(Ordering::SeqCst);
-            data_version.next_version();
-            assert_eq!(initial_state_version, data_version.state_version);
-            assert!(data_version.timestamp >= initial_timestamp);
-            assert_eq!(
-                initial_counter + 1,
-                data_version.counter.load(Ordering::SeqCst)
-            );
-        }
-
-        #[test]
-        fn data_version_next_version_with_state() {
-            let mut data_version = DataVersion::new();
-            let initial_timestamp = data_version.timestamp;
-            let initial_counter = data_version.counter.load(Ordering::SeqCst);
-            data_version.next_version_with(20);
-            assert_eq!(20, data_version.state_version);
-            assert!(data_version.timestamp >= initial_timestamp);
-            assert_eq!(
-                initial_counter + 1,
-                data_version.counter.load(Ordering::SeqCst)
-            );
-        }
+    #[test]
+    fn data_version_next_version_with_state() {
+        let mut data_version = DataVersion::new();
+        let initial_timestamp = data_version.timestamp;
+        let initial_counter = data_version.counter.load(Ordering::SeqCst);
+        data_version.next_version_with(20);
+        assert_eq!(20, data_version.state_version);
+        assert!(data_version.timestamp >= initial_timestamp);
+        assert_eq!(
+            initial_counter + 1,
+            data_version.counter.load(Ordering::SeqCst)
+        );
     }
 
     #[test]
     fn data_version_equality() {
         let data_version1 = DataVersion::new();
-        let mut data_version2 = data_version1.clone();
+        let data_version2 = data_version1.clone();
         assert_eq!(data_version1, data_version2);
 
         data_version2.increment_counter();
@@ -667,7 +660,7 @@ mod tests {
 
     #[test]
     fn data_version_partial_ordering() {
-        let mut data_version1 = DataVersion::new();
+        let data_version1 = DataVersion::new();
         let mut data_version2 = data_version1.clone();
 
         assert_eq!(
@@ -688,7 +681,7 @@ mod tests {
 
     #[test]
     fn data_version_total_ordering() {
-        let mut data_version1 = DataVersion::new();
+        let data_version1 = DataVersion::new();
         let mut data_version2 = data_version1.clone();
 
         assert_eq!(data_version1.cmp(&data_version2), std::cmp::Ordering::Equal);

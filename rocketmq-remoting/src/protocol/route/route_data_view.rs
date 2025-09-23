@@ -271,7 +271,7 @@ mod tests {
 
         broker_data.remove_broker_by_addr(1, &"127.0.0.1".into());
         //assert!(broker_data.broker_addrs.get(&1).is_none());
-        assert!(broker_data.broker_addrs.get(&2).is_some());
+        assert!(broker_data.broker_addrs.contains_key(&2));
     }
 
     #[test]
