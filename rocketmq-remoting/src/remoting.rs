@@ -69,3 +69,70 @@ pub trait InvokeCallback {
     fn operation_succeed(&self, response: RemotingCommand);
     fn operation_fail(&self, throwable: Box<dyn std::error::Error>);
 }
+
+#[allow(unused_variables)]
+mod inner {
+    use crate::base::response_future::ResponseFuture;
+    use crate::net::channel::Channel;
+    use crate::protocol::remoting_command::RemotingCommand;
+    use crate::protocol::RemotingCommandType;
+    use crate::remoting_server::server::Shutdown;
+    use crate::runtime::connection_handler_context::ConnectionHandlerContext;
+    use crate::runtime::processor::RequestProcessor;
+    use crate::runtime::RPCHook;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    struct RemotingGeneral<RP> {
+        request_processor: RP,
+        shutdown: Shutdown,
+        rpc_hooks: Arc<Vec<Box<dyn RPCHook>>>,
+        response_table: HashMap<i32, ResponseFuture>,
+    }
+
+    impl<RP> RemotingGeneral<RP> where RP: RequestProcessor + Sync + 'static + Clone {
+
+        pub fn process_message_received(&mut self, channel: Channel,
+                                        ctx: ConnectionHandlerContext,
+                                        cmd: &mut RemotingCommand,) {
+            match cmd.get_type() {
+                RemotingCommandType::REQUEST => {
+                    self.process_request_command(channel, ctx, cmd);
+                }
+                RemotingCommandType::RESPONSE => {
+                    self.process_response_command(channel, ctx, cmd);
+                }
+            }
+
+        }
+
+        fn process_request_command(&mut self, channel: Channel,
+                                   ctx: ConnectionHandlerContext,
+                                   cmd: &mut RemotingCommand,) {
+
+        }
+
+        fn process_response_command(&mut self, channel: Channel,
+                                   ctx: ConnectionHandlerContext,
+                                   cmd: &mut RemotingCommand,) {
+
+        }
+
+         fn do_after_rpc_hooks(
+            &self,
+            channel: &Channel,
+            request: &RemotingCommand,
+            response: Option<&mut RemotingCommand>,
+        ) -> rocketmq_error::RocketMQResult<()> {
+            unimplemented!("do_after_rpc_hooks unimplemented")
+        }
+
+        pub fn do_before_rpc_hooks(
+            &self,
+            channel: &Channel,
+            request: Option<&mut RemotingCommand>,
+        ) -> rocketmq_error::RocketMQResult<()> {
+            unimplemented!("do_before_rpc_hooks unimplemented")
+        }
+    }
+}
