@@ -192,13 +192,13 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
                     connection_tables.insert(addr.clone(), client.clone());
                     Some(client)
                 }
-                Err(_) => {
-                    error!("getAndCreateClient connect to {} failed", addr);
+                Err(e) => {
+                    error!("getAndCreateClient connect to {} failed,{e}", addr);
                     None
                 }
             },
-            Err(_) => {
-                error!("getAndCreateClient connect to {} failed", addr);
+            Err(e) => {
+                error!("getAndCreateClient connect to {} failed,{e}", addr);
                 None
             }
         }
