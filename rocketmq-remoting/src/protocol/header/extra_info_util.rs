@@ -506,13 +506,13 @@ mod tests {
 
     #[test]
     fn get_ck_queue_offset_with_valid_string() {
-        let result = ExtraInfoUtil::get_ck_queue_offset(&vec!["123".to_string()]).unwrap();
+        let result = ExtraInfoUtil::get_ck_queue_offset(&["123".to_string()]).unwrap();
         assert_eq!(result, 123);
     }
 
     #[test]
     fn get_ck_queue_offset_with_invalid_string() {
-        let result = ExtraInfoUtil::get_ck_queue_offset(&vec!["abc".to_string()]).unwrap_err();
+        let result = ExtraInfoUtil::get_ck_queue_offset(&["abc".to_string()]).unwrap_err();
         assert_eq!(
             result.to_string(),
             IllegalArgument("parse ck_queue_offset error".to_string()).to_string()
@@ -521,14 +521,13 @@ mod tests {
 
     #[test]
     fn get_pop_time_with_valid_string() {
-        let result =
-            ExtraInfoUtil::get_pop_time(&vec!["123".to_string(), "456".to_string()]).unwrap();
+        let result = ExtraInfoUtil::get_pop_time(&["123".to_string(), "456".to_string()]).unwrap();
         assert_eq!(result, 456);
     }
 
     #[test]
     fn get_pop_time_with_insufficient_length() {
-        let result = ExtraInfoUtil::get_pop_time(&vec!["123".to_string()]).unwrap_err();
+        let result = ExtraInfoUtil::get_pop_time(&["123".to_string()]).unwrap_err();
         assert_eq!(
             result.to_string(),
             IllegalArgument("getPopTime fail, extraInfoStrs length 1".to_string()).to_string()
@@ -537,7 +536,7 @@ mod tests {
 
     #[test]
     fn get_invisible_time_with_valid_string() {
-        let result = ExtraInfoUtil::get_invisible_time(&vec![
+        let result = ExtraInfoUtil::get_invisible_time(&[
             "123".to_string(),
             "456".to_string(),
             "789".to_string(),
@@ -548,8 +547,8 @@ mod tests {
 
     #[test]
     fn get_invisible_time_with_insufficient_length() {
-        let result = ExtraInfoUtil::get_invisible_time(&vec!["123".to_string(), "456".to_string()])
-            .unwrap_err();
+        let result =
+            ExtraInfoUtil::get_invisible_time(&["123".to_string(), "456".to_string()]).unwrap_err();
         assert_eq!(
             result.to_string(),
             IllegalArgument("getInvisibleTime fail, extraInfoStrs length 2".to_string())
@@ -559,7 +558,7 @@ mod tests {
 
     #[test]
     fn get_revive_qid_with_valid_string() {
-        let result = ExtraInfoUtil::get_revive_qid(&vec![
+        let result = ExtraInfoUtil::get_revive_qid(&[
             "123".to_string(),
             "456".to_string(),
             "789".to_string(),
@@ -571,7 +570,7 @@ mod tests {
 
     #[test]
     fn get_revive_qid_with_insufficient_length() {
-        let result = ExtraInfoUtil::get_revive_qid(&vec![
+        let result = ExtraInfoUtil::get_revive_qid(&[
             "123".to_string(),
             "456".to_string(),
             "789".to_string(),
@@ -586,7 +585,7 @@ mod tests {
     #[test]
     fn get_real_topic_with_retry_v1() {
         let result = ExtraInfoUtil::get_real_topic(
-            &vec![
+            &[
                 "123".to_string(),
                 "456".to_string(),
                 "789".to_string(),
@@ -603,7 +602,7 @@ mod tests {
     #[test]
     fn get_real_topic_with_retry_v2() {
         let result = ExtraInfoUtil::get_real_topic(
-            &vec![
+            &[
                 "123".to_string(),
                 "456".to_string(),
                 "789".to_string(),
@@ -620,7 +619,7 @@ mod tests {
     #[test]
     fn get_real_topic_with_normal_topic() {
         let result = ExtraInfoUtil::get_real_topic(
-            &vec![
+            &[
                 "123".to_string(),
                 "456".to_string(),
                 "789".to_string(),
@@ -637,7 +636,7 @@ mod tests {
     #[test]
     fn get_real_topic_with_insufficient_length() {
         let result = ExtraInfoUtil::get_real_topic(
-            &vec![
+            &[
                 "123".to_string(),
                 "456".to_string(),
                 "789".to_string(),
@@ -664,7 +663,7 @@ mod tests {
 
     #[test]
     fn get_retry_slice_with_valid_string() {
-        let result = ExtraInfoUtil::get_retry(&vec![
+        let result = ExtraInfoUtil::get_retry(&[
             "123".to_string(),
             "456".to_string(),
             "789".to_string(),
@@ -677,7 +676,7 @@ mod tests {
 
     #[test]
     fn get_retry_slice_with_insufficient_length() {
-        let result = ExtraInfoUtil::get_retry(&vec![
+        let result = ExtraInfoUtil::get_retry(&[
             "123".to_string(),
             "456".to_string(),
             "789".to_string(),
@@ -692,7 +691,7 @@ mod tests {
 
     #[test]
     fn get_broker_name_with_valid_string() {
-        let result = ExtraInfoUtil::get_broker_name(&vec![
+        let result = ExtraInfoUtil::get_broker_name(&[
             "123".to_string(),
             "456".to_string(),
             "789".to_string(),
@@ -706,7 +705,7 @@ mod tests {
 
     #[test]
     fn get_broker_name_with_insufficient_length() {
-        let result = ExtraInfoUtil::get_broker_name(&vec![
+        let result = ExtraInfoUtil::get_broker_name(&[
             "123".to_string(),
             "456".to_string(),
             "789".to_string(),
@@ -722,7 +721,7 @@ mod tests {
 
     #[test]
     fn get_queue_id_with_valid_string() {
-        let result = ExtraInfoUtil::get_queue_id(&vec![
+        let result = ExtraInfoUtil::get_queue_id(&[
             "123".to_string(),
             "456".to_string(),
             "789".to_string(),
@@ -737,7 +736,7 @@ mod tests {
 
     #[test]
     fn get_queue_id_with_insufficient_length() {
-        let result = ExtraInfoUtil::get_queue_id(&vec![
+        let result = ExtraInfoUtil::get_queue_id(&[
             "123".to_string(),
             "456".to_string(),
             "789".to_string(),
@@ -754,7 +753,7 @@ mod tests {
 
     #[test]
     fn get_queue_offset_with_valid_string() {
-        let result = ExtraInfoUtil::get_queue_offset(&vec![
+        let result = ExtraInfoUtil::get_queue_offset(&[
             "123".to_string(),
             "456".to_string(),
             "789".to_string(),
@@ -770,7 +769,7 @@ mod tests {
 
     #[test]
     fn get_queue_offset_with_insufficient_length() {
-        let result = ExtraInfoUtil::get_queue_offset(&vec![
+        let result = ExtraInfoUtil::get_queue_offset(&[
             "123".to_string(),
             "456".to_string(),
             "789".to_string(),
@@ -830,7 +829,7 @@ mod tests {
     #[test]
     fn build_msg_offset_info_creates_correct_string() {
         let mut string_builder = String::new();
-        ExtraInfoUtil::build_msg_offset_info(&mut string_builder, "topic", 7, &vec![100, 200, 300]);
+        ExtraInfoUtil::build_msg_offset_info(&mut string_builder, "topic", 7, &[100, 200, 300]);
         assert_eq!(string_builder, "0 7 100;200;300");
     }
 
@@ -897,7 +896,7 @@ mod tests {
 
     #[test]
     fn is_order_with_order_queue() {
-        let result = ExtraInfoUtil::is_order(&vec![
+        let result = ExtraInfoUtil::is_order(&[
             "123".to_string(),
             "456".to_string(),
             "789".to_string(),
@@ -913,7 +912,7 @@ mod tests {
 
     #[test]
     fn is_order_with_non_order_queue() {
-        let result = ExtraInfoUtil::is_order(&vec![
+        let result = ExtraInfoUtil::is_order(&[
             "123".to_string(),
             "456".to_string(),
             "789".to_string(),

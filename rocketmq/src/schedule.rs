@@ -747,8 +747,8 @@ mod tests {
             },
         );
 
-        let _ = tokio::time::sleep(Duration::from_secs(1));
-        let _ = manager.cancel_task(task_id);
+        time::sleep(Duration::from_millis(400)).await;
+        manager.cancel_task(task_id);
         assert_eq!(manager.task_count(), 0);
     }
 
@@ -806,7 +806,7 @@ mod tests {
 
         let executed = counter.load(Ordering::Relaxed);
         assert!(
-            executed >= 3 && executed <= 6,
+            (3..=6).contains(&executed),
             "FixedDelay count unexpected: {}",
             executed
         );
@@ -835,7 +835,7 @@ mod tests {
 
         let executed = counter.load(Ordering::Relaxed);
         assert!(
-            executed >= 2 && executed <= 5,
+            (2..=5).contains(&executed),
             "FixedRateNoOverlap count unexpected: {}",
             executed
         );
