@@ -65,7 +65,7 @@ mod tests {
         let mut all_acl_config_data_version = HashMap::new();
         all_acl_config_data_version.insert(CheetahString::from("key1"), DataVersion::default());
 
-        let _info1 = ClusterAclVersionInfo {
+        let info1 = ClusterAclVersionInfo {
             broker_name: CheetahString::from("broker1"),
             broker_addr: CheetahString::from("addr1"),
             acl_config_data_version: Some(DataVersion::default()),
@@ -73,18 +73,23 @@ mod tests {
             cluster_name: CheetahString::from("cluster1"),
         };
 
-        let _info2 = ClusterAclVersionInfo {
+        let info2 = ClusterAclVersionInfo {
             broker_name: CheetahString::from("broker1"),
             broker_addr: CheetahString::from("addr1"),
             acl_config_data_version: Some(DataVersion::default()),
-            all_acl_config_data_version: all_acl_config_data_version,
+            all_acl_config_data_version,
             cluster_name: CheetahString::from("cluster1"),
         };
+
+        assert_eq!(
+            serde_json::to_string(&info1).unwrap(),
+            serde_json::to_string(&info2).unwrap()
+        );
     }
 
     #[test]
     fn cluster_acl_version_info_inequality() {
-        let _info1 = ClusterAclVersionInfo {
+        let info1 = ClusterAclVersionInfo {
             broker_name: CheetahString::from("broker1"),
             broker_addr: CheetahString::from("addr1"),
             acl_config_data_version: Some(DataVersion::default()),
@@ -92,13 +97,18 @@ mod tests {
             cluster_name: CheetahString::from("cluster1"),
         };
 
-        let _info2 = ClusterAclVersionInfo {
+        let info2 = ClusterAclVersionInfo {
             broker_name: CheetahString::from("broker2"),
             broker_addr: CheetahString::from("addr2"),
             acl_config_data_version: None,
             all_acl_config_data_version: HashMap::new(),
             cluster_name: CheetahString::from("cluster2"),
         };
+
+        assert_ne!(
+            serde_json::to_string(&info1).unwrap(),
+            serde_json::to_string(&info2).unwrap()
+        );
     }
 
     #[test]
@@ -110,7 +120,7 @@ mod tests {
             broker_name: CheetahString::from("broker1"),
             broker_addr: CheetahString::from("addr1"),
             acl_config_data_version: Some(DataVersion::default()),
-            all_acl_config_data_version: all_acl_config_data_version,
+            all_acl_config_data_version,
             cluster_name: CheetahString::from("cluster1"),
         };
         let serialized = serde_json::to_string(&info).unwrap();
