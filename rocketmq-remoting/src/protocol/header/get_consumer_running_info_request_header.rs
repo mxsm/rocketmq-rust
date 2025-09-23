@@ -69,7 +69,7 @@ mod tests {
             CheetahString::from_static_str("client_id")
         );
         assert!(header.jstack_enable);
-        assert!(!header.rpc_request_header.is_none());
+        assert!(header.rpc_request_header.is_some());
     }
 
     #[test]
@@ -85,7 +85,7 @@ mod tests {
             CheetahString::from_static_str("client_id")
         );
         assert!(!header.jstack_enable);
-        assert!(!header.rpc_request_header.is_none());
+        assert!(header.rpc_request_header.is_some());
     }
 
     #[test]

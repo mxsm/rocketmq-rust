@@ -161,7 +161,7 @@ mod reply_message_request_header_tests {
         assert_eq!(map.get("producerGroup").unwrap(), "test_producer_group");
         assert_eq!(map.get("defaultTopicQueueNums").unwrap(), "10");
         assert_eq!(map.get("bornTimestamp").unwrap(), "1622547800");
-        assert!(map.get("topicRequest").is_none());
+        assert!(!map.contains_key("topicRequest"));
         assert_eq!(map.get("queueId").unwrap(), "1");
         assert_eq!(map.get("sysFlag").unwrap(), "0");
         assert_eq!(map.get("bornHost").unwrap(), "test_born_host");

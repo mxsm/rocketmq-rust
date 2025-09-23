@@ -60,7 +60,7 @@ mod tests {
             CheetahString::from_static_str("test_group")
         );
         assert!(header.clean_offset);
-        assert!(!header.rpc_request_header.is_none());
+        assert!(header.rpc_request_header.is_some());
     }
 
     #[test]
@@ -72,7 +72,7 @@ mod tests {
             CheetahString::from_static_str("test_group")
         );
         assert!(!header.clean_offset);
-        assert!(!header.rpc_request_header.is_none());
+        assert!(header.rpc_request_header.is_some());
     }
 
     #[test]

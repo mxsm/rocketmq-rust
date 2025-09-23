@@ -425,7 +425,7 @@ mod tests {
     fn time_millis_to_human_string_formats_correctly() {
         let timestamp = 1743239631601;
         let expected = Local
-            .timestamp_millis_opt(timestamp as i64)
+            .timestamp_millis_opt(timestamp)
             .unwrap()
             .format("%Y%m%d%H%M%S%3f")
             .to_string();
@@ -489,7 +489,7 @@ mod tests {
         use chrono::Utc;
         let timestamp = 1625140800000;
         let expected = Local
-            .timestamp_millis_opt(timestamp as i64)
+            .timestamp_millis_opt(timestamp)
             .unwrap()
             .format("%Y-%m-%d %H:%M:%S,%3f")
             .to_string();

@@ -126,17 +126,17 @@ mod tests {
     fn build_subscription_data_with_expression_type_sets_expression_type() {
         let topic = "test_topic".into();
         let sub_string = "tag1||tag2".into();
-        let expression_type = Some("SQL92".into());
+        let expression_type: CheetahString = "SQL92".into();
         let subscription_data = FilterAPI::build_subscription_data_with_expression_type(
             &topic,
             &sub_string,
-            expression_type.clone(),
+            Some(expression_type.clone()),
         )
         .unwrap();
 
         assert_eq!(subscription_data.topic.as_str(), topic.as_str());
         assert_eq!(subscription_data.sub_string.as_str(), sub_string.as_str());
-        assert_eq!(subscription_data.expression_type, expression_type.unwrap());
+        assert_eq!(subscription_data.expression_type, expression_type);
     }
 
     #[test]
