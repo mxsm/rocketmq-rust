@@ -33,12 +33,13 @@ use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
 use crate::protocol::remoting_command::RemotingCommand;
 use crate::protocol::RemotingCommandType;
+use crate::remoting::inner::RemotingGeneralHandler;
 use crate::runtime::connection_handler_context::ConnectionHandlerContext;
 use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::runtime::processor::RequestProcessor;
 
 #[derive(Clone)]
-pub struct Client {
+pub struct Client<PR> {
     /// The TCP connection decorated with the rocketmq remoting protocol encoder / decoder
     /// implemented using a buffered `TcpStream`.
     ///
@@ -47,92 +48,20 @@ pub struct Client {
     /// `Connection` allows the handler to operate at the "frame" level and keep
     /// the byte level protocol parsing details encapsulated in `Connection`.
     //connection: Connection,
-    inner: ArcMut<ClientInner>,
-    tx: tokio::sync::mpsc::Sender<SendMessage>,
+    inner: ArcMut<ClientInner<PR>>,
 }
 
-struct ClientInner {
-    response_table: ArcMut<HashMap<i32, ResponseFuture>>,
-    channel: (ArcMut<ChannelInner>, Channel),
+struct ClientInner<PR> {
+    cmd_handler: ArcMut<RemotingGeneralHandler<PR>>,
     ctx: ConnectionHandlerContext,
-    tx: tokio::sync::mpsc::Sender<SendMessage>,
 }
 
-type SendMessage = (
-    RemotingCommand,
-    Option<tokio::sync::oneshot::Sender<RocketMQResult<RemotingCommand>>>,
-    Option<u64>,
-);
-
-async fn run_send(mut client: ArcMut<ClientInner>, mut rx: Receiver<SendMessage>) {
-    while let Some((request, tx, timeout)) = rx.recv().await {
-        let _ = client.send(request, tx, timeout).await;
-    }
-}
-
-async fn run_recv<PR: RequestProcessor>(mut client: ArcMut<ClientInner>, mut processor: PR) {
-    while let Some(response) = client.channel.0.connection.receive_command().await {
-        match response {
-            Ok(mut msg) => match msg.get_type() {
-                // handle request
-                RemotingCommandType::REQUEST => {
-                    let opaque = msg.opaque();
-                    let process_result = processor
-                        .process_request(client.channel.1.clone(), client.ctx.clone(), &mut msg)
-                        .await;
-                    match process_result {
-                        Ok(response) => {
-                            if let Some(response) = response {
-                                let _ = client
-                                    .tx
-                                    .send((response.set_opaque(opaque), None, None))
-                                    .await;
-                            }
-                        }
-                        Err(err) => {
-                            error!("process request error: {:?}", err);
-                            let command = RemotingCommand::create_response_command()
-                                .set_opaque(opaque)
-                                .set_code(ResponseCode::SystemBusy)
-                                .set_remark_option(Some("System busy".to_string()));
-                            client.tx.send((command, None, None)).await.unwrap();
-                        }
-                    }
-                }
-                // handle response
-                RemotingCommandType::RESPONSE => {
-                    let opaque = msg.opaque();
-                    if let Some(response_future) = client.response_table.remove(&opaque) {
-                        let _ = response_future.tx.send(Ok(msg));
-                    } else {
-                        warn!(
-                            "receive response, cmd={}, but not matched any request, address={}",
-                            msg,
-                            client.channel.1.remote_address()
-                        )
-                    }
-                }
-            },
-            Err(error) => match error {
-                Io(value) => {
-                    client.channel.0.connection.ok = false;
-                    error!("error: {:?}", value);
-                    return;
-                }
-                _ => {
-                    error!("error: {:?}", error);
-                }
-            },
-        }
-    }
-}
-
-impl ClientInner {
+impl<PR> ClientInner<PR> {
     pub async fn connect<T, PR>(
         addr: T,
-        processor: PR,
+        cmd_handler: ArcMut<RemotingGeneralHandler<PR>>,
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
-    ) -> RocketMQResult<(tokio::sync::mpsc::Sender<SendMessage>, ArcMut<ClientInner>)>
+    ) -> RocketMQResult<ArcMut<ClientInner<PR>>>
     where
         T: tokio::net::ToSocketAddrs,
         PR: RequestProcessor + 'static,
@@ -145,31 +74,44 @@ impl ClientInner {
         let local_addr = stream.local_addr()?;
         let remote_address = stream.peer_addr()?;
         let connection = Connection::new(stream);
-        let response_table = ArcMut::new(HashMap::with_capacity(128));
-        let channel_inner = ArcMut::new(ChannelInner::new(connection, response_table.clone()));
-        let weak_channel = ArcMut::downgrade(&channel_inner);
-        let channel = Channel::new(weak_channel, local_addr, remote_address);
-        let (tx_, rx) = tokio::sync::mpsc::channel(1024);
+        let channel = Channel::new(connection, local_addr, remote_address);
         let client = ClientInner {
+            cmd_handler,
             ctx: ArcMut::new(ConnectionHandlerContextWrapper::new(
                 //connection,
                 channel.clone(),
             )),
-            response_table,
-            channel: (channel_inner, channel),
-            tx: tx_.clone(),
         };
         let client = ArcMut::new(client);
+        let client_inner = client.clone();
+        tokio::task::spawn(async move {
+            loop {
+                //Get the next frame from the connection.
+                let channel = client_inner.ctx.channel_mut();
+                let frame = tokio::select! {
+                    res = channel.connection_mut().receive_command() => res,
+                    _ = client_inner.shutdown.recv() =>{
+                        //If a shutdown signal is received, return from `handle`.
+                        channel.connection_mut().ok = false;
+                        return Ok(());
+                    }
+                };
+                let cmd = match frame {
+                    Some(frame) => frame?,
+                    None => {
+                        //If the frame is None, it means the connection is closed.
+                        return Ok(());
+                    }
+                };
+                //process request and response
+                client_inner
+                    .cmd_handler
+                    .process_message_received(&client_inner.ctx, cmd)
+                    .await;
+            }
+        });
 
-        tokio::spawn(run_recv(client.clone(), processor));
-        tokio::spawn(run_send(client.clone(), rx));
-        if let Some(tx) = tx {
-            let _ = tx.send(ConnectionNetEvent::CONNECTED(
-                client.channel.1.remote_address(),
-                //client.channel.clone(),
-            ));
-        }
-        Ok((tx_, client))
+        Ok(client)
     }
 
     pub async fn send(
@@ -202,7 +144,10 @@ impl ClientInner {
     }
 }
 
-impl Client {
+impl<PR> Client<PR>
+where
+    PR: RequestProcessor + 'static,
+{
     /// Creates a new `Client` instance and connects to the specified address.
     ///
     /// # Arguments
@@ -212,21 +157,16 @@ impl Client {
     /// # Returns
     ///
     /// A new `Client` instance wrapped in a `Result`. Returns an error if the connection fails.
-    pub async fn connect<T, PR>(
+    pub async fn connect<T>(
         addr: T,
-        processor: PR,
+        cmd_handler: ArcMut<RemotingGeneralHandler<PR>>,
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
-    ) -> RocketMQResult<Client>
+    ) -> RocketMQResult<Client<PR>>
     where
         T: tokio::net::ToSocketAddrs,
-        PR: RequestProcessor + 'static,
     {
-        let (tx, inner) = ClientInner::connect(addr, processor, tx).await?;
-        Ok(Client {
-            //connection: inner.connection.clone(),
-            inner,
-            tx,
-        })
+        let inner = ClientInner::connect(addr, cmd_handler, tx).await?;
+        Ok(Client { inner })
     }
 
     /// Invokes a remote operation with the given `RemotingCommand`.
@@ -244,10 +184,6 @@ impl Client {
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> RocketMQResult<RemotingCommand> {
-        /*self.send(request).await?;
-        let response = self.read().await?;
-        Ok(response)*/
-
         let (tx, rx) = tokio::sync::oneshot::channel::<RocketMQResult<RemotingCommand>>();
 
         if let Err(err) = self
@@ -288,16 +224,6 @@ impl Client {
     ///
     /// A `Result` indicating success or failure in sending the request.
     pub async fn send(&mut self, request: RemotingCommand) -> RocketMQResult<()> {
-        /*match self.inner.ctx.connection.writer.send(request).await {
-            Ok(_) => Ok(()),
-            Err(error) => match error {
-                Io(value) => {
-                    self.inner.ctx.connection.ok = false;
-                    Err(ConnectionInvalid(value.to_string()))
-                }
-                _ => Err(error),
-            },
-        }*/
         if let Err(err) = self.tx.send((request, None, None)).await {
             return Err(RemoteError(err.to_string()));
         }

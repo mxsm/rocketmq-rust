@@ -21,7 +21,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_common::common::server::config::ServerConfig;
-use rocketmq_error::RocketmqError;
 use rocketmq_rust::wait_for_signal;
 use rocketmq_rust::ArcMut;
 use tokio::net::TcpListener;
@@ -36,14 +35,11 @@ use tracing::warn;
 
 use crate::base::channel_event_listener::ChannelEventListener;
 use crate::base::connection_net_event::ConnectionNetEvent;
-use crate::base::response_future::ResponseFuture;
 use crate::base::tokio_event::TokioEvent;
-use crate::code::response_code::ResponseCode;
 use crate::connection::Connection;
 use crate::net::channel::Channel;
-use crate::net::channel::ChannelInner;
 use crate::protocol::remoting_command::RemotingCommand;
-use crate::protocol::RemotingCommandType;
+use crate::remoting::inner::RemotingGeneralHandler;
 use crate::runtime::connection_handler_context::ConnectionHandlerContext;
 use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
 use crate::runtime::processor::RequestProcessor;
@@ -59,20 +55,21 @@ type Tx = mpsc::UnboundedSender<RemotingCommand>;
 type Rx = mpsc::UnboundedReceiver<RemotingCommand>;
 
 pub struct ConnectionHandler<RP> {
-    request_processor: RP,
+    //request_processor: RP,
     connection_handler_context: ConnectionHandlerContext,
-    channel_inner: (ArcMut<ChannelInner>, Channel),
+    // channel: Channel,
     shutdown: Shutdown,
     _shutdown_complete: mpsc::Sender<()>,
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
-    rpc_hooks: Arc<Vec<Box<dyn RPCHook>>>,
-    response_table: ArcMut<HashMap<i32, ResponseFuture>>,
+    // rpc_hooks: Arc<Vec<Box<dyn RPCHook>>>,
+    // response_table: ArcMut<HashMap<i32, ResponseFuture>>,
+    cmd_handler: ArcMut<RemotingGeneralHandler<RP>>,
 }
 
 impl<RP> Drop for ConnectionHandler<RP> {
     fn drop(&mut self) {
         if let Some(ref sender) = self.conn_disconnect_notify {
-            let socket_addr = self.channel_inner.1.remote_address();
+            let socket_addr = self.connection_handler_context.remote_address();
             warn!(
                 "connection[{}] disconnected, Send notify message.",
                 socket_addr
@@ -82,154 +79,35 @@ impl<RP> Drop for ConnectionHandler<RP> {
     }
 }
 
-impl<RP> ConnectionHandler<RP> {
-    pub fn do_before_rpc_hooks(
-        &self,
-        channel: &Channel,
-        request: Option<&mut RemotingCommand>,
-    ) -> rocketmq_error::RocketMQResult<()> {
-        if let Some(request) = request {
-            for hook in self.rpc_hooks.iter() {
-                hook.do_before_request(channel.remote_address(), request)?;
-            }
-        }
-        Ok(())
-    }
-
-    pub fn do_after_rpc_hooks(
-        &self,
-        channel: &Channel,
-        request: &RemotingCommand,
-        response: Option<&mut RemotingCommand>,
-    ) -> rocketmq_error::RocketMQResult<()> {
-        if let Some(response) = response {
-            for hook in self.rpc_hooks.iter() {
-                hook.do_after_response(channel.remote_address(), request, response)?;
-            }
-        }
-        Ok(())
-    }
-}
-
 impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
     async fn handle(&mut self) -> rocketmq_error::RocketMQResult<()> {
         while !self.shutdown.is_shutdown {
             //Get the next frame from the connection.
+            let channel = self.connection_handler_context.channel_mut();
             let frame = tokio::select! {
-                res = self.channel_inner.0.connection.receive_command() => res,
+                res = channel.connection_mut().receive_command() => res,
                 _ = self.shutdown.recv() =>{
                     //If a shutdown signal is received, return from `handle`.
-                    self.channel_inner.0.connection_mut().ok = false;
+                    channel.connection_mut().ok = false;
                     return Ok(());
                 }
             };
-
-            let mut cmd = match frame {
+            let cmd = match frame {
                 Some(frame) => frame?,
                 None => {
                     //If the frame is None, it means the connection is closed.
                     return Ok(());
                 }
             };
-            // process response command
-            if cmd.get_type() == RemotingCommandType::RESPONSE {
-                let future_response = self.response_table.remove(&cmd.opaque());
-                if let Some(future_response) = future_response {
-                    let _ = future_response.tx.send(Ok(cmd));
-                } else {
-                    warn!(
-                        "receive response, cmd={}, but not matched any request, address={}",
-                        cmd,
-                        self.channel_inner.1.remote_address()
-                    )
-                }
-                continue;
-            }
-
-            let opaque = cmd.opaque();
-            let reject_request = self.request_processor.reject_request(cmd.code());
-            const REJECT_REQUEST_MSG: &str =
-                "[REJECT REQUEST]system busy, start flow control for a while";
-            if reject_request.0 {
-                let response = if let Some(response) = reject_request.1 {
-                    response
-                } else {
-                    RemotingCommand::create_response_command_with_code_remark(
-                        ResponseCode::SystemBusy,
-                        REJECT_REQUEST_MSG,
-                    )
-                };
-                self.channel_inner
-                    .0
-                    .connection
-                    .send_command(response.set_opaque(opaque))
-                    .await?;
-                continue;
-            }
-            let oneway_rpc = cmd.is_oneway_rpc();
-            //before handle request hooks
-
-            let exception = self
-                .do_before_rpc_hooks(&(self.channel_inner.1), Some(&mut cmd))
-                .err();
-            //handle error if return have
-            match self.handle_error(oneway_rpc, opaque, exception).await {
-                HandleErrorResult::Continue => continue,
-                HandleErrorResult::ReturnMethod => return Ok(()),
-                HandleErrorResult::GoHead => {}
-            }
-
-            let mut response = {
-                let channel = self.channel_inner.1.clone();
-                let ctx = self.connection_handler_context.clone();
-                let result = self
-                    .request_processor
-                    .process_request(channel, ctx, &mut cmd)
-                    .await
-                    .unwrap_or_else(|_err| {
-                        Some(RemotingCommand::create_response_command_with_code(
-                            ResponseCode::SystemError,
-                        ))
-                    });
-                result
-            };
-
-            let exception = self
-                .do_after_rpc_hooks(&self.channel_inner.1, &cmd, response.as_mut())
-                .err();
-
-            match self.handle_error(oneway_rpc, opaque, exception).await {
-                HandleErrorResult::Continue => continue,
-                HandleErrorResult::ReturnMethod => return Ok(()),
-                HandleErrorResult::GoHead => {}
-            }
-            if response.is_none() || oneway_rpc {
-                continue;
-            }
-            let response = response.unwrap();
-            let result = self
-                .channel_inner
-                .0
-                .connection
-                .send_command(response.set_opaque(opaque))
+            //process request and response
+            self.cmd_handler
+                .process_message_received(&self.connection_handler_context, cmd)
                 .await;
-            match result {
-                Ok(_) => {}
-                Err(err) => match err {
-                    RocketmqError::Io(io_error) => {
-                        error!("connection disconnect: {}", io_error);
-                        return Ok(());
-                    }
-                    _ => {
-                        error!("send response failed: {}", err);
-                    }
-                },
-            };
         }
         Ok(())
     }
 
-    async fn handle_error(
+    /*    async fn handle_error(
         &mut self,
         oneway_rpc: bool,
         opaque: i32,
@@ -244,7 +122,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                     let response =
                         RemotingCommand::create_response_command_with_code_remark(code, message);
                     tokio::select! {
-                        result =self.channel_inner.0.connection.send_command(response.set_opaque(opaque)) => match result{
+                        result =self.channel.0.connection.send_command(response.set_opaque(opaque)) => match result{
                             Ok(_) =>{},
                             Err(err) => {
                                 match err {
@@ -265,7 +143,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                             exception_inner.to_string(),
                         );
                         tokio::select! {
-                            result =self.channel_inner.0.connection.send_command(response.set_opaque(opaque)) => match result{
+                            result =self.channel.0.connection.send_command(response.set_opaque(opaque)) => match result{
                                 Ok(_) =>{},
                                 Err(err) => {
                                     match err {
@@ -285,7 +163,7 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
         } else {
             HandleErrorResult::GoHead
         }
-    }
+    }*/
 }
 
 enum HandleErrorResult {
@@ -316,11 +194,9 @@ struct ConnectionListener<RP> {
 
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
 
-    request_processor: RP,
-
-    rpc_hooks: Arc<Vec<Box<dyn RPCHook>>>,
-
     channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
+
+    cmd_handler: ArcMut<RemotingGeneralHandler<RP>>,
 }
 
 impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
@@ -354,7 +230,6 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
                 }
             });
         }
-
         loop {
             let permit = self
                 .limit_connections
@@ -370,30 +245,27 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             info!("Accepted connection, client ip:{}", remote_addr);
             socket.set_nodelay(true).expect("set nodelay failed");
             let local_addr = socket.local_addr()?;
-            let response_table = ArcMut::new(HashMap::with_capacity(128));
-            let channel_inner = ArcMut::new(ChannelInner::new(
+            //let response_table = ArcMut::new(HashMap::with_capacity(128));
+            /*let channel_inner = ArcMut::new(ChannelInner::new(
                 Connection::new(socket),
                 response_table.clone(),
-            ));
+            ));*/
             //create per connection handler state
-            let weak_channel = ArcMut::downgrade(&channel_inner);
-            let channel = Channel::new(weak_channel, local_addr, remote_addr);
+            // let weak_channel = ArcMut::downgrade(&channel_inner);
+            let channel = Channel::new(Connection::new(socket), local_addr, remote_addr);
             let _ = tx.send(TokioEvent::new(
                 ConnectionNetEvent::CONNECTED(remote_addr),
                 remote_addr,
                 channel.clone(),
             ));
             let mut handler = ConnectionHandler {
-                request_processor: self.request_processor.clone(),
                 connection_handler_context: ArcMut::new(ConnectionHandlerContextWrapper {
-                    channel: channel.clone(),
+                    channel,
                 }),
-                channel_inner: (channel_inner, channel),
                 shutdown: Shutdown::new(self.notify_shutdown.subscribe()),
                 _shutdown_complete: self.shutdown_complete_tx.clone(),
                 conn_disconnect_notify: self.conn_disconnect_notify.clone(),
-                rpc_hooks: self.rpc_hooks.clone(),
-                response_table,
+                cmd_handler: self.cmd_handler.clone(),
             };
             let sender = tx.clone();
             tokio::spawn(async move {
@@ -403,7 +275,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
                 let _ = sender.send(TokioEvent::new(
                     ConnectionNetEvent::DISCONNECTED,
                     remote_addr,
-                    handler.channel_inner.1.clone(),
+                    handler.connection_handler_context.channel.clone(),
                 ));
                 warn!(
                     "The client[IP={}] disconnected from the remoting_server.",
@@ -502,15 +374,20 @@ pub async fn run<RP: RequestProcessor + Sync + 'static + Clone>(
     let (notify_shutdown, _) = broadcast::channel(1);
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::channel(1);
     // Initialize the connection listener state
+    let handler = RemotingGeneralHandler {
+        request_processor,
+        //shutdown: Shutdown::new(notify_shutdown.subscribe()),
+        rpc_hooks: rpc_hooks,
+        response_table: HashMap::with_capacity(512),
+    };
     let mut listener = ConnectionListener {
         listener,
         notify_shutdown,
         shutdown_complete_tx,
         conn_disconnect_notify,
         limit_connections: Arc::new(Semaphore::new(DEFAULT_MAX_CONNECTIONS)),
-        request_processor,
-        rpc_hooks: Arc::new(rpc_hooks),
         channel_event_listener,
+        cmd_handler: ArcMut::new(handler),
     };
 
     tokio::select! {

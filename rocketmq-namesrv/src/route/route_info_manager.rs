@@ -674,7 +674,7 @@ impl RouteInfoManager {
                 tokio::spawn(async move {
                     let _ = remoting_client
                         .remoting_client()
-                        .invoke_oneway(
+                        .invoke_request_oneway(
                             &broker_addr,
                             RemotingCommand::create_request_command(
                                 RequestCode::NotifyMinBrokerIdChange,

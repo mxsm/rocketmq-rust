@@ -21,7 +21,7 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_error::RocketmqError::RpcError;
 use rocketmq_rust::ArcMut;
 
-use crate::clients::rocketmq_default_impl::RocketmqDefaultClient;
+use crate::clients::rocketmq_tokio_client::RocketmqDefaultClient;
 use crate::clients::RemotingClient;
 use crate::code::request_code::RequestCode;
 use crate::code::response_code::ResponseCode;
@@ -90,7 +90,7 @@ impl RpcClientImpl {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(Some(addr), request_command, timeout_millis)
+            .invoke_request(Some(addr), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -128,7 +128,7 @@ impl RpcClientImpl {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(Some(addr), request_command, timeout_millis)
+            .invoke_request(Some(addr), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -162,7 +162,7 @@ impl RpcClientImpl {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(Some(addr), request_command, timeout_millis)
+            .invoke_request(Some(addr), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -196,7 +196,7 @@ impl RpcClientImpl {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(Some(addr), request_command, timeout_millis)
+            .invoke_request(Some(addr), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -230,7 +230,7 @@ impl RpcClientImpl {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(Some(addr), request_command, timeout_millis)
+            .invoke_request(Some(addr), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -264,7 +264,7 @@ impl RpcClientImpl {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(Some(addr), request_command, timeout_millis)
+            .invoke_request(Some(addr), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -302,7 +302,7 @@ impl RpcClientImpl {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(Some(addr), request_command, timeout_millis)
+            .invoke_request(Some(addr), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
@@ -336,7 +336,7 @@ impl RpcClientImpl {
         let request_command = RpcClientUtils::create_command_for_rpc_request(request);
         match self
             .remoting_client
-            .invoke_async(Some(addr), request_command, timeout_millis)
+            .invoke_request(Some(addr), request_command, timeout_millis)
             .await
         {
             Ok(response) => match ResponseCode::from(response.code()) {
