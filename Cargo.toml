@@ -64,7 +64,7 @@ rand = "0.9.2"
 lazy_static = "1.5.0"
 num_cpus = "1.17"
 
-config = "0.15.17"
+config = "0.15.18"
 
 parking_lot = "0.12"
 dirs = "5.0"
