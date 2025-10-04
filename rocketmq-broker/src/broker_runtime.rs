@@ -830,10 +830,9 @@ impl BrokerRuntime {
         (broker_request_processor.clone(), broker_request_processor)
     }
 
-    #[allow(clippy::incompatible_msrv)]
     async fn initialize_scheduled_tasks(&mut self) {
         let initial_delay = compute_next_morning_time_millis() - get_current_millis();
-        let period = Duration::from_days(1);
+        let period = Duration::from_secs(24 * 60 * 60);
         let broker_stats_ = self.inner.clone();
         self.scheduled_task_manager.add_fixed_rate_task_async(
             Duration::from_millis(initial_delay),
