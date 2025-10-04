@@ -16,7 +16,6 @@
  */
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
