@@ -30,6 +30,7 @@ pub struct ExponentialRetryPolicy {
 }
 
 impl Default for ExponentialRetryPolicy {
+    #[allow(clippy::incompatible_msrv)]
     fn default() -> Self {
         ExponentialRetryPolicy {
             initial: Duration::from_secs(5).as_millis() as u64,
