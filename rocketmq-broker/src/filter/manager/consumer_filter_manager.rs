@@ -30,8 +30,7 @@ use crate::broker_path_config_helper::get_consumer_filter_path;
 use crate::filter::consumer_filter_data::ConsumerFilterData;
 use crate::filter::manager::consumer_filter_wrapper::ConsumerFilterWrapper;
 
-#[allow(clippy::incompatible_msrv)]
-const MS_24_HOUR: u64 = Duration::from_hours(24).as_millis() as u64;
+const MS_24_HOUR: u64 = 24 * 60 * 60 * 1000;
 
 #[derive(Clone)]
 pub(crate) struct ConsumerFilterManager {
