@@ -67,21 +67,15 @@ impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
         }
 
         let broker_identity = &broker_config.broker_identity;
-        let broker_cluster_name = &broker_identity.broker_cluster_name;
-        let broker_name = broker_config.broker_name();
-        let broker_id = broker_identity.broker_id;
-
-        let epoch_list = replicas_manage.get_epoch_entries();
 
         let message_store = broker_runtime_inner.message_store().as_ref().unwrap();
-        let max_offset = message_store.get_max_phy_offset() as u64;
 
         let entry_code = EpochEntryCache::new(
-            broker_cluster_name,
-            broker_name,
-            broker_id,
-            epoch_list,
-            max_offset,
+            &broker_identity.broker_cluster_name,
+            broker_config.broker_name(),
+            broker_identity.broker_id,
+            replicas_manage.get_epoch_entries(),
+            message_store.get_max_phy_offset() as u64,
         );
 
         let cache = entry_code.encode().unwrap_or_default();
