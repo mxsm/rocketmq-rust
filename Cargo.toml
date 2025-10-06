@@ -85,6 +85,6 @@ futures = "0.3"
 
 cheetah-string = { version = "0.1.6", features = ["serde", "bytes"] }
 
-flate2 = "1.1.2"
+flate2 = "1.1.4"
 dashmap = "6.1.0"
 strum = { version = "0.26.3", features = ["derive"] }
