@@ -115,7 +115,7 @@ pub struct DefaultMQPushConsumerImpl {
     pub(crate) rebalance_impl: ArcMut<RebalancePushImpl>,
     filter_message_hook_list: Vec<Arc<Box<dyn FilterMessageHook + Send + Sync>>>,
     consume_message_hook_list: Vec<Arc<Box<dyn ConsumeMessageHook + Send + Sync>>>,
-    rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
+    rpc_hook: Option<Arc<dyn RPCHook>>,
     service_state: ArcMut<ServiceState>,
     pub(crate) client_instance: Option<ArcMut<MQClientInstance>>,
     pub(crate) pull_api_wrapper: Option<ArcMut<PullAPIWrapper>>,
@@ -149,7 +149,7 @@ impl DefaultMQPushConsumerImpl {
     pub fn new(
         client_config: ClientConfig,
         consumer_config: ArcMut<ConsumerConfig>,
-        rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> Self {
         let mut this = Self {
             global_lock: Arc::new(Default::default()),

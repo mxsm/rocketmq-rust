@@ -20,15 +20,19 @@ use std::hash::Hasher;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
+use cheetah_string::CheetahString;
 use futures_util::stream::SplitSink;
 use futures_util::stream::SplitStream;
 use futures_util::SinkExt;
 use futures_util::StreamExt;
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
+use uuid::Uuid;
 
 use crate::codec::remoting_command_codec::CompositeCodec;
 use crate::protocol::remoting_command::RemotingCommand;
+
+pub type ConnectionId = CheetahString;
 
 /// Send and receive `Frame` values from a remote peer.
 ///
@@ -55,33 +59,19 @@ pub struct Connection {
     pub(crate) ok: bool,
 
     buf: BytesMut,
+
+    connection_id: ConnectionId,
 }
 
 impl Hash for Connection {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // Hash the boolean flag
-        self.ok.hash(state);
-
-        // Use the addr: *const _ess of writer and reader to hash them (they serve as a unique
-        // identifier for these components)
-        let writer_addr: *const SplitSink<Framed<TcpStream, CompositeCodec>, Bytes> =
-            &self.writer as *const SplitSink<Framed<TcpStream, CompositeCodec>, Bytes>;
-        let reader_addr: *const SplitStream<Framed<TcpStream, CompositeCodec>> =
-            &self.reader as *const SplitStream<Framed<TcpStream, CompositeCodec>>;
-
-        writer_addr.hash(state);
-        reader_addr.hash(state);
+        self.connection_id.hash(state);
     }
 }
 
 impl PartialEq for Connection {
     fn eq(&self, other: &Self) -> bool {
-        // Compare the boolean flag
-        self.ok == other.ok
-
-        // Compare the addr: *const _ess of writer and reader
-            && (std::ptr::eq(&self.writer, &other.writer))
-            && (std::ptr::eq(&self.reader, &other.reader))
+        self.connection_id == other.connection_id
     }
 }
 
@@ -107,6 +97,7 @@ impl Connection {
             reader,
             ok: true,
             buf: BytesMut::with_capacity(BUFFER_SIZE),
+            connection_id: CheetahString::from_string(Uuid::new_v4().to_string()),
         }
     }
 
@@ -216,5 +207,16 @@ impl Connection {
         let bytes = slice.into();
         self.writer.send(bytes).await?;
         Ok(())
+    }
+
+    /// Returns a reference to the connection ID.
+    #[inline]
+    pub fn connection_id(&self) -> &ConnectionId {
+        &self.connection_id
+    }
+
+    #[inline]
+    pub fn connection_is_ok(&self) -> bool {
+        self.ok
     }
 }

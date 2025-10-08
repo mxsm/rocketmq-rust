@@ -66,7 +66,7 @@ pub struct DefaultMQPushConsumerBuilder {
     await_termination_millis_when_shutdown: Option<u64>,
     trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>,
     client_rebalance: Option<bool>,
-    rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
+    rpc_hook: Option<Arc<dyn RPCHook>>,
 }
 
 impl Default for DefaultMQPushConsumerBuilder {
@@ -307,7 +307,7 @@ impl DefaultMQPushConsumerBuilder {
         self
     }
 
-    pub fn rpc_hook(mut self, rpc_hook: Option<Arc<Box<dyn RPCHook>>>) -> Self {
+    pub fn rpc_hook(mut self, rpc_hook: Option<Arc<dyn RPCHook>>) -> Self {
         self.rpc_hook = rpc_hook;
         self
     }

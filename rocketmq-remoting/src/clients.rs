@@ -28,7 +28,7 @@ mod async_client;
 mod blocking_client;
 
 mod client;
-pub mod rocketmq_default_impl;
+pub mod rocketmq_tokio_client;
 
 /// `RemotingClient` trait extends `RemotingService` to provide client-specific remote interaction
 /// functionalities.
@@ -65,7 +65,7 @@ pub trait RemotingClient: RemotingService {
     ///
     /// # Returns
     /// A `Result` containing either the response `RemotingCommand` or an `Error`.
-    async fn invoke_async(
+    async fn invoke_request(
         &self,
         addr: Option<&CheetahString>,
         request: RemotingCommand,
@@ -78,7 +78,7 @@ pub trait RemotingClient: RemotingService {
     /// * `addr` - The address to invoke the command on.
     /// * `request` - The `RemotingCommand` to be sent.
     /// * `timeout_millis` - The timeout for the operation in milliseconds.
-    async fn invoke_oneway(
+    async fn invoke_request_oneway(
         &self,
         addr: &CheetahString,
         request: RemotingCommand,

@@ -17,7 +17,7 @@
 
 use crate::remoting::RemotingService;
 
-pub mod server;
+pub mod rocketmq_tokio_server;
 
 pub trait RemotingServer: RemotingService {
     /*fn register_processor(

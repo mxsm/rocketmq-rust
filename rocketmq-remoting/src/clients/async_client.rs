@@ -18,7 +18,7 @@
 /// Connection with broker or nameserver
 pub struct AsyncClient {
     /// The asynchronous `Client`.
-    inner: crate::clients::Client,
+    //inner: crate::clients::Client,
 
     ///Create a separate thread pool to handle clients.
     rt: tokio::runtime::Runtime,

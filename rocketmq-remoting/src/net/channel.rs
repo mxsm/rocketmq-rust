@@ -25,7 +25,6 @@ use std::time::Duration;
 use cheetah_string::CheetahString;
 use rocketmq_error::RocketmqError;
 use rocketmq_rust::ArcMut;
-use rocketmq_rust::WeakArcMut;
 use tokio::sync::mpsc::Receiver;
 use tokio::time::timeout;
 use tracing::error;
@@ -37,9 +36,11 @@ use crate::protocol::remoting_command::RemotingCommand;
 
 pub type ChannelId = CheetahString;
 
+pub type ArcChannel = ArcMut<Channel>;
+
 #[derive(Clone)]
 pub struct Channel {
-    inner: WeakArcMut<ChannelInner>,
+    inner: ArcMut<ChannelInner>,
     local_address: SocketAddr,
     remote_address: SocketAddr,
     channel_id: ChannelId,
@@ -47,7 +48,7 @@ pub struct Channel {
 
 impl Channel {
     pub fn new(
-        inner: WeakArcMut<ChannelInner>,
+        inner: ArcMut<ChannelInner>,
         local_address: SocketAddr,
         remote_address: SocketAddr,
     ) -> Self {
@@ -95,8 +96,21 @@ impl Channel {
     }
 
     #[inline]
-    pub fn upgrade(&self) -> Option<ArcMut<ChannelInner>> {
-        self.inner.upgrade()
+    pub fn connection_mut(&mut self) -> &mut Connection {
+        self.inner.connection.as_mut()
+    }
+
+    #[inline]
+    pub fn connection_ref(&self) -> &Connection {
+        self.inner.connection.as_ref()
+    }
+
+    pub fn channel_inner(&self) -> &ChannelInner {
+        self.inner.as_ref()
+    }
+
+    pub fn channel_inner_mut(&mut self) -> &mut ChannelInner {
+        self.inner.as_mut()
     }
 }
 
@@ -211,11 +225,6 @@ impl ChannelInner {
     #[inline]
     pub fn connection_mut(&mut self) -> &mut Connection {
         self.connection.as_mut()
-    }
-
-    #[inline]
-    pub fn connection_mut_from_ref(&self) -> &mut Connection {
-        self.connection.mut_from_ref()
     }
 
     pub async fn send_wait_response(

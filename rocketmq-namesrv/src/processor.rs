@@ -122,15 +122,5 @@ impl RequestProcessor for NameServerRequestProcessor {
                 RequestProcessor::process_request(processor, channel, ctx, request).await
             }
         }
-        /*match request_code {
-            RequestCode::GetRouteinfoByTopic => {
-                self.client_request_processor
-                    .process_request(channel, ctx, request_code, request)
-            }
-            _ => {
-                self.default_request_processor
-                    .process_request(channel, ctx, request_code, request)
-            }
-        }*/
     }
 }

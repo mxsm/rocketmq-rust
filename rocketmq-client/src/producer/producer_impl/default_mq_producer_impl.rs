@@ -98,7 +98,7 @@ pub struct DefaultMQProducerImpl {
     send_message_hook_list: ArcMut<Vec<Box<dyn SendMessageHook>>>,
     end_transaction_hook_list: Arc<Vec<Box<dyn EndTransactionHook>>>,
     check_forbidden_hook_list: Vec<Arc<Box<dyn CheckForbiddenHook>>>,
-    rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
+    rpc_hook: Option<Arc<dyn RPCHook>>,
     service_state: ServiceState,
     client_instance: Option<ArcMut<MQClientInstance>>,
     mq_fault_strategy: ArcMut<MQFaultStrategy>,
@@ -117,7 +117,7 @@ impl DefaultMQProducerImpl {
     pub fn new(
         client_config: ClientConfig,
         producer_config: ProducerConfig,
-        rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> Self {
         let semaphore_async_send_num =
             Semaphore::new(producer_config.back_pressure_for_async_send_num().max(10) as usize);

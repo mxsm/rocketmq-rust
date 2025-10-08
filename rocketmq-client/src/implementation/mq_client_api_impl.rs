@@ -49,7 +49,7 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_error::RocketmqError;
 use rocketmq_error::RocketmqError::MQClientBrokerError;
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
-use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
+use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -169,7 +169,7 @@ impl MQClientAPIImpl {
         for name_srv_addr in name_server_address_list {
             let response = self
                 .remoting_client
-                .invoke_async(Some(name_srv_addr), request.clone(), timeout_millis)
+                .invoke_request(Some(name_srv_addr), request.clone(), timeout_millis)
                 .await?;
             match ResponseCode::from(response.code()) {
                 ResponseCode::Success => {}
@@ -204,7 +204,7 @@ impl MQClientAPIImpl {
         for name_srv_addr in name_server_address_list {
             let response = self
                 .remoting_client
-                .invoke_async(Some(name_srv_addr), request.clone(), timeout_millis)
+                .invoke_request(Some(name_srv_addr), request.clone(), timeout_millis)
                 .await?;
             match ResponseCode::from(response.code()) {
                 ResponseCode::Success => {}
@@ -254,7 +254,7 @@ impl MQClientAPIImpl {
         for name_srv_addr in invoke_name_servers {
             let response = self
                 .remoting_client
-                .invoke_async(Some(&name_srv_addr), request.clone(), timeout_millis)
+                .invoke_request(Some(&name_srv_addr), request.clone(), timeout_millis)
                 .await?;
             match ResponseCode::from(response.code()) {
                 ResponseCode::Success => {}
@@ -287,7 +287,7 @@ impl MQClientAPIImpl {
 
         let response = self
             .remoting_client
-            .invoke_async(Some(&namesrv_addr), request, timeout_millis)
+            .invoke_request(Some(&namesrv_addr), request, timeout_millis)
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             let request_header = response
@@ -314,7 +314,7 @@ impl MQClientAPIImpl {
 
         let response = self
             .remoting_client
-            .invoke_async(Some(&namesrv_addr), request, timeout_millis)
+            .invoke_request(Some(&namesrv_addr), request, timeout_millis)
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             let request_header = response
@@ -338,7 +338,7 @@ impl MQClientAPIImpl {
     pub fn new(
         tokio_client_config: Arc<TokioClientConfig>,
         client_remoting_processor: ClientRemotingProcessor,
-        rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
         client_config: ClientConfig,
         tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
     ) -> Self {
@@ -443,7 +443,7 @@ impl MQClientAPIImpl {
         );
         let response = self
             .remoting_client
-            .invoke_async(None, request, timeout_millis)
+            .invoke_request(None, request, timeout_millis)
             .await;
         match response {
             Ok(mut result) => {
@@ -595,7 +595,7 @@ impl MQClientAPIImpl {
             }
             CommunicationMode::Oneway => {
                 self.remoting_client
-                    .invoke_oneway(addr, request, timeout_millis)
+                    .invoke_request_oneway(addr, request, timeout_millis)
                     .await;
                 Ok(None)
             }
@@ -646,7 +646,7 @@ impl MQClientAPIImpl {
     {
         let response = self
             .remoting_client
-            .invoke_async(Some(addr), request, timeout_millis)
+            .invoke_request(Some(addr), request, timeout_millis)
             .await?;
         self.process_send_response(broker_name, msg, &response, addr)
     }
@@ -756,7 +756,7 @@ impl MQClientAPIImpl {
             let begin_start_time = Instant::now();
             let result = self
                 .remoting_client
-                .invoke_async(Some(&current_addr), current_request.clone(), timeout_millis)
+                .invoke_request(Some(&current_addr), current_request.clone(), timeout_millis)
                 .await;
 
             match result {
@@ -1109,7 +1109,7 @@ impl MQClientAPIImpl {
         );
         let response = self
             .remoting_client
-            .invoke_async(Some(addr), request, timeout_millis)
+            .invoke_request(Some(addr), request, timeout_millis)
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(response.version());
@@ -1138,7 +1138,7 @@ impl MQClientAPIImpl {
         request.set_body_mut_ref(body.encode().expect("encode CheckClientRequestBody failed"));
         let response = self
             .remoting_client
-            .invoke_async(
+            .invoke_request(
                 Some(
                     mix_all::broker_vip_channel(
                         self.client_config.vip_channel_enabled,
@@ -1175,7 +1175,7 @@ impl MQClientAPIImpl {
         );
         let response = self
             .remoting_client
-            .invoke_async(
+            .invoke_request(
                 Some(
                     mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr)
                         .as_ref(),
@@ -1224,7 +1224,7 @@ impl MQClientAPIImpl {
             request_header,
         );
         self.remoting_client
-            .invoke_oneway(
+            .invoke_request_oneway(
                 mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr).as_ref(),
                 request,
                 timeout_millis,
@@ -1245,7 +1245,7 @@ impl MQClientAPIImpl {
         );
         let response = self
             .remoting_client
-            .invoke_async(Some(addr), request, timeout_millis)
+            .invoke_request(Some(addr), request, timeout_millis)
             .await?;
         if ResponseCode::from(response.code()) != ResponseCode::Success {
             Err(rocketmq_error::RocketmqError::MQClientBrokerError(
@@ -1272,7 +1272,7 @@ impl MQClientAPIImpl {
         );
         let response = self
             .remoting_client
-            .invoke_async(
+            .invoke_request(
                 Some(
                     mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr)
                         .as_ref(),
@@ -1348,7 +1348,7 @@ impl MQClientAPIImpl {
     ) -> rocketmq_error::RocketMQResult<PullResultExt> {
         let response = self
             .remoting_client
-            .invoke_async(Some(addr), request, timeout_millis)
+            .invoke_request(Some(addr), request, timeout_millis)
             .await?;
         self.process_pull_response(response, addr).await
     }
@@ -1365,7 +1365,7 @@ impl MQClientAPIImpl {
     {
         match self
             .remoting_client
-            .invoke_async(Some(addr), request, timeout_millis)
+            .invoke_request(Some(addr), request, timeout_millis)
             .await
         {
             Ok(response) => {
@@ -1452,7 +1452,7 @@ impl MQClientAPIImpl {
             RemotingCommand::create_request_command(RequestCode::ConsumerSendMsgBack, header);
         let response = self
             .remoting_client
-            .invoke_async(
+            .invoke_request(
                 Some(&mix_all::broker_vip_channel(
                     self.client_config.vip_channel_enabled,
                     addr,
@@ -1490,7 +1490,7 @@ impl MQClientAPIImpl {
             RemotingCommand::create_request_command(RequestCode::UnregisterClient, request_header);
         let response = self
             .remoting_client
-            .invoke_async(Some(addr), request, timeout_millis)
+            .invoke_request(Some(addr), request, timeout_millis)
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             Ok(())
@@ -1521,13 +1521,13 @@ impl MQClientAPIImpl {
         );
         if oneway {
             self.remoting_client
-                .invoke_oneway(addr, request, timeout_millis)
+                .invoke_request_oneway(addr, request, timeout_millis)
                 .await;
             Ok(())
         } else {
             let response = self
                 .remoting_client
-                .invoke_async(
+                .invoke_request(
                     Some(&mix_all::broker_vip_channel(
                         self.client_config.vip_channel_enabled,
                         addr,
@@ -1565,7 +1565,7 @@ impl MQClientAPIImpl {
         );
         let response = self
             .remoting_client
-            .invoke_async(
+            .invoke_request(
                 Some(&mix_all::broker_vip_channel(
                     self.client_config.vip_channel_enabled,
                     addr,
@@ -1613,7 +1613,7 @@ impl MQClientAPIImpl {
                 .set_remark(remark);
 
         self.remoting_client
-            .invoke_oneway(addr, request, timeout_millis)
+            .invoke_request_oneway(addr, request, timeout_millis)
             .await;
         Ok(())
     }
@@ -1642,7 +1642,7 @@ impl MQClientAPIImpl {
 
         let response = self
             .remoting_client
-            .invoke_async(
+            .invoke_request(
                 Some(&mix_all::broker_vip_channel(
                     self.client_config.vip_channel_enabled,
                     addr,
@@ -1686,7 +1686,7 @@ impl MQClientAPIImpl {
             );
         let response = self
             .remoting_client
-            .invoke_async(
+            .invoke_request(
                 Some(&mix_all::broker_vip_channel(
                     self.client_config.vip_channel_enabled,
                     broker_addr,
@@ -1729,7 +1729,7 @@ impl MQClientAPIImpl {
         );
         let response = self
             .remoting_client
-            .invoke_async(
+            .invoke_request(
                 Some(&mix_all::broker_vip_channel(
                     self.client_config.vip_channel_enabled,
                     addr,
@@ -1774,7 +1774,7 @@ impl MQClientAPIImpl {
         );
         match self
             .remoting_client
-            .invoke_async(Some(addr), request, timeout_millis)
+            .invoke_request(Some(addr), request, timeout_millis)
             .await
         {
             Ok(response) => {
@@ -1831,7 +1831,7 @@ impl MQClientAPIImpl {
             RemotingCommand::create_request_command(RequestCode::PopMessage, request_header);
         match self
             .remoting_client
-            .invoke_async(Some(addr), request, timeout_millis)
+            .invoke_request(Some(addr), request, timeout_millis)
             .await
         {
             Ok(response) => {
@@ -2129,7 +2129,7 @@ impl MQClientAPIImpl {
         };
         match self
             .remoting_client
-            .invoke_async(Some(addr), request, timeout_millis)
+            .invoke_request(Some(addr), request, timeout_millis)
             .await
         {
             Ok(response) => {
@@ -2177,7 +2177,7 @@ impl MQClientAPIImpl {
             // Make synchronous call with timeout
             let response = self
                 .remoting_client
-                .invoke_async(
+                .invoke_request(
                     Some(&name_server),
                     request.clone(),
                     timeout_millis.as_millis() as u64,

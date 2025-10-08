@@ -25,6 +25,7 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 #[derive(Default, Clone)]
 pub struct Broker2Client;
 
+#[allow(unused)]
 impl Broker2Client {
     pub async fn call_client(
         &mut self,
@@ -32,20 +33,15 @@ impl Broker2Client {
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
-        match channel.upgrade() {
-            None => Err(rocketmq_error::RocketmqError::ChannelError(
-                "Channel is closed".to_string(),
-            )),
-            Some(mut channel) => match channel.send_wait_response(request, timeout_millis).await {
-                Ok(value) => Ok(value),
-                Err(e) => Err(e),
-            },
-        }
+        channel
+            .channel_inner_mut()
+            .send_wait_response(request, timeout_millis)
+            .await
     }
 
     pub async fn check_producer_transaction_state(
         &self,
-        _group: &CheetahString,
+        group: &CheetahString,
         channel: &mut Channel,
         request_header: CheckTransactionStateRequestHeader,
         message_ext: MessageExt,
@@ -62,14 +58,10 @@ impl Broker2Client {
                 return Err(e);
             }
         }
-        match channel.upgrade() {
-            None => Err(rocketmq_error::RocketmqError::ChannelError(
-                "Channel is closed".to_string(),
-            )),
-            Some(channel) => match channel.send_one_way(request, 100).await {
-                Ok(_) => Ok(()),
-                Err(e) => Err(e),
-            },
-        }
+        channel
+            .channel_inner_mut()
+            .send_one_way(request, 100)
+            .await?;
+        Ok(())
     }
 }

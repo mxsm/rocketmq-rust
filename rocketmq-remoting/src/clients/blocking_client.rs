@@ -17,7 +17,7 @@
 
 pub struct BlockingClient {
     /// The asynchronous `Client`.
-    inner: crate::clients::Client,
+   // inner: crate::clients::Client,
 
     /// A `current_thread` runtime for executing operations on the asynchronous
     /// client in a blocking manner.

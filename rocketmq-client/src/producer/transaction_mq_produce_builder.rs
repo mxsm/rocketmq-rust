@@ -53,7 +53,7 @@ pub struct TransactionMQProducerBuilder {
     enable_backpressure_for_async_mode: Option<bool>,
     back_pressure_for_async_send_num: Option<u32>,
     back_pressure_for_async_send_size: Option<u32>,
-    rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
+    rpc_hook: Option<Arc<dyn RPCHook>>,
     compress_level: Option<i32>,
     compress_type: Option<CompressionType>,
     compressor: Option<Arc<Box<dyn Compressor + Send + Sync>>>,
@@ -218,8 +218,8 @@ impl TransactionMQProducerBuilder {
         self
     }
 
-    pub fn rpc_hook(mut self, rpc_hook: Box<dyn RPCHook>) -> Self {
-        self.rpc_hook = Some(Arc::new(rpc_hook));
+    pub fn rpc_hook(mut self, rpc_hook: Arc<dyn RPCHook>) -> Self {
+        self.rpc_hook = Some(rpc_hook);
         self
     }
 
