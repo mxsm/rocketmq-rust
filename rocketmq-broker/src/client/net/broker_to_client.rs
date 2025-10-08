@@ -25,7 +25,6 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 #[derive(Default, Clone)]
 pub struct Broker2Client;
 
-#[allow(unused)]
 impl Broker2Client {
     pub async fn call_client(
         &mut self,
@@ -41,7 +40,7 @@ impl Broker2Client {
 
     pub async fn check_producer_transaction_state(
         &self,
-        group: &CheetahString,
+        _group: &CheetahString,
         channel: &mut Channel,
         request_header: CheckTransactionStateRequestHeader,
         message_ext: MessageExt,
