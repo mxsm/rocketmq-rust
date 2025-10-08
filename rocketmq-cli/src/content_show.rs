@@ -42,10 +42,7 @@ pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) 
     // read message number
     let mut counter = 0;
     let form = from.unwrap_or_default();
-    let to = match to {
-        None => u32::MAX,
-        Some(value) => value,
-    };
+    let to = to.unwrap_or(u32::MAX);
     let mut current_pos = 0usize;
     let mut table = vec![];
     loop {
