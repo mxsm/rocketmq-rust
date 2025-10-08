@@ -90,7 +90,7 @@ pub struct ConsumerConfig {
     pub(crate) await_termination_millis_when_shutdown: u64,
     pub(crate) trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>,
     pub(crate) client_rebalance: bool,
-    pub(crate) rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
+    pub(crate) rpc_hook: Option<Arc<dyn RPCHook>>,
 }
 
 impl ConsumerConfig {
@@ -218,7 +218,7 @@ impl ConsumerConfig {
         self.client_rebalance
     }
 
-    pub fn rpc_hook(&self) -> &Option<Arc<Box<dyn RPCHook>>> {
+    pub fn rpc_hook(&self) -> &Option<Arc<dyn RPCHook>> {
         &self.rpc_hook
     }
 
@@ -374,7 +374,7 @@ impl ConsumerConfig {
         self.client_rebalance = client_rebalance;
     }
 
-    pub fn set_rpc_hook(&mut self, rpc_hook: Option<Arc<Box<dyn RPCHook>>>) {
+    pub fn set_rpc_hook(&mut self, rpc_hook: Option<Arc<dyn RPCHook>>) {
         self.rpc_hook = rpc_hook;
     }
 }

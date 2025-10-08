@@ -32,15 +32,10 @@ impl Broker2Client {
         request: RemotingCommand,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
-        match channel.upgrade() {
-            None => Err(rocketmq_error::RocketmqError::ChannelError(
-                "Channel is closed".to_string(),
-            )),
-            Some(mut channel) => match channel.send_wait_response(request, timeout_millis).await {
-                Ok(value) => Ok(value),
-                Err(e) => Err(e),
-            },
-        }
+        channel
+            .channel_inner_mut()
+            .send_wait_response(request, timeout_millis)
+            .await
     }
 
     pub async fn check_producer_transaction_state(
@@ -62,14 +57,10 @@ impl Broker2Client {
                 return Err(e);
             }
         }
-        match channel.upgrade() {
-            None => Err(rocketmq_error::RocketmqError::ChannelError(
-                "Channel is closed".to_string(),
-            )),
-            Some(channel) => match channel.send_one_way(request, 100).await {
-                Ok(_) => Ok(()),
-                Err(e) => Err(e),
-            },
-        }
+        channel
+            .channel_inner_mut()
+            .send_one_way(request, 100)
+            .await?;
+        Ok(())
     }
 }

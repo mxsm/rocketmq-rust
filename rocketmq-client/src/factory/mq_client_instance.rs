@@ -189,7 +189,7 @@ impl MQClientInstance {
         client_config: ClientConfig,
         instance_index: i32,
         client_id: impl Into<CheetahString>,
-        rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> ArcMut<MQClientInstance> {
         let broker_addr_table = Arc::new(Default::default());
         let mut instance = ArcMut::new(MQClientInstance {

@@ -90,7 +90,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
         mut get_message_result: GetMessageResult,
         request: &mut RemotingCommand,
         request_header: PullMessageRequestHeader,
-        channel: Channel,
+        mut channel: Channel,
         ctx: ConnectionHandlerContext,
         subscription_data: SubscriptionData,
         subscription_group_config: SubscriptionGroupConfig,
@@ -192,18 +192,17 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                     Some(response)
                 } else {
                     //zero copy transfer
-                    if let Some(mut channel) = channel.upgrade() {
-                        if let Some(header_bytes) = response.encode_header_with_body_length(
-                            get_message_result.buffer_total_size() as usize,
-                        ) {
-                            let _ = channel.connection_mut().send_bytes(header_bytes).await;
-                        }
-                        for select_result in get_message_result.message_mapped_list_mut() {
-                            if let Some(message) = select_result.bytes.take() {
-                                let _ = channel.connection_mut().send_bytes(message).await;
-                            }
+                    if let Some(header_bytes) = response.encode_header_with_body_length(
+                        get_message_result.buffer_total_size() as usize,
+                    ) {
+                        let _ = channel.connection_mut().send_bytes(header_bytes).await;
+                    }
+                    for select_result in get_message_result.message_mapped_list_mut() {
+                        if let Some(message) = select_result.bytes.take() {
+                            let _ = channel.connection_mut().send_bytes(message).await;
                         }
                     }
+
                     None
                 }
             }

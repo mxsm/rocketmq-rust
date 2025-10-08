@@ -59,7 +59,7 @@ impl MQClientManager {
     pub fn get_or_create_mq_client_instance(
         &self,
         client_config: ClientConfig,
-        rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> ArcMut<MQClientInstance> {
         let client_id = CheetahString::from_string(client_config.build_mq_client_id());
         let mut factory_table = self.factory_table.write();

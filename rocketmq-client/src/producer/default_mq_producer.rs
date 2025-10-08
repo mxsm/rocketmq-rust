@@ -98,7 +98,7 @@ pub struct ProducerConfig {
     /// on BackpressureForAsyncMode, limit maximum message size of on-going sending async messages
     /// default is 100M
     back_pressure_for_async_send_size: u32,
-    rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
+    rpc_hook: Option<Arc<dyn RPCHook>>,
     compress_level: i32,
     compress_type: CompressionType,
     compressor: Option<Arc<Box<dyn Compressor + Send + Sync>>>,
@@ -174,7 +174,7 @@ impl ProducerConfig {
         self.back_pressure_for_async_send_size
     }
 
-    pub fn rpc_hook(&self) -> &Option<Arc<Box<dyn RPCHook>>> {
+    pub fn rpc_hook(&self) -> &Option<Arc<dyn RPCHook>> {
         &self.rpc_hook
     }
 
@@ -329,7 +329,7 @@ impl DefaultMQProducer {
         self.producer_config.back_pressure_for_async_send_size
     }
 
-    pub fn rpc_hook(&self) -> &Option<Arc<Box<dyn RPCHook>>> {
+    pub fn rpc_hook(&self) -> &Option<Arc<dyn RPCHook>> {
         &self.producer_config.rpc_hook
     }
 
@@ -447,7 +447,7 @@ impl DefaultMQProducer {
         self.producer_config.back_pressure_for_async_send_size = back_pressure_for_async_send_size;
     }
 
-    pub fn set_rpc_hook(&mut self, rpc_hook: Option<Arc<Box<dyn RPCHook>>>) {
+    pub fn set_rpc_hook(&mut self, rpc_hook: Option<Arc<dyn RPCHook>>) {
         self.producer_config.rpc_hook = rpc_hook;
     }
 

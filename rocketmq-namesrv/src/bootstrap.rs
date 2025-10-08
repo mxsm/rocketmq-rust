@@ -24,11 +24,11 @@ use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::utils::network_util::NetworkUtil;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
-use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
+use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::remoting::RemotingService;
-use rocketmq_remoting::remoting_server::server::RocketMQServer;
+use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
@@ -138,7 +138,7 @@ impl NameServerRuntime {
     }
     fn initiate_rpc_hooks(&mut self) {
         if let Some(server) = self.server_inner.as_mut() {
-            server.register_rpc_hook(Box::new(ZoneRouteRPCHook));
+            server.register_rpc_hook(Arc::new(ZoneRouteRPCHook));
         }
     }
 

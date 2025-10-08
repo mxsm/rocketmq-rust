@@ -157,6 +157,7 @@ impl ProducerManager {
         }
     }
 
+    #[allow(clippy::mutable_key_type)]
     pub fn register_producer(
         &self,
         group: &CheetahString,
@@ -205,14 +206,14 @@ impl ProducerManager {
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
             let mut index = index.unsigned_abs() as usize % size;
             let mut channel = channels[index];
-            let mut ok = channel.upgrade().is_some();
+            let mut ok = channel.connection_ref().connection_is_ok();
             for _ in 0..GET_AVAILABLE_CHANNEL_RETRY_COUNT {
                 if ok {
                     return Some(channel.clone());
                 }
                 index = (index + 1) % size;
                 channel = channels[index];
-                ok = channel.upgrade().is_some();
+                ok = channel.connection_ref().connection_is_ok();
             }
             return None;
         }

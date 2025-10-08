@@ -110,12 +110,12 @@ impl DefaultMQAdminExt {
 
     pub fn with_rpc_hook(rpc_hook: impl RPCHook) -> Self {
         let admin_ext_group = CheetahString::from_static_str(ADMIN_EXT_GROUP);
-        let rpc_hook_inner: Box<dyn RPCHook> = Box::new(rpc_hook);
+        let rpc_hook_inner: Arc<dyn RPCHook> = Arc::new(rpc_hook);
         let client_config = ArcMut::new(ClientConfig::new());
         Self {
             client_config: client_config.clone(),
             default_mqadmin_ext_impl: ArcMut::new(DefaultMQAdminExtImpl::new(
-                Some(Arc::new(rpc_hook_inner)),
+                Some(rpc_hook_inner),
                 Duration::from_millis(5000),
                 client_config,
                 admin_ext_group.clone(),
@@ -130,12 +130,12 @@ impl DefaultMQAdminExt {
 
     pub fn with_rpc_hook_and_timeout(rpc_hook: impl RPCHook, timeout_millis: Duration) -> Self {
         let admin_ext_group = CheetahString::from_static_str(ADMIN_EXT_GROUP);
-        let rpc_hook_inner: Box<dyn RPCHook> = Box::new(rpc_hook);
+        let rpc_hook_inner: Arc<dyn RPCHook> = Arc::new(rpc_hook);
         let client_config = ArcMut::new(ClientConfig::new());
         Self {
             client_config: client_config.clone(),
             default_mqadmin_ext_impl: ArcMut::new(DefaultMQAdminExtImpl::new(
-                Some(Arc::new(rpc_hook_inner)),
+                Some(rpc_hook_inner),
                 timeout_millis,
                 client_config,
                 admin_ext_group.clone(),

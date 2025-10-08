@@ -84,7 +84,7 @@ const NAMESPACE_ORDER_TOPIC_CONFIG: &str = "ORDER_TOPIC_CONFIG";
 pub struct DefaultMQAdminExtImpl {
     service_state: ServiceState,
     client_instance: Option<ArcMut<MQClientInstance>>,
-    rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
+    rpc_hook: Option<Arc<dyn RPCHook>>,
     timeout_millis: Duration,
     kv_namespace_to_delete_list: Vec<CheetahString>,
     client_config: ArcMut<ClientConfig>,
@@ -94,7 +94,7 @@ pub struct DefaultMQAdminExtImpl {
 
 impl DefaultMQAdminExtImpl {
     pub fn new(
-        rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
         timeout_millis: Duration,
         client_config: ArcMut<ClientConfig>,
         admin_ext_group: CheetahString,

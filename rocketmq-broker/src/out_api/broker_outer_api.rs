@@ -41,7 +41,7 @@ use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_error::RocketmqError;
-use rocketmq_remoting::clients::rocketmq_default_impl::RocketmqDefaultClient;
+use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -116,7 +116,7 @@ impl BrokerOuterAPI {
 
     pub fn new_with_hook(
         tokio_client_config: Arc<TokioClientConfig>,
-        rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> Self {
         let mut client = ArcMut::new(RocketmqDefaultClient::new(
             tokio_client_config,
@@ -278,13 +278,13 @@ impl BrokerOuterAPI {
                 .set_body(body.clone());
         if oneway {
             self.remoting_client
-                .invoke_oneway(namesrv_addr, request, timeout_mills)
+                .invoke_request_oneway(namesrv_addr, request, timeout_mills)
                 .await;
             return None;
         }
         match self
             .remoting_client
-            .invoke_async(Some(namesrv_addr), request, timeout_mills)
+            .invoke_request(Some(namesrv_addr), request, timeout_mills)
             .await
         {
             Ok(response) => match From::from(response.code()) {
@@ -340,7 +340,7 @@ impl BrokerOuterAPI {
             let client = self.remoting_client.clone();
             let join_handle = tokio::spawn(async move {
                 client
-                    .invoke_async(Some(&addr), cloned_request, timeout_mills)
+                    .invoke_request(Some(&addr), cloned_request, timeout_mills)
                     .await
             });
             handle_vec.push(join_handle);
@@ -373,7 +373,7 @@ impl BrokerOuterAPI {
         request.set_body_mut_ref(request_body);
         let result = self
             .remoting_client
-            .invoke_async(Some(addr), request, timeout_millis)
+            .invoke_request(Some(addr), request, timeout_millis)
             .await;
         match result {
             Ok(response) => {
@@ -411,7 +411,7 @@ impl BrokerOuterAPI {
         request.set_body_mut_ref(request_body);
         let result = self
             .remoting_client
-            .invoke_async(Some(addr), request, timeout_millis)
+            .invoke_request(Some(addr), request, timeout_millis)
             .await;
         match result {
             Ok(response) => {
@@ -447,7 +447,7 @@ impl BrokerOuterAPI {
             RemotingCommand::create_request_command(RequestCode::GetRouteinfoByTopic, header);
         let response = self
             .remoting_client
-            .invoke_async(None, request, timeout_millis)
+            .invoke_request(None, request, timeout_millis)
             .await?;
         match ResponseCode::from(response.code()) {
             ResponseCode::TopicNotExist => {
@@ -491,7 +491,7 @@ impl BrokerOuterAPI {
         let request = build_send_message_request(msg, group);
         let response = self
             .remoting_client
-            .invoke_async(Some(broker_addr), request, timeout_millis)
+            .invoke_request(Some(broker_addr), request, timeout_millis)
             .await?;
 
         process_send_response(
@@ -540,7 +540,7 @@ impl BrokerOuterAPI {
             RemotingCommand::create_request_command(RequestCode::PullMessage, request_header);
         match self
             .remoting_client
-            .invoke_async(Some(broker_addr), request_command, timeout_millis)
+            .invoke_request(Some(broker_addr), request_command, timeout_millis)
             .await
         {
             Ok(response) => {
@@ -610,7 +610,7 @@ impl BrokerOuterAPI {
             RemotingCommand::create_request_command(RequestCode::UnregisterBroker, request_header);
         let response = self
             .remoting_client
-            .invoke_async(Some(namesrv_addr), request, 3000)
+            .invoke_request(Some(namesrv_addr), request, 3000)
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             Ok(())
@@ -630,7 +630,7 @@ impl BrokerOuterAPI {
         let request = RemotingCommand::create_remoting_command(RequestCode::GetAllTopicConfig);
         let response = self
             .remoting_client
-            .invoke_async(
+            .invoke_request(
                 Some(mix_all::broker_vip_channel(true, addr).as_ref()),
                 request,
                 3000,
@@ -659,7 +659,7 @@ impl BrokerOuterAPI {
         // let addr_ = mix_all::broker_vip_channel(true, addr);
         let response = self
             .remoting_client
-            .invoke_async(Some(addr), request, 3000)
+            .invoke_request(Some(addr), request, 3000)
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.body() {
@@ -683,7 +683,7 @@ impl BrokerOuterAPI {
         let request = RemotingCommand::create_remoting_command(RequestCode::GetAllDelayOffset);
         let mut response = self
             .remoting_client
-            .invoke_async(Some(addr), request, 3000)
+            .invoke_request(Some(addr), request, 3000)
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
@@ -707,7 +707,7 @@ impl BrokerOuterAPI {
             RemotingCommand::create_remoting_command(RequestCode::GetAllSubscriptionGroupConfig);
         let mut response = self
             .remoting_client
-            .invoke_async(Some(addr), request, 3000)
+            .invoke_request(Some(addr), request, 3000)
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
@@ -731,7 +731,7 @@ impl BrokerOuterAPI {
             RemotingCommand::create_remoting_command(RequestCode::GetAllMessageRequestMode);
         let mut response = self
             .remoting_client
-            .invoke_async(Some(addr), request, 3000)
+            .invoke_request(Some(addr), request, 3000)
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.take_body() {
@@ -776,7 +776,7 @@ impl BrokerOuterAPI {
         );
         let response = self
             .remoting_client
-            .invoke_async(Some(broker_addr), request, 3000)
+            .invoke_request(Some(broker_addr), request, 3000)
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             Ok(())
@@ -800,7 +800,7 @@ impl BrokerOuterAPI {
         );
         let response = self
             .remoting_client
-            .invoke_async(master_broker_addr, request, 3000)
+            .invoke_request(master_broker_addr, request, 3000)
             .await?;
 
         if ResponseCode::from(response.code()) == ResponseCode::Success {

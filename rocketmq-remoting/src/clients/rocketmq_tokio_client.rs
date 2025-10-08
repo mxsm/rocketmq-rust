@@ -37,6 +37,7 @@ use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::clients::Client;
 use crate::clients::RemotingClient;
 use crate::protocol::remoting_command::RemotingCommand;
+use crate::remoting::inner::RemotingGeneralHandler;
 use crate::remoting::RemotingService;
 use crate::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use crate::runtime::config::client_config::TokioClientConfig;
@@ -45,18 +46,16 @@ use crate::runtime::RPCHook;
 
 const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 
-pub type ArcSyncClient = Arc<Mutex<Client>>;
-
 pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
     tokio_client_config: Arc<TokioClientConfig>,
     //cache connection
-    connection_tables: Arc<Mutex<HashMap<CheetahString /* ip:port */, Client>>>,
+    connection_tables: Arc<Mutex<HashMap<CheetahString /* ip:port */, Client<PR>>>>,
     namesrv_addr_list: ArcMut<Vec<CheetahString>>,
     namesrv_addr_choosed: ArcMut<Option<CheetahString>>,
     available_namesrv_addr_set: ArcMut<HashSet<CheetahString>>,
     namesrv_index: Arc<AtomicI32>,
     client_runtime: Option<RocketMQRuntime>,
-    processor: PR,
+    cmd_handler: ArcMut<RemotingGeneralHandler<PR>>,
     tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
 }
 impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
@@ -69,6 +68,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         processor: PR,
         tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
     ) -> Self {
+        let handler = RemotingGeneralHandler {
+            request_processor: processor,
+            //shutdown: (),
+            rpc_hooks: vec![],
+            response_table: ArcMut::new(HashMap::with_capacity(512)),
+        };
         Self {
             tokio_client_config,
             connection_tables: Arc::new(Mutex::new(Default::default())),
@@ -77,14 +82,14 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             available_namesrv_addr_set: ArcMut::new(Default::default()),
             namesrv_index: Arc::new(AtomicI32::new(init_value_index())),
             client_runtime: Some(RocketMQRuntime::new_multi(10, "client-thread")),
-            processor,
+            cmd_handler: ArcMut::new(handler),
             tx,
         }
     }
 }
 
 impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
-    async fn get_and_create_nameserver_client(&self) -> Option<Client> {
+    async fn get_and_create_nameserver_client(&self) -> Option<Client<PR>> {
         let mut addr = self.namesrv_addr_choosed.as_ref().clone();
         if let Some(ref addr) = addr {
             let guard = self.connection_tables.lock().await;
@@ -137,7 +142,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         None
     }
 
-    async fn get_and_create_client(&self, addr: Option<&CheetahString>) -> Option<Client> {
+    async fn get_and_create_client(&self, addr: Option<&CheetahString>) -> Option<Client<PR>> {
         match addr {
             None => self.get_and_create_nameserver_client().await,
             Some(addr) => {
@@ -158,7 +163,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         }
     }
 
-    async fn create_client(&self, addr: &CheetahString, duration: Duration) -> Option<Client> {
+    async fn create_client(&self, addr: &CheetahString, duration: Duration) -> Option<Client<PR>> {
         let mut connection_tables = self.connection_tables.lock().await;
         let cw = connection_tables.get(addr);
         if let Some(cw) = cw {
@@ -181,7 +186,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         let addr_inner = addr.to_string();
 
         match time::timeout(duration, async {
-            Client::connect(addr_inner, self.processor.clone(), self.tx.as_ref()).await
+            Client::connect(addr_inner, self.cmd_handler.clone(), self.tx.as_ref()).await
         })
         .await
         {
@@ -269,8 +274,8 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for Rocketmq
         info!(">>>>>>>>>>>>>>>RemotingClient shutdown success<<<<<<<<<<<<<<<<<");
     }
 
-    fn register_rpc_hook(&mut self, hook: Arc<Box<dyn RPCHook>>) {
-        todo!()
+    fn register_rpc_hook(&mut self, hook: Arc<dyn RPCHook>) {
+        self.cmd_handler.register_rpc_hook(hook);
     }
 
     fn clear_rpc_hook(&mut self) {
@@ -340,7 +345,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
             .collect()
     }
 
-    async fn invoke_async(
+    async fn invoke_request(
         &self,
         addr: Option<&CheetahString>,
         request: RemotingCommand,
@@ -382,7 +387,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         }
     }
 
-    async fn invoke_oneway(
+    async fn invoke_request_oneway(
         &self,
         addr: &CheetahString,
         request: RemotingCommand,

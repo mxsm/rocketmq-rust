@@ -34,7 +34,7 @@ impl AsyncTraceDispatcher {
         group: &str,
         type_: Type,
         trace_topic_name: &str,
-        rpc_hook: Option<Arc<Box<dyn RPCHook>>>,
+        rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> Self {
         AsyncTraceDispatcher
     }
