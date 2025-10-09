@@ -818,6 +818,10 @@ impl BrokerOuterAPI {
             master_broker_addr.map_or("".to_string(), |s| s.to_string()),
         ))
     }
+
+    pub fn close_channel(&self, addr_list: Vec<String>) {
+        self.remoting_client.mut_from_ref().close_clients(addr_list);
+    }
 }
 
 fn process_pull_result(
