@@ -180,7 +180,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
 
         if let Some(slave_synchronize) = broker_runtime_inner.slave_synchronize() {
             if let Some(master_addr) = slave_synchronize.master_addr() {
-                let vip_channel = mix_all::broker_vip_channel(true, &master_addr);
+                let vip_channel = mix_all::broker_vip_channel(true, master_addr);
                 let addr_list = vec![master_addr.to_string(), vip_channel.to_string()];
                 self.broker_runtime_inner
                     .broker_outer_api()
