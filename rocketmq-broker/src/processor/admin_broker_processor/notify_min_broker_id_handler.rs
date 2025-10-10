@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -178,8 +179,12 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         let broker_runtime_inner = self.broker_runtime_inner.mut_from_ref();
 
         if let Some(slave_synchronize) = broker_runtime_inner.slave_synchronize() {
-            if let Some(_master_addr) = slave_synchronize.master_addr() {
-                // Call the close client method
+            if let Some(master_addr) = slave_synchronize.master_addr() {
+                let vip_channel = mix_all::broker_vip_channel(true, master_addr);
+                let addr_list = vec![master_addr.to_string(), vip_channel.to_string()];
+                self.broker_runtime_inner
+                    .broker_outer_api()
+                    .close_channel(addr_list);
             }
         }
 
