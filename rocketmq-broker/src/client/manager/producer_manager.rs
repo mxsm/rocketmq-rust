@@ -285,8 +285,8 @@ impl ProducerManager {
                     .remove(client_channel_info.client_id());
                 removed = true;
                 info!(
-                    "NETTY EVENT: remove channel[{}][{}] from ProducerManager groupChannelTable, \
-                     producer group: {}",
+                    "Channel Close event: remove channel[{}][{}] from ProducerManager \
+                     groupChannelTable, producer group: {}",
                     client_channel_info.channel(),
                     remote_addr,
                     group
