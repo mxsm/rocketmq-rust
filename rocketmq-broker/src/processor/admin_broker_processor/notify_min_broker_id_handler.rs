@@ -166,6 +166,15 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
             self.on_master_on_line(min_broker_addr, master_ha_addr)
                 .await;
         }
+
+        if self.lock.read().await.min_broker_id_in_group.unwrap() == MASTER_ID {
+            let pull_request_hold_service = self.broker_runtime_inner.pull_request_hold_service();
+            if let Some(pull_request_hold_service) = pull_request_hold_service {
+                pull_request_hold_service.notify_master_online().await;
+            } else {
+                error!("pull_request_hold_service is empty");
+            }
+        }
     }
 
     async fn change_special_service_status(&self, should_start: bool) {
@@ -194,11 +203,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         }
     }
 
-    async fn on_master_on_line(
-        &self,
-        _min_broker_addr: &str,
-        master_ha_addr: &Option<CheetahString>,
-    ) {
+    async fn on_master_on_line(&self, master_addr: &str, master_ha_addr: &Option<CheetahString>) {
         let need_sync_master_flush_offset =
             if let Some(message_store) = self.broker_runtime_inner.message_store() {
                 message_store.get_master_flushed_offset() == 0x0000
@@ -211,16 +216,53 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
             };
 
         if master_ha_addr.is_none() || need_sync_master_flush_offset {
-            if need_sync_master_flush_offset {
-                unimplemented!();
-            }
+            let broker_sync_info = self
+                .broker_runtime_inner
+                .broker_outer_api()
+                .retrieve_broker_ha_info(Some(&CheetahString::from(master_addr)))
+                .await;
 
-            if master_ha_addr.is_none() {
-                let broker_runtime_inner = self.broker_runtime_inner.mut_from_ref();
-                if let Some(_message_store) = broker_runtime_inner.message_store() {
-                    unimplemented!("");
+            match broker_sync_info {
+                Ok(broker_sync_info) => {
+                    if let Some(message_store) = self.broker_runtime_inner.message_store() {
+                        if need_sync_master_flush_offset {
+                            info!(
+                                "Set master flush offset in slave to {}",
+                                broker_sync_info.master_flush_offset
+                            );
+                            message_store
+                                .set_master_flushed_offset(broker_sync_info.master_flush_offset);
+                        }
+
+                        if master_ha_addr.is_none() {
+                            if let Some(master_hs_address) = broker_sync_info.master_ha_address {
+                                message_store
+                                    .update_ha_master_address(master_hs_address.as_str())
+                                    .await;
+                            }
+                            if let Some(master_address) = broker_sync_info.master_address {
+                                message_store.update_master_address(&master_address);
+                            }
+                        }
+                    } else {
+                        error!("message_store is empty");
+                    }
+                }
+                Err(e) => {
+                    error!("retrieve master ha info exception {}", e);
+                }
+            };
+        }
+
+        if let Some(message_store) = self.broker_runtime_inner.message_store() {
+            if master_ha_addr.is_some() {
+                if let Some(master_ha_addr) = master_ha_addr {
+                    message_store
+                        .update_ha_master_address(master_ha_addr.as_str())
+                        .await;
                 }
             }
+            message_store.wakeup_ha_client();
         }
     }
 
