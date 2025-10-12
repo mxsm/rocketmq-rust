@@ -15,9 +15,11 @@
  * limitations under the License.
  */
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketmqError;
 use rocketmq_error::RocketmqError::DeserializeHeaderError;
 use serde::Deserialize;
 use serde::Serialize;
@@ -27,6 +29,37 @@ use crate::protocol::command_custom_header::FromMap;
 use crate::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
 use crate::rpc::topic_request_header::TopicRequestHeader;
+
+// Field key constants to avoid repeated allocations
+const FIELD_A: &str = "a";
+const FIELD_B: &str = "b";
+const FIELD_C: &str = "c";
+const FIELD_D: &str = "d";
+const FIELD_E: &str = "e";
+const FIELD_F: &str = "f";
+const FIELD_G: &str = "g";
+const FIELD_H: &str = "h";
+const FIELD_I: &str = "i";
+const FIELD_J: &str = "j";
+const FIELD_K: &str = "k";
+const FIELD_L: &str = "l";
+const FIELD_M: &str = "m";
+const FIELD_N: &str = "n";
+
+const KEY_A: CheetahString = CheetahString::from_static_str(FIELD_A);
+const KEY_B: CheetahString = CheetahString::from_static_str(FIELD_B);
+const KEY_C: CheetahString = CheetahString::from_static_str(FIELD_C);
+const KEY_D: CheetahString = CheetahString::from_static_str(FIELD_D);
+const KEY_E: CheetahString = CheetahString::from_static_str(FIELD_E);
+const KEY_F: CheetahString = CheetahString::from_static_str(FIELD_F);
+const KEY_G: CheetahString = CheetahString::from_static_str(FIELD_G);
+const KEY_H: CheetahString = CheetahString::from_static_str(FIELD_H);
+const KEY_I: CheetahString = CheetahString::from_static_str(FIELD_I);
+const KEY_J: CheetahString = CheetahString::from_static_str(FIELD_J);
+const KEY_K: CheetahString = CheetahString::from_static_str(FIELD_K);
+const KEY_L: CheetahString = CheetahString::from_static_str(FIELD_L);
+const KEY_M: CheetahString = CheetahString::from_static_str(FIELD_M);
+const KEY_N: CheetahString = CheetahString::from_static_str(FIELD_N);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,62 +85,59 @@ pub struct SendMessageRequestHeaderV2 {
 
 impl CommandCustomHeader for SendMessageRequestHeaderV2 {
     fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        let mut map = HashMap::new();
-        map.insert(CheetahString::from_slice("a"), self.a.clone());
-        map.insert(CheetahString::from_slice("b"), self.b.clone());
-        map.insert(CheetahString::from_slice("c"), self.c.clone());
+        let mut map = HashMap::with_capacity(14);
+        map.insert(CheetahString::from_static_str(FIELD_A), self.a.clone());
+        map.insert(CheetahString::from_static_str(FIELD_B), self.b.clone());
+        map.insert(CheetahString::from_static_str(FIELD_C), self.c.clone());
         map.insert(
-            CheetahString::from_slice("d"),
+            CheetahString::from_static_str(FIELD_D),
             CheetahString::from_string(self.d.to_string()),
         );
         map.insert(
-            CheetahString::from_slice("e"),
+            CheetahString::from_static_str(FIELD_E),
             CheetahString::from_string(self.e.to_string()),
         );
         map.insert(
-            CheetahString::from_slice("f"),
+            CheetahString::from_static_str(FIELD_F),
             CheetahString::from_string(self.f.to_string()),
         );
         map.insert(
-            CheetahString::from_slice("g"),
+            CheetahString::from_static_str(FIELD_G),
             CheetahString::from_string(self.g.to_string()),
         );
         map.insert(
-            CheetahString::from_slice("h"),
+            CheetahString::from_static_str(FIELD_H),
             CheetahString::from_string(self.h.to_string()),
         );
         if let Some(ref value) = self.i {
-            map.insert(
-                CheetahString::from_slice("i"),
-                CheetahString::from_string(value.to_string()),
-            );
+            map.insert(CheetahString::from_static_str(FIELD_I), value.clone());
         }
         if let Some(value) = self.j {
             map.insert(
-                CheetahString::from_slice("j"),
+                CheetahString::from_static_str(FIELD_J),
                 CheetahString::from_string(value.to_string()),
             );
         }
         if let Some(value) = self.k {
             map.insert(
-                CheetahString::from_slice("k"),
+                CheetahString::from_static_str(FIELD_K),
                 CheetahString::from_string(value.to_string()),
             );
         }
         if let Some(value) = self.l {
             map.insert(
-                CheetahString::from_slice("l"),
+                CheetahString::from_static_str(FIELD_L),
                 CheetahString::from_string(value.to_string()),
             );
         }
         if let Some(value) = self.m {
             map.insert(
-                CheetahString::from_slice("m"),
+                CheetahString::from_static_str(FIELD_M),
                 CheetahString::from_string(value.to_string()),
             );
         }
         if let Some(ref value) = self.n {
-            map.insert(CheetahString::from_slice("n"), value.clone());
+            map.insert(CheetahString::from_static_str(FIELD_N), value.clone());
         }
         if let Some(ref value) = self.topic_request_header {
             if let Some(value) = value.to_map() {
@@ -118,31 +148,41 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
     }
 
     fn encode_fast(&mut self, out: &mut BytesMut) {
-        self.write_if_not_null(out, "a", self.a.as_str());
-        self.write_if_not_null(out, "b", self.b.as_str());
-        self.write_if_not_null(out, "c", self.c.as_str());
-        self.write_if_not_null(out, "d", self.d.to_string().as_str());
-        self.write_if_not_null(out, "e", self.e.to_string().as_str());
-        self.write_if_not_null(out, "f", self.f.to_string().as_str());
-        self.write_if_not_null(out, "g", self.g.to_string().as_str());
-        self.write_if_not_null(out, "h", self.h.to_string().as_str());
+        self.write_if_not_null(out, FIELD_A, self.a.as_str());
+        self.write_if_not_null(out, FIELD_B, self.b.as_str());
+        self.write_if_not_null(out, FIELD_C, self.c.as_str());
+
+        // Reduce allocations by avoiding format! macro
+        let d_str = self.d.to_string();
+        self.write_if_not_null(out, FIELD_D, &d_str);
+        let e_str = self.e.to_string();
+        self.write_if_not_null(out, FIELD_E, &e_str);
+        let f_str = self.f.to_string();
+        self.write_if_not_null(out, FIELD_F, &f_str);
+        let g_str = self.g.to_string();
+        self.write_if_not_null(out, FIELD_G, &g_str);
+        let h_str = self.h.to_string();
+        self.write_if_not_null(out, FIELD_H, &h_str);
+
         if let Some(ref value) = self.i {
-            self.write_if_not_null(out, "i", value.as_str());
+            self.write_if_not_null(out, FIELD_I, value.as_str());
         }
         if let Some(value) = self.j {
-            self.write_if_not_null(out, "j", value.to_string().as_str());
+            let j_str = value.to_string();
+            self.write_if_not_null(out, FIELD_J, &j_str);
         }
         if let Some(value) = self.k {
-            self.write_if_not_null(out, "k", value.to_string().as_str());
+            self.write_if_not_null(out, FIELD_K, if value { "true" } else { "false" });
         }
         if let Some(value) = self.l {
-            self.write_if_not_null(out, "l", value.to_string().as_str());
+            let l_str = value.to_string();
+            self.write_if_not_null(out, FIELD_L, &l_str);
         }
         if let Some(value) = self.m {
-            self.write_if_not_null(out, "m", value.to_string().as_str());
+            self.write_if_not_null(out, FIELD_M, if value { "true" } else { "false" });
         }
         if let Some(ref value) = self.n {
-            self.write_if_not_null(out, "n", value.as_str());
+            self.write_if_not_null(out, FIELD_N, value.as_str());
         }
     }
 
@@ -150,60 +190,62 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         &mut self,
         fields: &HashMap<CheetahString, CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        self.a = self.get_and_check_not_none(fields, &CheetahString::from_slice("a"))?; //producerGroup
-        self.b = self.get_and_check_not_none(fields, &CheetahString::from_slice("b"))?; //topic
-        self.c = self.get_and_check_not_none(fields, &CheetahString::from_slice("c"))?; //defaultTopic
+        // Use static keys to avoid repeated allocations
+
+        self.a = self.get_and_check_not_none(fields, &KEY_A)?; //producerGroup
+        self.b = self.get_and_check_not_none(fields, &KEY_B)?; //topic
+        self.c = self.get_and_check_not_none(fields, &KEY_C)?; //defaultTopic
         self.d = self
-            .get_and_check_not_none(fields, &CheetahString::from_slice("d"))?
+            .get_and_check_not_none(fields, &KEY_D)?
             .parse()
             .map_err(|_| DeserializeHeaderError("Parse field d error".to_string()))?; //defaultTopicQueueNums
         self.e = self
-            .get_and_check_not_none(fields, &CheetahString::from_slice("e"))?
+            .get_and_check_not_none(fields, &KEY_E)?
             .parse()
             .map_err(|_| DeserializeHeaderError("Parse field e error".to_string()))?; //queueId
         self.f = self
-            .get_and_check_not_none(fields, &CheetahString::from_slice("f"))?
+            .get_and_check_not_none(fields, &KEY_F)?
             .parse()
             .map_err(|_| DeserializeHeaderError("Parse field f error".to_string()))?; //sysFlag
         self.g = self
-            .get_and_check_not_none(fields, &CheetahString::from_slice("g"))?
+            .get_and_check_not_none(fields, &KEY_G)?
             .parse()
             .map_err(|_| DeserializeHeaderError("Parse field g error".to_string()))?; //bornTimestamp
         self.h = self
-            .get_and_check_not_none(fields, &CheetahString::from_slice("h"))?
+            .get_and_check_not_none(fields, &KEY_H)?
             .parse()
             .map_err(|_| DeserializeHeaderError("Parse field h error".to_string()))?; //flag
 
-        if let Some(v) = fields.get(&CheetahString::from_slice("i")) {
+        if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_I)) {
             self.i = Some(v.clone());
         }
 
-        if let Some(v) = fields.get(&CheetahString::from_slice("j")) {
+        if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_J)) {
             self.j = Some(v.parse().unwrap());
         }
 
-        if let Some(v) = fields.get(&CheetahString::from_slice("k")) {
+        if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_K)) {
             self.k = Some(
                 v.parse()
                     .map_err(|_| DeserializeHeaderError("Parse field k error".to_string()))?,
             );
         }
 
-        if let Some(v) = fields.get(&CheetahString::from_slice("l")) {
+        if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_L)) {
             self.l = Some(
                 v.parse()
                     .map_err(|_| DeserializeHeaderError("Parse field l error".to_string()))?,
             );
         }
 
-        if let Some(v) = fields.get(&CheetahString::from_slice("m")) {
+        if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_M)) {
             self.m = Some(
                 v.parse()
                     .map_err(|_| DeserializeHeaderError("Parse field m error".to_string()))?,
             );
         }
 
-        if let Some(v) = fields.get(&CheetahString::from_slice("n")) {
+        if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_N)) {
             self.n = Some(v.clone());
         }
         Ok(())
@@ -220,78 +262,56 @@ impl FromMap for SendMessageRequestHeaderV2 {
     type Target = Self;
 
     fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
+        #[inline(always)]
+        fn get_required<'a>(
+            map: &'a HashMap<CheetahString, CheetahString>,
+            key: &CheetahString,
+            field: &'static str,
+        ) -> Result<&'a CheetahString, rocketmq_error::RocketmqError> {
+            map.get(key).ok_or_else(|| {
+                RocketmqError::DeserializeHeaderError(format!("Missing field: {}", field))
+            })
+        }
+
+        #[inline(always)]
+        fn parse_required<T: FromStr>(
+            map: &HashMap<CheetahString, CheetahString>,
+            key: &CheetahString,
+            field: &'static str,
+        ) -> Result<T, RocketmqError> {
+            get_required(map, key, field)?
+                .as_str()
+                .parse::<T>()
+                .map_err(|_| {
+                    RocketmqError::DeserializeHeaderError(format!("Parse {} field error", field))
+                })
+        }
+
+        #[inline(always)]
+        fn optional_parse<T: FromStr>(
+            map: &HashMap<CheetahString, CheetahString>,
+            key: &CheetahString,
+        ) -> Option<T> {
+            map.get(key)?.as_str().parse::<T>().ok()
+        }
+
         Ok(SendMessageRequestHeaderV2 {
-            a: map.get(&CheetahString::from_slice("a")).cloned().ok_or(
-                Self::Error::DeserializeHeaderError("Miss a field".to_string()),
-            )?,
-            b: map.get(&CheetahString::from_slice("b")).cloned().ok_or(
-                Self::Error::DeserializeHeaderError("Miss b field".to_string()),
-            )?,
-            c: map.get(&CheetahString::from_slice("c")).cloned().ok_or(
-                Self::Error::DeserializeHeaderError("Miss c field".to_string()),
-            )?,
-            d: map
-                .get(&CheetahString::from_slice("d"))
-                .cloned()
-                .ok_or(Self::Error::DeserializeHeaderError(
-                    "Miss d field".to_string(),
-                ))?
-                .parse()
-                .map_err(|_| {
-                    Self::Error::DeserializeHeaderError("Parse d field error".to_string())
-                })?,
-            e: map
-                .get(&CheetahString::from_slice("e"))
-                .cloned()
-                .ok_or(Self::Error::DeserializeHeaderError(
-                    "Miss e field".to_string(),
-                ))?
-                .parse()
-                .map_err(|_| {
-                    Self::Error::DeserializeHeaderError("Parse e field error".to_string())
-                })?,
-            f: map
-                .get(&CheetahString::from_slice("f"))
-                .cloned()
-                .ok_or(Self::Error::DeserializeHeaderError(
-                    "Miss f field".to_string(),
-                ))?
-                .parse()
-                .map_err(|_| {
-                    Self::Error::DeserializeHeaderError("Parse f field error".to_string())
-                })?,
-            g: map
-                .get(&CheetahString::from_slice("g"))
-                .ok_or(Self::Error::DeserializeHeaderError(
-                    "Miss g field".to_string(),
-                ))?
-                .parse()
-                .map_err(|_| {
-                    Self::Error::DeserializeHeaderError("Parse g field error".to_string())
-                })?,
-            h: map
-                .get(&CheetahString::from_slice("h"))
-                .ok_or(Self::Error::DeserializeHeaderError(
-                    "Miss h field".to_string(),
-                ))?
-                .parse()
-                .map_err(|_| {
-                    Self::Error::DeserializeHeaderError("Parse h field error".to_string())
-                })?,
-            i: map.get(&CheetahString::from_slice("i")).cloned(),
-            j: map
-                .get(&CheetahString::from_slice("j"))
-                .and_then(|v| v.parse().ok()),
-            k: map
-                .get(&CheetahString::from_slice("k"))
-                .and_then(|v| v.parse().ok()),
-            l: map
-                .get(&CheetahString::from_slice("l"))
-                .and_then(|v| v.parse().ok()),
-            m: map
-                .get(&CheetahString::from_slice("m"))
-                .and_then(|v| v.parse().ok()),
-            n: map.get(&CheetahString::from_slice("n")).cloned(),
+            a: get_required(map, &KEY_A, FIELD_A)?.clone(),
+            b: get_required(map, &KEY_B, FIELD_B)?.clone(),
+            c: get_required(map, &KEY_C, FIELD_C)?.clone(),
+
+            d: parse_required::<i32>(map, &KEY_D, FIELD_D)?,
+            e: parse_required::<i32>(map, &KEY_E, FIELD_E)?,
+            f: parse_required::<i32>(map, &KEY_F, FIELD_F)?,
+            g: parse_required::<i64>(map, &KEY_G, FIELD_G)?,
+            h: parse_required::<i32>(map, &KEY_H, FIELD_H)?,
+
+            i: map.get(&KEY_I).cloned(),
+            j: optional_parse::<i32>(map, &KEY_J),
+            k: optional_parse::<bool>(map, &KEY_K),
+            l: optional_parse::<i32>(map, &KEY_L),
+            m: optional_parse::<bool>(map, &KEY_M),
+            n: map.get(&KEY_N).cloned(),
             topic_request_header: Some(<TopicRequestHeader as FromMap>::from(map)?),
         })
     }
