@@ -130,7 +130,7 @@ impl ConsumerGroupInfo {
     pub fn handle_channel_close_event(&self, channel: &Channel) -> Option<ClientChannelInfo> {
         if let Some((_, info)) = self.channel_info_table.remove(channel) {
             warn!(
-                "NETTY EVENT: remove not active channel [{}] from ConsumerGroupInfo \
+                "Channel close event: remove not active channel [{}] from ConsumerGroupInfo \
                  groupChannelTable, consumer group: {}",
                 info.channel().remote_address(),
                 self.group_name
