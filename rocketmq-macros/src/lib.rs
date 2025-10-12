@@ -23,6 +23,7 @@ use syn::TypePath;
 
 use crate::remoting_serializable::remoting_serializable_inner;
 use crate::request_header_custom::request_header_codec_inner;
+use crate::request_header_custom::request_header_codec_inner_v2;
 
 mod remoting_serializable;
 mod request_header_custom;
@@ -30,6 +31,11 @@ mod request_header_custom;
 #[proc_macro_derive(RequestHeaderCodec, attributes(required))]
 pub fn request_header_codec(input: TokenStream) -> TokenStream {
     request_header_codec_inner(input)
+}
+
+#[proc_macro_derive(RequestHeaderCodecV2, attributes(required))]
+pub fn request_header_codec_v2(input: TokenStream) -> TokenStream {
+    request_header_codec_inner_v2(input)
 }
 
 #[proc_macro_derive(RemotingSerializable)]

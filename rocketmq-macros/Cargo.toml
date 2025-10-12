@@ -20,3 +20,14 @@ proc-macro = true
 syn = "2.0"
 quote = "1.0"
 proc-macro2 = "1.0"
+
+[dev-dependencies]
+criterion = { version = "0.7", features = ["html_reports"] }
+cheetah-string = { workspace = true }
+rocketmq-error = { workspace = true }
+rocketmq-remoting = { workspace = true }
+rocketmq-macros = { workspace = true }
+
+[[bench]]
+name = "from_map_bench"
+harness = false
