@@ -83,7 +83,7 @@ uuid = { version = "1.18.1", features = ["v4", # Lets you generate random UUIDs
 
 futures = "0.3"
 
-cheetah-string = { version = "0.1.6", features = ["serde", "bytes"] }
+cheetah-string = { version = "0.1.7", features = ["serde", "bytes"] }
 
 flate2 = "1.1.4"
 dashmap = "6.1.0"
