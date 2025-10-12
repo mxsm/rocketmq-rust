@@ -210,8 +210,8 @@ where
                     &mut request_header,
                     &mapping_context,
                 );
-                if let Some(rewrite_result) = rewrite_result {
-                    return Ok(Some(rewrite_result));
+                if rewrite_result.is_some() {
+                    return Ok(rewrite_result);
                 }
 
                 let send_message_context =
@@ -220,11 +220,14 @@ where
                 self.inner
                     .execute_send_message_hook_before(&send_message_context);
                 SendMessageProcessor::<MS, TS>::clear_reserved_properties(&mut request_header);
-                let inner = self.inner.clone();
-                let execute_send_message_hook_after =
-                    |ctx: &mut SendMessageContext, cmd: &mut RemotingCommand| {
+
+                let execute_send_message_hook_after = {
+                    let inner = self.inner.clone();
+                    move |ctx: &mut SendMessageContext, cmd: &mut RemotingCommand| {
                         inner.execute_send_message_hook_after(Some(cmd), ctx)
-                    };
+                    }
+                };
+
                 if !request_header.batch.unwrap_or(false) {
                     //handle single message
                     self.send_message(
