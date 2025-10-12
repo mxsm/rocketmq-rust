@@ -41,6 +41,7 @@ use tracing::error;
 use super::RemotingCommandType;
 use super::RemotingSerializable;
 use super::SerializeType;
+use crate::code::request_code::RequestCode;
 use crate::code::response_code::RemotingSysResponseCode;
 use crate::protocol::command_custom_header::CommandCustomHeader;
 use crate::protocol::command_custom_header::FromMap;
@@ -577,6 +578,11 @@ impl RemotingCommand {
     #[inline]
     pub fn code(&self) -> i32 {
         self.code
+    }
+
+    #[inline]
+    pub fn request_code(&self) -> RequestCode {
+        RequestCode::from(self.code)
     }
 
     #[inline]
