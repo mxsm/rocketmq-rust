@@ -380,6 +380,7 @@ impl TopicRequestHeaderTrait for SendMessageRequestHeader {
 /// * `Ok(SendMessageRequestHeader)` if the header is successfully parsed and converted (if
 ///   necessary).
 /// * `Err(crate::Error)` if there is an error in decoding the header.
+#[inline]
 pub fn parse_request_header(
     request: &RemotingCommand,
     request_code: RequestCode,
