@@ -112,9 +112,8 @@ where
             | RequestCode::SendMessageV2
             | RequestCode::SendBatchMessage
             | RequestCode::ConsumerSendMsgBack => {
-                return self
-                    .process_request_inner(channel, ctx, request_code, request)
-                    .await;
+                self.process_request_inner(channel, ctx, request_code, request)
+                    .await
             }
             _ => {
                 warn!(
