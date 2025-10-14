@@ -72,6 +72,10 @@ impl ConsumerConnection {
         self.connection_set.clone()
     }
 
+    pub fn connection_set_insert(&mut self, connection: Connection) {
+        self.connection_set.insert(connection);
+    }
+
     pub fn set_connection_set(&mut self, connection_set: HashSet<Connection>) {
         self.connection_set = connection_set;
     }
