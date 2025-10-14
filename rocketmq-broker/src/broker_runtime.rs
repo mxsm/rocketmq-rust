@@ -1345,7 +1345,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             .register_single_topic_all(
                 self.broker_config
                     .broker_identity
-                    .broker_cluster_name
+                    .broker_name
                     .clone(),
                 topic_config,
                 3000,
