@@ -1343,10 +1343,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         }
         self.broker_outer_api
             .register_single_topic_all(
-                self.broker_config
-                    .broker_identity
-                    .broker_name
-                    .clone(),
+                self.broker_config.broker_identity.broker_name.clone(),
                 topic_config,
                 3000,
             )
