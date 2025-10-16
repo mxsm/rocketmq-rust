@@ -87,4 +87,4 @@ cheetah-string = { version = "0.1.7", features = ["serde", "bytes"] }
 
 flate2 = "1.1.4"
 dashmap = "6.1.0"
-strum = { version = "0.26.3", features = ["derive"] }
+strum = { version = "0.27.2", features = ["derive"] }
