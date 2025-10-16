@@ -384,6 +384,7 @@ where
             .await
     }
 
+    #[allow(unused_assignments)]
     async fn process_request_inner(
         &mut self,
         request_code: RequestCode,

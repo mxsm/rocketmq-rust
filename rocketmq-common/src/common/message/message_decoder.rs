@@ -391,10 +391,10 @@ pub fn count_inner_msg_num(bytes: Option<Bytes>) -> u32 {
 
 pub fn encode_messages(messages: &[Message]) -> Bytes {
     let mut bytes = BytesMut::new();
-    let mut all_size = 0;
+    //let mut all_size = 0;
     for message in messages {
         let message_bytes = encode_message(message);
-        all_size += message_bytes.len();
+        //all_size += message_bytes.len();
         bytes.put_slice(&message_bytes);
     }
     bytes.freeze()
