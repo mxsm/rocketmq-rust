@@ -22,8 +22,10 @@ use crate::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMapping
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct TopicConfigAndQueueMapping {
+    #[serde(flatten)]
     pub topic_config: TopicConfig,
 
+    #[serde(rename = "mappingDetail")]
     pub topic_queue_mapping_detail: Option<TopicQueueMappingDetail>,
 }
 

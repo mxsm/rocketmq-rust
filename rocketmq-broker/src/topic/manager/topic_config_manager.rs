@@ -490,8 +490,8 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         let final_attributes_result = AttributeUtil::alter_current_attributes(
             create,
             TopicAttributes::all(),
-            &new_attributes,
             &current_attributes,
+            &new_attributes,
         );
         match final_attributes_result {
             Ok(final_attributes) => {

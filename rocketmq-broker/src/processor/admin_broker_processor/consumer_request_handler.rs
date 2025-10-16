@@ -85,7 +85,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                     connection.set_version(channel_info.version());
                     connection
                         .set_client_addr(channel_info.key().remote_address().to_string().into());
-                    body_data.get_connection_set().insert(connection);
+                    body_data.connection_set_insert(connection);
                 }
                 let body = body_data
                     .encode()
