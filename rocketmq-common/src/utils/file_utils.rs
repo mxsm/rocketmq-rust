@@ -23,6 +23,8 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use parking_lot::Mutex;
+#[cfg(feature = "async_fs")]
+use tokio::io::AsyncReadExt;
 use tracing::warn;
 
 static LOCK: Mutex<()> = Mutex::new(());
@@ -84,6 +86,31 @@ fn write_string_to_file(file: &File, data: &str, _encoding: &str) -> io::Result<
     Ok(())
 }
 
+#[cfg(feature = "async_fs")]
+pub async fn file_to_string_async(file_name: &str) -> Result<String, io::Error> {
+    if !tokio::fs::try_exists(file_name).await.unwrap_or(false) {
+        warn!("file not exist:{}", file_name);
+        return Ok("".to_string());
+    }
+    let mut file = tokio::fs::File::open(file_name).await?;
+    file_to_string_impl_async(&mut file).await
+}
+
+#[cfg(feature = "async_fs")]
+async fn file_to_string_impl_async(file: &mut tokio::fs::File) -> Result<String, io::Error> {
+    let file_length = file.metadata().await?.len() as usize;
+    let mut data = vec![0; file_length];
+    let result = file.read_exact(&mut data).await;
+
+    match result {
+        Ok(_) => Ok(String::from_utf8_lossy(&data).to_string()),
+        Err(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Failed to read file",
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,5 +146,24 @@ mod tests {
         // Check if the result is Ok and the file was created with the expected content
         assert!(result.is_ok());
         assert_eq!(std::fs::read_to_string(file_path).unwrap(), content);
+    }
+
+    #[cfg(feature = "async_fs")]
+    #[tokio::test]
+    async fn test_file_to_string_async() {
+        // Create a temporary file for testing
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let file_path = temp_file.path().to_str().unwrap();
+
+        // Write some content to the file
+        let content = "Hello, Async World!";
+        tokio::fs::write(file_path, content).await.unwrap();
+
+        // Call the file_to_string_async function
+        let result = file_to_string_async(file_path).await;
+
+        // Check if the result is Ok and contains the expected content
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), content);
     }
 }
