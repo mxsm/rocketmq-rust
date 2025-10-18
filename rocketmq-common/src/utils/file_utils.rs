@@ -25,9 +25,14 @@ use std::path::PathBuf;
 use parking_lot::Mutex;
 #[cfg(feature = "async_fs")]
 use tokio::io::AsyncReadExt;
+#[cfg(feature = "async_fs")]
+use tokio::io::AsyncWriteExt;
 use tracing::warn;
 
 static LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(feature = "async_fs")]
+static ASYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub fn file_to_string(file_name: &str) -> Result<String, io::Error> {
     if !PathBuf::from(file_name).exists() {
@@ -38,7 +43,7 @@ pub fn file_to_string(file_name: &str) -> Result<String, io::Error> {
     file_to_string_impl(&file)
 }
 
-pub fn file_to_string_impl(file: &File) -> Result<String, io::Error> {
+fn file_to_string_impl(file: &File) -> Result<String, io::Error> {
     let file_length = file.metadata()?.len() as usize;
     let mut data = vec![0; file_length];
     let result = file.take(file_length as u64).read_exact(&mut data);
@@ -111,6 +116,45 @@ async fn file_to_string_impl_async(file: &mut tokio::fs::File) -> Result<String,
     }
 }
 
+#[cfg(feature = "async_fs")]
+pub async fn string_to_file_async(str_content: &str, file_name: &str) -> io::Result<()> {
+    let lock = ASYNC_LOCK.lock().await;
+
+    let bak_file = format!("{file_name}.bak");
+
+    // Read previous content and create a backup
+    if let Ok(prev_content) = file_to_string_async(file_name).await {
+        string_to_file_not_safe_async(&prev_content, &bak_file).await?;
+    }
+
+    // Write new content to the file
+    string_to_file_not_safe_async(str_content, file_name).await?;
+    drop(lock);
+    Ok(())
+}
+
+#[cfg(feature = "async_fs")]
+async fn string_to_file_not_safe_async(str_content: &str, file_name: &str) -> io::Result<()> {
+    // Create parent directories if they don't exist
+    if let Some(parent) = Path::new(file_name).parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let mut file = tokio::fs::File::create(file_name).await?;
+
+    write_string_to_file_async(&mut file, str_content, "UTF-8").await
+}
+
+#[cfg(feature = "async_fs")]
+async fn write_string_to_file_async(
+    file: &mut tokio::fs::File,
+    data: &str,
+    _encoding: &str,
+) -> io::Result<()> {
+    file.write_all(data.as_bytes()).await?;
+    file.flush().await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +209,21 @@ mod tests {
         // Check if the result is Ok and contains the expected content
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), content);
+    }
+
+    #[cfg(feature = "async_fs")]
+    #[tokio::test]
+    async fn test_string_to_file_async() {
+        // Create a temporary file for testing
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let file_path = temp_file.path().to_str().unwrap();
+
+        // Call the string_to_file_async function
+        let content = "Hello, Async World!";
+        let result = string_to_file_async(content, file_path).await;
+
+        // Check if the result is Ok and the file was created with the expected content
+        assert!(result.is_ok());
+        assert_eq!(tokio::fs::read_to_string(file_path).await.unwrap(), content);
     }
 }
