@@ -51,6 +51,21 @@ impl PermName {
     }
 
     #[inline]
+    pub fn perm_to_string(perm: u32) -> String {
+        let mut s = ['-', '-', '-'];
+        if Self::is_readable(perm) {
+            s[0] = 'R';
+        }
+        if Self::is_writeable(perm) {
+            s[1] = 'W';
+        }
+        if Self::is_inherited(perm) {
+            s[2] = 'X';
+        }
+        s.iter().collect()
+    }
+
+    #[inline]
     pub fn is_readable(perm: u32) -> bool {
         (perm & Self::PERM_READ) == Self::PERM_READ
     }
@@ -74,6 +89,14 @@ impl PermName {
     pub fn is_priority(perm: u32) -> bool {
         (perm & Self::PERM_PRIORITY) == Self::PERM_PRIORITY
     }
+
+    #[inline]
+    pub fn is_valid_str(perm: &str) -> bool {
+        perm.parse::<u32>()
+            .ok()
+            .map(Self::is_valid)
+            .unwrap_or(false)
+    }
 }
 
 #[cfg(test)]
@@ -82,15 +105,18 @@ mod tests {
 
     #[test]
     fn test_perm_2_string() {
-        assert_eq!(PermName::perm2string(0).as_str(), "---");
-        assert_eq!(PermName::perm2string(PermName::PERM_READ).as_str(), "R--");
+        assert_eq!(PermName::perm_to_string(0).as_str(), "---");
         assert_eq!(
-            PermName::perm2string(PermName::PERM_READ | PermName::PERM_WRITE).as_str(),
+            PermName::perm_to_string(PermName::PERM_READ).as_str(),
+            "R--"
+        );
+        assert_eq!(
+            PermName::perm_to_string(PermName::PERM_READ | PermName::PERM_WRITE).as_str(),
             "RW-"
         );
 
         assert_eq!(
-            PermName::perm2string(
+            PermName::perm_to_string(
                 PermName::PERM_READ | PermName::PERM_WRITE | PermName::PERM_INHERIT
             ),
             "RWX"
@@ -167,5 +193,23 @@ mod tests {
                 | PermName::PERM_PRIORITY
                 | PermName::PERM_INHERIT
         ));
+    }
+
+    #[test]
+    fn valid_str_returns_true_for_valid_permission() {
+        assert!(PermName::is_valid_str("1"));
+        assert!(PermName::is_valid_str("0"));
+    }
+
+    #[test]
+    fn valid_str_returns_false_for_invalid_permission() {
+        assert!(PermName::is_valid_str("4"));
+        assert!(!PermName::is_valid_str("-1"));
+    }
+
+    #[test]
+    fn valid_str_returns_false_for_non_numeric_input() {
+        assert!(!PermName::is_valid_str("abc"));
+        assert!(!PermName::is_valid_str(""));
     }
 }
