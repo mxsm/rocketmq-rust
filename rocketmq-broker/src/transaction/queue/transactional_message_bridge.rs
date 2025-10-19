@@ -231,7 +231,8 @@ where
         let mut topic_config = self
             .broker_runtime_inner
             .topic_config_manager()
-            .select_topic_config(topic);
+            .select_topic_config(topic)
+            .cloned();
         if topic_config.is_none() {
             topic_config = self
                 .broker_runtime_inner

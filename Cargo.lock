@@ -2411,6 +2411,7 @@ dependencies = [
  "bytes",
  "cheetah-string",
  "criterion",
+ "dashmap",
  "dirs",
  "futures-util",
  "lazy_static",

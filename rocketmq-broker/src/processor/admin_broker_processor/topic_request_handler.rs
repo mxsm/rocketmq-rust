@@ -154,9 +154,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         let topic_config_origin = self
             .broker_runtime_inner
             .topic_config_manager()
-            .topic_config_table()
-            .lock()
-            .get(&topic)
+            .get_topic_config(topic.as_str())
             .cloned();
         if topic_config_origin.is_some() && topic_config == topic_config_origin.unwrap() {
             info!(
@@ -257,9 +255,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             let topic_config_origin = self
                 .broker_runtime_inner
                 .topic_config_manager()
-                .topic_config_table()
-                .lock()
-                .get(topic)
+                .get_topic_config(topic)
                 .cloned();
             if topic_config_origin.is_some() && topic_config.clone() == topic_config_origin.unwrap()
             {
@@ -405,9 +401,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 topic_config_table: self
                     .broker_runtime_inner
                     .topic_config_manager()
-                    .topic_config_table()
-                    .lock()
-                    .clone(),
+                    .topic_config_table_hash_map(),
             },
             ..Default::default()
         };
@@ -531,7 +525,8 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         let topic_config = self
             .broker_runtime_inner
             .topic_config_manager()
-            .select_topic_config(topic);
+            .select_topic_config(topic)
+            .cloned();
         if topic_config.is_none() {
             return Some(
                 response

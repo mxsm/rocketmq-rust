@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rocketmq_common::common::attribute::attribute_util::AttributeUtil;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
@@ -47,7 +48,7 @@ use crate::broker_path_config_helper::get_topic_config_path;
 use crate::broker_runtime::BrokerRuntimeInner;
 
 pub(crate) struct TopicConfigManager<MS: MessageStore> {
-    topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
+    topic_config_table: Arc<DashMap<CheetahString, TopicConfig>>,
     data_version: ArcMut<DataVersion>,
     topic_config_table_lock: Arc<parking_lot::ReentrantMutex<()>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
@@ -58,7 +59,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
 
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>, init: bool) -> Self {
         let mut manager = Self {
-            topic_config_table: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            topic_config_table: Arc::new(DashMap::with_capacity(1024)),
             data_version: ArcMut::new(DataVersion::default()),
             topic_config_table_lock: Default::default(),
             broker_runtime_inner,
@@ -253,8 +254,9 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
     }
 
     #[inline]
-    pub fn select_topic_config(&self, topic: &CheetahString) -> Option<TopicConfig> {
-        self.topic_config_table.lock().get(topic).cloned()
+    pub fn select_topic_config(&self, topic: &CheetahString) -> Option<&TopicConfig> {
+        let option = self.topic_config_table.get(topic);
+        option.as_deref()
     }
 
     pub fn build_serialize_wrapper(
@@ -277,13 +279,13 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             self.data_version.mut_from_ref().next_version();
         }
         TopicConfigAndMappingSerializeWrapper {
-             topic_config_serialize_wrapper: rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper {
-                 topic_config_table,
-                 data_version: self.data_version.as_ref().clone(),
-             },
-             topic_queue_mapping_info_map,
-             ..TopicConfigAndMappingSerializeWrapper::default()
-         }
+            topic_config_serialize_wrapper: rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper {
+                topic_config_table,
+                data_version: self.data_version.as_ref().clone(),
+            },
+            topic_queue_mapping_info_map,
+            ..TopicConfigAndMappingSerializeWrapper::default()
+        }
     }
 
     #[inline]
@@ -294,12 +296,16 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         }
     }
 
-    fn get_topic_config(&self, topic_name: &str) -> Option<TopicConfig> {
-        self.topic_config_table.lock().get(topic_name).cloned()
+    pub fn get_topic_config(&self, topic_name: &str) -> Option<&TopicConfig> {
+        self.topic_config_table.get(topic_name).as_deref()
+    }
+
+    pub fn get_topic_config_mut(&self, topic_name: &str) -> Option<&mut TopicConfig> {
+        self.topic_config_table.get_mut(topic_name).as_deref_mut()
     }
 
     pub(crate) fn put_topic_config(&self, topic_config: TopicConfig) -> Option<TopicConfig> {
-        self.topic_config_table.lock().insert(
+        self.topic_config_table.insert(
             topic_config.topic_name.as_ref().unwrap().clone(),
             topic_config,
         )
@@ -318,10 +324,10 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             .try_lock_for(Duration::from_secs(3))
         {
             if let Some(topic_config) = self.get_topic_config(topic) {
-                return Some(topic_config);
+                return Some(topic_config.clone());
             }
 
-            if let Some(mut default_topic_config) = self.get_topic_config(default_topic) {
+            if let Some(mut default_topic_config) = self.get_topic_config_mut(default_topic) {
                 if default_topic == TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC
                     && !self
                         .broker_runtime_inner
@@ -384,7 +390,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         is_order: bool,
         topic_sys_flag: u32,
     ) -> Option<TopicConfig> {
-        if let Some(ref mut config) = self.get_topic_config(topic) {
+        if let Some(config) = self.get_topic_config_mut(topic) {
             if is_order != config.order {
                 config.order = is_order;
                 self.update_topic_config(config);
@@ -397,7 +403,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             .try_lock_for(Duration::from_secs(3))
         {
             if let Some(config) = self.get_topic_config(topic) {
-                return Some(config);
+                return Some(config.clone());
             }
 
             let mut config = TopicConfig::new(topic);
@@ -456,7 +462,10 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
 
     #[inline]
     pub fn remove_topic_config(&self, topic: &str) -> Option<TopicConfig> {
-        self.topic_config_table.lock().remove(topic)
+        match self.topic_config_table.remove(topic) {
+            None => None,
+            Some(value) => Some(value.1),
+        }
     }
 
     pub fn delete_topic_config(&self, topic: &CheetahString) {
@@ -483,7 +492,6 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         let current_attributes = self.current(topic_config.topic_name.as_ref().unwrap().as_str());
         let create = self
             .topic_config_table
-            .lock()
             .get(topic_config.topic_name.as_ref().unwrap().as_str())
             .is_none();
 
@@ -540,15 +548,20 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         }
     }
 
-    pub fn topic_config_table(
-        &self,
-    ) -> Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>> {
+    pub fn topic_config_table(&self) -> Arc<DashMap<CheetahString, TopicConfig>> {
         self.topic_config_table.clone()
+    }
+
+    pub fn topic_config_table_hash_map(&self) -> HashMap<CheetahString, TopicConfig> {
+        self.topic_config_table
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect::<HashMap<CheetahString, TopicConfig>>()
     }
 
     pub fn set_topic_config_table(
         &mut self,
-        topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
+        topic_config_table: Arc<DashMap<CheetahString, TopicConfig>>,
     ) {
         self.topic_config_table = topic_config_table;
     }
@@ -571,7 +584,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             if let Some(config) =
                 self.get_topic_config(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC)
             {
-                return Some(config);
+                return Some(config.clone());
             }
 
             let mut config = TopicConfig::new(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC);
@@ -601,7 +614,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
     }
 
     pub fn contains_topic(&self, topic: &CheetahString) -> bool {
-        self.topic_config_table.lock().contains_key(topic)
+        self.topic_config_table.contains_key(topic)
     }
 
     pub fn data_version(&self) -> ArcMut<DataVersion> {
@@ -637,7 +650,12 @@ impl<MS: MessageStore> ConfigManager for TopicConfigManager<MS> {
     }
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
-        let topic_config_table = self.topic_config_table.lock().clone();
+        let topic_config_table = self
+            .topic_config_table
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect::<HashMap<CheetahString, TopicConfig>>();
+
         let version = self.data_version().as_ref().clone();
         match pretty_format {
             true => TopicConfigSerializeWrapper::new(Some(topic_config_table), Some(version))
@@ -661,9 +679,7 @@ impl<MS: MessageStore> ConfigManager for TopicConfigManager<MS> {
         }
         if let Some(map) = wrapper.topic_config_table() {
             for (key, value) in map {
-                self.topic_config_table
-                    .lock()
-                    .insert(key.clone(), value.clone());
+                self.topic_config_table.insert(key.clone(), value.clone());
             }
         }
     }

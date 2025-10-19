@@ -42,6 +42,7 @@ use bytes::Buf;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -125,7 +126,7 @@ pub struct LocalFileMessageStore {
     message_store_config: Arc<MessageStoreConfig>,
     broker_config: Arc<BrokerConfig>,
     put_message_hook_list: Vec<BoxedPutMessageHook>,
-    topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
+    topic_config_table: Arc<DashMap<CheetahString, TopicConfig>>,
     commit_log: ArcMut<CommitLog>,
 
     store_checkpoint: Option<Arc<StoreCheckpoint>>,
@@ -164,7 +165,7 @@ impl LocalFileMessageStore {
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
         broker_config: Arc<BrokerConfig>,
-        topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
+        topic_config_table: Arc<DashMap<CheetahString, TopicConfig>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,
     ) -> Self {
@@ -317,10 +318,10 @@ impl Drop for LocalFileMessageStore {
 impl LocalFileMessageStore {
     #[inline]
     pub fn get_topic_config(&self, topic: &CheetahString) -> Option<TopicConfig> {
-        if self.topic_config_table.lock().is_empty() {
+        if self.topic_config_table.is_empty() {
             return None;
         }
-        self.topic_config_table.lock().get(topic).cloned()
+        self.topic_config_table.get(topic).as_deref().cloned()
     }
 
     fn is_temp_file_exist(&self) -> bool {
