@@ -72,3 +72,8 @@ cheetah-string = { workspace = true }
 
 [dev-dependencies]
 mockall = "0.13.1"
+criterion = { version = "0.7", features = ["html_reports"] }
+
+[[bench]]
+name = "delete_property"
+harness = false

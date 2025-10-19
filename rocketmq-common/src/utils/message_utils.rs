@@ -109,6 +109,57 @@ pub fn delete_property(properties_string: &str, name: &str) -> String {
     properties_string.to_string()
 }
 
+#[allow(unused_assignments)]
+pub fn delete_property_v2(properties_str: &str, name: &str) -> String {
+    if properties_str.is_empty() {
+        return String::new();
+    }
+    if let Some(mut idx1) = properties_str.find(name) {
+        let mut idx0 = 0;
+        let mut result = String::with_capacity(properties_str.len());
+
+        loop {
+            let mut start_idx = idx0;
+            loop {
+                match properties_str[start_idx..].find(name) {
+                    Some(offset) => {
+                        idx1 = start_idx + offset;
+                        start_idx = idx1 + name.len();
+                        let before_ok = idx1 == 0
+                            || properties_str.chars().nth(idx1 - 1) == Some(PROPERTY_SEPARATOR);
+                        let after_ok = properties_str.chars().nth(idx1 + name.len())
+                            == Some(NAME_VALUE_SEPARATOR);
+                        if before_ok && after_ok {
+                            break;
+                        }
+                    }
+                    None => {
+                        idx1 = usize::MAX;
+                        break;
+                    }
+                }
+            }
+
+            if idx1 == usize::MAX {
+                result.push_str(&properties_str[idx0..]);
+                break;
+            }
+
+            result.push_str(&properties_str[idx0..idx1]);
+
+            let idx2_opt = properties_str[idx1 + name.len() + 1..].find(PROPERTY_SEPARATOR);
+
+            match idx2_opt {
+                Some(rel) => idx0 = idx1 + name.len() + 1 + rel + 1, //
+                None => break,
+            }
+        }
+        result
+    } else {
+        properties_str.to_string()
+    }
+}
+
 pub fn build_message_id(socket_addr: SocketAddr, wrote_offset: i64) -> String {
     let mut msg_id_vec = match socket_addr {
         SocketAddr::V4(addr) => {
@@ -228,6 +279,9 @@ mod tests {
         let name = "aa";
         let result = delete_property(properties_string, name);
         assert_eq!(result, "cc\u{0001}bb\u{0002}");
+
+        let result = delete_property_v2(properties_string, name);
+        assert_eq!(result, "cc\u{0001}bb\u{0002}");
     }
 
     #[test]
@@ -236,6 +290,9 @@ mod tests {
             "key1\u{0001}value1\u{0002}key2\u{0001}value2\u{0002}key3\u{0001}value3";
         let name = "key2";
         let result = delete_property(properties_string, name);
+        assert_eq!(result, "key1\u{0001}value1\u{0002}key3\u{0001}value3");
+
+        let result = delete_property_v2(properties_string, name);
         assert_eq!(result, "key1\u{0001}value1\u{0002}key3\u{0001}value3");
     }
 
