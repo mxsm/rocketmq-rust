@@ -62,6 +62,13 @@ pub struct SendMessageRequestHeader {
     pub topic_request_header: Option<TopicRequestHeader>,
 }
 
+impl SendMessageRequestHeader {
+    #[inline(always)]
+    pub fn is_batch(&self) -> bool {
+        self.batch.unwrap_or_default()
+    }
+}
+
 impl TopicRequestHeaderTrait for SendMessageRequestHeader {
     fn set_lo(&mut self, lo: Option<bool>) {
         self.topic_request_header.as_mut().unwrap().lo = lo;
