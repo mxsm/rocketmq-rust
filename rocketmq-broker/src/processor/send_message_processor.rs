@@ -227,9 +227,9 @@ where
                     }
                 };
 
-                if !request_header.batch.unwrap_or(false) {
-                    //handle single message
-                    self.send_message(
+                if request_header.is_batch() {
+                    //handle batch message
+                    self.send_batch_message(
                         &channel,
                         &mut ctx,
                         request,
@@ -240,8 +240,8 @@ where
                     )
                     .await
                 } else {
-                    //handle batch message
-                    self.send_batch_message(
+                    //handle single message
+                    self.send_message(
                         &channel,
                         &mut ctx,
                         request,
