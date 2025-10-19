@@ -2245,6 +2245,7 @@ dependencies = [
  "chrono",
  "config",
  "crc32fast",
+ "criterion",
  "dashmap",
  "dirs",
  "flate2",
