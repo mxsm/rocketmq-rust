@@ -46,7 +46,7 @@ lazy_static.workspace = true
 
 tempfile = "3.23.0"
 
-memmap2 = "0.9.8"
+memmap2 = "0.9.9"
 trait-variant.workspace = true
 sysinfo = "0.37.2"
 once_cell = { workspace = true }
