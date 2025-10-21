@@ -63,12 +63,13 @@ mod tests {
     #[test]
     fn cluster_acl_version_info_equality() {
         let mut all_acl_config_data_version = HashMap::new();
-        all_acl_config_data_version.insert(CheetahString::from("key1"), DataVersion::default());
+        let version = DataVersion::default();
+        all_acl_config_data_version.insert(CheetahString::from("key1"), version.clone());
 
         let info1 = ClusterAclVersionInfo {
             broker_name: CheetahString::from("broker1"),
             broker_addr: CheetahString::from("addr1"),
-            acl_config_data_version: Some(DataVersion::default()),
+            acl_config_data_version: Some(version.clone()),
             all_acl_config_data_version: all_acl_config_data_version.clone(),
             cluster_name: CheetahString::from("cluster1"),
         };
@@ -76,7 +77,7 @@ mod tests {
         let info2 = ClusterAclVersionInfo {
             broker_name: CheetahString::from("broker1"),
             broker_addr: CheetahString::from("addr1"),
-            acl_config_data_version: Some(DataVersion::default()),
+            acl_config_data_version: Some(version),
             all_acl_config_data_version,
             cluster_name: CheetahString::from("cluster1"),
         };
