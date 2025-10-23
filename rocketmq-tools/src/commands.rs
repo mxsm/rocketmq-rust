@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+pub mod command_util;
 mod namesrv_commands;
 mod topic_commands;
 
@@ -97,12 +98,32 @@ struct Command {
 pub(crate) struct ClassificationTablePrint;
 
 impl CommandExecute for ClassificationTablePrint {
+    /// Prints a classification table of available commands.
+    ///
+    /// The table is rendered with extended styling and written to standard output. Returns `Ok(())` on success.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use crate::commands::ClassificationTablePrint;
+    /// # async fn example() {
+    /// let cmd = ClassificationTablePrint{};
+    /// let result = cmd.execute(None).await;
+    /// assert!(result.is_ok());
+    /// # }
+    /// ```
     async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         let commands: Vec<Command> = vec![
             Command {
                 category: "Topic",
                 command: "allocateMQ",
                 remark: "Allocate MQ.",
+            },
+            Command {
+                category: "Topic",
+                command: "updateTopic",
+                remark: "Update or create topic.",
             },
             Command {
                 category: "NameServer",
