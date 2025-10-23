@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 mod allocate_mq_sub_command;
+mod update_topic_sub_command;
 
 use std::sync::Arc;
 
@@ -34,12 +35,40 @@ space of the topic when the topic is created. The default value is 1. If you wan
 more memory space, you can use this command to allocate it."#
     )]
     AllocateMQ(allocate_mq_sub_command::AllocateMQSubCommand),
+
+    #[command(
+        name = "updateTopic",
+        about = "Update or create topic",
+        long_about = r#"Update or create topic with specified configuration."#
+    )]
+    UpdateTopic(update_topic_sub_command::UpdateTopicSubCommand),
 }
 
 impl CommandExecute for TopicCommands {
+    /// Dispatches execution to the active topic subcommand.
+    ///
+    /// Calls the corresponding subcommand's `execute` implementation and returns its result.
+    ///
+    /// # Returns
+    ///
+    /// A `RocketMQResult<()>` that is `Ok(())` on success or an error describing the failure.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use rocketmq_remoting::runtime::RPCHook;
+    /// use crate::commands::topic_commands::TopicCommands;
+    ///
+    /// // Given an initialized `TopicCommands` value `cmd`, call `execute`.
+    /// # async fn example(cmd: TopicCommands) -> rocketmq_error::RocketMQResult<()> {
+    /// cmd.execute(None).await
+    /// # }
+    /// ```
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
             TopicCommands::AllocateMQ(cmd) => cmd.execute(rpc_hook).await,
+            TopicCommands::UpdateTopic(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }
