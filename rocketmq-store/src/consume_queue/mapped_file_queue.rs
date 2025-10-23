@@ -176,17 +176,11 @@ impl MappedFileQueue {
 
     #[inline]
     pub fn get_last_mapped_file(&self) -> Option<Arc<DefaultMappedFile>> {
-        if self.mapped_files.read().is_empty() {
-            return None;
-        }
         self.mapped_files.read().last().cloned()
     }
 
     #[inline]
     pub fn get_first_mapped_file(&self) -> Option<Arc<DefaultMappedFile>> {
-        if self.mapped_files.read().is_empty() {
-            return None;
-        }
         self.mapped_files.read().first().cloned()
     }
 
