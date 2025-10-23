@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 mod allocate_mq_sub_command;
+mod update_topic_sub_command;
 
 use std::sync::Arc;
 
@@ -34,12 +35,20 @@ space of the topic when the topic is created. The default value is 1. If you wan
 more memory space, you can use this command to allocate it."#
     )]
     AllocateMQ(allocate_mq_sub_command::AllocateMQSubCommand),
+
+    #[command(
+        name = "updateTopic",
+        about = "Update or create topic",
+        long_about = r#"Update or create topic with specified configuration."#
+    )]
+    UpdateTopic(update_topic_sub_command::UpdateTopicSubCommand),
 }
 
 impl CommandExecute for TopicCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
             TopicCommands::AllocateMQ(cmd) => cmd.execute(rpc_hook).await,
+            TopicCommands::UpdateTopic(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }
