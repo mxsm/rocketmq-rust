@@ -292,7 +292,7 @@ where
     where
         F: Fn(&mut SendMessageContext, &mut RemotingCommand),
     {
-        let mut response = self.pre_send(channel, ctx, request.as_ref(), &request_header);
+        let mut response = self.pre_send(channel, ctx, request, &request_header);
         if response.code() != -1 {
             return Ok(Some(response));
         }
@@ -526,7 +526,7 @@ where
     where
         F: Fn(&mut SendMessageContext, &mut RemotingCommand),
     {
-        let mut response = self.pre_send(channel, ctx, request.as_ref(), &request_header);
+        let mut response = self.pre_send(channel, ctx, request, &request_header);
         if response.code() != -1 {
             return Ok(Some(response));
         }
