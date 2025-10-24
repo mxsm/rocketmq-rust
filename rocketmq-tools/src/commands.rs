@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+pub mod command_util;
 mod namesrv_commands;
 mod topic_commands;
 
@@ -103,6 +104,11 @@ impl CommandExecute for ClassificationTablePrint {
                 category: "Topic",
                 command: "allocateMQ",
                 remark: "Allocate MQ.",
+            },
+            Command {
+                category: "Topic",
+                command: "updateTopic",
+                remark: "Update or create topic.",
             },
             Command {
                 category: "NameServer",
