@@ -985,11 +985,13 @@ where
         );
         response.add_ext_field(
             MessageConst::PROPERTY_TRACE_SWITCH,
-            self.inner
-                .broker_runtime_inner
-                .broker_config()
-                .trace_on
-                .to_string(),
+            CheetahString::from_static_str(
+                if self.inner.broker_runtime_inner.broker_config().trace_on {
+                    "true"
+                } else {
+                    "false"
+                },
+            ),
         );
         let start_timestamp = self
             .inner
