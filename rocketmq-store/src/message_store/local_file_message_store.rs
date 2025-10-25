@@ -42,6 +42,7 @@ use bytes::Buf;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
@@ -62,6 +63,7 @@ use rocketmq_common::common::system_clock::SystemClock;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_common::utils::util_all;
 use rocketmq_common::CleanupPolicyUtils::get_delete_policy;
+use rocketmq_common::CleanupPolicyUtils::get_delete_policy_arc_mut;
 use rocketmq_common::FileUtils::string_to_file;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -125,7 +127,7 @@ pub struct LocalFileMessageStore {
     message_store_config: Arc<MessageStoreConfig>,
     broker_config: Arc<BrokerConfig>,
     put_message_hook_list: Vec<BoxedPutMessageHook>,
-    topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
+    topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
     commit_log: ArcMut<CommitLog>,
 
     store_checkpoint: Option<Arc<StoreCheckpoint>>,
@@ -164,7 +166,7 @@ impl LocalFileMessageStore {
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
         broker_config: Arc<BrokerConfig>,
-        topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
+        topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,
     ) -> Self {
@@ -316,11 +318,11 @@ impl Drop for LocalFileMessageStore {
 
 impl LocalFileMessageStore {
     #[inline]
-    pub fn get_topic_config(&self, topic: &CheetahString) -> Option<TopicConfig> {
-        if self.topic_config_table.lock().is_empty() {
+    pub fn get_topic_config(&self, topic: &CheetahString) -> Option<ArcMut<TopicConfig>> {
+        if self.topic_config_table.is_empty() {
             return None;
         }
-        self.topic_config_table.lock().get(topic).cloned()
+        self.topic_config_table.get(topic).as_deref().cloned()
     }
 
     fn is_temp_file_exist(&self) -> bool {
@@ -788,7 +790,7 @@ impl MessageStore for LocalFileMessageStore {
 
         if MessageSysFlag::check(msg.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG) {
             let topic_config = self.get_topic_config(msg.topic());
-            if !QueueTypeUtils::is_batch_cq(topic_config.as_ref()) {
+            if !QueueTypeUtils::is_batch_cq_arc_mut(topic_config.as_ref()) {
                 error!("[BUG]The message is an inner batch but cq type is not batch cq");
                 return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
             }
@@ -883,7 +885,7 @@ impl MessageStore for LocalFileMessageStore {
             return None;
         }
         let topic_config = self.get_topic_config(topic);
-        let policy = get_delete_policy(topic_config.as_ref());
+        let policy = get_delete_policy_arc_mut(topic_config.as_ref());
         if policy == CleanupPolicy::COMPACTION && self.message_store_config.enable_compaction {
             //not implemented will be implemented in the future
             return self.compaction_store.get_message(

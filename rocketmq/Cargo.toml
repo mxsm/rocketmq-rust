@@ -25,6 +25,7 @@ cron = "0.15"
 anyhow = { workspace = true }
 tokio-util = "0.7.16"
 parking_lot = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
 tokio-test = "0.4"

@@ -28,6 +28,11 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 use std::sync::Weak;
 
+use serde::Deserialize;
+use serde::Deserializer;
+use serde::Serialize;
+use serde::Serializer;
+
 /// A weak version of `ArcMut` that doesn't prevent the inner value from being dropped.
 ///
 /// # Safety
@@ -243,6 +248,32 @@ impl<T> DerefMut for SyncUnsafeCellWrapper<T> {
 impl<T: ?Sized + Debug> std::fmt::Debug for ArcMut<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         fmt::Debug::fmt(&**self, f)
+    }
+}
+
+impl<T> Serialize for ArcMut<T>
+where
+    T: Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let inner_ref = unsafe { &*self.inner.get() };
+        inner_ref.serialize(serializer)
+    }
+}
+
+impl<'de, T> Deserialize<'de> for ArcMut<T>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let inner = T::deserialize(deserializer)?;
+        Ok(ArcMut::new(inner))
     }
 }
 

@@ -17,6 +17,8 @@
 
 use std::str::FromStr;
 
+use rocketmq_rust::ArcMut;
+
 use crate::common::attribute::cleanup_policy::CleanupPolicy;
 use crate::common::attribute::Attribute;
 use crate::common::config::TopicConfig;
@@ -30,6 +32,25 @@ pub fn is_compaction(topic_config: Option<&TopicConfig>) -> bool {
 }
 
 pub fn get_delete_policy(topic_config: Option<&TopicConfig>) -> CleanupPolicy {
+    match topic_config {
+        Some(config) => {
+            let attribute_name = TopicAttributes::cleanup_policy_attribute().name();
+            match config.attributes.get(attribute_name) {
+                Some(value) => CleanupPolicy::from_str(value.as_str()).unwrap(),
+                None => CleanupPolicy::from_str(
+                    TopicAttributes::cleanup_policy_attribute().default_value(),
+                )
+                .unwrap(),
+            }
+        }
+        None => {
+            CleanupPolicy::from_str(TopicAttributes::cleanup_policy_attribute().default_value())
+                .unwrap()
+        }
+    }
+}
+
+pub fn get_delete_policy_arc_mut(topic_config: Option<&ArcMut<TopicConfig>>) -> CleanupPolicy {
     match topic_config {
         Some(config) => {
             let attribute_name = TopicAttributes::cleanup_policy_attribute().name();

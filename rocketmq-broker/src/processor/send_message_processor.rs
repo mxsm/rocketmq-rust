@@ -379,7 +379,7 @@ where
                 .message_ext_inner
                 .message,
         );
-        if batch_uniq_id.is_some() && QueueTypeUtils::is_batch_cq(Some(topic_config).as_ref()) {
+        if batch_uniq_id.is_some() && QueueTypeUtils::is_batch_cq_arc_mut(Some(&topic_config)) {
             let sys_flag = batch_message
                 .message_ext_broker_inner
                 .message_ext_inner
@@ -1027,7 +1027,7 @@ where
         response: &mut RemotingCommand,
         request: &RemotingCommand,
         msg: &mut MessageExt,
-        topic_config: &mut rocketmq_common::common::config::TopicConfig,
+        topic_config: &mut ArcMut<rocketmq_common::common::config::TopicConfig>,
         properties: &mut HashMap<CheetahString, CheetahString>,
     ) -> bool {
         let mut new_topic = request_header.topic();

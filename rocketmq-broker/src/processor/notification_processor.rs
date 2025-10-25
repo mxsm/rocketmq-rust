@@ -109,7 +109,7 @@ impl<MS: MessageStore> NotificationProcessor<MS> {
 
     async fn has_msg_from_topic(
         &self,
-        topic_config: Option<&TopicConfig>,
+        topic_config: Option<&ArcMut<TopicConfig>>,
         random_q: i32,
         request_header: &NotificationRequestHeader,
     ) -> bool {
