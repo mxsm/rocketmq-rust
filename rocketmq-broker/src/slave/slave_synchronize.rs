@@ -148,13 +148,14 @@ where
                 .topic_config_manager()
                 .topic_config_table();
 
-            let mut topic_config_table = topic_config_table.lock();
-
             // Delete entries not in new config
             topic_config_table.retain(|key, _| new_topic_config_table.contains_key(key));
 
             // Update with new entries
-            topic_config_table.extend(new_topic_config_table);
+            for (key, value) in new_topic_config_table.into_iter() {
+                topic_config_table.insert(key, ArcMut::new(value));
+            }
+
             drop(topic_config_table);
             self.broker_runtime_inner.topic_config_manager().persist();
         }
@@ -180,12 +181,13 @@ where
                 .broker_runtime_inner
                 .topic_config_manager()
                 .topic_config_table();
-            let mut topic_config_table = topic_config_table.lock();
             // Delete entries not in new config
             topic_config_table.retain(|key, _| new_topic_config_table.contains_key(key));
 
             // Update with new entries
-            topic_config_table.extend(new_topic_config_table);
+            for (key, value) in new_topic_config_table.into_iter() {
+                topic_config_table.insert(key, ArcMut::new(value));
+            }
             drop(topic_config_table);
             self.broker_runtime_inner
                 .topic_queue_mapping_manager()

@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rocketmq_common::common::attribute::attribute_util::AttributeUtil;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
@@ -47,7 +48,7 @@ use crate::broker_path_config_helper::get_topic_config_path;
 use crate::broker_runtime::BrokerRuntimeInner;
 
 pub(crate) struct TopicConfigManager<MS: MessageStore> {
-    topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
+    topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
     data_version: ArcMut<DataVersion>,
     topic_config_table_lock: Arc<parking_lot::ReentrantMutex<()>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
@@ -58,7 +59,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
 
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>, init: bool) -> Self {
         let mut manager = Self {
-            topic_config_table: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            topic_config_table: Arc::new(DashMap::with_capacity(1024)),
             data_version: ArcMut::new(DataVersion::default()),
             topic_config_table_lock: Default::default(),
             broker_runtime_inner,
@@ -72,11 +73,11 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
     fn init(&mut self) {
         //SELF_TEST_TOPIC
         {
-            self.put_topic_config(TopicConfig::with_queues(
+            self.put_topic_config(ArcMut::new(TopicConfig::with_queues(
                 TopicValidator::RMQ_SYS_SELF_TEST_TOPIC,
                 1,
                 1,
-            ));
+            )));
         }
 
         //auto create topic setting
@@ -91,20 +92,20 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                     .broker_config()
                     .topic_queue_config
                     .default_topic_queue_nums;
-                self.put_topic_config(TopicConfig::with_perm(
+                self.put_topic_config(ArcMut::new(TopicConfig::with_perm(
                     TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
                     default_topic_queue_nums,
                     default_topic_queue_nums,
                     PermName::PERM_INHERIT | PermName::PERM_READ | PermName::PERM_WRITE,
-                ));
+                )));
             }
         }
         {
-            self.put_topic_config(TopicConfig::with_queues(
+            self.put_topic_config(ArcMut::new(TopicConfig::with_queues(
                 TopicValidator::RMQ_SYS_BENCHMARK_TOPIC,
                 1024,
                 1024,
-            ));
+            )));
         }
         {
             let topic = self
@@ -124,7 +125,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                 perm |= PermName::PERM_READ | PermName::PERM_WRITE;
             }
             config.perm = perm;
-            self.put_topic_config(config);
+            self.put_topic_config(ArcMut::new(config));
         }
 
         {
@@ -147,23 +148,23 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                 perm |= PermName::PERM_READ | PermName::PERM_WRITE;
             }
             config.perm = perm;
-            self.put_topic_config(config);
+            self.put_topic_config(ArcMut::new(config));
         }
 
         {
-            self.put_topic_config(TopicConfig::with_queues(
+            self.put_topic_config(ArcMut::new(TopicConfig::with_queues(
                 TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT,
                 1,
                 1,
-            ));
+            )));
         }
 
         {
-            self.put_topic_config(TopicConfig::with_queues(
+            self.put_topic_config(ArcMut::new(TopicConfig::with_queues(
                 TopicValidator::RMQ_SYS_SCHEDULE_TOPIC,
                 Self::SCHEDULE_TOPIC_QUEUE_NUM,
                 Self::SCHEDULE_TOPIC_QUEUE_NUM,
-            ));
+            )));
         }
 
         {
@@ -174,7 +175,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                     .msg_trace_topic_name
                     .clone();
                 TopicValidator::add_system_topic(topic.as_str());
-                self.put_topic_config(TopicConfig::with_queues(topic, 1, 1));
+                self.put_topic_config(ArcMut::new(TopicConfig::with_queues(topic, 1, 1)));
             }
         }
 
@@ -188,7 +189,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                 mix_all::REPLY_TOPIC_POSTFIX
             );
             TopicValidator::add_system_topic(topic.as_str());
-            self.put_topic_config(TopicConfig::with_queues(topic, 1, 1));
+            self.put_topic_config(ArcMut::new(TopicConfig::with_queues(topic, 1, 1)));
         }
 
         {
@@ -200,11 +201,11 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                     .as_str(),
             );
             TopicValidator::add_system_topic(topic.as_str());
-            self.put_topic_config(TopicConfig::with_queues(
+            self.put_topic_config(ArcMut::new(TopicConfig::with_queues(
                 topic,
                 self.broker_runtime_inner.broker_config().revive_queue_num,
                 self.broker_runtime_inner.broker_config().revive_queue_num,
-            ));
+            )));
         }
 
         {
@@ -217,23 +218,28 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                     .broker_name,
             );
             TopicValidator::add_system_topic(topic.as_str());
-            self.put_topic_config(TopicConfig::with_perm(topic, 1, 1, PermName::PERM_INHERIT));
+            self.put_topic_config(ArcMut::new(TopicConfig::with_perm(
+                topic,
+                1,
+                1,
+                PermName::PERM_INHERIT,
+            )));
         }
 
         {
-            self.put_topic_config(TopicConfig::with_queues(
+            self.put_topic_config(ArcMut::new(TopicConfig::with_queues(
                 TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC,
                 1,
                 1,
-            ));
+            )));
         }
 
         {
-            self.put_topic_config(TopicConfig::with_queues(
+            self.put_topic_config(ArcMut::new(TopicConfig::with_queues(
                 TopicValidator::RMQ_SYS_TRANS_OP_HALF_TOPIC,
                 1,
                 1,
-            ));
+            )));
         }
 
         {
@@ -243,18 +249,18 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                 .timer_wheel_enable
             {
                 TopicValidator::add_system_topic(timer_message_store::TIMER_TOPIC);
-                self.put_topic_config(TopicConfig::with_queues(
+                self.put_topic_config(ArcMut::new(TopicConfig::with_queues(
                     timer_message_store::TIMER_TOPIC,
                     1,
                     1,
-                ));
+                )));
             }
         }
     }
 
     #[inline]
-    pub fn select_topic_config(&self, topic: &CheetahString) -> Option<TopicConfig> {
-        self.topic_config_table.lock().get(topic).cloned()
+    pub fn select_topic_config(&self, topic: &CheetahString) -> Option<ArcMut<TopicConfig>> {
+        self.topic_config_table.get(topic).as_deref().cloned()
     }
 
     pub fn build_serialize_wrapper(
@@ -277,13 +283,13 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             self.data_version.mut_from_ref().next_version();
         }
         TopicConfigAndMappingSerializeWrapper {
-             topic_config_serialize_wrapper: rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper {
-                 topic_config_table,
-                 data_version: self.data_version.as_ref().clone(),
-             },
-             topic_queue_mapping_info_map,
-             ..TopicConfigAndMappingSerializeWrapper::default()
-         }
+            topic_config_serialize_wrapper: rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper {
+                topic_config_table,
+                data_version: self.data_version.as_ref().clone(),
+            },
+            topic_queue_mapping_info_map,
+            ..TopicConfigAndMappingSerializeWrapper::default()
+        }
     }
 
     #[inline]
@@ -294,12 +300,15 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         }
     }
 
-    fn get_topic_config(&self, topic_name: &str) -> Option<TopicConfig> {
-        self.topic_config_table.lock().get(topic_name).cloned()
+    pub fn get_topic_config(&self, topic_name: &str) -> Option<ArcMut<TopicConfig>> {
+        self.topic_config_table.get(topic_name).as_deref().cloned()
     }
 
-    pub(crate) fn put_topic_config(&self, topic_config: TopicConfig) -> Option<TopicConfig> {
-        self.topic_config_table.lock().insert(
+    pub(crate) fn put_topic_config(
+        &self,
+        topic_config: ArcMut<TopicConfig>,
+    ) -> Option<ArcMut<TopicConfig>> {
+        self.topic_config_table.insert(
             topic_config.topic_name.as_ref().unwrap().clone(),
             topic_config,
         )
@@ -312,13 +321,14 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         remote_address: SocketAddr,
         client_default_topic_queue_nums: i32,
         topic_sys_flag: u32,
-    ) -> Option<TopicConfig> {
+    ) -> Option<ArcMut<TopicConfig>> {
         let (topic_config, create_new) = if let Some(_lock) = self
             .topic_config_table_lock
             .try_lock_for(Duration::from_secs(3))
         {
-            if let Some(topic_config) = self.get_topic_config(topic) {
-                return Some(topic_config);
+            let topic_config = self.get_topic_config(topic);
+            if topic_config.is_some() {
+                return topic_config;
             }
 
             if let Some(mut default_topic_config) = self.get_topic_config(default_topic) {
@@ -345,6 +355,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                         "Create new topic by default topic:[{}] config:[{:?}] producer:[{}]",
                         default_topic, topic_config, remote_address
                     );
+                    let topic_config = ArcMut::new(topic_config);
                     self.put_topic_config(topic_config.clone());
                     self.data_version.mut_from_ref().next_version_with(
                         self.broker_runtime_inner
@@ -371,7 +382,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         };
 
         if create_new {
-            self.register_broker_data(topic_config.as_ref().unwrap());
+            self.register_broker_data(topic_config.clone().unwrap());
         }
         topic_config
     }
@@ -383,13 +394,13 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         perm: u32,
         is_order: bool,
         topic_sys_flag: u32,
-    ) -> Option<TopicConfig> {
-        if let Some(ref mut config) = self.get_topic_config(topic) {
+    ) -> Option<ArcMut<TopicConfig>> {
+        if let Some(mut config) = self.get_topic_config(topic) {
             if is_order != config.order {
                 config.order = is_order;
-                self.update_topic_config(config);
+                self.update_topic_config(config.clone());
             }
-            return Some(config.clone());
+            return Some(config);
         }
 
         let (topic_config, create_new) = if let Some(_lock) = self
@@ -400,14 +411,14 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                 return Some(config);
             }
 
-            let mut config = TopicConfig::new(topic);
+            let mut config = ArcMut::new(TopicConfig::new(topic));
             config.read_queue_nums = client_default_topic_queue_nums as u32;
             config.write_queue_nums = client_default_topic_queue_nums as u32;
             config.perm = perm;
             config.topic_sys_flag = topic_sys_flag;
             config.order = is_order;
 
-            self.put_topic_config(config.clone());
+            let current_ref = self.put_topic_config(config);
             self.data_version.mut_from_ref().next_version_with(
                 self.broker_runtime_inner
                     .message_store()
@@ -416,18 +427,18 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                     .get_state_machine_version(),
             );
             self.persist();
-            (Some(config), true)
+            (current_ref, true)
         } else {
             (None, false)
         };
 
         if create_new {
-            self.register_broker_data(topic_config.as_ref().unwrap());
+            self.register_broker_data(topic_config.clone().unwrap());
         }
         topic_config
     }
 
-    fn register_broker_data(&mut self, topic_config: &TopicConfig) {
+    fn register_broker_data(&mut self, topic_config: ArcMut<TopicConfig>) {
         let broker_config = self.broker_runtime_inner.broker_config().clone();
         let broker_runtime_inner = self.broker_runtime_inner.clone();
         let topic_config_clone = topic_config.clone();
@@ -448,15 +459,19 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         });
     }
 
-    pub fn update_topic_config_list(&mut self, topic_config_list: &mut [TopicConfig]) {
+    pub fn update_topic_config_list(&mut self, topic_config_list: &mut [ArcMut<TopicConfig>]) {
         for topic_config in topic_config_list {
-            self.update_topic_config(topic_config);
+            //can optimize todo
+            self.update_topic_config(topic_config.clone());
         }
     }
 
     #[inline]
-    pub fn remove_topic_config(&self, topic: &str) -> Option<TopicConfig> {
-        self.topic_config_table.lock().remove(topic)
+    pub fn remove_topic_config(&self, topic: &str) -> Option<ArcMut<TopicConfig>> {
+        match self.topic_config_table.remove(topic) {
+            None => None,
+            Some(value) => Some(value.1),
+        }
     }
 
     pub fn delete_topic_config(&self, topic: &CheetahString) {
@@ -478,12 +493,11 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         }
     }
 
-    pub fn update_topic_config(&mut self, topic_config: &mut TopicConfig) {
-        let new_attributes = Self::request(topic_config);
+    pub fn update_topic_config(&mut self, mut topic_config: ArcMut<TopicConfig>) {
+        let new_attributes = Self::request(topic_config.as_ref());
         let current_attributes = self.current(topic_config.topic_name.as_ref().unwrap().as_str());
         let create = self
             .topic_config_table
-            .lock()
             .get(topic_config.topic_name.as_ref().unwrap().as_str())
             .is_none();
 
@@ -540,15 +554,20 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         }
     }
 
-    pub fn topic_config_table(
-        &self,
-    ) -> Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>> {
+    pub fn topic_config_table(&self) -> Arc<DashMap<CheetahString, ArcMut<TopicConfig>>> {
         self.topic_config_table.clone()
+    }
+
+    pub fn topic_config_table_hash_map(&self) -> HashMap<CheetahString, TopicConfig> {
+        self.topic_config_table
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().as_ref().clone()))
+            .collect::<HashMap<CheetahString, TopicConfig>>()
     }
 
     pub fn set_topic_config_table(
         &mut self,
-        topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
+        topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
     ) {
         self.topic_config_table = topic_config_table;
     }
@@ -557,7 +576,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         &mut self,
         client_default_topic_queue_nums: i32,
         perm: u32,
-    ) -> Option<TopicConfig> {
+    ) -> Option<ArcMut<TopicConfig>> {
         if let Some(ref mut config) =
             self.get_topic_config(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC)
         {
@@ -571,10 +590,12 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             if let Some(config) =
                 self.get_topic_config(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC)
             {
-                return Some(config);
+                return Some(config.clone());
             }
 
-            let mut config = TopicConfig::new(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC);
+            let mut config = ArcMut::new(TopicConfig::new(
+                TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC,
+            ));
             config.read_queue_nums = client_default_topic_queue_nums as u32;
             config.write_queue_nums = client_default_topic_queue_nums as u32;
             config.perm = perm;
@@ -595,13 +616,13 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         };
 
         if create_new {
-            self.register_broker_data(topic_config.as_ref().unwrap());
+            self.register_broker_data(topic_config.clone().unwrap());
         }
         topic_config
     }
 
     pub fn contains_topic(&self, topic: &CheetahString) -> bool {
-        self.topic_config_table.lock().contains_key(topic)
+        self.topic_config_table.contains_key(topic)
     }
 
     pub fn data_version(&self) -> ArcMut<DataVersion> {
@@ -637,7 +658,12 @@ impl<MS: MessageStore> ConfigManager for TopicConfigManager<MS> {
     }
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
-        let topic_config_table = self.topic_config_table.lock().clone();
+        let topic_config_table = self
+            .topic_config_table
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().as_ref().clone()))
+            .collect::<HashMap<CheetahString, TopicConfig>>();
+
         let version = self.data_version().as_ref().clone();
         match pretty_format {
             true => TopicConfigSerializeWrapper::new(Some(topic_config_table), Some(version))
@@ -654,16 +680,14 @@ impl<MS: MessageStore> ConfigManager for TopicConfigManager<MS> {
         if json_string.is_empty() {
             return;
         }
-        let wrapper = SerdeJsonUtils::from_json_str::<TopicConfigSerializeWrapper>(json_string)
+        let mut wrapper = SerdeJsonUtils::from_json_str::<TopicConfigSerializeWrapper>(json_string)
             .expect("Decode TopicConfigSerializeWrapper from json failed");
         if let Some(value) = wrapper.data_version() {
             self.data_version.mut_from_ref().assign_new_one(value);
         }
-        if let Some(map) = wrapper.topic_config_table() {
+        if let Some(map) = wrapper.take_topic_config_table() {
             for (key, value) in map {
-                self.topic_config_table
-                    .lock()
-                    .insert(key.clone(), value.clone());
+                self.topic_config_table.insert(key, ArcMut::new(value));
             }
         }
     }

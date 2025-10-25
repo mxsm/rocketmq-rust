@@ -1334,7 +1334,7 @@ impl BrokerRuntime {
 }
 
 impl<MS: MessageStore> BrokerRuntimeInner<MS> {
-    pub async fn register_single_topic_all(&self, topic_config: TopicConfig) {
+    pub async fn register_single_topic_all(&self, topic_config: ArcMut<TopicConfig>) {
         let mut topic_config = topic_config;
         if !PermName::is_writeable(self.broker_config.broker_permission)
             || !PermName::is_readable(self.broker_config.broker_permission)
@@ -1352,7 +1352,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     pub async fn register_increment_broker_data(
         this: ArcMut<BrokerRuntimeInner<MS>>,
-        topic_config_list: Vec<TopicConfig>,
+        topic_config_list: Vec<ArcMut<TopicConfig>>,
         data_version: DataVersion,
     ) {
         let mut serialize_wrapper = TopicConfigAndMappingSerializeWrapper {
@@ -1371,10 +1371,10 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 {
                     TopicConfig {
                         perm: topic_config.perm & this.broker_config().broker_permission,
-                        ..topic_config.clone()
+                        ..topic_config.as_ref().clone()
                     }
                 } else {
-                    topic_config.clone()
+                    topic_config.as_ref().clone()
                 };
             topic_config_table.insert(
                 register_topic_config.topic_name.as_ref().unwrap().clone(),
@@ -1495,7 +1495,6 @@ impl<MS: MessageStore> StateGetter for ProducerStateGetter<MS> {
             .broker_runtime_inner
             .topic_config_manager()
             .topic_config_table()
-            .lock()
             .contains_key(NamespaceUtil::wrap_namespace(instance_id, topic).as_str())
         {
             self.broker_runtime_inner
@@ -1528,7 +1527,6 @@ impl<MS: MessageStore> StateGetter for ConsumerStateGetter<MS> {
             .broker_runtime_inner
             .topic_config_manager()
             .topic_config_table()
-            .lock()
             .contains_key(topic)
         {
             let topic_full_name =
@@ -2340,7 +2338,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     ) {
         let mut topic_config_table = HashMap::new();
         let table = self.topic_config_manager().topic_config_table();
-        for topic_config in table.lock().values() {
+        for topic_config in table.iter() {
             let new_topic_config = if !PermName::is_writeable(self.broker_config.broker_permission)
                 || !PermName::is_readable(self.broker_config.broker_permission)
             {
@@ -2352,7 +2350,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                     ..TopicConfig::default()
                 }
             } else {
-                topic_config.clone()
+                topic_config.as_ref().clone()
             };
             topic_config_table.insert(
                 new_topic_config.topic_name.as_ref().unwrap().clone(),

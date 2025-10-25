@@ -73,4 +73,8 @@ impl TopicConfigSerializeWrapper {
     pub fn set_data_version(&mut self, data_version: Option<DataVersion>) {
         self.data_version = data_version;
     }
+
+    pub fn take_topic_config_table(&mut self) -> Option<HashMap<CheetahString, TopicConfig>> {
+        self.topic_config_table.take()
+    }
 }

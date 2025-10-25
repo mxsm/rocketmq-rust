@@ -14,13 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::Buf;
 use bytes::BufMut;
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -29,6 +29,7 @@ use rocketmq_common::utils::message_utils;
 use rocketmq_common::CRC32Utils::crc32;
 use rocketmq_common::MessageDecoder::create_crc32;
 use rocketmq_common::MessageUtils::build_batch_message_id;
+use rocketmq_rust::ArcMut;
 use rocketmq_rust::SyncUnsafeCellWrapper;
 
 use crate::base::message_result::AppendMessageResult;
@@ -83,13 +84,13 @@ pub(crate) struct DefaultAppendMessageCallback {
     msg_store_item_memory: SyncUnsafeCellWrapper<bytes::BytesMut>,
     crc32_reserved_length: i32,
     message_store_config: Arc<MessageStoreConfig>,
-    topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
+    topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
 }
 
 impl DefaultAppendMessageCallback {
     pub fn new(
         message_store_config: Arc<MessageStoreConfig>,
-        topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
+        topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
     ) -> Self {
         let crc32_reserved_length = if message_store_config.enabled_append_prop_crc {
             CRC32_RESERVED_LEN

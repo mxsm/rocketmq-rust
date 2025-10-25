@@ -15,11 +15,12 @@
  * limitations under the License.
  */
 use rocketmq_common::common::config::TopicConfig;
+use rocketmq_rust::ArcMut;
 use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateTopicListRequestBody {
-    pub topic_config_list: Vec<TopicConfig>,
+    pub topic_config_list: Vec<ArcMut<TopicConfig>>,
 }

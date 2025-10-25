@@ -173,7 +173,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         {
             return;
         }
-        let mut topic_config = TopicConfig::new(topic.clone());
+        let mut topic_config = ArcMut::new(TopicConfig::new(topic.clone()));
         topic_config.read_queue_nums = PopAckConstants::RETRY_QUEUE_NUM as u32;
         topic_config.write_queue_nums = PopAckConstants::RETRY_QUEUE_NUM as u32;
         topic_config.topic_filter_type = TopicFilterType::SingleTag;
@@ -181,7 +181,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         topic_config.topic_sys_flag = 0;
         self.broker_runtime_inner
             .topic_config_manager_mut()
-            .update_topic_config(&mut topic_config);
+            .update_topic_config(topic_config.clone());
         self.init_pop_retry_offset(topic, consumer_group);
     }
 

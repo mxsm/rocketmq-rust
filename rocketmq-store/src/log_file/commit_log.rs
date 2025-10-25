@@ -26,6 +26,7 @@ use bytes::Buf;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
@@ -152,16 +153,15 @@ fn generate_key(msg: &MessageExtBrokerInner) -> String {
 }
 
 pub fn get_cq_type(
-    topic_config_table: &Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
+    topic_config_table: &Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
     msg_inner: &MessageExtBrokerInner,
 ) -> CQType {
-    let topic_config_table_guard = topic_config_table.lock();
-    let option = topic_config_table_guard.get(msg_inner.topic());
-    QueueTypeUtils::get_cq_type(option)
+    let binding = topic_config_table.get(msg_inner.topic());
+    QueueTypeUtils::get_cq_type_arc_mut(binding.as_deref())
 }
 
 pub fn get_message_num(
-    topic_config_table: &Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
+    topic_config_table: &Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
     msg_inner: &MessageExtBrokerInner,
 ) -> i16 {
     let mut message_num = 1i16;
@@ -196,7 +196,7 @@ pub struct CommitLog {
     append_message_callback: Arc<DefaultAppendMessageCallback>,
     put_message_lock: Arc<tokio::sync::Mutex<()>>,
     topic_queue_lock: Arc<TopicQueueLock>,
-    topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
+    topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
     consume_queue_store: ConsumeQueueStore,
     flush_manager: Arc<tokio::sync::Mutex<DefaultFlushManager>>,
     begin_time_in_lock: Arc<AtomicU64>,
@@ -209,7 +209,7 @@ impl CommitLog {
         broker_config: Arc<BrokerConfig>,
         dispatcher: ArcMut<CommitLogDispatcherDefault>,
         store_checkpoint: Arc<StoreCheckpoint>,
-        topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
+        topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
         consume_queue_store: ConsumeQueueStore,
     ) -> Self {
         let enabled_append_prop_crc = message_store_config.enabled_append_prop_crc;

@@ -167,7 +167,7 @@ impl<MS: MessageStore> ConsumerOrderInfoManager<MS> {
                 if *queue_id == topic_config.read_queue_nums as i32 {
                     queues_to_remove.push(*queue_id);
                     info!(
-                        "Queue not exist, Clean order info, {}:{}, {}",
+                        "Queue not exist, Clean order info, {}:{}, {:?}",
                         topic_at_group, order_info, topic_config
                     );
                     continue;
