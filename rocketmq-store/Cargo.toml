@@ -61,6 +61,8 @@ page_size = "0.6.0"
 
 dashmap = { workspace = true }
 
+hashbrown = "0.16"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.177"
 
