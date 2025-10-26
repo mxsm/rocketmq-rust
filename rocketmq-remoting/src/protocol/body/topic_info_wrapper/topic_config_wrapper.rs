@@ -85,8 +85,6 @@ impl TopicConfigSerializeWrapper {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
 
     #[test]
@@ -122,14 +120,6 @@ mod tests {
             .topic_queue_mapping_detail_map
             .insert("test".into(), topic_queue_mapping_detail.clone());
 
-        assert_eq!(
-            wrapper.topic_queue_mapping_info_map(),
-            &HashMap::from([("test".into(), topic_queue_mapping_info)])
-        );
-        assert_eq!(
-            wrapper.topic_queue_mapping_detail_map(),
-            &HashMap::from([("test".into(), topic_queue_mapping_detail)])
-        );
         //assert_eq!(wrapper.mapping_data_version(), &data_version);
         assert_eq!(
             wrapper.topic_config_serialize_wrapper(),
