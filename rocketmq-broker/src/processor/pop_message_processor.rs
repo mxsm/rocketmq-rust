@@ -605,7 +605,7 @@ where
             .await
         } else {
             self.pop_msg_from_queue(
-                &topic_config.topic_name.unwrap_or_default(),
+                &topic_config.topic_name.clone().unwrap_or_default(),
                 &request_header.attempt_id.clone().unwrap_or_default(),
                 false,
                 get_message_result.clone(),

@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-use std::collections::HashMap;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -138,7 +138,7 @@ impl HookUtils {
     }
 
     pub fn check_inner_batch(
-        topic_config_table: &Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
+        topic_config_table: &Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
         msg: &MessageExt,
     ) -> Option<PutMessageResult> {
         if msg
@@ -156,9 +156,9 @@ impl HookUtils {
         }
 
         if MessageSysFlag::check(msg.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG) {
-            let topic_config_table_guard = topic_config_table.lock();
-            let topic_config = topic_config_table_guard.get(msg.topic());
-            if !QueueTypeUtils::is_batch_cq(topic_config) {
+            let topic_config_ref = topic_config_table.get(msg.topic());
+            let topic_config = topic_config_ref.as_deref();
+            if !QueueTypeUtils::is_batch_cq_arc_mut(topic_config) {
                 error!("[BUG]The message is an inner batch but cq type is not batch cq");
                 return Some(PutMessageResult::new_default(
                     PutMessageStatus::MessageIllegal,
@@ -416,7 +416,6 @@ impl HookUtils {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use rocketmq_common::common::config::TopicConfig;
@@ -428,9 +427,12 @@ mod tests {
     #[test]
     fn check_inner_batch_returns_message_illegal_when_inner_batch_flag_is_set_but_cq_type_is_not_batch_cq(
     ) {
-        let mut topic_config_table = HashMap::new();
-        topic_config_table.insert("test_topic".into(), TopicConfig::default());
-        let topic_config_table = Arc::new(parking_lot::Mutex::new(topic_config_table));
+        let topic_config_table = DashMap::new();
+        topic_config_table.insert(
+            CheetahString::from_static_str("test_topic"),
+            ArcMut::new(TopicConfig::default()),
+        );
+        let topic_config_table = Arc::new(topic_config_table);
         let mut msg = MessageExt::default();
         msg.message.topic = "test_topic".into();
         msg.set_sys_flag(MessageSysFlag::INNER_BATCH_FLAG);

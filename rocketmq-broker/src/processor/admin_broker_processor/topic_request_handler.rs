@@ -124,7 +124,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             }
         };
 
-        let mut topic_config = TopicConfig {
+        let topic_config = ArcMut::new(TopicConfig {
             topic_name: Some(topic.clone()),
             read_queue_nums: request_header.read_queue_nums as u32,
             write_queue_nums: request_header.write_queue_nums as u32,
@@ -137,7 +137,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             },
             order: request_header.order,
             attributes,
-        };
+        });
         if topic_config.get_topic_message_type() == TopicMessageType::Mixed
             && !self
                 .broker_runtime_inner
@@ -154,10 +154,8 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         let topic_config_origin = self
             .broker_runtime_inner
             .topic_config_manager()
-            .topic_config_table()
-            .lock()
-            .get(&topic)
-            .cloned();
+            .get_topic_config(topic.as_str())
+            .clone();
         if topic_config_origin.is_some() && topic_config == topic_config_origin.unwrap() {
             info!(
                 "Broker receive request to update or create topic={}, but topicConfig has  no \
@@ -169,7 +167,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         }
         self.broker_runtime_inner
             .topic_config_manager_mut()
-            .update_topic_config(&mut topic_config);
+            .update_topic_config(topic_config.clone());
 
         if self
             .broker_runtime_inner
@@ -179,7 +177,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             self.broker_runtime_inner
                 .topic_config_manager()
                 .broker_runtime_inner()
-                .register_single_topic_all(topic_config)
+                .register_single_topic_all(topic_config.clone())
                 .await;
         } else {
             /* self.broker_runtime_inner
@@ -257,10 +255,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             let topic_config_origin = self
                 .broker_runtime_inner
                 .topic_config_manager()
-                .topic_config_table()
-                .lock()
-                .get(topic)
-                .cloned();
+                .get_topic_config(topic);
             if topic_config_origin.is_some() && topic_config.clone() == topic_config_origin.unwrap()
             {
                 info!(
@@ -405,9 +400,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 topic_config_table: self
                     .broker_runtime_inner
                     .topic_config_manager()
-                    .topic_config_table()
-                    .lock()
-                    .clone(),
+                    .topic_config_table_hash_map(),
             },
             ..Default::default()
         };
@@ -553,8 +546,10 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 }
             }
         }
-        let topic_config_and_queue_mapping =
-            TopicConfigAndQueueMapping::new(topic_config.unwrap(), topic_queue_mapping_detail);
+        let topic_config_and_queue_mapping = TopicConfigAndQueueMapping::new(
+            topic_config.unwrap().try_unwrap().unwrap(),
+            topic_queue_mapping_detail,
+        );
         response.set_body_mut_ref(
             topic_config_and_queue_mapping
                 .encode()

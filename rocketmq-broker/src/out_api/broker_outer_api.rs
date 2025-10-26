@@ -134,7 +134,10 @@ impl BrokerOuterAPI {
         }
     }
 
-    fn create_request(broker_name: CheetahString, topic_config: TopicConfig) -> RemotingCommand {
+    fn create_request(
+        broker_name: CheetahString,
+        topic_config: ArcMut<TopicConfig>,
+    ) -> RemotingCommand {
         let request_header =
             RegisterTopicRequestHeader::new(topic_config.topic_name.as_ref().cloned().unwrap());
         let queue_data = QueueData::new(
@@ -328,7 +331,7 @@ impl BrokerOuterAPI {
     pub async fn register_single_topic_all(
         &self,
         broker_name: CheetahString,
-        topic_config: TopicConfig,
+        topic_config: ArcMut<TopicConfig>,
         timeout_mills: u64,
     ) {
         let request = Self::create_request(broker_name, topic_config);

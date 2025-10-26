@@ -427,7 +427,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         let consume_queue = topic_map.entry(queue_id).or_insert_with(|| {
             let message_store = self.inner.message_store.as_ref().unwrap();
             let option = message_store.get_topic_config(topic);
-            match QueueTypeUtils::get_cq_type(option.as_ref()) {
+            match QueueTypeUtils::get_cq_type_arc_mut(option.as_ref()) {
                 CQType::SimpleCQ | CQType::RocksDBCQ => ArcMut::new(Box::new(ConsumeQueue::new(
                     topic.clone(),
                     queue_id,
@@ -633,7 +633,7 @@ impl ConsumeQueueStore {
             .as_ref()
             .unwrap()
             .get_topic_config(topic);
-        let act = QueueTypeUtils::get_cq_type(topic_config.as_ref());
+        let act = QueueTypeUtils::get_cq_type_arc_mut(topic_config.as_ref());
         if act != cq_type {
             panic!("The queue type of topic: {topic} should be {cq_type:?}, but is {act:?}",);
         }

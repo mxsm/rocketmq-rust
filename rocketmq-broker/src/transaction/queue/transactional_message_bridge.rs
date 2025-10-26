@@ -227,7 +227,7 @@ where
         found_list
     }
 
-    pub fn select_topic_config(&mut self, topic: &CheetahString) -> Option<TopicConfig> {
+    pub fn select_topic_config(&mut self, topic: &CheetahString) -> Option<ArcMut<TopicConfig>> {
         let mut topic_config = self
             .broker_runtime_inner
             .topic_config_manager()

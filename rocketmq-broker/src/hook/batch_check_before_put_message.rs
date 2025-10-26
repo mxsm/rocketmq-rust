@@ -14,13 +14,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::MessageTrait;
+use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::hook::put_message_hook::PutMessageHook;
 use tracing::warn;
@@ -28,13 +29,11 @@ use tracing::warn;
 use crate::util::hook_utils::HookUtils;
 
 pub struct BatchCheckBeforePutMessageHook {
-    topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
+    topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
 }
 
 impl BatchCheckBeforePutMessageHook {
-    pub fn new(
-        topic_config_table: Arc<parking_lot::Mutex<HashMap<CheetahString, TopicConfig>>>,
-    ) -> Self {
+    pub fn new(topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>) -> Self {
         Self { topic_config_table }
     }
 }
