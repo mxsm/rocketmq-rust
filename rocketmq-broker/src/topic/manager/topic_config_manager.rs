@@ -267,13 +267,13 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         &self,
         topic_config_table: HashMap<CheetahString, TopicConfig>,
     ) -> TopicConfigAndMappingSerializeWrapper {
-        self.build_serialize_wrapper_with_topic_queue_map(topic_config_table, HashMap::new())
+        self.build_serialize_wrapper_with_topic_queue_map(topic_config_table, DashMap::new())
     }
 
     pub fn build_serialize_wrapper_with_topic_queue_map(
         &self,
         topic_config_table: HashMap<CheetahString, TopicConfig>,
-        topic_queue_mapping_info_map: HashMap<CheetahString, TopicQueueMappingInfo>,
+        topic_queue_mapping_info_map: DashMap<CheetahString, ArcMut<TopicQueueMappingInfo>>,
     ) -> TopicConfigAndMappingSerializeWrapper {
         if self
             .broker_runtime_inner

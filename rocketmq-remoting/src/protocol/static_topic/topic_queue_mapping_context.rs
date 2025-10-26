@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use cheetah_string::CheetahString;
+use rocketmq_rust::ArcMut;
 
 use crate::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
 use crate::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
@@ -23,7 +24,7 @@ use crate::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMapping
 pub struct TopicQueueMappingContext {
     pub topic: CheetahString,
     pub global_id: Option<i32>,
-    pub mapping_detail: Option<TopicQueueMappingDetail>,
+    pub mapping_detail: Option<ArcMut<TopicQueueMappingDetail>>,
     pub mapping_item_list: Vec<LogicQueueMappingItem>,
     pub leader_item: Option<LogicQueueMappingItem>,
     pub current_item: Option<LogicQueueMappingItem>,
@@ -33,7 +34,7 @@ impl TopicQueueMappingContext {
     pub fn new(
         topic: impl Into<CheetahString>,
         global_id: Option<i32>,
-        mapping_detail: Option<TopicQueueMappingDetail>,
+        mapping_detail: Option<ArcMut<TopicQueueMappingDetail>>,
         mapping_item_list: Vec<LogicQueueMappingItem>,
         leader_item: Option<LogicQueueMappingItem>,
     ) -> Self {

@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use rocketmq_common::common::config::TopicConfig;
+use rocketmq_rust::ArcMut;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -26,13 +27,13 @@ pub struct TopicConfigAndQueueMapping {
     pub topic_config: TopicConfig,
 
     #[serde(rename = "mappingDetail")]
-    pub topic_queue_mapping_detail: Option<TopicQueueMappingDetail>,
+    pub topic_queue_mapping_detail: Option<ArcMut<TopicQueueMappingDetail>>,
 }
 
 impl TopicConfigAndQueueMapping {
     pub fn new(
         topic_config: TopicConfig,
-        topic_queue_mapping_detail: Option<TopicQueueMappingDetail>,
+        topic_queue_mapping_detail: Option<ArcMut<TopicQueueMappingDetail>>,
     ) -> Self {
         Self {
             topic_config,
@@ -40,13 +41,13 @@ impl TopicConfigAndQueueMapping {
         }
     }
 
-    pub fn get_topic_queue_mapping_detail(&self) -> Option<&TopicQueueMappingDetail> {
+    pub fn get_topic_queue_mapping_detail(&self) -> Option<&ArcMut<TopicQueueMappingDetail>> {
         self.topic_queue_mapping_detail.as_ref()
     }
 
     pub fn set_topic_queue_mapping_detail(
         &mut self,
-        topic_queue_mapping_detail: Option<TopicQueueMappingDetail>,
+        topic_queue_mapping_detail: Option<ArcMut<TopicQueueMappingDetail>>,
     ) {
         self.topic_queue_mapping_detail = topic_queue_mapping_detail;
     }

@@ -341,7 +341,9 @@ impl RouteInfoManager {
             if self.is_broker_topic_config_changed(&cluster_name, &broker_addr, data_version)
                 || register_first
             {
-                for (topic, vtq_info) in topic_queue_mapping_info_map {
+                for kv in topic_queue_mapping_info_map {
+                    let topic = kv.key();
+                    let vtq_info = kv.value();
                     if !self.topic_queue_mapping_info_table.contains_key(topic) {
                         self.topic_queue_mapping_info_table
                             .mut_from_ref()
@@ -351,7 +353,10 @@ impl RouteInfoManager {
                         .mut_from_ref()
                         .get_mut(topic)
                         .unwrap()
-                        .insert(vtq_info.bname.as_ref().unwrap().clone(), vtq_info.clone());
+                        .insert(
+                            vtq_info.bname.as_ref().unwrap().clone(),
+                            vtq_info.as_ref().clone(),
+                        );
                 }
             }
         }

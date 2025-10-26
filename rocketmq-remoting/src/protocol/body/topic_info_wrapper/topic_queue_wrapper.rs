@@ -14,10 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-use std::collections::HashMap;
-
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
+use rocketmq_rust::ArcMut;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -27,13 +26,15 @@ use crate::protocol::DataVersion;
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TopicQueueMappingSerializeWrapper {
-    topic_queue_mapping_info_map: Option<HashMap<CheetahString, TopicQueueMappingDetail>>,
+    topic_queue_mapping_info_map: Option<DashMap<CheetahString, ArcMut<TopicQueueMappingDetail>>>,
     data_version: Option<DataVersion>,
 }
 
 impl TopicQueueMappingSerializeWrapper {
     pub fn new(
-        topic_queue_mapping_info_map: Option<HashMap<CheetahString, TopicQueueMappingDetail>>,
+        topic_queue_mapping_info_map: Option<
+            DashMap<CheetahString, ArcMut<TopicQueueMappingDetail>>,
+        >,
         data_version: Option<DataVersion>,
     ) -> Self {
         Self {
@@ -46,8 +47,14 @@ impl TopicQueueMappingSerializeWrapper {
 impl TopicQueueMappingSerializeWrapper {
     pub fn topic_queue_mapping_info_map(
         &self,
-    ) -> Option<&HashMap<CheetahString, TopicQueueMappingDetail>> {
+    ) -> Option<&DashMap<CheetahString, ArcMut<TopicQueueMappingDetail>>> {
         self.topic_queue_mapping_info_map.as_ref()
+    }
+
+    pub fn take_topic_queue_mapping_info_map(
+        &mut self,
+    ) -> Option<DashMap<CheetahString, ArcMut<TopicQueueMappingDetail>>> {
+        self.topic_queue_mapping_info_map.take()
     }
 
     pub fn data_version(&self) -> Option<&DataVersion> {
