@@ -17,7 +17,9 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rocketmq_common::common::config::TopicConfig;
+use rocketmq_rust::ArcMut;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -25,15 +27,15 @@ use crate::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
 use crate::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use crate::protocol::DataVersion;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TopicConfigAndMappingSerializeWrapper {
     #[serde(rename = "topicQueueMappingInfoMap")]
     pub topic_queue_mapping_info_map:
-        HashMap<CheetahString /* topic */, TopicQueueMappingInfo>,
+        DashMap<CheetahString /* topic */, ArcMut<TopicQueueMappingInfo>>,
 
     #[serde(rename = "topicQueueMappingDetailMap")]
     pub topic_queue_mapping_detail_map:
-        HashMap<CheetahString /* topic */, TopicQueueMappingDetail>,
+        DashMap<CheetahString /* topic */, ArcMut<TopicQueueMappingDetail>>,
 
     #[serde(rename = "mappingDataVersion")]
     pub mapping_data_version: DataVersion,
@@ -51,13 +53,15 @@ pub struct TopicConfigSerializeWrapper {
 }
 
 impl TopicConfigAndMappingSerializeWrapper {
-    pub fn topic_queue_mapping_info_map(&self) -> &HashMap<CheetahString, TopicQueueMappingInfo> {
+    pub fn topic_queue_mapping_info_map(
+        &self,
+    ) -> &DashMap<CheetahString, ArcMut<TopicQueueMappingInfo>> {
         &self.topic_queue_mapping_info_map
     }
 
     pub fn topic_queue_mapping_detail_map(
         &self,
-    ) -> &HashMap<CheetahString, TopicQueueMappingDetail> {
+    ) -> &DashMap<CheetahString /* topic */, ArcMut<TopicQueueMappingDetail>> {
         &self.topic_queue_mapping_detail_map
     }
 
@@ -105,8 +109,8 @@ mod tests {
     fn topic_config_and_mapping_serialize_wrapper_getters() {
         let mut wrapper = TopicConfigAndMappingSerializeWrapper::default();
         let _topic_config = TopicConfig::default();
-        let topic_queue_mapping_info = TopicQueueMappingInfo::default();
-        let topic_queue_mapping_detail = TopicQueueMappingDetail::default();
+        let topic_queue_mapping_info = ArcMut::new(TopicQueueMappingInfo::default());
+        let topic_queue_mapping_detail = ArcMut::<TopicQueueMappingDetail>::default();
         //let data_version = DataVersion::default();
 
         let topic_config_serialize_wrapper = TopicConfigSerializeWrapper::default();

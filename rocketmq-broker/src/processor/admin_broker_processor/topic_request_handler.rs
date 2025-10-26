@@ -382,7 +382,6 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 .broker_runtime_inner
                 .topic_queue_mapping_manager()
                 .topic_queue_mapping_table
-                .lock()
                 .clone(),
             mapping_data_version: self
                 .broker_runtime_inner
@@ -532,7 +531,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                     .set_remark(format!("No topic in this broker. topic: {topic}")),
             );
         }
-        let mut topic_queue_mapping_detail: Option<TopicQueueMappingDetail> = None;
+        let mut topic_queue_mapping_detail: Option<ArcMut<TopicQueueMappingDetail>> = None;
         if let Some(value) = request_header.topic_request_header.as_ref() {
             if let Some(lo) = value.get_lo() {
                 if *lo {
@@ -540,8 +539,8 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                         .broker_runtime_inner
                         .topic_queue_mapping_manager()
                         .topic_queue_mapping_table
-                        .lock()
                         .get(topic)
+                        .as_deref()
                         .cloned();
                 }
             }

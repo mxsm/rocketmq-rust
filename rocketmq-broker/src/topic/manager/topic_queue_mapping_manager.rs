@@ -15,10 +15,10 @@
  * limitations under the License.
  */
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -29,6 +29,7 @@ use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_context::Topi
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
+use rocketmq_rust::ArcMut;
 use tracing::info;
 use tracing::warn;
 
@@ -38,7 +39,7 @@ use crate::broker_path_config_helper::get_topic_queue_mapping_path;
 pub(crate) struct TopicQueueMappingManager {
     pub(crate) data_version: Arc<parking_lot::Mutex<DataVersion>>,
     pub(crate) topic_queue_mapping_table:
-        parking_lot::Mutex<HashMap<CheetahString /* topic */, TopicQueueMappingDetail>>,
+        DashMap<CheetahString /* topic */, ArcMut<TopicQueueMappingDetail>>,
     pub(crate) broker_config: Arc<BrokerConfig>,
 }
 
@@ -105,11 +106,8 @@ impl TopicQueueMappingManager {
             //do
         }
         let topic = request_header.topic();
-
         let mut global_id = request_header.queue_id();
-
-        let mutex_guard = self.topic_queue_mapping_table.lock();
-        let tqmd = mutex_guard.get(topic.as_str());
+        let tqmd = self.topic_queue_mapping_table.get(topic);
         if tqmd.is_none() {
             return TopicQueueMappingContext {
                 topic: topic.clone(),
@@ -165,7 +163,7 @@ impl TopicQueueMappingManager {
         }
         // }
         let (leader_item, mapping_item_list) = if let Some(mapping_item_list) =
-            TopicQueueMappingDetail::get_mapping_info(mapping_detail, global_id)
+            TopicQueueMappingDetail::get_mapping_info(mapping_detail.as_ref(), global_id)
         {
             if !mapping_item_list.is_empty() {
                 (
@@ -188,12 +186,15 @@ impl TopicQueueMappingManager {
         }
     }
 
-    pub fn get_topic_queue_mapping(&self, topic: &str) -> Option<TopicQueueMappingDetail> {
-        self.topic_queue_mapping_table.lock().get(topic).cloned()
+    pub fn get_topic_queue_mapping(&self, topic: &str) -> Option<ArcMut<TopicQueueMappingDetail>> {
+        self.topic_queue_mapping_table
+            .get(topic)
+            .as_deref()
+            .cloned()
     }
 
     pub fn delete(&self, topic: &CheetahString) {
-        let old = self.topic_queue_mapping_table.lock().remove(topic);
+        let old = self.topic_queue_mapping_table.remove(topic);
         match old {
             None => {
                 warn!(
@@ -221,7 +222,7 @@ impl ConfigManager for TopicQueueMappingManager {
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
         let wrapper = TopicQueueMappingSerializeWrapper::new(
-            Some(self.topic_queue_mapping_table.lock().clone()),
+            Some(self.topic_queue_mapping_table.clone()),
             Some(self.data_version.lock().clone()),
         );
         match pretty_format {
@@ -238,16 +239,14 @@ impl ConfigManager for TopicQueueMappingManager {
         if json_string.is_empty() {
             return;
         }
-        let wrapper = serde_json::from_str::<TopicQueueMappingSerializeWrapper>(json_string)
+        let mut wrapper = serde_json::from_str::<TopicQueueMappingSerializeWrapper>(json_string)
             .unwrap_or_default();
         if let Some(value) = wrapper.data_version() {
             self.data_version.lock().assign_new_one(value);
         }
-        if let Some(map) = wrapper.topic_queue_mapping_info_map() {
+        if let Some(map) = wrapper.take_topic_queue_mapping_info_map() {
             for (key, value) in map {
-                self.topic_queue_mapping_table
-                    .lock()
-                    .insert(key.clone(), value.clone());
+                self.topic_queue_mapping_table.insert(key, value);
             }
         }
     }
@@ -268,7 +267,7 @@ mod tests {
 
         assert!(Arc::ptr_eq(&manager.broker_config, &broker_config));
         assert_eq!(manager.data_version.lock().get_state_version(), 0);
-        assert_eq!(manager.topic_queue_mapping_table.lock().len(), 0);
+        assert_eq!(manager.topic_queue_mapping_table.len(), 0);
     }
 
     #[test]
@@ -285,11 +284,10 @@ mod tests {
     fn get_topic_queue_mapping_returns_mapping_for_existing_topic() {
         let broker_config = Arc::new(BrokerConfig::default());
         let manager = TopicQueueMappingManager::new(broker_config);
-        let detail = TopicQueueMappingDetail::default();
-        manager.topic_queue_mapping_table.lock().insert(
-            CheetahString::from_static_str("existing_topic"),
-            detail.clone(),
-        );
+        let detail = ArcMut::new(TopicQueueMappingDetail::default());
+        manager
+            .topic_queue_mapping_table
+            .insert(CheetahString::from_static_str("existing_topic"), detail);
 
         assert!(manager.get_topic_queue_mapping("existing_topic").is_some());
     }
@@ -298,11 +296,10 @@ mod tests {
     fn delete_removes_existing_topic() {
         let broker_config = Arc::new(BrokerConfig::default());
         let manager = TopicQueueMappingManager::new(broker_config);
-        let detail = TopicQueueMappingDetail::default();
+        let detail = ArcMut::new(TopicQueueMappingDetail::default());
         manager
             .topic_queue_mapping_table
-            .lock()
-            .insert("existing_topic".into(), detail.clone());
+            .insert("existing_topic".into(), detail);
 
         manager.delete(&CheetahString::from_static_str("existing_topic"));
 

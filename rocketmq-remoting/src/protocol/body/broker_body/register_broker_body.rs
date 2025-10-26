@@ -14,7 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashMap;
 use std::io::prelude::*;
 
 use bytes::Buf;
@@ -22,12 +21,14 @@ use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use flate2::read::DeflateDecoder;
 use flate2::write::DeflateEncoder;
 use flate2::Compression;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
+use rocketmq_rust::ArcMut;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -160,11 +161,11 @@ impl RegisterBrokerBody {
 
         if broker_version >= RocketMqVersion::V5_0_0 {
             let topic_queue_mapping_num = bytes.get_i32();
-            let mut topic_queue_mapping_info_map = HashMap::new();
+            let topic_queue_mapping_info_map = DashMap::new();
             for _ in 0..topic_queue_mapping_num {
                 let queue_mapping_length = bytes.get_i32();
                 let buffer = bytes.copy_to_bytes(queue_mapping_length as usize);
-                let info = TopicQueueMappingInfo::decode(buffer.as_ref()).unwrap();
+                let info = ArcMut::new(TopicQueueMappingInfo::decode(buffer.as_ref()).unwrap());
                 topic_queue_mapping_info_map.insert(info.topic.clone().unwrap_or_default(), info);
             }
             register_broker_body
@@ -177,6 +178,8 @@ impl RegisterBrokerBody {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use bytes::Bytes;
     use cheetah_string::CheetahString;
     use rocketmq_common::common::config::TopicConfig;
