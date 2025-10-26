@@ -416,7 +416,6 @@ impl HookUtils {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use rocketmq_common::common::config::TopicConfig;
@@ -428,9 +427,12 @@ mod tests {
     #[test]
     fn check_inner_batch_returns_message_illegal_when_inner_batch_flag_is_set_but_cq_type_is_not_batch_cq(
     ) {
-        let mut topic_config_table = HashMap::new();
-        topic_config_table.insert("test_topic".into(), TopicConfig::default());
-        let topic_config_table = Arc::new(parking_lot::Mutex::new(topic_config_table));
+        let topic_config_table = DashMap::new();
+        topic_config_table.insert(
+            CheetahString::from_static_str("test_topic"),
+            ArcMut::new(TopicConfig::default()),
+        );
+        let topic_config_table = Arc::new(topic_config_table);
         let mut msg = MessageExt::default();
         msg.message.topic = "test_topic".into();
         msg.set_sys_flag(MessageSysFlag::INNER_BATCH_FLAG);
