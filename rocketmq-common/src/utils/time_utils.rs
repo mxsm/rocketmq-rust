@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-#[inline]
+#[inline(always)]
 pub fn get_current_millis() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -23,7 +23,7 @@ pub fn get_current_millis() -> u64 {
         .as_millis() as u64
 }
 
-#[inline]
+#[inline(always)]
 pub fn get_current_nano() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

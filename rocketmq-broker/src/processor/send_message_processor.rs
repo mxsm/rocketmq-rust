@@ -1001,9 +1001,7 @@ where
         if self
             .inner
             .broker_runtime_inner
-            .message_store()
-            .as_ref()
-            .unwrap()
+            .message_store_unchecked()
             .now()
             < (start_timestamp as u64)
         {

@@ -346,6 +346,7 @@ pub trait MessageStoreInner: Sync + 'static {
     fn slave_fall_behind_much(&self) -> i64;
 
     /// Return the current timestamp of the store.
+    #[inline(always)]
     fn now(&self) -> u64 {
         get_current_millis()
     }
