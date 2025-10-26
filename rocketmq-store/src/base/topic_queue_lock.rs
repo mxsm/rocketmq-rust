@@ -17,7 +17,6 @@
 
 use std::hash::BuildHasher;
 use std::hash::Hash;
-use std::hash::Hasher;
 use std::sync::Arc;
 
 use hashbrown::DefaultHashBuilder;
@@ -28,8 +27,8 @@ const MAXIMUM_CAPACITY: usize = 1 << 6;
 
 #[derive(Clone)]
 pub struct TopicQueueLock {
-    size: usize,
-    locks: Vec<Arc<Mutex<()>>>,
+    mask: usize,
+    locks: Arc<Vec<Mutex<()>>>,
     hasher_builder: DefaultHashBuilder,
 }
 
@@ -45,13 +44,11 @@ impl TopicQueueLock {
     }
 
     pub fn with_size(size: usize) -> Self {
-        let size = table_size_for(size);
-        let locks = (0..size)
-            .map(|_| Arc::new(Mutex::new(())))
-            .collect::<Vec<_>>();
+        let capacity = size.next_power_of_two();
+        let locks = (0..capacity).map(|_| Mutex::new(())).collect::<Vec<_>>();
         Self {
-            size,
-            locks,
+            mask: capacity - 1,
+            locks: Arc::new(locks),
             hasher_builder: DefaultHashBuilder::default(),
         }
     }
@@ -69,7 +66,7 @@ impl TopicQueueLock {
     fn index_for_key<K: Hash + ?Sized>(&self, key: &K) -> usize {
         let mut hasher = self.hasher_builder.build_hasher();
         key.hash(&mut hasher);
-        (hasher.finish() as usize) % self.size
+        (self.hasher_builder.hash_one(key) as usize) & self.mask
     }
 }
 
