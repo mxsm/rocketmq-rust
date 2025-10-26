@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+use bytes::Bytes;
 use crc32fast::Hasher;
 
 // Calculate the CRC32 checksum for the given byte array
@@ -23,6 +23,17 @@ pub fn crc32(buf: &[u8]) -> u32 {
         return 0;
     }
     //crc32fast::hash(buf)
+    let mut hasher = Hasher::new();
+    hasher.update(buf);
+    hasher.finalize() & 0x7FFFFFFF
+}
+
+// Calculate the CRC32 checksum for the given byte array
+pub fn crc32_bytes(buf: Option<&Bytes>) -> u32 {
+    if buf.is_none() {
+        return 0;
+    }
+    let buf = buf.unwrap();
     let mut hasher = Hasher::new();
     hasher.update(buf);
     hasher.finalize() & 0x7FFFFFFF

@@ -43,6 +43,7 @@ use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_common::utils::time_utils;
 use rocketmq_common::CRC32Utils::crc32;
+use rocketmq_common::CRC32Utils::crc32_bytes;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::MessageDecoder::string_to_message_properties;
 use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_POSITION;
@@ -508,13 +509,7 @@ impl CommitLog {
             msg.message_ext_inner.store_timestamp = time_utils::get_current_millis() as i64;
         }
         // Set the message body CRC (consider the most appropriate setting on the client)
-        msg.message_ext_inner.body_crc = crc32(
-            msg.message_ext_inner
-                .message
-                .body
-                .as_ref()
-                .unwrap_or(&Bytes::new()),
-        );
+        msg.message_ext_inner.body_crc = crc32_bytes(msg.message_ext_inner.message.body.as_ref());
         if self.enabled_append_prop_crc {
             // delete crc32 properties if exist
             msg.delete_property(MessageConst::PROPERTY_CRC32);
