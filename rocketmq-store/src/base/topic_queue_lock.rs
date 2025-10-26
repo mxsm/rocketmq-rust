@@ -64,8 +64,6 @@ impl TopicQueueLock {
 
     #[inline(always)]
     fn index_for_key<K: Hash + ?Sized>(&self, key: &K) -> usize {
-        let mut hasher = self.hasher_builder.build_hasher();
-        key.hash(&mut hasher);
         (self.hasher_builder.hash_one(key) as usize) & self.mask
     }
 }
