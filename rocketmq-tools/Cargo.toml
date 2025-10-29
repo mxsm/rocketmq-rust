@@ -24,7 +24,7 @@ serde_json.workspace = true
 tokio = { workspace = true }
 
 cheetah-string = { workspace = true }
-clap = { version = "4.5.50", features = ["derive"] }
+clap = { version = "4.5.51", features = ["derive"] }
 tabled = { version = "0.20.0", features = ["derive"] }
 futures = "0.3.31"
 
