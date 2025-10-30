@@ -19,14 +19,11 @@ use std::fmt::Debug;
 use std::path::PathBuf;
 
 use config::Config;
-use rocketmq_error::RocketMQResult;
 use serde::Deserialize;
-use tracing::error;
-use tracing::warn;
 
 use crate::error::CommonError;
 
-pub fn parse_config_file<'de, C>(config_file: PathBuf) -> crate::error::RocketMQResult<C>
+pub fn parse_config_file<'de, C>(config_file: PathBuf) -> rocketmq_error::RocketMQResult<C>
 where
     C: Debug + Deserialize<'de>,
 {
