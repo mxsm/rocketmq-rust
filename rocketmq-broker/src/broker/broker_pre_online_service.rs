@@ -20,6 +20,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::common::remoting_helper::RemotingHelper;
@@ -149,7 +150,7 @@ where
                 if broker_id == MASTER_ID {
                     return Ok(self.prepare_for_master_online(broker_member_group).await);
                 } else if min_broker_id == MASTER_ID {
-                    return Ok(self.prepare_for_slave_online(broker_member_group));
+                    return Ok(self.prepare_for_slave_online(broker_member_group).await);
                 } else {
                     info!("no master online, start service directly");
                     self.broker_runtime_inner.mut_from_ref().start_service(
@@ -322,8 +323,57 @@ where
         }
     }
 
-    fn prepare_for_slave_online(&self, _broker_member_group: BrokerMemberGroup) -> bool {
-        unimplemented!("prepare_for_slave_online unimplemented")
+    async fn prepare_for_slave_online(&self, broker_member_group: BrokerMemberGroup) -> bool {
+        let master_broker_addr = broker_member_group.broker_addrs.get(&mix_all::MASTER_ID);
+        let broker_sync_info = match self
+            .broker_runtime_inner
+            .broker_outer_api()
+            .retrieve_broker_ha_info(master_broker_addr)
+            .await
+        {
+            Ok(addr) => addr,
+            Err(e) => {
+                error!("retrieve master ha info exception, {}", e);
+                return false;
+            }
+        };
+        let message_store = self.broker_runtime_inner.message_store_unchecked();
+        if message_store.get_master_flushed_offset() == 0
+            && self
+                .broker_runtime_inner
+                .message_store_config()
+                .sync_master_flush_offset_when_startup
+        {
+            info!(
+                "Set master flush offset in slave to {}",
+                broker_sync_info.master_flush_offset
+            );
+            message_store.set_master_flushed_offset(broker_sync_info.master_flush_offset);
+        }
+
+        match broker_sync_info.master_ha_address {
+            None => {
+                let min_broker_id = self.get_min_broker_id(&broker_member_group.broker_addrs);
+                self.broker_runtime_inner.mut_from_ref().start_service(
+                    min_broker_id,
+                    broker_member_group
+                        .broker_addrs
+                        .get(&mix_all::MASTER_ID)
+                        .cloned(),
+                );
+            }
+            Some(ref value) => {
+                message_store.update_ha_master_address(value).await;
+                message_store
+                    .update_master_address(&broker_sync_info.master_address.clone().unwrap());
+            }
+        }
+
+        let ha_handshake_result = self
+            .wait_for_ha_handshake_complete(broker_sync_info.master_ha_address.unwrap())
+            .await;
+        self.future_wait_action(ha_handshake_result, &broker_member_group)
+            .await
     }
 }
 
