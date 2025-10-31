@@ -488,7 +488,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                             if let Some(mut response) = result {
                                 let channel = pop_request.get_channel();
                                 response.set_opaque_mut(opaque);
-                                let _ = channel.channel_inner().send_one_way(response, 1000).await;
+                                let _ = channel.channel_inner().send_oneway(response, 1000).await;
                             }
                         }
                         Err(e) => {
@@ -530,7 +530,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                     .unwrap()
                     .get_channel()
                     .connection_ref()
-                    .connection_is_ok()
+                    .is_healthy()
             {
                 continue;
             } else {

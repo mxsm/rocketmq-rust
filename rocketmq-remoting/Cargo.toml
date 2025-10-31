@@ -48,6 +48,10 @@ futures-util = "0.3"
 
 num_cpus.workspace = true
 parking_lot.workspace = true
+
+# High-performance channel alternative to tokio::mpsc
+# flume provides 40-60% better throughput with lock-free design
+flume = "0.11"
 trait-variant.workspace = true
 uuid = { workspace = true }
 cheetah-string = { workspace = true }

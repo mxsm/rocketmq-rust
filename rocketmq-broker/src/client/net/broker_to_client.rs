@@ -59,7 +59,7 @@ impl Broker2Client {
         }
         channel
             .channel_inner_mut()
-            .send_one_way(request, 100)
+            .send_oneway(request, 100)
             .await?;
         Ok(())
     }

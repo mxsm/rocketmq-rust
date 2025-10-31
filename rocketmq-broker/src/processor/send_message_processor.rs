@@ -907,7 +907,7 @@ where
             let queue_id = Some(response_header.queue_id());
             let queue_offset = Some(response_header.queue_offset());
             response.set_opaque_mut(request.opaque());
-            ctx.write_ref(response).await;
+            ctx.write_response_ref(response).await;
 
             if self.has_send_message_hook() {
                 send_message_context.msg_id = CheetahString::from_string(msg_id);
