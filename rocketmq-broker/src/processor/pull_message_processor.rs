@@ -929,7 +929,7 @@ where
                 let command = response.set_opaque(opaque).mark_response_type();
 
                 let guard = lock.lock().await;
-                ctx.write(command).await;
+                ctx.write_response(command).await;
                 drop(guard);
             }
         });
