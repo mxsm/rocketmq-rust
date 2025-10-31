@@ -2671,8 +2671,29 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         }
     }
 
-    pub fn start_service(&mut self, _min_broker_id: u64, _min_broker_addr: Option<CheetahString>) {
-        unimplemented!("BrokerRuntimeInner#start_service");
+    pub async fn start_service(
+        mut this: ArcMut<BrokerRuntimeInner<MS>>,
+        min_broker_id: u64,
+        min_broker_addr: Option<CheetahString>,
+    ) {
+        info!(
+            "{} start service, min broker id is {}, min broker addr: {:?}",
+            this.broker_config.broker_identity.get_canonical_name(),
+            min_broker_id,
+            min_broker_addr
+        );
+
+        this.min_broker_id_in_group
+            .store(min_broker_id, Ordering::SeqCst);
+        let mut guard = this.min_broker_addr_in_group.lock().await;
+        *guard = min_broker_addr;
+        drop(guard);
+        let flag = this.broker_config.broker_identity.broker_id == min_broker_id;
+        this.change_special_service_status(flag).await;
+        let this_clone = this.clone();
+        this.register_broker_all_inner(this_clone, true, false, this.broker_config.force_register)
+            .await;
+        this.is_isolated.store(false, Ordering::SeqCst);
     }
 
     async fn on_min_broker_change(

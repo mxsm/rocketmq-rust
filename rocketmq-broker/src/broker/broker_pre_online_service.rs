@@ -153,22 +153,28 @@ where
                     return Ok(self.prepare_for_slave_online(broker_member_group).await);
                 } else {
                     info!("no master online, start service directly");
-                    self.broker_runtime_inner.mut_from_ref().start_service(
+                    BrokerRuntimeInner::<MS>::start_service(
+                        self.broker_runtime_inner.clone(),
                         min_broker_id,
                         broker_member_group
                             .broker_addrs
                             .get(&min_broker_id)
                             .cloned(),
-                    );
+                    )
+                    .await;
                     return Ok(true);
                 }
             }
         }
         info!("no other broker online, will start service directly");
         let broker_addr = self.broker_runtime_inner.get_broker_addr().clone();
-        self.broker_runtime_inner
-            .mut_from_ref()
-            .start_service(broker_id, Some(broker_addr));
+
+        BrokerRuntimeInner::<MS>::start_service(
+            self.broker_runtime_inner.clone(),
+            broker_id,
+            Some(broker_addr),
+        )
+        .await;
         Ok(true)
     }
 
@@ -206,9 +212,13 @@ where
             if (wait_index as usize) >= broker_id_list.len() {
                 info!("master preOnline complete, start service");
                 let broker_addr = self.broker_runtime_inner.get_broker_addr().clone();
-                self.broker_runtime_inner
-                    .mut_from_ref()
-                    .start_service(MASTER_ID, Some(broker_addr));
+                BrokerRuntimeInner::<MS>::start_service(
+                    self.broker_runtime_inner.clone(),
+                    MASTER_ID,
+                    Some(broker_addr),
+                )
+                .await;
+
                 return true;
             }
             let wait_broker_id = broker_id_list[wait_index as usize];
@@ -310,9 +320,12 @@ where
                         .broker_addrs
                         .get(&min_broker_id)
                         .cloned();
-                    self.broker_runtime_inner
-                        .mut_from_ref()
-                        .start_service(min_broker_id, broker_addr);
+                    BrokerRuntimeInner::<MS>::start_service(
+                        self.broker_runtime_inner.clone(),
+                        min_broker_id,
+                        broker_addr,
+                    )
+                    .await;
                 }
                 true
             }
@@ -354,13 +367,15 @@ where
         match broker_sync_info.master_ha_address {
             None => {
                 let min_broker_id = self.get_min_broker_id(&broker_member_group.broker_addrs);
-                self.broker_runtime_inner.mut_from_ref().start_service(
+                BrokerRuntimeInner::<MS>::start_service(
+                    self.broker_runtime_inner.clone(),
                     min_broker_id,
                     broker_member_group
                         .broker_addrs
                         .get(&mix_all::MASTER_ID)
                         .cloned(),
-                );
+                )
+                .await;
             }
             Some(ref value) => {
                 message_store.update_ha_master_address(value).await;
