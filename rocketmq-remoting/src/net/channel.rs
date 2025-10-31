@@ -349,7 +349,7 @@ pub struct ChannelInner {
 /// # Potential Optimization (TODO)
 ///
 /// Consider implementing batch sending:
-/// ```rust
+/// ```ignore
 /// // Collect multiple pending messages
 /// let mut batch = vec![first_msg];
 /// while batch.len() < 32 {
