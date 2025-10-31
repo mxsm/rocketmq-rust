@@ -54,32 +54,32 @@ pub type ConnectionId = CheetahString;
 pub struct Connection {
     // === I/O Transport ===
     /// Outbound message sink (sends encoded frames to peer)
-    /// 
+    ///
     /// Renamed from `writer` for clarity: handles outbound data flow
     outbound_sink: SplitSink<Framed<TcpStream, CompositeCodec>, Bytes>,
-    
+
     /// Inbound message stream (receives decoded frames from peer)
-    /// 
+    ///
     /// Renamed from `reader` for clarity: handles inbound data flow
     inbound_stream: SplitStream<Framed<TcpStream, CompositeCodec>>,
 
     // === State Management ===
     /// Connection health status
-    /// 
+    ///
     /// - `true`: Connection is healthy and operational
     /// - `false`: Connection degraded due to I/O error, should be closed
     pub(crate) ok: bool,
 
     // === Buffers ===
     /// Reusable encoding buffer to avoid repeated allocations
-    /// 
+    ///
     /// Used for staging `RemotingCommand` serialization before sending.
     /// Cleared and reused for each send operation.
     encode_buffer: BytesMut,
 
     // === Identification ===
     /// Unique identifier for this connection instance
-    /// 
+    ///
     /// Generated via UUID, stable across the connection lifetime
     connection_id: ConnectionId,
 }
@@ -123,9 +123,9 @@ impl Connection {
     }
 
     /// Gets a reference to the inbound stream for receiving messages
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// Immutable reference to the inbound message stream
     #[inline]
     pub fn inbound_stream(&self) -> &SplitStream<Framed<TcpStream, CompositeCodec>> {
@@ -133,9 +133,9 @@ impl Connection {
     }
 
     /// Gets a reference to the outbound sink for sending messages
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// Immutable reference to the outbound message sink
     #[inline]
     pub fn outbound_sink(&self) -> &SplitSink<Framed<TcpStream, CompositeCodec>, Bytes> {
@@ -145,15 +145,15 @@ impl Connection {
     /// Receives the next `RemotingCommand` from the peer.
     ///
     /// Blocks until a complete frame is available or the stream ends.
-    /// 
+    ///
     /// # Returns
     ///
     /// - `Some(Ok(command))`: Successfully received and decoded a command
     /// - `Some(Err(e))`: Decoding error occurred
     /// - `None`: Stream ended (peer closed connection)
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```ignore
     /// while let Some(result) = connection.receive_command().await {
     ///     match result {
@@ -173,7 +173,7 @@ impl Connection {
     ///
     /// Encodes the command into the internal buffer, then flushes to the network.
     /// This method takes ownership of the command for optimization.
-    /// 
+    ///
     /// # Arguments
     ///
     /// * `command` - The command to send (consumed)
@@ -182,16 +182,16 @@ impl Connection {
     ///
     /// - `Ok(())`: Command successfully sent
     /// - `Err(e)`: Network I/O error occurred
-    /// 
+    ///
     /// # Lifecycle
-    /// 
+    ///
     /// 1. Encode command header + body into reusable buffer
     /// 2. Use zero-copy `split_to()` to extract buffer contents as `Bytes`
     /// 3. Send extracted bytes via outbound sink
     /// 4. Buffer is now empty and ready for next command (no clear() needed)
-    /// 
+    ///
     /// # Performance Optimization
-    /// 
+    ///
     /// - Uses `split_to(len)` instead of `split()` for better performance
     /// - `split_to()` returns all data and leaves buffer empty, eliminating need for clear()
     /// - `freeze()` converts BytesMut to Bytes with zero-copy (just refcount increment)
@@ -204,12 +204,12 @@ impl Connection {
         if let Some(body_inner) = command.take_body() {
             self.encode_buffer.put(body_inner);
         }
-        
+
         // Zero-copy extraction: split_to(len) returns all data, leaves buffer empty
         // This is more efficient than split() + clear() pattern
         let len = self.encode_buffer.len();
         let bytes = self.encode_buffer.split_to(len).freeze();
-        
+
         self.outbound_sink.send(bytes).await?;
         Ok(())
     }
@@ -218,7 +218,7 @@ impl Connection {
     ///
     /// Similar to `send_command`, but borrows the command mutably instead of
     /// consuming it. Use when the caller needs to retain ownership.
-    /// 
+    ///
     /// # Arguments
     ///
     /// * `command` - Mutable reference to the command to send
@@ -227,9 +227,9 @@ impl Connection {
     ///
     /// - `Ok(())`: Command successfully sent
     /// - `Err(e)`: Network I/O error occurred
-    /// 
+    ///
     /// # Note
-    /// 
+    ///
     /// This method may consume the command's body (`take_body()`), modifying
     /// the original command.
     pub async fn send_command_ref(
@@ -241,11 +241,11 @@ impl Connection {
         if let Some(body_inner) = command.take_body() {
             self.encode_buffer.put(body_inner);
         }
-        
+
         // Zero-copy extraction using split_to() pattern
         let len = self.encode_buffer.len();
         let bytes = self.encode_buffer.split_to(len).freeze();
-        
+
         self.outbound_sink.send(bytes).await?;
         Ok(())
     }
@@ -254,7 +254,7 @@ impl Connection {
     ///
     /// Bypasses command encoding and sends pre-serialized bytes directly.
     /// Use for forwarding or when bytes are already encoded.
-    /// 
+    ///
     /// # Arguments
     ///
     /// * `bytes` - The bytes to send (reference-counted, zero-copy)
@@ -263,9 +263,9 @@ impl Connection {
     ///
     /// - `Ok(())`: Bytes successfully sent
     /// - `Err(e)`: Network I/O error occurred
-    /// 
+    ///
     /// # Performance
-    /// 
+    ///
     /// This is the most efficient send method as it avoids intermediate buffering
     /// and serialization overhead.
     pub async fn send_bytes(&mut self, bytes: Bytes) -> rocketmq_error::RocketMQResult<()> {
@@ -277,7 +277,7 @@ impl Connection {
     ///
     /// Converts a `&'static [u8]` to `Bytes` and sends. Use for compile-time
     /// known data (e.g., protocol constants).
-    /// 
+    ///
     /// # Arguments
     ///
     /// * `slice` - Static byte slice with `'static` lifetime
@@ -286,9 +286,9 @@ impl Connection {
     ///
     /// - `Ok(())`: Slice successfully sent
     /// - `Err(e)`: Network I/O error occurred
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```ignore
     /// const PING: &[u8] = b"PING\r\n";
     /// connection.send_slice(PING).await?;
@@ -300,9 +300,9 @@ impl Connection {
     }
 
     /// Gets the unique identifier for this connection.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// Reference to the connection ID (UUID-based string)
     #[inline]
     pub fn connection_id(&self) -> &ConnectionId {
@@ -310,25 +310,25 @@ impl Connection {
     }
 
     /// Checks if the connection is in a healthy state.
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// - `true`: Connection is operational
     /// - `false`: Connection has encountered an error and should be closed
-    /// 
+    ///
     /// # Note
-    /// 
+    ///
     /// This flag is set to `false` when an I/O error occurs. The connection
     /// should be discarded and a new one established.
     #[inline]
     pub fn is_healthy(&self) -> bool {
         self.ok
     }
-    
+
     /// Legacy alias for `is_healthy()` - kept for backward compatibility.
-    /// 
+    ///
     /// # Deprecated
-    /// 
+    ///
     /// Use `is_healthy()` instead for clearer semantics.
     #[inline]
     #[deprecated(since = "0.1.0", note = "Use `is_healthy()` instead")]
