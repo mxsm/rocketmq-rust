@@ -15,8 +15,10 @@
  * limitations under the License.
  */
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+use std::time::Instant;
 
 /// Performance metrics for mapped file operations.
 ///
@@ -316,12 +318,9 @@ impl MappedFileMetrics {
     /// A multi-line string with human-readable metrics
     pub fn summary(&self) -> String {
         format!(
-            "MappedFile Metrics:\n\
-             Writes: {} ({:.2} writes/sec, {:.2} MB/s)\n\
-             Reads: {} ({:.1}% zero-copy)\n\
-             Flushes: {} (avg: {:?})\n\
-             Cache Hit Rate: {:.1}%\n\
-             Avg Write Size: {:.1} bytes",
+            "MappedFile Metrics:\nWrites: {} ({:.2} writes/sec, {:.2} MB/s)\nReads: {} ({:.1}% \
+             zero-copy)\nFlushes: {} (avg: {:?})\nCache Hit Rate: {:.1}%\nAvg Write Size: {:.1} \
+             bytes",
             self.total_writes(),
             self.writes_per_sec(),
             self.write_throughput_mb_per_sec(),

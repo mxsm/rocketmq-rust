@@ -19,7 +19,12 @@ use std::fs::OpenOptions;
 use std::io::Write as IoWrite;
 use std::sync::Arc;
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::black_box;
+use criterion::criterion_group;
+use criterion::criterion_main;
+use criterion::BenchmarkId;
+use criterion::Criterion;
+use criterion::Throughput;
 use memmap2::MmapMut;
 use parking_lot::RwLock;
 use rocketmq_store::log_file::mapped_file::MappedBuffer;
@@ -126,34 +131,26 @@ fn bench_read(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(*size as u64));
 
         // Copy read
-        group.bench_with_input(
-            BenchmarkId::new("copy", size),
-            size,
-            |b, &size| {
-                let (_file, mmap) = create_test_mmap(1024 * 1024);
-                let buffer = MappedBuffer::new(mmap, 0, 1024 * 1024).unwrap();
+        group.bench_with_input(BenchmarkId::new("copy", size), size, |b, &size| {
+            let (_file, mmap) = create_test_mmap(1024 * 1024);
+            let buffer = MappedBuffer::new(mmap, 0, 1024 * 1024).unwrap();
 
-                b.iter(|| {
-                    let data = buffer.read(0..size).unwrap();
-                    black_box(data);
-                });
-            },
-        );
+            b.iter(|| {
+                let data = buffer.read(0..size).unwrap();
+                black_box(data);
+            });
+        });
 
         // Zero-copy read
-        group.bench_with_input(
-            BenchmarkId::new("zero_copy", size),
-            size,
-            |b, &size| {
-                let (_file, mmap) = create_test_mmap(1024 * 1024);
-                let buffer = MappedBuffer::new(mmap, 0, 1024 * 1024).unwrap();
+        group.bench_with_input(BenchmarkId::new("zero_copy", size), size, |b, &size| {
+            let (_file, mmap) = create_test_mmap(1024 * 1024);
+            let buffer = MappedBuffer::new(mmap, 0, 1024 * 1024).unwrap();
 
-                b.iter(|| {
-                    let data = buffer.read_zero_copy(0..size).unwrap();
-                    black_box(data);
-                });
-            },
-        );
+            b.iter(|| {
+                let data = buffer.read_zero_copy(0..size).unwrap();
+                black_box(data);
+            });
+        });
     }
 
     group.finish();
@@ -209,8 +206,7 @@ fn bench_concurrent(c: &mut Criterion) {
                     let mmap_clone = Arc::clone(&mmap);
                     std::thread::spawn(move || {
                         let offset = i * 1024 * 1024;
-                        let buffer =
-                            MappedBuffer::new(mmap_clone, offset, 1024 * 1024).unwrap();
+                        let buffer = MappedBuffer::new(mmap_clone, offset, 1024 * 1024).unwrap();
                         let data = vec![i as u8; 1024];
 
                         for j in 0..1024 {

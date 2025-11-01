@@ -168,10 +168,7 @@ impl FlushStrategy {
     /// ```
     #[inline]
     pub fn periodic(duration: Duration) -> Self {
-        assert!(
-            !duration.is_zero(),
-            "duration must be greater than zero"
-        );
+        assert!(!duration.is_zero(), "duration must be greater than zero");
         Self::Periodic(duration)
     }
 
@@ -197,10 +194,7 @@ impl FlushStrategy {
     #[inline]
     pub fn hybrid(pages: usize, duration: Duration) -> Self {
         assert!(pages > 0, "pages must be greater than 0");
-        assert!(
-            !duration.is_zero(),
-            "duration must be greater than zero"
-        );
+        assert!(!duration.is_zero(), "duration must be greater than zero");
         Self::Hybrid { pages, duration }
     }
 

@@ -18,7 +18,9 @@
 use std::path::Path;
 
 use super::default_mapped_file_impl::DefaultMappedFile;
-use super::{FlushStrategy, MappedFileError, MappedFileResult};
+use super::FlushStrategy;
+use super::MappedFileError;
+use super::MappedFileResult;
 
 /// Builder for configuring and creating mapped file instances.
 ///
@@ -397,10 +399,7 @@ mod tests {
             .flush_strategy(FlushStrategy::Sync);
 
         assert_eq!(builder.get_file_size(), Some(1024 * 1024));
-        assert!(matches!(
-            builder.get_flush_strategy(),
-            FlushStrategy::Sync
-        ));
+        assert!(matches!(builder.get_flush_strategy(), FlushStrategy::Sync));
     }
 
     #[test]

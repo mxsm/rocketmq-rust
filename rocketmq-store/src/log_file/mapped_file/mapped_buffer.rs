@@ -22,7 +22,8 @@ use bytes::Bytes;
 use memmap2::MmapMut;
 use parking_lot::RwLock;
 
-use super::{MappedFileError, MappedFileResult};
+use super::MappedFileError;
+use super::MappedFileResult;
 
 /// Safe abstraction over a memory-mapped file region.
 ///
@@ -91,11 +92,7 @@ impl MappedBuffer {
         drop(mmap_guard);
 
         if offset.checked_add(len).is_none_or(|end| end > mmap_len) {
-            return Err(MappedFileError::out_of_bounds(
-                offset,
-                len,
-                mmap_len as u64,
-            ));
+            return Err(MappedFileError::out_of_bounds(offset, len, mmap_len as u64));
         }
 
         Ok(Self { mmap, offset, len })
@@ -228,28 +225,24 @@ impl MappedBuffer {
         // - Small reads (< 8KB): Stay in L1/L2 cache, simple copy is fastest
         // - Medium reads (8-64KB): Benefit from aligned vectorized access
         // - Large reads (> 64KB): Already optimized by memcpy
-        
+
         let slice = &mmap[start..end];
-        
+
         // For medium-sized reads, ensure proper alignment to avoid cache line splits
         // Check if the start address is aligned to 64-byte (typical cache line)
         let is_aligned = (slice.as_ptr() as usize) % 64 == 0;
-        
+
         if (8192..=65536).contains(&size) && is_aligned {
             // Medium to large aligned reads: Use optimized copy with hint
             // This avoids Bytes overhead while maintaining good performance
             let mut vec = vec![0u8; size];
-            
+
             // SAFETY: vec is fully initialized with zeros, safe to copy into
             unsafe {
                 // Use ptr::copy_nonoverlapping for aligned, non-temporal access
-                std::ptr::copy_nonoverlapping(
-                    slice.as_ptr(),
-                    vec.as_mut_ptr(),
-                    size,
-                );
+                std::ptr::copy_nonoverlapping(slice.as_ptr(), vec.as_mut_ptr(), size);
             }
-            
+
             Ok(Bytes::from(vec))
         } else {
             // Small or unaligned reads: Standard copy
@@ -388,9 +381,11 @@ impl MappedBuffer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Write as IoWrite;
+
     use tempfile::NamedTempFile;
+
+    use super::*;
 
     fn create_test_mmap(size: usize) -> Arc<RwLock<MmapMut>> {
         let mut file = NamedTempFile::new().unwrap();

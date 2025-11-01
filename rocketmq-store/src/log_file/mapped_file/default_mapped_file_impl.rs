@@ -27,24 +27,25 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use memmap2::MmapMut;
+use parking_lot::RwLock;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::UtilAll::ensure_dir_ok;
-use std::sync::Arc;
-
-use parking_lot::RwLock;
 use rocketmq_rust::ArcMut;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use super::FlushStrategy;
+use super::MappedFileMetrics;
 use crate::base::append_message_callback::AppendMessageCallback;
 use crate::base::compaction_append_msg_callback::CompactionAppendMsgCallback;
 use crate::base::message_result::AppendMessageResult;
@@ -56,7 +57,6 @@ use crate::config::flush_disk_type::FlushDiskType;
 use crate::log_file::mapped_file::reference_resource::ReferenceResource;
 use crate::log_file::mapped_file::reference_resource_counter::ReferenceResourceCounter;
 use crate::log_file::mapped_file::MappedFile;
-use super::{FlushStrategy, MappedFileMetrics};
 
 pub const OS_PAGE_SIZE: u64 = 1024 * 4;
 
@@ -331,11 +331,11 @@ impl MappedFile for DefaultMappedFile {
             .fetch_add(result.wrote_bytes, Ordering::AcqRel);
         self.store_timestamp
             .store(result.store_timestamp as u64, Ordering::Release);
-        
+
         if let Some(metrics) = &self.metrics {
             metrics.record_write(result.wrote_bytes as usize);
         }
-        
+
         result
     }
 
@@ -505,36 +505,37 @@ impl MappedFile for DefaultMappedFile {
                         FlushStrategy::Hybrid { .. } => true,
                         FlushStrategy::Never => false,
                     };
-                    
+
                     if should_flush {
                         let flush_start = std::time::Instant::now();
-                        
+
                         let flushed_pos = self.flushed_position.load(Ordering::Acquire);
                         let flush_size = value - flushed_pos;
-                        
-                        let flush_result = if flush_size > 0 && flush_size < (self.file_size as i32) / 2 {
-                            self.flush_range(flushed_pos as usize, value as usize)
-                        } else {
-                            // Full flush for large updates
-                            if let Err(e) = self.mmapped_file.flush() {
-                                error!("Error occurred when force data to disk: {:?}", e);
-                                0
+
+                        let flush_result =
+                            if flush_size > 0 && flush_size < (self.file_size as i32) / 2 {
+                                self.flush_range(flushed_pos as usize, value as usize)
                             } else {
-                                value - flushed_pos
-                            }
-                        };
-                        
+                                // Full flush for large updates
+                                if let Err(e) = self.mmapped_file.flush() {
+                                    error!("Error occurred when force data to disk: {:?}", e);
+                                    0
+                                } else {
+                                    value - flushed_pos
+                                }
+                            };
+
                         if flush_result > 0 {
                             self.last_flush_time
                                 .store(get_current_millis(), Ordering::Relaxed);
-                            
+
                             if let Some(metrics) = &self.metrics {
                                 let flush_duration = flush_start.elapsed();
                                 metrics.record_flush(flush_duration);
                             }
                         }
                     }
-                    
+
                     MappedFile::release(self);
                 } else {
                     unimplemented!(
@@ -569,7 +570,7 @@ impl MappedFile for DefaultMappedFile {
             if MappedFile::hold(self) {
                 self.mapped_byte_buffer_access_count_since_last_swap
                     .fetch_add(1, Ordering::AcqRel);
-                
+
                 let bytes = if size >= 8192 {
                     // Try zero-copy read first
                     self.get_bytes_zero_copy(pos as usize, size as usize)
@@ -589,7 +590,7 @@ impl MappedFile for DefaultMappedFile {
                         size as usize,
                     ))
                 };
-                
+
                 Some(SelectMappedBufferResult {
                     start_offset: self.file_from_offset + pos as u64,
                     size,
@@ -618,11 +619,11 @@ impl MappedFile for DefaultMappedFile {
     fn get_mapped_byte_buffer(&self) -> &[u8] {
         self.mapped_byte_buffer_access_count_since_last_swap
             .fetch_add(1, Ordering::AcqRel);
-        
+
         if let Some(metrics) = &self.metrics {
             metrics.record_read(self.file_size as usize, false);
         }
-        
+
         self.mmapped_file.as_ref()
     }
 
@@ -630,11 +631,11 @@ impl MappedFile for DefaultMappedFile {
     fn slice_byte_buffer(&self) -> &[u8] {
         self.mapped_byte_buffer_access_count_since_last_swap
             .fetch_add(1, Ordering::AcqRel);
-        
+
         if let Some(metrics) = &self.metrics {
             metrics.record_read(self.file_size as usize, false);
         }
-        
+
         self.mmapped_file.as_ref()
     }
 
@@ -918,7 +919,7 @@ impl MappedFile for DefaultMappedFile {
             self.mapped_byte_buffer_access_count_since_last_swap
                 .fetch_add(1, Ordering::AcqRel);
             let size = read_position - pos;
-            
+
             let bytes = if size >= 8192 {
                 self.get_bytes_zero_copy(pos as usize, size as usize)
                     .unwrap_or_else(|| {
@@ -935,7 +936,7 @@ impl MappedFile for DefaultMappedFile {
                     size as usize,
                 ))
             };
-            
+
             Some(SelectMappedBufferResult {
                 start_offset: self.get_file_from_offset() + pos as u64,
                 size,
@@ -961,11 +962,11 @@ impl MappedFile for DefaultMappedFile {
         if pos >= self.file_size as usize || pos + size >= self.file_size as usize {
             return None;
         }
-        
+
         if let Some(metrics) = &self.metrics {
             metrics.record_read(size, false);
         }
-        
+
         Some(&self.get_mapped_file()[pos..pos + size])
     }
 }
@@ -1157,25 +1158,21 @@ impl DefaultMappedFile {
 
         let mmap = self.mmapped_file.deref();
         let slice = &mmap[pos..pos + size];
-        
+
         // Performance optimization: Use aligned access for medium-sized reads
         // This fixes the 16KB performance regression
         let is_aligned = (slice.as_ptr() as usize) % 64 == 0;
-        
+
         if (8192..=65536).contains(&size) && is_aligned {
             // Medium-sized aligned reads: Use optimized vectorized copy
             let mut vec = vec![0u8; size];
-            
+
             // SAFETY: vec is fully initialized with zeros, safe to copy into
             unsafe {
                 // Use fast non-temporal copy for aligned data
-                std::ptr::copy_nonoverlapping(
-                    slice.as_ptr(),
-                    vec.as_mut_ptr(),
-                    size,
-                );
+                std::ptr::copy_nonoverlapping(slice.as_ptr(), vec.as_mut_ptr(), size);
             }
-            
+
             Some(Bytes::from(vec))
         } else {
             // Small or unaligned reads: Standard copy
@@ -1220,7 +1217,7 @@ impl DefaultMappedFile {
 
         for message in messages.iter_mut() {
             let current_pos = self.wrote_position.load(Ordering::Acquire) as u64;
-            
+
             if current_pos >= self.file_size {
                 results.push(AppendMessageResult {
                     status: AppendMessageStatus::UnknownError,
@@ -1336,15 +1333,16 @@ impl DefaultMappedFile {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     fn create_test_file() -> (TempDir, DefaultMappedFile) {
         let temp_dir = TempDir::new().unwrap();
         // Use numeric filename format expected by DefaultMappedFile
         let file_path = temp_dir.path().join("00000000000000000000");
         let file_name = CheetahString::from(file_path.to_str().unwrap());
-        
+
         let mapped_file = DefaultMappedFile::new(file_name, 4096);
         (temp_dir, mapped_file)
     }
@@ -1352,14 +1350,14 @@ mod tests {
     #[test]
     fn test_metrics_enabled_by_default() {
         let (_temp_dir, mapped_file) = create_test_file();
-        
+
         assert!(mapped_file.get_metrics().is_some());
     }
 
     #[test]
     fn test_default_flush_strategy() {
         let (_temp_dir, mapped_file) = create_test_file();
-        
+
         let strategy = mapped_file.get_flush_strategy();
         assert!(matches!(strategy, FlushStrategy::Async));
     }
@@ -1367,15 +1365,18 @@ mod tests {
     #[test]
     fn test_set_flush_strategy() {
         let (_temp_dir, mut mapped_file) = create_test_file();
-        
+
         mapped_file.set_flush_strategy(FlushStrategy::Sync);
-        assert!(matches!(mapped_file.get_flush_strategy(), FlushStrategy::Sync));
+        assert!(matches!(
+            mapped_file.get_flush_strategy(),
+            FlushStrategy::Sync
+        ));
     }
 
     #[test]
     fn test_metrics_summary() {
         let (_temp_dir, mapped_file) = create_test_file();
-        
+
         let summary = mapped_file.metrics_summary();
         assert!(!summary.is_empty());
         assert!(summary.contains("MappedFile Metrics"));
@@ -1384,10 +1385,10 @@ mod tests {
     #[test]
     fn test_get_bytes_zero_copy() {
         let (_temp_dir, mapped_file) = create_test_file();
-        
+
         let data = mapped_file.get_bytes_zero_copy(0, 100);
         assert!(data.is_some());
-        
+
         let data = data.unwrap();
         assert_eq!(data.len(), 100);
     }
@@ -1395,7 +1396,7 @@ mod tests {
     #[test]
     fn test_get_bytes_zero_copy_out_of_bounds() {
         let (_temp_dir, mapped_file) = create_test_file();
-        
+
         let data = mapped_file.get_bytes_zero_copy(0, 10000);
         assert!(data.is_none());
     }
@@ -1403,7 +1404,7 @@ mod tests {
     #[test]
     fn test_flush_range() {
         let (_temp_dir, mapped_file) = create_test_file();
-        
+
         let flushed = mapped_file.flush_range(0, 1024);
         assert!(flushed >= 0);
     }
@@ -1411,10 +1412,10 @@ mod tests {
     #[test]
     fn test_flush_range_invalid() {
         let (_temp_dir, mapped_file) = create_test_file();
-        
+
         let flushed = mapped_file.flush_range(0, 10000);
         assert_eq!(flushed, 0);
-        
+
         let flushed = mapped_file.flush_range(100, 50);
         assert_eq!(flushed, 0);
     }
@@ -1422,16 +1423,16 @@ mod tests {
     #[test]
     fn test_metrics_record_reads() {
         let (_temp_dir, mapped_file) = create_test_file();
-        
+
         // Perform some zero-copy reads
         mapped_file.get_bytes_zero_copy(0, 100);
         mapped_file.get_bytes_zero_copy(100, 200);
-        
+
         // Check metrics
         let metrics = mapped_file.get_metrics().unwrap();
         assert_eq!(metrics.total_reads(), 2);
         assert_eq!(metrics.total_bytes_read(), 300);
-        
+
         // Both reads should be zero-copy
         assert_eq!(metrics.zero_copy_read_percentage(), 100.0);
     }
@@ -1439,15 +1440,15 @@ mod tests {
     #[test]
     fn test_metrics_record_flushes() {
         let (_temp_dir, mapped_file) = create_test_file();
-        
+
         // Perform some flushes
         mapped_file.flush_range(0, 512);
         mapped_file.flush_range(512, 1024);
-        
+
         // Check metrics
         let metrics = mapped_file.get_metrics().unwrap();
         assert_eq!(metrics.total_flushes(), 2);
-        
+
         // Average flush duration should be calculated
         let avg_duration = metrics.avg_flush_duration();
         assert!(avg_duration.as_micros() > 0);
@@ -1456,14 +1457,14 @@ mod tests {
     #[test]
     fn test_metrics_summary_content() {
         let (_temp_dir, mapped_file) = create_test_file();
-        
+
         // Perform some operations
         mapped_file.get_bytes_zero_copy(0, 1024);
         mapped_file.flush_range(0, 1024);
-        
+
         // Get summary
         let summary = mapped_file.metrics_summary();
-        
+
         // Summary should contain key metrics
         assert!(summary.contains("Reads:"));
         assert!(summary.contains("Flushes:"));

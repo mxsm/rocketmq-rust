@@ -45,7 +45,8 @@ mod metrics;
 pub use builder::MappedFileBuilder;
 pub use flush_strategy::FlushStrategy;
 pub use mapped_buffer::MappedBuffer;
-pub use mapped_file_error::{MappedFileError, MappedFileResult};
+pub use mapped_file_error::MappedFileError;
+pub use mapped_file_error::MappedFileResult;
 pub use metrics::MappedFileMetrics;
 
 pub trait MappedFile {
