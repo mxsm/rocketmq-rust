@@ -125,8 +125,8 @@ where
             let frame = tokio::select! {
                 res = channel.connection_mut().receive_command() => res,
                 _ = self.shutdown.recv() =>{
-                    //If a shutdown signal is received, return from `handle`.
-                    channel.connection_mut().ok = false;
+                    //If a shutdown signal is received, mark connection as closed
+                    channel.connection_mut().close();
                     return Ok(());
                 }
             };
@@ -134,6 +134,7 @@ where
                 Some(frame) => frame?,
                 None => {
                     //If the frame is None, it means the connection is closed.
+                    //Connection state is automatically managed by I/O operations
                     return Ok(());
                 }
             };
@@ -167,8 +168,8 @@ where
             Ok(_) => Ok(()),
             Err(error) => match error {
                 Io(value) => {
+                    // Connection state is automatically marked as degraded by send_command()
                     self.cmd_handler.response_table.remove(&opaque);
-                    self.ctx.connection_mut().ok = false;
                     Err(ConnectionInvalid(value.to_string()))
                 }
                 _ => {
@@ -391,14 +392,14 @@ where
     async fn read(&mut self) -> RocketMQResult<RemotingCommand> {
         /*match self.inner.channel.0.connection.receive_command().await {
             None => {
-                self.inner.channel.0.connection.ok = false;
+                // Connection state is automatically managed by receive_command()
                 Err(ConnectionInvalid("connection disconnection".to_string()))
             }
             Some(result) => match result {
                 Ok(response) => Ok(response),
                 Err(error) => match error {
                     Io(value) => {
-                        self.inner.channel.0.connection.ok = false;
+                        // Connection state is automatically marked degraded by I/O operations
                         Err(ConnectionInvalid(value.to_string()))
                     }
                     _ => Err(error),
