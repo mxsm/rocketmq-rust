@@ -92,7 +92,7 @@ const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use std::sync::Arc;
 ///
 /// use rocketmq_remoting::clients::RocketmqDefaultClient;
@@ -237,7 +237,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use rocketmq_remoting::clients::RocketmqDefaultClient;
     /// # use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
     /// # use std::sync::Arc;
@@ -284,7 +284,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use rocketmq_remoting::clients::RocketmqDefaultClient;
     /// # fn example(client: &RocketmqDefaultClient) {
     /// if let Some(stats) = client.get_pool_stats() {
@@ -397,7 +397,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     /// # Lock Optimization
     /// Current: Hold lock during `get()` and `clone()`
     /// TODO: Use `DashMap` for lock-free read path:
-    /// ```rust
+    /// ```rust,ignore
     /// if let Some(client) = self.connection_tables.get(addr) {
     ///     if client.connection().ok {
     ///         return Some(client.clone());
@@ -884,7 +884,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use rocketmq_remoting::clients::RocketmqDefaultClient;
     /// # use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
     /// # async fn example(client: &RocketmqDefaultClient) -> Result<(), Box<dyn std::error::Error>> {

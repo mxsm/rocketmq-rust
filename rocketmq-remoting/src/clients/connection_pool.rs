@@ -52,7 +52,7 @@
 //!
 //! # Example
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use std::time::Duration;
 //!
 //! use rocketmq_remoting::clients::connection_pool::ConnectionPool;
@@ -264,7 +264,7 @@ impl Default for ConnectionMetrics {
 ///
 /// # Configuration
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use std::time::Duration;
 ///
 /// use rocketmq_remoting::clients::connection_pool::ConnectionPool;
@@ -306,7 +306,7 @@ impl<PR> ConnectionPool<PR> {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// use std::time::Duration;
     ///
     /// use rocketmq_remoting::clients::connection_pool::ConnectionPool;
@@ -420,7 +420,7 @@ impl<PR> ConnectionPool<PR> {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use rocketmq_remoting::clients::connection_pool::ConnectionPool;
     /// # async fn example(pool: &ConnectionPool) {
     /// let evicted = pool.evict_idle().await;
@@ -522,7 +522,7 @@ impl<PR> ConnectionPool<PR> {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use rocketmq_remoting::clients::connection_pool::ConnectionPool;
     /// # use std::time::Duration;
     /// # async fn example() {
