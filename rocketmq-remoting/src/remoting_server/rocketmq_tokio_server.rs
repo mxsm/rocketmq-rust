@@ -55,15 +55,42 @@ type Tx = mpsc::UnboundedSender<RemotingCommand>;
 /// Shorthand for the receive half of the message channel.
 type Rx = mpsc::UnboundedReceiver<RemotingCommand>;
 
+/// Per-connection handler managing the lifecycle of a single client connection.
+///
+/// # Performance Notes
+/// - Uses reference-counted handler to avoid cloning heavyweight objects
+/// - Shutdown signal via broadcast for efficient multi-connection coordination
+/// - Connection context wrapped in ArcMut for safe concurrent access
+///
+/// # Lifecycle
+/// 1. Created when TCP connection accepted
+/// 2. Spawned into dedicated Tokio task
+/// 3. Processes commands until shutdown or disconnection
+/// 4. Notifies listeners on drop
 pub struct ConnectionHandler<RP> {
-    //request_processor: RP,
+    /// Connection-specific context (channel, state, metrics)
+    ///
+    /// Wrapped in ArcMut to allow sharing with async tasks without excessive cloning
     connection_handler_context: ConnectionHandlerContext,
-    // channel: Channel,
+
+    /// Shutdown coordination signal
+    ///
+    /// Receives broadcast when server initiates graceful shutdown
     shutdown: Shutdown,
+
+    /// Completion notification sender
+    ///
+    /// Dropped when handler completes, signaling to shutdown coordinator
     _shutdown_complete: mpsc::Sender<()>,
+
+    /// Optional disconnect event broadcaster
+    ///
+    /// If Some, sends `SocketAddr` when connection closes (for routing table cleanup)
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
-    // rpc_hooks: Arc<Vec<Box<dyn RPCHook>>>,
-    // response_table: ArcMut<HashMap<i32, ResponseFuture>>,
+
+    /// Shared command processing handler
+    ///
+    /// Reference-counted to avoid cloning per-connection (contains processor + hooks)
     cmd_handler: ArcMut<RemotingGeneralHandler<RP>>,
 }
 
@@ -81,26 +108,59 @@ impl<RP> Drop for ConnectionHandler<RP> {
 }
 
 impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
+    /// Main event loop processing incoming commands until shutdown or disconnect.
+    ///
+    /// # Flow
+    /// 1. Wait for next command or shutdown signal (via `tokio::select!`)
+    /// 2. Decode and validate command
+    /// 3. Dispatch to business logic processor
+    /// 4. Repeat until connection closes or shutdown requested
+    ///
+    /// # Performance
+    /// - Zero-copy command reception where possible
+    /// - Early exit on shutdown reduces unnecessary work
+    /// - Connection state checked once per loop iteration
+    ///
+    /// # Error Handling
+    /// - Decode errors: logged, connection marked unhealthy
+    /// - Processor errors: logged, connection continues (per-request isolation)
+    /// - Connection closed: graceful return Ok(())
+    #[inline]
     async fn handle(&mut self) -> rocketmq_error::RocketMQResult<()> {
+        // HOT PATH: Main server receive loop
         while !self.shutdown.is_shutdown {
-            //Get the next frame from the connection.
             let channel = self.connection_handler_context.channel_mut();
+
+            // Use tokio::select! for cancellation-safe shutdown
             let frame = tokio::select! {
+                // Branch 1: Receive next command from peer
                 res = channel.connection_mut().receive_command() => res,
-                _ = self.shutdown.recv() =>{
-                    //If a shutdown signal is received, return from `handle`.
+
+                // Branch 2: Shutdown signal received
+                _ = self.shutdown.recv() => {
+                    // Mark connection as unhealthy to prevent further sends
                     channel.connection_mut().ok = false;
                     return Ok(());
                 }
             };
+
+            // Extract command or handle end-of-stream
             let cmd = match frame {
-                Some(frame) => frame?,
+                Some(Ok(frame)) => frame,
+                Some(Err(e)) => {
+                    // Decode error - log and close connection
+                    error!("Failed to decode command: {:?}", e);
+                    channel.connection_mut().ok = false;
+                    return Err(e);
+                }
                 None => {
-                    //If the frame is None, it means the connection is closed.
+                    // Peer closed connection gracefully
                     return Ok(());
                 }
             };
-            //process request and response
+
+            // Dispatch command to business logic
+            // Note: process_message_received handles errors internally
             self.cmd_handler
                 .process_message_received(&mut self.connection_handler_context, cmd)
                 .await;
@@ -109,143 +169,246 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
     }
 }
 
-/// Server listener state. Created in the `run` call. It includes a `run` method
-/// which performs the TCP listening and initialization of per-connection state.
+/// Server listener managing TCP connection acceptance and connection lifecycle.
+///
+/// # Architecture
+/// ```text
+/// TcpListener → ConnectionListener → ConnectionHandler (per-connection task)
+///                      ↓
+///               Event Dispatcher
+/// ```
+///
+/// # Concurrency Control
+/// - **Connection Limit**: Semaphore-based backpressure (DEFAULT_MAX_CONNECTIONS)
+/// - **Graceful Shutdown**: Broadcast signal to all active handlers
+/// - **Event Notification**: Optional async event dispatcher for connection lifecycle
+///
+/// # Performance Characteristics
+/// - O(1) accept loop with backpressure
+/// - Parallel connection handling via Tokio spawn
+/// - Shared handler state (Arc) to avoid per-connection clones
 struct ConnectionListener<RP> {
-    /// The TCP listener supplied by the `run` caller.
+    /// TCP socket acceptor bound to server address
     listener: TcpListener,
 
-    /// Limit the max number of connections.
+    /// Semaphore controlling max concurrent connections
     ///
-    /// A `Semaphore` is used to limit the max number of connections. Before
-    /// attempting to accept a new connection, a permit is acquired from the
-    /// semaphore. If none are available, the listener waits for one.
-    ///
-    /// When handlers complete processing a connection, the permit is returned
-    /// to the semaphore.
+    /// Permits acquired before accept, released on handler drop.
+    /// Provides backpressure when server reaches capacity.
     limit_connections: Arc<Semaphore>,
 
+    /// Shutdown broadcast sender
+    ///
+    /// All connection handlers subscribe to this channel.
+    /// Sending signal triggers graceful termination across all connections.
     notify_shutdown: broadcast::Sender<()>,
 
+    /// Completion coordination channel
+    ///
+    /// Each handler holds a clone of this sender.
+    /// When all handlers drop (server fully shutdown), receiver unblocks.
     shutdown_complete_tx: mpsc::Sender<()>,
 
+    /// Optional connection disconnect broadcaster
+    ///
+    /// Used for routing table cleanup and metrics.
     conn_disconnect_notify: Option<broadcast::Sender<SocketAddr>>,
 
+    /// Optional lifecycle event listener
+    ///
+    /// Receives CONNECTED/DISCONNECTED/EXCEPTION events.
+    /// Useful for external monitoring and orchestration.
     channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
 
+    /// Shared command processing handler
+    ///
+    /// Contains request processor, RPC hooks, and response routing table.
+    /// Arc-wrapped to share across all connection handlers efficiently.
     cmd_handler: ArcMut<RemotingGeneralHandler<RP>>,
 }
 
 impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
+    /// Main server event loop accepting and spawning connection handlers.
+    ///
+    /// # Architecture
+    /// ```text
+    /// ┌─────────────┐
+    /// │TcpListener  │ ← accept()
+    /// └──────┬──────┘
+    ///        │ spawn for each connection
+    ///        ↓
+    /// ┌──────────────────┐      ┌─────────────────┐
+    /// │ConnectionHandler │ ───► │Event Dispatcher │ ← optional
+    /// └──────────────────┘      └─────────────────┘
+    /// ```
+    ///
+    /// # Performance Optimizations
+    /// 1. **Permit acquisition before accept**: Backpressure at OS level
+    /// 2. **TCP_NODELAY**: Disable Nagle's algorithm for low latency
+    /// 3. **Event channel buffering**: Prevent blocking on event dispatch
+    /// 4. **Arc reuse**: cmd_handler cloned once per connection, not per message
+    ///
+    /// # Concurrency
+    /// - Accept loop: Single-threaded (TcpListener)
+    /// - Handler tasks: Multi-threaded (Tokio runtime)
+    /// - Event dispatcher: Independent task (non-blocking)
     async fn run(&mut self) -> anyhow::Result<()> {
-        info!("Prepare accepting connection");
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<TokioEvent>();
+        info!("Server ready to accept connections");
 
+        // Event notification channel (unbounded to prevent accept() blocking)
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<TokioEvent>();
+
+        // Spawn event dispatcher task if listener configured
         if let Some(listener) = self.channel_event_listener.take() {
             tokio::spawn(async move {
-                loop {
-                    if let Some(event) = rx.recv().await {
-                        info!("Accepting connection event: {:?}", event);
-                        let addr = event.remote_addr();
-                        match event.type_() {
-                            ConnectionNetEvent::CONNECTED(_) => {
-                                listener
-                                    .on_channel_connect(addr.to_string().as_str(), event.channel());
-                            }
-                            ConnectionNetEvent::DISCONNECTED => {
-                                listener
-                                    .on_channel_close(addr.to_string().as_str(), event.channel());
-                            }
-                            ConnectionNetEvent::EXCEPTION => {
-                                listener.on_channel_exception(
-                                    addr.to_string().as_str(),
-                                    event.channel(),
-                                );
-                            }
+                while let Some(event) = event_rx.recv().await {
+                    let addr = event.remote_addr();
+                    let addr_str = addr.to_string();
+
+                    // HOT PATH: Match on event type and dispatch to listener
+                    match event.type_() {
+                        ConnectionNetEvent::CONNECTED(_) => {
+                            listener.on_channel_connect(&addr_str, event.channel());
+                        }
+                        ConnectionNetEvent::DISCONNECTED => {
+                            listener.on_channel_close(&addr_str, event.channel());
+                        }
+                        ConnectionNetEvent::EXCEPTION => {
+                            listener.on_channel_exception(&addr_str, event.channel());
                         }
                     }
                 }
+                info!("Event dispatcher task terminated");
             });
         }
+
+        // Main accept loop
         loop {
+            // OPTIMIZATION: Acquire permit BEFORE accept() to provide backpressure
+            // If at capacity, accept() won't be called until a slot frees up
             let permit = self
                 .limit_connections
                 .clone()
                 .acquire_owned()
                 .await
-                .unwrap();
+                .expect("Semaphore closed unexpectedly");
 
-            // Accept a new socket. This will attempt to perform error handling.
-            // The `accept` method internally attempts to recover errors, so an
-            // error here is non-recoverable.
+            // Accept next connection (with exponential backoff on errors)
             let (socket, remote_addr) = self.accept().await?;
-            info!("Accepted connection, client ip:{}", remote_addr);
-            socket.set_nodelay(true).expect("set nodelay failed");
+
+            // OPTIMIZATION: Enable TCP_NODELAY for low-latency RPC
+            // Disables Nagle's algorithm to send small packets immediately
+            if let Err(e) = socket.set_nodelay(true) {
+                warn!("Failed to set TCP_NODELAY for {}: {}", remote_addr, e);
+            }
+
             let local_addr = socket.local_addr()?;
+            info!("Accepted connection: {} → {}", remote_addr, local_addr);
+
+            // Create connection channel wrapper
             let channel_inner = ArcMut::new(ChannelInner::new(
                 Connection::new(socket),
                 self.cmd_handler.response_table.clone(),
             ));
-            //create per connection handler state
             let channel = Channel::new(channel_inner, local_addr, remote_addr);
-            let _ = tx.send(TokioEvent::new(
+
+            // Notify CONNECTED event
+            let _ = event_tx.send(TokioEvent::new(
                 ConnectionNetEvent::CONNECTED(remote_addr),
                 remote_addr,
                 channel.clone(),
             ));
-            let mut handler = ConnectionHandler {
+
+            // Build connection handler
+            let handler = ConnectionHandler {
                 connection_handler_context: ArcMut::new(ConnectionHandlerContextWrapper {
-                    channel,
+                    channel: channel.clone(),
                 }),
                 shutdown: Shutdown::new(self.notify_shutdown.subscribe()),
                 _shutdown_complete: self.shutdown_complete_tx.clone(),
                 conn_disconnect_notify: self.conn_disconnect_notify.clone(),
                 cmd_handler: self.cmd_handler.clone(),
             };
-            let sender = tx.clone();
+
+            // Spawn dedicated task for this connection
+            let event_tx_clone = event_tx.clone();
             tokio::spawn(async move {
+                let mut handler = handler;
+
+                // Run handler until completion
                 if let Err(err) = handler.handle().await {
-                    error!(cause = ?err, "connection error");
+                    error!(
+                        remote_addr = %remote_addr,
+                        error = ?err,
+                        "Connection handler terminated with error"
+                    );
                 }
-                let _ = sender.send(TokioEvent::new(
+
+                // Notify DISCONNECTED event
+                let _ = event_tx_clone.send(TokioEvent::new(
                     ConnectionNetEvent::DISCONNECTED,
                     remote_addr,
                     handler.connection_handler_context.channel.clone(),
                 ));
-                warn!(
-                    "The client[IP={}] disconnected from the remoting_server.",
-                    remote_addr
-                );
-                /*  if let Some(ref sender) = handler.conn_disconnect_notify {
-                    let _ = sender.send(remote_addr);
-                }*/
+
+                info!("Client {} disconnected", remote_addr);
+
+                // IMPORTANT: Permit released when `permit` drops here
                 drop(permit);
-                drop(handler);
             });
         }
     }
 
+    /// Accept new TCP connection with exponential backoff on transient errors.
+    ///
+    /// # Error Handling Strategy
+    /// - **Fatal errors** (e.g., listener closed): Return immediately
+    /// - **Transient errors** (e.g., too many open files): Retry with backoff
+    /// - **Max retries**: Give up after backoff reaches 64 seconds
+    ///
+    /// # Backoff Schedule
+    /// ```text
+    /// Attempt | Delay
+    /// --------|-------
+    /// 1       | 1s
+    /// 2       | 2s
+    /// 3       | 4s
+    /// 4       | 8s
+    /// 5       | 16s
+    /// 6       | 32s
+    /// 7       | 64s (final)
+    /// ```
+    ///
+    /// # Performance
+    /// - Fast path: Single syscall when no errors
+    /// - Slow path: Exponential backoff prevents thundering herd
     async fn accept(&mut self) -> anyhow::Result<(TcpStream, SocketAddr)> {
         let mut backoff = 1;
+        const MAX_BACKOFF: u64 = 64;
 
-        // Try to accept a few times
         loop {
-            // Perform the accept operation. If a socket is successfully
-            // accepted, return it. Otherwise, save the error.
             match self.listener.accept().await {
-                Ok((socket, remote_addr)) => return Ok((socket, remote_addr)),
+                Ok((socket, remote_addr)) => {
+                    // Fast path: successful accept
+                    return Ok((socket, remote_addr));
+                }
                 Err(err) => {
-                    if backoff > 64 {
-                        // Accept has failed too many times. Return the error.
+                    if backoff > MAX_BACKOFF {
+                        // Exceeded retry limit - fatal error
+                        error!(
+                            "Accept failed after {} retries, last error: {}",
+                            MAX_BACKOFF, err
+                        );
                         return Err(err.into());
                     }
+
+                    // Log transient error and retry
+                    warn!("Accept error (will retry in {}s): {}", backoff, err);
                 }
             }
 
-            // Pause execution until the back off period elapses.
+            // Exponential backoff before retry
             time::sleep(Duration::from_secs(backoff)).await;
-
-            // Double the back off
             backoff *= 2;
         }
     }

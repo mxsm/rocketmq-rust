@@ -28,6 +28,9 @@ mod async_client;
 mod blocking_client;
 
 mod client;
+pub mod connection_pool;
+pub(crate) mod nameserver_selector;
+pub mod reconnect;
 pub mod rocketmq_tokio_client;
 
 /// `RemotingClient` trait extends `RemotingService` to provide client-specific remote interaction
