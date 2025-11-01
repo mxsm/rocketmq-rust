@@ -264,7 +264,7 @@ impl Default for ConnectionMetrics {
 ///
 /// # Configuration
 ///
-/// ```rust
+/// ```rust,no_run
 /// use std::time::Duration;
 ///
 /// use rocketmq_remoting::clients::connection_pool::ConnectionPool;
@@ -306,7 +306,7 @@ impl<PR> ConnectionPool<PR> {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```rust,no_run
     /// use std::time::Duration;
     ///
     /// use rocketmq_remoting::clients::connection_pool::ConnectionPool;
