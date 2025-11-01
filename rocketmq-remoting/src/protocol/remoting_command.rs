@@ -39,7 +39,6 @@ use serde::Serialize;
 use tracing::error;
 
 use super::RemotingCommandType;
-use super::RemotingSerializable;
 use super::SerializeType;
 use crate::code::request_code::RequestCode;
 use crate::code::response_code::RemotingSysResponseCode;
@@ -374,71 +373,70 @@ impl RemotingCommand {
         self.serialize_type
     }
 
+    /// Encode header with optimized path selection
+    #[inline]
     pub fn header_encode(&mut self) -> Option<Bytes> {
         self.make_custom_header_to_net();
-        if SerializeType::ROCKETMQ == self.serialize_type {
-            Some(RocketMQSerializable::rocket_mq_protocol_encode_bytes(self))
-        } else {
-            match self.encode() {
+        match self.serialize_type {
+            SerializeType::ROCKETMQ => {
+                Some(RocketMQSerializable::rocket_mq_protocol_encode_bytes(self))
+            }
+            SerializeType::JSON => match serde_json::to_vec(self) {
                 Ok(value) => Some(Bytes::from(value)),
                 Err(e) => {
-                    error!("Failed to encode generic: {}", e);
+                    error!("Failed to encode JSON header: {}", e);
                     None
                 }
-            }
+            },
         }
     }
 
+    /// Encode header with body length information
+    #[inline]
     pub fn encode_header(&mut self) -> Option<Bytes> {
-        if let Some(body) = &self.body {
-            let size = body.len();
-            self.encode_header_with_body_length(size)
-        } else {
-            self.encode_header_with_body_length(0)
-        }
+        let body_length = self.body.as_ref().map_or(0, |b| b.len());
+        self.encode_header_with_body_length(body_length)
     }
+
+    /// Optimized header encoding with pre-calculated capacity
+    #[inline]
     pub fn encode_header_with_body_length(&mut self, body_length: usize) -> Option<Bytes> {
-        //for zero copy
-        // 1> header length size
-        let mut length = 4;
+        // Encode header data
+        let header_data = self.header_encode()?;
+        let header_len = header_data.len();
 
-        // 2> header data length
-        let header_data = self.header_encode().unwrap();
+        // Calculate frame size: 4 (total_length) + 4 (serialize_type) + header_len
+        let frame_header_size = 8;
+        let total_length = 4 + header_len + body_length; // 4 is for serialize_type field
 
-        length += header_data.len();
+        // Allocate exact capacity
+        let mut result = BytesMut::with_capacity(frame_header_size + header_len);
 
-        // 3> body data length
-        length += body_length;
+        // Write total length
+        result.put_i32(total_length as i32);
 
-        let mut result = BytesMut::with_capacity(4 + length - body_length);
+        // Write serialize type with embedded header length
+        result.put_i32(mark_protocol_type(header_len as i32, self.serialize_type));
 
-        // length
-        result.put_i32(length as i32);
-
-        // header length
-        result.put_i32(mark_protocol_type(
-            header_data.len() as i32,
-            self.serialize_type,
-        ));
-
-        // header data
+        // Write header data
         result.put(header_data);
 
         Some(result.freeze())
     }
 
+    /// Convert custom header to network format (merge into ext_fields)
+    #[inline]
     pub fn make_custom_header_to_net(&mut self) {
         if let Some(header) = &self.command_custom_header {
-            let option = header.to_map();
-
-            match &mut self.ext_fields {
-                None => {
-                    self.ext_fields = option;
-                }
-                Some(ext) => {
-                    if let Some(val) = option {
-                        for (key, value) in &val {
-                            ext.insert(key.clone(), value.clone());
+            if let Some(header_map) = header.to_map() {
+                match &mut self.ext_fields {
+                    None => {
+                        self.ext_fields = Some(header_map);
+                    }
+                    Some(ext) => {
+                        // Merge header map into existing ext_fields
+                        for (key, value) in header_map {
+                            ext.insert(key, value);
                         }
                     }
                 }
@@ -446,96 +444,197 @@ impl RemotingCommand {
         }
     }
 
+    #[inline]
     pub fn fast_header_encode(&mut self, dst: &mut BytesMut) {
         match self.serialize_type {
             SerializeType::JSON => {
-                self.make_custom_header_to_net();
-                let header = match serde_json::to_vec(self) {
-                    Ok(value) => Some(value),
-                    Err(e) => {
-                        error!("Failed to encode generic: {}", e);
-                        None
-                    }
-                };
-                let header_length = header.as_ref().map_or(0, |h| h.len()) as i32;
-                let body_length = self.body.as_ref().map_or(0, |b| b.len()) as i32;
-                let total_length = 4 + header_length + body_length;
-
-                dst.reserve((total_length + 4) as usize);
-                dst.put_i32(total_length);
-                let serialize_type =
-                    RemotingCommand::mark_serialize_type(header_length, SerializeType::JSON);
-                dst.put_i32(serialize_type);
-
-                if let Some(header_inner) = header {
-                    dst.put(header_inner.as_slice());
-                }
+                self.fast_encode_json(dst);
             }
             SerializeType::ROCKETMQ => {
-                let begin_index = dst.len();
-                dst.put_i64(0);
-                if let Some(header) = self.command_custom_header_ref() {
-                    if !header.support_fast_codec() {
-                        self.make_custom_header_to_net();
-                    }
-                }
-                let header_size = RocketMQSerializable::rocketmq_protocol_encode(self, dst);
-                let body_length = self.body.as_ref().map_or(0, |b| b.len()) as i32;
-                let serialize_type = RemotingCommand::mark_serialize_type(
-                    header_size as i32,
-                    SerializeType::ROCKETMQ,
-                );
-                dst[begin_index..begin_index + 4]
-                    .copy_from_slice(&(header_size as i32 + body_length).to_be_bytes());
-                dst[begin_index + 4..begin_index + 8]
-                    .copy_from_slice(&serialize_type.to_be_bytes());
+                self.fast_encode_rocketmq(dst);
             }
         }
     }
 
+    /// Optimized JSON encoding with pre-calculated capacity and zero-copy optimizations
+    #[inline]
+    fn fast_encode_json(&mut self, dst: &mut BytesMut) {
+        self.make_custom_header_to_net();
+
+        // Pre-calculate approximate header size to reduce reallocations
+        let estimated_header_size = self.estimate_json_header_size();
+        let body_length = self.body.as_ref().map_or(0, |b| b.len());
+
+        // Reserve space upfront: 4 (total_length) + 4 (serialize_type) + estimated_header + body
+        dst.reserve(8 + estimated_header_size + body_length);
+
+        // Encode header using serde_json (direct to Vec for better performance)
+        match serde_json::to_vec(self) {
+            Ok(header_bytes) => {
+                let header_length = header_bytes.len() as i32;
+                let body_length = body_length as i32;
+                let total_length = 4 + header_length + body_length;
+
+                // Write frame header
+                dst.put_i32(total_length);
+                dst.put_i32(RemotingCommand::mark_serialize_type(
+                    header_length,
+                    SerializeType::JSON,
+                ));
+
+                // Write header bytes (zero-copy from Vec)
+                dst.put_slice(&header_bytes);
+            }
+            Err(e) => {
+                error!("Failed to encode JSON header: {}", e);
+                // Write minimal error frame
+                dst.put_i32(4); // total_length: just the serialize_type field
+                dst.put_i32(RemotingCommand::mark_serialize_type(0, SerializeType::JSON));
+            }
+        }
+    }
+
+    /// Optimized ROCKETMQ binary encoding with minimal allocations
+    #[inline]
+    fn fast_encode_rocketmq(&mut self, dst: &mut BytesMut) {
+        let begin_index = dst.len();
+
+        // Reserve space for total_length (4 bytes) and serialize_type (4 bytes)
+        dst.reserve(8);
+        dst.put_i64(0); // Placeholder for total_length + serialize_type
+
+        // Check if custom header supports fast codec
+        if let Some(header) = self.command_custom_header_ref() {
+            if !header.support_fast_codec() {
+                self.make_custom_header_to_net();
+            }
+        }
+
+        // Encode header directly to buffer
+        let header_size = RocketMQSerializable::rocketmq_protocol_encode(self, dst);
+        let body_length = self.body.as_ref().map_or(0, |b| b.len()) as i32;
+
+        // Calculate serialize type with header length embedded
+        let serialize_type =
+            RemotingCommand::mark_serialize_type(header_size as i32, SerializeType::ROCKETMQ);
+
+        // Write total_length and serialize_type at the beginning (in-place update)
+        let total_length = (header_size as i32 + body_length).to_be_bytes();
+        let serialize_type_bytes = serialize_type.to_be_bytes();
+
+        dst[begin_index..begin_index + 4].copy_from_slice(&total_length);
+        dst[begin_index + 4..begin_index + 8].copy_from_slice(&serialize_type_bytes);
+    }
+
+    /// Estimate JSON header size to reduce buffer reallocations
+    /// This is an approximation based on typical field sizes
+    #[inline]
+    fn estimate_json_header_size(&self) -> usize {
+        let mut size = 100; // Base JSON overhead
+
+        if let Some(ref remark) = self.remark {
+            size += remark.len() + 20; // "remark":"..." + quotes
+        }
+
+        if let Some(ref ext) = self.ext_fields {
+            // Approximate: each entry adds ~30 bytes overhead + key/value lengths
+            size += ext
+                .iter()
+                .map(|(k, v)| k.len() + v.len() + 30)
+                .sum::<usize>();
+        }
+
+        size
+    }
+
+    /// Optimized decode with enhanced boundary checks and reduced allocations
+    #[inline]
     pub fn decode(src: &mut BytesMut) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let read_to = src.len();
-        if read_to < 4 {
-            // Wait for more data when there are less than 4 bytes.
+        const FRAME_HEADER_SIZE: usize = 4;
+        const SERIALIZE_TYPE_SIZE: usize = 4;
+        const MIN_PAYLOAD_SIZE: usize = SERIALIZE_TYPE_SIZE; // Minimum: just serialize_type field
+
+        let available = src.len();
+
+        // Early return if not enough data for frame header
+        if available < FRAME_HEADER_SIZE {
             return Ok(None);
         }
-        //Read the total size as a big-endian i32 from the first 4 bytes.
+
+        // Read total size without advancing the buffer (peek)
         let total_size = i32::from_be_bytes([src[0], src[1], src[2], src[3]]) as usize;
 
-        if read_to < total_size + 4 {
-            // Wait for more data when the available data is less than the total size.
-            return Ok(None);
-        }
-        // Split the BytesMut to get the command data including the total size.
-        let mut cmd_data = src.split_to(total_size + 4);
-        // Discard the first i32 (total size).
-        cmd_data.advance(4);
-        if cmd_data.remaining() < 4 {
-            return Ok(None);
-        }
-        // Read the header length as a big-endian i32.
-        let ori_header_length = cmd_data.get_i32();
-        let header_length = parse_header_length(ori_header_length);
-        if header_length > total_size - 4 {
+        // Validate total_size to prevent overflow attacks (check max first)
+        if total_size > 16 * 1024 * 1024 {
             return Err(RocketmqError::RemotingCommandDecoderError(format!(
-                "Header length {header_length} is greater than total size {total_size}"
+                "Frame size {total_size} exceeds maximum allowed (16MB)"
             )));
         }
+
+        // Wait for complete frame
+        let full_frame_size = total_size + FRAME_HEADER_SIZE;
+        if available < full_frame_size {
+            return Ok(None);
+        }
+
+        // Now validate minimum total_size (we have the complete frame)
+        if total_size < MIN_PAYLOAD_SIZE {
+            return Err(RocketmqError::RemotingCommandDecoderError(format!(
+                "Invalid total_size {total_size}, minimum required is {MIN_PAYLOAD_SIZE}"
+            )));
+        }
+
+        // Extract complete frame (zero-copy split)
+        let mut cmd_data = src.split_to(full_frame_size);
+        cmd_data.advance(FRAME_HEADER_SIZE); // Skip total_size field
+
+        // Ensure we have serialize_type field (should always pass after above checks)
+        if cmd_data.remaining() < SERIALIZE_TYPE_SIZE {
+            return Err(RocketmqError::RemotingCommandDecoderError(
+                "Incomplete serialize_type field".to_string(),
+            ));
+        }
+
+        // Parse header length and protocol type
+        let ori_header_length = cmd_data.get_i32();
+        let header_length = parse_header_length(ori_header_length);
+
+        // Validate header length
+        if header_length > total_size - SERIALIZE_TYPE_SIZE {
+            return Err(RocketmqError::RemotingCommandDecoderError(format!(
+                "Invalid header length {header_length}, total size {total_size}"
+            )));
+        }
+
         let protocol_type = parse_serialize_type(ori_header_length)?;
-        // Assume the header is of i32 type and directly get it from the data.
+
+        // Split header and body (zero-copy)
         let mut header_data = cmd_data.split_to(header_length);
 
+        // Decode header
         let mut cmd =
             RemotingCommand::header_decode(&mut header_data, header_length, protocol_type)?;
 
-        if let Some(cmd) = cmd.as_mut() {
-            if total_size - 4 > header_length {
-                cmd.set_body_mut_ref(cmd_data.split_to(total_size - 4 - header_length).freeze());
+        // Attach body if present (zero-copy freeze)
+        if let Some(ref mut cmd) = cmd {
+            let body_length = total_size - SERIALIZE_TYPE_SIZE - header_length;
+            if body_length > 0 {
+                if cmd_data.remaining() >= body_length {
+                    cmd.set_body_mut_ref(cmd_data.split_to(body_length).freeze());
+                } else {
+                    return Err(RocketmqError::RemotingCommandDecoderError(format!(
+                        "Insufficient body data: expected {body_length}, available {}",
+                        cmd_data.remaining()
+                    )));
+                }
             }
         }
+
         Ok(cmd)
     }
 
+    /// Optimized header decoding with type-based dispatch
+    #[inline]
     pub fn header_decode(
         src: &mut BytesMut,
         header_length: usize,
@@ -543,17 +642,18 @@ impl RemotingCommand {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match type_ {
             SerializeType::JSON => {
+                // Deserialize JSON header
                 let cmd =
                     SerdeJsonUtils::from_json_slice::<RemotingCommand>(src).map_err(|error| {
-                        // Handle deserialization error gracefully
                         RocketmqError::RemotingCommandDecoderError(format!(
-                            "Deserialization error: {error}"
+                            "JSON deserialization error: {error}"
                         ))
                     })?;
 
                 Ok(Some(cmd.set_serialize_type(SerializeType::JSON)))
             }
             SerializeType::ROCKETMQ => {
+                // Deserialize binary header
                 let cmd = RocketMQSerializable::rocket_mq_protocol_decode(src, header_length)?;
                 Ok(Some(cmd.set_serialize_type(SerializeType::ROCKETMQ)))
             }
@@ -811,20 +911,23 @@ impl RemotingCommand {
     }
 }
 
+/// Extract header length from the combined serialize_type field
+#[inline]
 pub fn parse_header_length(size: i32) -> usize {
-    (size & 0xFFFFFF) as usize
+    (size & 0x00FFFFFF) as usize
 }
 
+/// Combine serialize type code with header length
+#[inline]
 pub fn mark_protocol_type(source: i32, serialize_type: SerializeType) -> i32 {
     ((serialize_type.get_code() as i32) << 24) | (source & 0x00FFFFFF)
 }
 
+/// Extract serialize type from the combined field
+#[inline]
 pub fn parse_serialize_type(size: i32) -> rocketmq_error::RocketMQResult<SerializeType> {
     let code = (size >> 24) as u8;
-    match SerializeType::value_of(code) {
-        None => Err(RocketmqError::NotSupportSerializeType(code)),
-        Some(value) => Ok(value),
-    }
+    SerializeType::value_of(code).ok_or_else(|| RocketmqError::NotSupportSerializeType(code))
 }
 
 impl AsRef<RemotingCommand> for RemotingCommand {
