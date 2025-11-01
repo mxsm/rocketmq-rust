@@ -138,8 +138,8 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
 
                 // Branch 2: Shutdown signal received
                 _ = self.shutdown.recv() => {
-                    // Mark connection as unhealthy to prevent further sends
-                    channel.connection_mut().ok = false;
+                    // Mark connection as closed to prevent further sends
+                    channel.connection_mut().close();
                     return Ok(());
                 }
             };
@@ -149,8 +149,9 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                 Some(Ok(frame)) => frame,
                 Some(Err(e)) => {
                     // Decode error - log and close connection
+                    // Connection state is automatically managed by receive_command()
                     error!("Failed to decode command: {:?}", e);
-                    channel.connection_mut().ok = false;
+                    channel.connection_mut().close();
                     return Err(e);
                 }
                 None => {

@@ -396,9 +396,9 @@ pub(crate) async fn handle_send(
             Err(error) => match error {
                 RocketmqError::Io(error) => {
                     // I/O error means connection is broken
+                    // Connection state is automatically marked as degraded by send_command()
                     error!("send request failed: {}", error);
                     response_table.remove(&opaque);
-                    connection.ok = false;
                     return;
                 }
                 _ => {
@@ -638,7 +638,7 @@ impl ChannelInner {
     /// - `false`: Connection has failed, channel should be discarded
     #[inline]
     pub fn is_healthy(&self) -> bool {
-        self.connection.ok
+        self.connection.is_healthy()
     }
 
     /// Legacy alias for `is_healthy()` - kept for backward compatibility.
@@ -649,6 +649,6 @@ impl ChannelInner {
     #[inline]
     #[deprecated(since = "0.1.0", note = "Use `is_healthy()` instead")]
     pub fn is_ok(&self) -> bool {
-        self.connection.ok
+        self.connection.is_healthy()
     }
 }

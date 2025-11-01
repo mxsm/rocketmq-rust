@@ -26,6 +26,7 @@ use futures_util::stream::SplitStream;
 use futures_util::SinkExt;
 use futures_util::StreamExt;
 use tokio::net::TcpStream;
+use tokio::sync::watch;
 use tokio_util::codec::Framed;
 use uuid::Uuid;
 
@@ -34,47 +35,104 @@ use crate::protocol::remoting_command::RemotingCommand;
 
 pub type ConnectionId = CheetahString;
 
+/// Connection health state
+///
+/// Represents the current health status of a connection.
+/// This enum is used with `watch` channel to broadcast state changes
+/// to all interested parties without explicit polling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionState {
+    /// Connection is healthy and ready for I/O operations
+    Healthy,
+    /// Connection has encountered an error and should not be used
+    Degraded,
+    /// Connection is explicitly closed
+    Closed,
+}
+
 /// Bidirectional TCP connection for RocketMQ protocol communication.
 ///
 /// `Connection` handles low-level frame encoding/decoding and provides high-level
-/// APIs for sending/receiving `RemotingCommand` messages. It maintains connection
-/// state, manages I/O buffers, and tracks the connection lifecycle.
+/// APIs for sending/receiving `RemotingCommand` messages. It manages I/O buffers
+/// and broadcasts connection state changes via a watch channel.
 ///
-/// ## Lifecycle
+/// ## Lifecycle & State Management
 ///
-/// 1. **Created**: New connection from `TcpStream`
-/// 2. **Active**: Processing requests/responses
-/// 3. **Degraded**: `ok = false` after I/O error
-/// 4. **Closed**: Stream ends or explicit shutdown
+/// **Tokio Best Practice**: Connection health is determined by I/O operation results,
+/// not by polling a boolean flag. State changes are broadcast via `watch` channel:
+///
+/// ```text
+/// ┌──────────┐  I/O Success   ┌──────────┐
+/// │ Healthy  │ ──────────────► │ Healthy  │
+/// └──────────┘                 └──────────┘
+///      │                            │
+///      │ I/O Error                  │ I/O Error
+///      ↓                            ↓
+/// ┌──────────┐                 ┌──────────┐
+/// │ Degraded │                 │ Degraded │
+/// └──────────┘                 └──────────┘
+///      │                            │
+///      │ close()                    │
+///      ↓                            ↓
+/// ┌──────────┐                 ┌──────────┐
+/// │  Closed  │                 │  Closed  │
+/// └──────────┘                 └──────────┘
+/// ```
+///
+/// 1. **Created**: New connection from `TcpStream` (Healthy)
+/// 2. **Active**: Processing requests/responses (Healthy)
+/// 3. **Degraded**: I/O error occurred, broadcast state change
+/// 4. **Closed**: Stream ended or explicit shutdown
 ///
 /// ## Threading
 ///
 /// - Safe for concurrent sends (internal buffering)
 /// - Receives must be sequential (single reader)
+/// - State monitoring: Multiple tasks can watch state via `subscribe()`
+///
+/// ## Key Design Principles
+///
+/// - **No explicit `ok` flag**: Connection validity determined by I/O results
+/// - **Broadcast state changes**: Using `watch` channel for reactive updates
+/// - **Fail-fast**: I/O errors immediately update state and return error
+/// - **Zero polling**: Subscribers notified automatically on state change
 pub struct Connection {
     // === I/O Transport ===
     /// Outbound message sink (sends encoded frames to peer)
     ///
-    /// Renamed from `writer` for clarity: handles outbound data flow
+    /// Handles outbound data flow with automatic framing
     outbound_sink: SplitSink<Framed<TcpStream, CompositeCodec>, Bytes>,
 
     /// Inbound message stream (receives decoded frames from peer)
     ///
-    /// Renamed from `reader` for clarity: handles inbound data flow
+    /// Handles inbound data flow with automatic frame decoding
     inbound_stream: SplitStream<Framed<TcpStream, CompositeCodec>>,
 
-    // === State Management ===
-    /// Connection health status
+    // === State Management (Tokio Watch Channel) ===
+    /// Broadcast channel for connection state changes
     ///
-    /// - `true`: Connection is healthy and operational
-    /// - `false`: Connection degraded due to I/O error, should be closed
-    pub(crate) ok: bool,
+    /// **Design**: Uses `watch` channel to notify all subscribers of state changes.
+    /// This is the Tokio-idiomatic way to share state without locks or polling.
+    ///
+    /// - **Sender**: Held by Connection to broadcast state changes
+    /// - **Receivers**: Created via `subscribe()` for monitoring
+    ///
+    /// **Why not a boolean?**
+    /// - Reactive: Subscribers notified immediately on change
+    /// - Lock-free: No mutex/atomic overhead
+    /// - Composable: Can use in `tokio::select!` for timeout/cancellation
+    state_tx: watch::Sender<ConnectionState>,
+
+    /// Cached current state receiver for quick local queries
+    ///
+    /// Used for fast `state()` queries without creating new receivers
+    state_rx: watch::Receiver<ConnectionState>,
 
     // === Buffers ===
     /// Reusable encoding buffer to avoid repeated allocations
     ///
     /// Used for staging `RemotingCommand` serialization before sending.
-    /// Cleared and reused for each send operation.
+    /// Split pattern automatically clears buffer after each send.
     encode_buffer: BytesMut,
 
     // === Identification ===
@@ -99,24 +157,45 @@ impl PartialEq for Connection {
 impl Eq for Connection {}
 
 impl Connection {
-    /// Creates a new `Connection` instance.
+    /// Creates a new `Connection` instance with initial Healthy state.
     ///
     /// # Arguments
     ///
-    /// * `tcp_stream` - The `TcpStream` associated with the connection.
+    /// * `tcp_stream` - The `TcpStream` associated with the connection
     ///
     /// # Returns
     ///
-    /// A new `Connection` instance.
+    /// A new `Connection` instance with a watch channel for state monitoring
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let stream = TcpStream::connect("127.0.0.1:9876").await?;
+    /// let connection = Connection::new(stream);
+    ///
+    /// // Subscribe to state changes
+    /// let mut state_watcher = connection.subscribe();
+    /// tokio::spawn(async move {
+    ///     while state_watcher.changed().await.is_ok() {
+    ///         let state = *state_watcher.borrow();
+    ///         println!("Connection state: {:?}", state);
+    ///     }
+    /// });
+    /// ```
     pub fn new(tcp_stream: TcpStream) -> Connection {
         const CAPACITY: usize = 1024 * 1024; // 1 MB
         const BUFFER_SIZE: usize = 8 * 1024; // 8 KB
         let framed = Framed::with_capacity(tcp_stream, CompositeCodec::new(), CAPACITY);
         let (outbound_sink, inbound_stream) = framed.split();
+
+        // Initialize watch channel with Healthy state
+        let (state_tx, state_rx) = watch::channel(ConnectionState::Healthy);
+
         Self {
             outbound_sink,
             inbound_stream,
-            ok: true,
+            state_tx,
+            state_rx,
             encode_buffer: BytesMut::with_capacity(BUFFER_SIZE),
             connection_id: CheetahString::from_string(Uuid::new_v4().to_string()),
         }
@@ -172,7 +251,7 @@ impl Connection {
     /// Sends a `RemotingCommand` to the peer (consumes command).
     ///
     /// Encodes the command into the internal buffer, then flushes to the network.
-    /// This method takes ownership of the command for optimization.
+    /// **Automatically marks connection as Degraded on I/O errors.**
     ///
     /// # Arguments
     ///
@@ -181,7 +260,17 @@ impl Connection {
     /// # Returns
     ///
     /// - `Ok(())`: Command successfully sent
-    /// - `Err(e)`: Network I/O error occurred
+    /// - `Err(e)`: Network I/O error occurred (connection marked as Degraded)
+    ///
+    /// # State Management
+    ///
+    /// On error, this method:
+    /// 1. Marks connection as `Degraded` via watch channel
+    /// 2. Broadcasts state change to all subscribers
+    /// 3. Returns the error to caller
+    ///
+    /// **No need to explicitly check `is_healthy()` before calling** - just
+    /// handle the `Result` and the connection state is automatically managed.
     ///
     /// # Lifecycle
     ///
@@ -210,14 +299,22 @@ impl Connection {
         let len = self.encode_buffer.len();
         let bytes = self.encode_buffer.split_to(len).freeze();
 
-        self.outbound_sink.send(bytes).await?;
-        Ok(())
+        // Send and automatically handle state on error
+        match self.outbound_sink.send(bytes).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                // Tokio best practice: Mark degraded on I/O error
+                self.mark_degraded();
+                Err(e)
+            }
+        }
     }
 
     /// Sends a `RemotingCommand` to the peer (borrows command).
     ///
     /// Similar to `send_command`, but borrows the command mutably instead of
     /// consuming it. Use when the caller needs to retain ownership.
+    /// **Automatically marks connection as Degraded on I/O errors.**
     ///
     /// # Arguments
     ///
@@ -226,7 +323,7 @@ impl Connection {
     /// # Returns
     ///
     /// - `Ok(())`: Command successfully sent
-    /// - `Err(e)`: Network I/O error occurred
+    /// - `Err(e)`: Network I/O error occurred (connection marked as Degraded)
     ///
     /// # Note
     ///
@@ -246,11 +343,19 @@ impl Connection {
         let len = self.encode_buffer.len();
         let bytes = self.encode_buffer.split_to(len).freeze();
 
-        self.outbound_sink.send(bytes).await?;
-        Ok(())
+        // Send and automatically handle state on error
+        match self.outbound_sink.send(bytes).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                self.mark_degraded();
+                Err(e)
+            }
+        }
     }
 
     /// Sends multiple `RemotingCommand`s in a single batch (optimized for throughput).
+    ///
+    /// **Automatically marks connection as Degraded on I/O errors.**
     ///
     /// # Performance Benefits
     ///
@@ -273,7 +378,7 @@ impl Connection {
     /// # Returns
     ///
     /// - `Ok(())`: All commands sent successfully
-    /// - `Err(e)`: Network I/O error (some commands may have been sent)
+    /// - `Err(e)`: Network I/O error (connection marked as Degraded)
     ///
     /// # Example
     ///
@@ -301,14 +406,21 @@ impl Connection {
         let len = self.encode_buffer.len();
         let bytes = self.encode_buffer.split_to(len).freeze();
 
-        self.outbound_sink.send(bytes).await?;
-        Ok(())
+        // Send and automatically handle state on error
+        match self.outbound_sink.send(bytes).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                self.mark_degraded();
+                Err(e)
+            }
+        }
     }
 
     /// Sends raw `Bytes` directly to the peer (zero-copy).
     ///
     /// Bypasses command encoding and sends pre-serialized bytes directly.
     /// Use for forwarding or when bytes are already encoded.
+    /// **Automatically marks connection as Degraded on I/O errors.**
     ///
     /// # Arguments
     ///
@@ -317,21 +429,27 @@ impl Connection {
     /// # Returns
     ///
     /// - `Ok(())`: Bytes successfully sent
-    /// - `Err(e)`: Network I/O error occurred
+    /// - `Err(e)`: Network I/O error occurred (connection marked as Degraded)
     ///
     /// # Performance
     ///
     /// This is the most efficient send method as it avoids intermediate buffering
     /// and serialization overhead.
     pub async fn send_bytes(&mut self, bytes: Bytes) -> rocketmq_error::RocketMQResult<()> {
-        self.outbound_sink.send(bytes).await?;
-        Ok(())
+        match self.outbound_sink.send(bytes).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                self.mark_degraded();
+                Err(e)
+            }
+        }
     }
 
     /// Sends a static byte slice to the peer (zero-copy).
     ///
     /// Converts a `&'static [u8]` to `Bytes` and sends. Use for compile-time
     /// known data (e.g., protocol constants).
+    /// **Automatically marks connection as Degraded on I/O errors.**
     ///
     /// # Arguments
     ///
@@ -340,7 +458,7 @@ impl Connection {
     /// # Returns
     ///
     /// - `Ok(())`: Slice successfully sent
-    /// - `Err(e)`: Network I/O error occurred
+    /// - `Err(e)`: Network I/O error occurred (connection marked as Degraded)
     ///
     /// # Example
     ///
@@ -350,8 +468,13 @@ impl Connection {
     /// ```
     pub async fn send_slice(&mut self, slice: &'static [u8]) -> rocketmq_error::RocketMQResult<()> {
         let bytes = slice.into();
-        self.outbound_sink.send(bytes).await?;
-        Ok(())
+        match self.outbound_sink.send(bytes).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                self.mark_degraded();
+                Err(e)
+            }
+        }
     }
 
     /// Gets the unique identifier for this connection.
@@ -364,30 +487,144 @@ impl Connection {
         &self.connection_id
     }
 
-    /// Checks if the connection is in a healthy state.
+    /// Gets the current connection state.
     ///
     /// # Returns
     ///
-    /// - `true`: Connection is operational
-    /// - `false`: Connection has encountered an error and should be closed
+    /// Current `ConnectionState` (Healthy, Degraded, or Closed)
+    ///
+    /// # Performance
+    ///
+    /// This is a fast, lock-free read from the watch channel receiver.
+    /// No system calls or network operations involved.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if connection.state() == ConnectionState::Healthy {
+    ///     // Safe to send
+    ///     connection.send_command(cmd).await?;
+    /// }
+    /// ```
+    #[inline]
+    pub fn state(&self) -> ConnectionState {
+        *self.state_rx.borrow()
+    }
+
+    /// Checks if the connection is in a healthy state (convenience method).
+    ///
+    /// # Returns
+    ///
+    /// - `true`: Connection is `Healthy` and operational
+    /// - `false`: Connection is `Degraded` or `Closed`
     ///
     /// # Note
     ///
-    /// This flag is set to `false` when an I/O error occurs. The connection
-    /// should be discarded and a new one established.
+    /// **Prefer using `send_*()` methods directly** rather than checking state first.
+    /// This method is provided for backward compatibility and specific use cases
+    /// like connection pool eviction.
+    ///
+    /// **Best practice (Tokio-idiomatic)**:
+    /// ```rust,ignore
+    /// // Don't do this:
+    /// if connection.is_healthy() {
+    ///     connection.send_command(cmd).await?;
+    /// }
+    ///
+    /// // Do this instead:
+    /// match connection.send_command(cmd).await {
+    ///     Ok(()) => { /* success */ }
+    ///     Err(e) => { /* connection automatically marked as degraded */ }
+    /// }
+    /// ```
     #[inline]
     pub fn is_healthy(&self) -> bool {
-        self.ok
+        self.state() == ConnectionState::Healthy
     }
 
-    /// Legacy alias for `is_healthy()` - kept for backward compatibility.
+    /// Subscribes to connection state changes.
+    ///
+    /// # Returns
+    ///
+    /// A `watch::Receiver` that notifies on state transitions
+    ///
+    /// # Example: Monitor state in background task
+    ///
+    /// ```rust,ignore
+    /// let mut state_watcher = connection.subscribe();
+    /// tokio::spawn(async move {
+    ///     while state_watcher.changed().await.is_ok() {
+    ///         match *state_watcher.borrow() {
+    ///             ConnectionState::Healthy => println!("Connection restored"),
+    ///             ConnectionState::Degraded => println!("Connection degraded"),
+    ///             ConnectionState::Closed => {
+    ///                 println!("Connection closed");
+    ///                 break;
+    ///             }
+    ///         }
+    ///     }
+    /// });
+    /// ```
+    ///
+    /// # Example: Wait for state change with timeout
+    ///
+    /// ```rust,ignore
+    /// let mut state_watcher = connection.subscribe();
+    /// tokio::select! {
+    ///     _ = state_watcher.changed() => {
+    ///         println!("State changed to: {:?}", *state_watcher.borrow());
+    ///     }
+    ///     _ = tokio::time::sleep(Duration::from_secs(5)) => {
+    ///         println!("No state change within 5 seconds");
+    ///     }
+    /// }
+    /// ```
+    pub fn subscribe(&self) -> watch::Receiver<ConnectionState> {
+        self.state_tx.subscribe()
+    }
+
+    /// Marks the connection as degraded (internal use).
+    ///
+    /// Called automatically when I/O errors occur. Broadcasts state change
+    /// to all subscribers.
+    ///
+    /// # Note
+    ///
+    /// This is an internal method. Users should rely on automatic state
+    /// management via I/O operation results.
+    #[inline]
+    fn mark_degraded(&self) {
+        let _ = self.state_tx.send(ConnectionState::Degraded);
+    }
+
+    /// Marks the connection as closed (internal use).
+    ///
+    /// Called when connection is explicitly closed. Broadcasts final state.
+    #[inline]
+    fn mark_closed(&self) {
+        let _ = self.state_tx.send(ConnectionState::Closed);
+    }
+
+    /// Explicitly closes the connection and broadcasts Closed state.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// connection.close();
+    /// assert_eq!(connection.state(), ConnectionState::Closed);
+    /// ```
+    pub fn close(&self) {
+        self.mark_closed();
+    }
+
+    /// Legacy alias for backward compatibility.
     ///
     /// # Deprecated
     ///
-    /// Use `is_healthy()` instead for clearer semantics.
+    /// Use `is_healthy()` or `state()` instead for clearer semantics.
     #[inline]
-    #[deprecated(since = "0.1.0", note = "Use `is_healthy()` instead")]
+    #[deprecated(since = "0.7.0", note = "Use `is_healthy()` or `state()` instead")]
     pub fn connection_is_ok(&self) -> bool {
-        self.ok
+        self.is_healthy()
     }
 }

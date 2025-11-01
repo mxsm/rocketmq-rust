@@ -341,7 +341,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         if let Some(ref addr) = cached_addr {
             // Quick lookup in connection pool (lock-free with DashMap)
             if let Some(client) = self.connection_tables.get(addr) {
-                if client.connection().ok && self.latency_tracker.is_healthy(addr) {
+                if client.connection().is_healthy() && self.latency_tracker.is_healthy(addr) {
                     // Fast path: Cached nameserver is healthy
                     return Some(client.value().clone());
                 }
@@ -387,7 +387,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     /// # Flow
     /// 1. If `addr` is `None` or empty, route to nameserver
     /// 2. Check connection pool for existing client
-    /// 3. Verify client health (connection.ok == true)
+    /// 3. Verify client health (connection.is_healthy() == true)
     /// 4. If unhealthy or missing, create new connection
     ///
     /// # Performance
@@ -399,7 +399,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     /// TODO: Use `DashMap` for lock-free read path:
     /// ```rust,ignore
     /// if let Some(client) = self.connection_tables.get(addr) {
-    ///     if client.connection().ok {
+    ///     if client.connection().is_healthy() {
     ///         return Some(client.clone());
     ///     }
     /// }
@@ -417,7 +417,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         // Fast path: Check connection pool (lock-free with DashMap)
         if let Some(client_ref) = self.connection_tables.get(target_addr) {
             let client = client_ref.value().clone();
-            if client.connection().ok {
+            if client.connection().is_healthy() {
                 return Some(client); // Return healthy cached client
             }
             // Client unhealthy - will create new connection
@@ -490,7 +490,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         // Check if healthy client already exists (fallback to DashMap)
         if let Some(client_ref) = self.connection_tables.get(addr) {
             let client = client_ref.value().clone();
-            if client.connection().ok {
+            if client.connection().is_healthy() {
                 return Some(client);
             }
             // Client unhealthy - remove it immediately (DashMap allows concurrent removal)
@@ -547,7 +547,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
                 match self.connection_tables.entry(addr.clone()) {
                     dashmap::mapref::entry::Entry::Occupied(mut entry) => {
                         // Check if existing is still healthy
-                        if entry.get().connection().ok {
+                        if entry.get().connection().is_healthy() {
                             info!("Race condition: {} already connected by another task", addr);
                             return Some(entry.get().clone());
                         }
