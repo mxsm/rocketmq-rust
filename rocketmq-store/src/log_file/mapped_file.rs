@@ -34,6 +34,21 @@ pub mod default_mapped_file_impl;
 pub(crate) mod reference_resource;
 mod reference_resource_counter;
 
+// New modules for storage optimization
+mod builder;
+mod flush_strategy;
+mod mapped_buffer;
+mod mapped_file_error;
+mod metrics;
+
+// Re-export commonly used types
+pub use builder::MappedFileBuilder;
+pub use flush_strategy::FlushStrategy;
+pub use mapped_buffer::MappedBuffer;
+pub use mapped_file_error::MappedFileError;
+pub use mapped_file_error::MappedFileResult;
+pub use metrics::MappedFileMetrics;
+
 pub trait MappedFile {
     /// Returns the file name of the mapped file.
     ///
