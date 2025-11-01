@@ -31,78 +31,139 @@ use crate::protocol::LanguageCode;
 pub struct RocketMQSerializable;
 
 impl RocketMQSerializable {
+    /// Optimized string write with inline hint for better performance
+    #[inline]
     pub fn write_str(buf: &mut BytesMut, use_short_length: bool, s: &str) -> usize {
-        let mut total = 0;
         let bytes = s.as_bytes();
-        total += bytes.len();
-        if use_short_length {
-            buf.put_u16(bytes.len() as u16);
-            total += 2;
+        let len = bytes.len();
+
+        let length_size = if use_short_length {
+            buf.put_u16(len as u16);
+            2
         } else {
-            buf.put_u32(bytes.len() as u32);
-            total += 4;
-        }
-        buf.put(bytes);
-        total
+            buf.put_u32(len as u32);
+            4
+        };
+
+        buf.put_slice(bytes); // Use put_slice for better performance
+        length_size + len
     }
 
+    /// Optimized string read with enhanced boundary checks and zero-copy
+    #[inline]
     pub fn read_str(
         buf: &mut BytesMut,
         use_short_length: bool,
         limit: usize,
     ) -> rocketmq_error::RocketMQResult<Option<CheetahString>> {
+        // Read length prefix
         let len = if use_short_length {
+            if buf.remaining() < 2 {
+                return Err(RocketmqError::DecodingError(2, buf.remaining()));
+            }
             buf.get_u16() as usize
         } else {
+            if buf.remaining() < 4 {
+                return Err(RocketmqError::DecodingError(4, buf.remaining()));
+            }
             buf.get_u32() as usize
         };
 
+        // Empty string
         if len == 0 {
             return Ok(None);
         }
 
+        // Boundary check
         if len > limit {
             return Err(RocketmqError::DecodingError(len, limit));
         }
 
-        let bytes = buf.split_to(len).freeze(); // Convert BytesMut to Bytes
-                                                /*str::from_utf8(&bytes)
-                                                .map(|s| Some(s.to_string()))
-                                                .map_err(Error::Utf8Error)*/
+        // Ensure buffer has enough data
+        if buf.remaining() < len {
+            return Err(RocketmqError::DecodingError(len, buf.remaining()));
+        }
+
+        // Zero-copy split and freeze
+        let bytes = buf.split_to(len).freeze();
         Ok(Some(CheetahString::from_bytes(bytes)))
     }
 
+    /// Optimized ROCKETMQ protocol encoding with reduced allocations
+    #[inline]
     pub fn rocketmq_protocol_encode(cmd: &mut RemotingCommand, buf: &mut BytesMut) -> usize {
         let begin_index = buf.len();
-        buf.put_u16(cmd.code() as u16);
-        buf.put_u8(cmd.language().get_code());
-        buf.put_u16(cmd.version() as u16);
-        buf.put_i32(cmd.opaque());
-        buf.put_i32(cmd.flag());
+
+        // Estimate required capacity and reserve upfront to reduce reallocations
+        let estimated_size = Self::estimate_encode_size(cmd);
+        buf.reserve(estimated_size);
+
+        // Write fixed-size header fields (total: 15 bytes)
+        buf.put_u16(cmd.code() as u16); // 2 bytes
+        buf.put_u8(cmd.language().get_code()); // 1 byte
+        buf.put_u16(cmd.version() as u16); // 2 bytes
+        buf.put_i32(cmd.opaque()); // 4 bytes
+        buf.put_i32(cmd.flag()); // 4 bytes
+
+        // Write remark (variable length with 4-byte prefix or 0)
         if let Some(remark) = cmd.remark() {
-            Self::write_str(buf, true, remark.as_str());
+            Self::write_str(buf, false, remark.as_str());
         } else {
             buf.put_i32(0);
         }
+
+        // Reserve space for ext_fields length (will be updated later)
         let map_len_index = buf.len();
         buf.put_i32(0);
-        let header = cmd.command_custom_header_mut().unwrap();
-        if header.support_fast_codec() {
-            header.encode_fast(buf);
+
+        // Encode custom header if it supports fast codec
+        if let Some(header) = cmd.command_custom_header_mut() {
+            if header.support_fast_codec() {
+                header.encode_fast(buf);
+            }
         }
+
+        // Encode ext_fields map
         if let Some(ext_fields) = cmd.ext_fields() {
-            ext_fields.iter().for_each(|(k, v)| {
-                if k.is_empty() || v.is_empty() {
-                    return;
+            for (k, v) in ext_fields.iter() {
+                // Skip empty keys/values
+                if !k.is_empty() && !v.is_empty() {
+                    Self::write_str(buf, true, k.as_str());
+                    Self::write_str(buf, true, v.as_str());
                 }
-                Self::write_str(buf, true, k.as_str());
-                Self::write_str(buf, true, v.as_str());
-            });
+            }
         }
+
+        // Update ext_fields length in-place
         let current_length = buf.len();
-        buf[map_len_index..map_len_index + 4]
-            .copy_from_slice(&((current_length - map_len_index - 4) as i32).to_be_bytes());
+        let ext_fields_length = (current_length - map_len_index - 4) as i32;
+        buf[map_len_index..map_len_index + 4].copy_from_slice(&ext_fields_length.to_be_bytes());
+
         buf.len() - begin_index
+    }
+
+    /// Estimate the size needed for encoding to reduce reallocations
+    #[inline]
+    fn estimate_encode_size(cmd: &RemotingCommand) -> usize {
+        let mut size = 15; // Fixed header: code(2) + language(1) + version(2) + opaque(4) + flag(4) + map_len(4)
+
+        // Remark size
+        if let Some(remark) = cmd.remark() {
+            size += 4 + remark.len(); // length prefix + data
+        } else {
+            size += 4; // just the length prefix (0)
+        }
+
+        // Ext fields size (approximate)
+        if let Some(ext) = cmd.ext_fields() {
+            for (k, v) in ext.iter() {
+                if !k.is_empty() && !v.is_empty() {
+                    size += 2 + k.len() + 2 + v.len(); // short length prefix for both
+                }
+            }
+        }
+
+        size
     }
 
     pub fn rocket_mq_protocol_encode_bytes(cmd: &RemotingCommand) -> Bytes {
@@ -153,35 +214,42 @@ impl RocketMQSerializable {
         header_buffer.freeze()
     }
 
+    /// Optimized map serialization with pre-calculated capacity
+    #[inline]
     pub fn map_serialize(map: &HashMap<CheetahString, CheetahString>) -> Option<BytesMut> {
-        // Calculate the total length of the serialized map
-        let mut total_length = 0;
-
-        for (key, value) in map.iter() {
-            if key.is_empty() || value.is_empty() {
-                continue;
-            }
-            total_length += 2 + key.len() + 4 + value.len();
-        }
-
-        if total_length == 0 {
+        if map.is_empty() {
             return None;
         }
 
-        // Allocate the BytesMut buffer with the calculated length
-        let mut content = BytesMut::with_capacity(total_length);
+        // Pre-calculate total length in a single pass
+        let mut total_length = 0;
+        let mut valid_entries = 0;
 
         for (key, value) in map.iter() {
-            if key.is_empty() || value.is_empty() {
-                continue;
+            if !key.is_empty() && !value.is_empty() {
+                total_length += 2 + key.len() + 4 + value.len();
+                valid_entries += 1;
             }
-            // Serialize key
-            content.put_u16(key.len() as u16);
-            content.put_slice(key.as_bytes());
+        }
 
-            // Serialize value
-            content.put_i32(value.len() as i32);
-            content.put_slice(value.as_bytes());
+        if valid_entries == 0 {
+            return None;
+        }
+
+        // Allocate exact capacity (avoid reallocations)
+        let mut content = BytesMut::with_capacity(total_length);
+
+        // Serialize entries
+        for (key, value) in map.iter() {
+            if !key.is_empty() && !value.is_empty() {
+                // Write key: u16 length + bytes
+                content.put_u16(key.len() as u16);
+                content.put_slice(key.as_bytes());
+
+                // Write value: i32 length + bytes
+                content.put_i32(value.len() as i32);
+                content.put_slice(value.as_bytes());
+            }
         }
 
         Some(content)
@@ -232,16 +300,31 @@ impl RocketMQSerializable {
         Ok(cmd.set_remark_option(remark).set_ext_fields(ext))
     }
 
+    /// Optimized map deserialization with capacity hint and better error handling
+    #[inline]
     pub fn map_deserialize(
         buffer: &mut BytesMut,
         len: usize,
     ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, CheetahString>> {
-        let mut map = HashMap::new();
-        let end_index = buffer.len() - len;
+        if len == 0 {
+            return Ok(HashMap::new());
+        }
 
-        while buffer.remaining() > end_index {
-            let key = Self::read_str(buffer, true, len)?.unwrap();
-            let value = Self::read_str(buffer, false, len)?.unwrap();
+        // Pre-allocate HashMap with estimated capacity (assume ~50 bytes per entry)
+        let estimated_entries = (len / 50).clamp(4, 1024);
+        let mut map = HashMap::with_capacity(estimated_entries);
+
+        let target_remaining = buffer.remaining().saturating_sub(len);
+
+        while buffer.remaining() > target_remaining {
+            // Read key (short length prefix)
+            let key = Self::read_str(buffer, true, len)?
+                .ok_or_else(|| RocketmqError::DecodingError(0, 0))?;
+
+            // Read value (long length prefix)
+            let value = Self::read_str(buffer, false, len)?
+                .ok_or_else(|| RocketmqError::DecodingError(0, 0))?;
+
             map.insert(key, value);
         }
 
