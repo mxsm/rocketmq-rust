@@ -81,3 +81,7 @@ criterion = { version = "0.7", features = ["html_reports"] }
 [[bench]]
 name = "delivery"
 harness = false
+
+[[bench]]
+name = "mapped_buffer_bench"
+harness = false
