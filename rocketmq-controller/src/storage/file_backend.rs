@@ -39,7 +39,7 @@ use crate::storage::StorageStats;
 /// This is simpler than RocksDB but less performant for large datasets.
 ///
 /// File structure:
-/// ```
+/// ```text
 ///  data_dir/
 ///    ├── metadata.json (index of all keys)
 ///    └── data/
