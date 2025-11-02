@@ -24,3 +24,4 @@ pub struct QueryMessageResponseHeader {
     pub index_last_update_timestamp: i64,
     pub index_last_update_phyoffset: i64,
 }
+

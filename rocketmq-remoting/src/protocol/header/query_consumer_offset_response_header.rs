@@ -24,3 +24,4 @@ use serde::Serialize;
 pub struct QueryConsumerOffsetResponseHeader {
     pub offset: Option<i64>,
 }
+

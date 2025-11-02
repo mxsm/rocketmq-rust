@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_error::mq_client_err;
+
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_rust::ArcMut;
 
@@ -86,10 +86,10 @@ impl MQAdminImpl {
                 ));
             }
         }
-        mq_client_err!(format!(
+        Err(mq_client_err!(format!(
             "Unknow why, Can not find Message Queue for this topic, {}",
             topic
-        ))
+        )))
     }
 
     pub async fn max_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {

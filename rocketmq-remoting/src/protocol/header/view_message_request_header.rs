@@ -24,3 +24,4 @@ pub struct ViewMessageRequestHeader {
     pub topic: CheetahString,
     pub offset: i64,
 }
+

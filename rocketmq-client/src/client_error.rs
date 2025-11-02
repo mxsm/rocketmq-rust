@@ -104,25 +104,8 @@ impl MQBrokerErr {
     }
 }
 
-#[macro_export]
-macro_rules! client_broker_err {
-    // Handle errors with a custom ResponseCode and formatted string
-    ($response_code:expr, $error_message:expr, $broker_addr:expr) => {{
-        std::result::Result::Err($crate::client_error::MQClientError::MQClientBrokerError(
-            $crate::client_error::MQBrokerErr::new_with_broker(
-                $response_code as i32,
-                $error_message,
-                $broker_addr,
-            ),
-        ))
-    }};
-    // Handle errors without a ResponseCode, using only the error message
-    ($response_code:expr, $error_message:expr) => {{
-        std::result::Result::Err($crate::client_error::MQClientError::MQClientBrokerError(
-            $crate::client_error::MQBrokerErr::new($response_code as i32, $error_message),
-        ))
-    }};
-}
+// Note: Macros mq_client_err! and client_broker_err! are now defined in lib.rs
+// to ensure they're available throughout the crate
 
 #[derive(Error, Debug)]
 #[error("{message}")]
@@ -162,34 +145,6 @@ impl ClientErr {
     pub fn error_message(&self) -> Option<&CheetahString> {
         self.error_message.as_ref()
     }
-}
-
-// Create a macro to simplify error creation
-#[macro_export]
-macro_rules! mq_client_err {
-    // Handle errors with a custom ResponseCode and formatted string
-    ($response_code:expr, $fmt:expr, $($arg:expr),*) => {{
-        let formatted_msg = format!($fmt, $($arg),*);
-        std::result::Result::Err($crate::client_error::MQClientError::MQClientErr(
-            $crate::client_error::ClientErr::new_with_code($response_code as i32, formatted_msg),
-        ))
-    }};
-
-    ($response_code:expr, $error_message:expr) => {{
-        std::result::Result::Err($crate::client_error::MQClientError::MQClientErr(
-            $crate::client_error::ClientErr::new_with_code(
-                $response_code as i32,
-                $error_message,
-            ),
-        ))
-    }};
-
-    // Handle errors without a ResponseCode, using only the error message
-    ($error_message:expr) => {{
-        std::result::Result::Err($crate::client_error::MQClientError::MQClientErr(
-            $crate::client_error::ClientErr::new($error_message),
-        ))
-    }};
 }
 
 #[derive(Error, Debug)]
@@ -268,7 +223,7 @@ mod tests {
     #[test]
     fn client_err_with_response_code_formats_correctly() {
         let result: std::result::Result<(), client_error::MQClientError> =
-            mq_client_err!(404, "Error: not found");
+            Err(mq_client_err!(404, "Error: not found"));
         assert!(result.is_err());
         if let Err(MQClientError::MQClientErr(err)) = result {
             assert_eq!(err.response_code(), 404);
@@ -281,7 +236,7 @@ mod tests {
     #[test]
     fn client_broker_err_with_response_code_and_broker_formats_correctly() {
         let result: std::result::Result<(), client_error::MQClientError> =
-            client_broker_err!(404, "Error: {}", "127.0.0.1");
+            Err(client_broker_err!(404, "Error: {}", "127.0.0.1"));
         assert!(result.is_err());
         if let Err(MQClientError::MQClientBrokerError(err)) = result {
             assert_eq!(err.response_code(), 404);
@@ -293,7 +248,7 @@ mod tests {
     #[test]
     fn client_broker_err_with_response_code_formats_correctly() {
         let result: std::result::Result<(), client_error::MQClientError> =
-            client_broker_err!(404, "Error: not found");
+            Err(client_broker_err!(404, "Error: not found"));
         assert!(result.is_err());
         if let Err(MQClientError::MQClientBrokerError(err)) = result {
             assert_eq!(err.response_code(), 404);
@@ -337,7 +292,7 @@ mod tests {
     #[test]
     fn mq_client_err_with_response_code_formats_correctly() {
         let result: std::result::Result<(), client_error::MQClientError> =
-            mq_client_err!(404, "Error: {}", "not found");
+            Err(mq_client_err!(404, "Error: {}", "not found"));
         assert!(result.is_err());
         if let Err(MQClientError::MQClientErr(err)) = result {
             assert_eq!(err.response_code(), 404);
@@ -347,7 +302,7 @@ mod tests {
 
     #[test]
     fn mq_client_err_without_response_code_formats_correctly() {
-        let result: Result<(), client_error::MQClientError> = mq_client_err!("simple error");
+        let result: Result<(), client_error::MQClientError> = Err(mq_client_err!("simple error"));
         assert!(result.is_err());
         if let Err(MQClientError::MQClientErr(err)) = result {
             assert_eq!(err.response_code(), -1);
@@ -358,7 +313,7 @@ mod tests {
     #[test]
     fn mq_client_err_with_multiple_arguments_formats_correctly() {
         let result: Result<(), client_error::MQClientError> =
-            mq_client_err!(500, "Error: {} - {}", "internal", "server error");
+            Err(mq_client_err!(500, "Error: {} - {}", "internal", "server error"));
         assert!(result.is_err());
         if let Err(MQClientError::MQClientErr(err)) = result {
             assert_eq!(err.response_code(), 500);

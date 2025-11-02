@@ -27,3 +27,4 @@ pub struct LockBatchMqRequestHeader {
     #[serde(flatten)]
     pub rpc_request_header: Option<RpcRequestHeader>,
 }
+

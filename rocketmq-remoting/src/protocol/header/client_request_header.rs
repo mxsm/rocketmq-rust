@@ -99,3 +99,4 @@ mod tests {
         assert!(header.topic_request_header.is_none());
     }
 }
+

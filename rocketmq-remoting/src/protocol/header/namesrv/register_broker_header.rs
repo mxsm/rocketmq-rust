@@ -263,3 +263,4 @@ mod tests {
         assert_eq!(deserialized.master_addr, None);
     }
 }
+

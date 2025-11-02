@@ -27,7 +27,6 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::utils::util_all;
 use rocketmq_common::TimeUtils::get_current_millis;
-use rocketmq_error::mq_client_err;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
@@ -283,10 +282,10 @@ impl Rebalance for RebalancePushImpl {
                             .await?
                     }
                 } else {
-                    return mq_client_err!(
+                    return Err(mq_client_err!(
                         ResponseCode::QueryNotFound as i32,
                         "Failed to query consume offset from offset store"
-                    );
+                    ));
                 }
             }
             ConsumeFromWhere::ConsumeFromFirstOffset => {
@@ -298,10 +297,10 @@ impl Rebalance for RebalancePushImpl {
                 } else if -1 == last_offset {
                     0
                 } else {
-                    return mq_client_err!(
+                    return Err(mq_client_err!(
                         ResponseCode::QueryNotFound as i32,
                         "Failed to query consume offset from offset store"
-                    );
+                    ));
                 }
             }
             ConsumeFromWhere::ConsumeFromTimestamp => {
@@ -339,18 +338,18 @@ impl Rebalance for RebalancePushImpl {
                             .await?
                     }
                 } else {
-                    return mq_client_err!(
+                    return Err(mq_client_err!(
                         ResponseCode::QueryNotFound as i32,
                         "Failed to query consume offset from offset store"
-                    );
+                    ));
                 }
             }
         };
         if result < 0 {
-            return mq_client_err!(
+            return Err(mq_client_err!(
                 ResponseCode::SystemError as i32,
                 "Failed to query consume offset from offset store"
-            );
+            ));
         }
         Ok(result)
     }

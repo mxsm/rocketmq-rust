@@ -133,7 +133,7 @@ mod tests {
 
     use std::fmt::Debug;
 
-    use rocketmq_error::RocketmqError;
+    use rocketmq_error::RocketMQError;
     use serde::Deserialize;
     use serde::Serialize;
 

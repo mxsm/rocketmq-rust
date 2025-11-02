@@ -26,3 +26,4 @@ pub struct HeartbeatRequestHeader {
     #[serde(flatten)]
     pub rpc_request: Option<RpcRequestHeader>,
 }
+

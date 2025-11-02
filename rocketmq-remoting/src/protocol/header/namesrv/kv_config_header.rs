@@ -232,3 +232,4 @@ mod tests {
         assert_eq!(deserialized.namespace, CheetahString::from("namespace1"));
     }
 }
+

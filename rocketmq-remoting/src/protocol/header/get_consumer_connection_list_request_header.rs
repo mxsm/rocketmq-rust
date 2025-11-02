@@ -39,3 +39,4 @@ impl GetConsumerConnectionListRequestHeader {
         self.consumer_group = consumer_group;
     }
 }
+

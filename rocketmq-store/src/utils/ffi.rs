@@ -15,8 +15,8 @@
  *   limitations under the License.
  */
 
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_error::RocketmqError;
 
 pub(crate) const MADV_NORMAL: i32 = 0;
 pub(crate) const MADV_RANDOM: i32 = 1;
@@ -35,7 +35,9 @@ pub fn mlock(addr: *const u8, len: usize) -> RocketMQResult<()> {
         use std::ffi::c_void;
         let result = unsafe { libc::mlock(addr as *const c_void, len) };
         if result != 0 {
-            return Err(RocketmqError::StoreCustomError("mlock failed".to_string()));
+            return Err(RocketMQError::StorageLockFailed {
+                path: "memory lock (mlock)".to_string(),
+            });
         }
         Ok(())
     }
@@ -45,7 +47,9 @@ pub fn mlock(addr: *const u8, len: usize) -> RocketMQResult<()> {
         use windows::Win32::System::Memory::VirtualLock;
         // Windows does not have mlock, so we just return Ok
         let result = unsafe { VirtualLock(addr as _, len) };
-        result.map_err(|e| RocketmqError::StoreCustomError(e.to_string()))?;
+        result.map_err(|e| RocketMQError::StorageLockFailed {
+            path: format!("memory lock (VirtualLock): {}", e),
+        })?;
         Ok(())
     }
 }
@@ -58,9 +62,9 @@ pub fn munlock(addr: *const u8, len: usize) -> RocketMQResult<()> {
 
         let result = unsafe { libc::munlock(addr as *const c_void, len) };
         if result != 0 {
-            return Err(RocketmqError::StoreCustomError(
-                "munlock failed".to_string(),
-            ));
+            return Err(RocketMQError::StorageLockFailed {
+                path: "memory unlock (munlock)".to_string(),
+            });
         }
         Ok(())
     }
@@ -70,7 +74,9 @@ pub fn munlock(addr: *const u8, len: usize) -> RocketMQResult<()> {
 
         // Windows does not have munlock, so we just return Ok
         let result = unsafe { VirtualUnlock(addr as _, len) };
-        result.map_err(|e| RocketmqError::StoreCustomError(e.to_string()))?;
+        result.map_err(|e| RocketMQError::StorageLockFailed {
+            path: format!("memory unlock (VirtualUnlock): {}", e),
+        })?;
         Ok(())
     }
 }

@@ -20,13 +20,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use once_cell::sync::Lazy;
-use rocketmq_error::RequestTimeoutErr;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::task;
 use tokio::time::interval;
 
-use crate::common::client_error_code::ClientErrorCode;
 use crate::producer::request_response_future::RequestResponseFuture;
 
 pub static REQUEST_FUTURE_HOLDER: Lazy<Arc<RequestFutureHolder>> =
@@ -64,12 +62,10 @@ impl RequestFutureHolder {
         }
 
         for rf in rf_list {
-            let cause = Box::new(rocketmq_error::RocketmqError::RequestTimeoutError(
-                RequestTimeoutErr::new_with_code(
-                    ClientErrorCode::REQUEST_TIMEOUT_EXCEPTION,
-                    "request timeout, no reply message.",
-                ),
-            ));
+            let cause = Box::new(rocketmq_error::RocketMQError::Timeout {
+                operation: "request_reply",
+                timeout_ms: 3000, // default timeout
+            });
             rf.set_cause(cause);
             rf.execute_request_callback().await;
         }

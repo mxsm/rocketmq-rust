@@ -47,3 +47,4 @@ mod tests {
         assert_eq!(header.master_flush_offset, Some(9527));
     }
 }
+

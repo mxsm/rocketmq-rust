@@ -24,5 +24,5 @@ pub type RequestCallbackFn =
 
 pub trait RequestCallback: Sync + Send {
     fn on_success(&self, response: &Message);
-    fn on_exception(&self, e: &rocketmq_error::RocketmqError);
+    fn on_exception(&self, e: &rocketmq_error::RocketMQError);
 }

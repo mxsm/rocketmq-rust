@@ -16,8 +16,8 @@
  */
 
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_error::RocketmqError;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 
 pub struct CommandUtil;
@@ -30,25 +30,22 @@ impl CommandUtil {
         cluster_name: &str,
     ) -> RocketMQResult<Vec<CheetahString>> {
         let cluster_addr_table = cluster_info.cluster_addr_table.as_ref().ok_or_else(|| {
-            RocketmqError::SubCommand(
-                "CommandUtil".into(),
-                "No cluster address table available from nameserver.".into(),
+            RocketMQError::Internal(
+                "CommandUtil: No cluster address table available from nameserver.".into(),
             )
         })?;
         let broker_names = cluster_addr_table.get(cluster_name).ok_or_else(|| {
-            RocketmqError::SubCommand(
-                "CommandUtil".into(),
+            RocketMQError::Internal(
                 format!(
-                    "Make sure the specified clusterName exists or the nameserver which connected \
+                    "CommandUtil: Make sure the specified clusterName exists or the nameserver which connected \
                      to is correct. Cluster: {}",
                     cluster_name
                 ),
             )
         })?;
         let broker_addr_table = cluster_info.broker_addr_table.as_ref().ok_or_else(|| {
-            RocketmqError::SubCommand(
-                "CommandUtil".into(),
-                "No broker address table available from nameserver.".into(),
+            RocketMQError::Internal(
+                "CommandUtil: No broker address table available from nameserver.".into(),
             )
         })?;
 
@@ -75,9 +72,8 @@ impl CommandUtil {
                 }
             }
         }
-        Err(RocketmqError::SubCommand(
-            "CommandUtil".into(),
-            format!("No broker address for broker name: {}", broker_name),
+        Err(RocketMQError::Internal(
+            format!("CommandUtil: No broker address for broker name: {}", broker_name),
         ))
     }
 
@@ -91,10 +87,9 @@ impl CommandUtil {
                 return Ok(broker_names.iter().map(|n| n.to_string()).collect());
             }
         }
-        Err(RocketmqError::SubCommand(
-            "CommandUtil".into(),
+        Err(RocketMQError::Internal(
             format!(
-                "Make sure the specified clusterName exists or the nameserver which connected to \
+                "CommandUtil: Make sure the specified clusterName exists or the nameserver which connected to \
                  is correct. Cluster: {}",
                 cluster_name
             ),
@@ -115,10 +110,9 @@ impl CommandUtil {
                 }
             }
         }
-        Err(RocketmqError::SubCommand(
-            "CommandUtil".into(),
+        Err(RocketMQError::Internal(
             format!(
-                "Make sure the specified broker address exists. Address: {}",
+                "CommandUtil: Make sure the specified broker address exists. Address: {}",
                 broker_addr
             ),
         ))

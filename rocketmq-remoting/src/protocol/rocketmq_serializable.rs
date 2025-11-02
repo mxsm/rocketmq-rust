@@ -59,12 +59,12 @@ impl RocketMQSerializable {
         // Read length prefix
         let len = if use_short_length {
             if buf.remaining() < 2 {
-                return Err(RocketmqError::DecodingError(2, buf.remaining()));
+                return Err(RocketmqError::DecodingError(2, buf.remaining()).into());
             }
             buf.get_u16() as usize
         } else {
             if buf.remaining() < 4 {
-                return Err(RocketmqError::DecodingError(4, buf.remaining()));
+                return Err(RocketmqError::DecodingError(4, buf.remaining()).into());
             }
             buf.get_u32() as usize
         };
@@ -76,12 +76,12 @@ impl RocketMQSerializable {
 
         // Boundary check
         if len > limit {
-            return Err(RocketmqError::DecodingError(len, limit));
+            return Err(RocketmqError::DecodingError(len, limit).into());
         }
 
         // Ensure buffer has enough data
         if buf.remaining() < len {
-            return Err(RocketmqError::DecodingError(len, buf.remaining()));
+            return Err(RocketmqError::DecodingError(len, buf.remaining()).into());
         }
 
         // Zero-copy split and freeze
@@ -290,7 +290,7 @@ impl RocketMQSerializable {
         let ext_fields_length = header_buffer.get_i32() as usize;
         let ext = if ext_fields_length > 0 {
             if ext_fields_length > header_len {
-                return Err(RocketmqError::DecodingError(ext_fields_length, header_len));
+                return Err(RocketmqError::DecodingError(ext_fields_length, header_len).into());
             }
             Self::map_deserialize(header_buffer, ext_fields_length)?
         } else {
@@ -411,3 +411,4 @@ mod tests {
         );
     }
 }
+

@@ -31,7 +31,6 @@ use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::FAQUrl;
-use rocketmq_error::ClientErr;
 use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
 use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
@@ -152,13 +151,11 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
                     .await;
                 if !register_ok {
                     self.service_state = ServiceState::StartFailed;
-                    return Err(rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(
-                        format!(
-                            "The adminExt group[{}] has created already, specified another name \
-                             please.{}",
-                            self.admin_ext_group,
-                            FAQUrl::suggest_todo(FAQUrl::GROUP_NAME_DUPLICATE_URL)
-                        ),
+                    return Err(rocketmq_error::RocketMQError::illegal_argument(format!(
+                        "The adminExt group[{}] has created already, specified another name \
+                         please.{}",
+                        self.admin_ext_group,
+                        FAQUrl::suggest_todo(FAQUrl::GROUP_NAME_DUPLICATE_URL)
                     )));
                 }
                 let arc_mut = self.client_instance.clone().unwrap();

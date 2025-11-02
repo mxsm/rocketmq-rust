@@ -21,7 +21,6 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
-use rocketmq_error::mq_client_err;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
@@ -111,7 +110,10 @@ impl RemoteBrokerOffsetStore {
                 )
                 .await
         } else {
-            mq_client_err!(format!("broker not found, {}", mq.get_broker_name()))
+            Err(mq_client_err!(format!(
+                "broker not found, {}",
+                mq.get_broker_name()
+            )))
         }
     }
 }
@@ -158,7 +160,8 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
                         value
                     }
                     Err(e) => match e {
-                        rocketmq_error::RocketmqError::OffsetNotFoundError(_, _, _) => -1,
+                        rocketmq_error::RocketMQError::BrokerOperationFailed { code, .. }
+                        if code == rocketmq_remoting::code::response_code::ResponseCode::QueryNotFound as i32 => -1,
                         _ => {
                             warn!("fetchConsumeOffsetFromBroker exception: {:?}", mq);
                             -2
@@ -318,7 +321,10 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
             };
             Ok(())
         } else {
-            mq_client_err!(format!("broker not found, {}", mq.get_broker_name()))
+            Err(mq_client_err!(format!(
+                "broker not found, {}",
+                mq.get_broker_name()
+            )))
         }
     }
 }

@@ -19,8 +19,8 @@ use std::sync::Arc;
 use clap::Parser;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_error::RocketmqError;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
@@ -46,10 +46,10 @@ impl CommandExecute for DeleteKvConfigCommand {
             MQAdminExt::start(&mut default_mqadmin_ext)
                 .await
                 .map_err(|e| {
-                    RocketmqError::SubCommand(
-                        "DeleteKvConfigCommand".parse().unwrap(),
-                        e.to_string(),
-                    )
+                    RocketMQError::Internal(format!(
+                        "DeleteKvConfigCommand: Failed to start MQAdminExt: {}",
+                        e
+                    ))
                 })?;
 
             MQAdminExt::delete_kv_config(
@@ -59,7 +59,10 @@ impl CommandExecute for DeleteKvConfigCommand {
             )
             .await
             .map_err(|e| {
-                RocketmqError::SubCommand("DeleteKvConfigCommand".parse().unwrap(), e.to_string())
+                RocketMQError::Internal(format!(
+                    "DeleteKvConfigCommand: Failed to delete kv config: {}",
+                    e
+                ))
             })?;
 
             println!("delete kv config from namespace success.");

@@ -135,8 +135,8 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
                 .await;
             if let Err(e) = topic_route_data {
                 if !NamespaceUtil::is_retry_topic(topic) {
-                    if let rocketmq_error::RocketmqError::MQBrokerError(a, _, _) = e {
-                        if a == ResponseCode::TopicNotExist as i32 {
+                    if let rocketmq_error::RocketMQError::BrokerOperationFailed { code, .. } = e {
+                        if code == ResponseCode::TopicNotExist as i32 {
                             self.clean_none_route_topic(topic);
                             return;
                         }

@@ -49,3 +49,4 @@ pub trait TopicRequestHeaderTrait: Sync + Send {
 
     fn set_queue_id(&mut self, queue_id: i32);
 }
+

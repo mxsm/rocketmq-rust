@@ -115,7 +115,7 @@ pub trait CommandCustomHeader: AsAny {
             Some(value) => Ok(value.clone()),
             None => Err(rocketmq_error::RocketmqError::DeserializeHeaderError(
                 format!("The field {field} is required."),
-            )),
+            ).into()),
         }
     }
 }
@@ -145,3 +145,4 @@ pub trait FromMap {
     /// Returns an instance of `Self::Target` that is created from the provided map.
     fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error>;
 }
+

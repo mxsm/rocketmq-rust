@@ -23,8 +23,7 @@ use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::mix_all;
 use rocketmq_error::RocketMQResult;
-use rocketmq_error::RocketmqError::IllegalArgument;
-use rocketmq_error::RocketmqError::IllegalArgumentError;
+use rocketmq_error::RocketmqError::{IllegalArgument, IllegalArgumentError};
 
 pub struct ExtraInfoUtil;
 
@@ -48,11 +47,11 @@ impl ExtraInfoUtil {
             return Err(IllegalArgument(format!(
                 "getCkQueueOffset fail, extraInfoStrs length {}",
                 extra_info_strs.len()
-            )));
+            )).into());
         }
         extra_info_strs[0]
             .parse::<i64>()
-            .map_err(|_| IllegalArgument("parse ck_queue_offset error".to_string()))
+            .map_err(|_| IllegalArgument("parse ck_queue_offset error".to_string()).into())
     }
 
     /// Get the pop time from the extra info
@@ -61,11 +60,11 @@ impl ExtraInfoUtil {
             return Err(IllegalArgument(format!(
                 "getPopTime fail, extraInfoStrs length {}",
                 extra_info_strs.len()
-            )));
+            )).into());
         }
         extra_info_strs[1]
             .parse::<i64>()
-            .map_err(|_| IllegalArgument("parse pop_time error".to_string()))
+            .map_err(|_| IllegalArgument("parse pop_time error".to_string()).into())
     }
 
     /// Get the invisible time from the extra info
@@ -74,11 +73,11 @@ impl ExtraInfoUtil {
             return Err(IllegalArgument(format!(
                 "getInvisibleTime fail, extraInfoStrs length {}",
                 extra_info_strs.len()
-            )));
+            )).into());
         }
         extra_info_strs[2]
             .parse::<i64>()
-            .map_err(|_| IllegalArgument("parse invisible_time error".to_string()))
+            .map_err(|_| IllegalArgument("parse invisible_time error".to_string()).into())
     }
 
     /// Get the revive queue ID from the extra info
@@ -87,11 +86,11 @@ impl ExtraInfoUtil {
             return Err(IllegalArgument(format!(
                 "getReviveQid fail, extraInfoStrs length {}",
                 extra_info_strs.len()
-            )));
+            )).into());
         }
         extra_info_strs[3]
             .parse::<i32>()
-            .map_err(|_| IllegalArgument("parse revive_qid error".to_string()))
+            .map_err(|_| IllegalArgument("parse revive_qid error".to_string()).into())
     }
 
     /// Get the real topic name based on the retry flag
@@ -104,7 +103,7 @@ impl ExtraInfoUtil {
             return Err(IllegalArgument(format!(
                 "getRealTopic fail, extraInfoStrs length {}",
                 extra_info_strs.len()
-            )));
+            )).into());
         }
 
         if RETRY_TOPIC == extra_info_strs[4] {
@@ -131,7 +130,7 @@ impl ExtraInfoUtil {
         } else {
             Err(IllegalArgument(
                 "getRetry fail, format is wrong".to_string(),
-            ))
+            ).into())
         }
     }
 
@@ -141,7 +140,7 @@ impl ExtraInfoUtil {
             return Err(IllegalArgument(format!(
                 "getRetry fail, extraInfoStrs length {}",
                 extra_info_strs.len()
-            )));
+            )).into());
         }
         Ok(extra_info_strs[4].clone())
     }
@@ -152,7 +151,7 @@ impl ExtraInfoUtil {
             return Err(IllegalArgument(format!(
                 "getBrokerName fail, extraInfoStrs length {}",
                 extra_info_strs.len()
-            )));
+            )).into());
         }
         Ok(extra_info_strs[5].clone())
     }
@@ -163,11 +162,11 @@ impl ExtraInfoUtil {
             return Err(IllegalArgument(format!(
                 "getQueueId fail, extraInfoStrs length {}",
                 extra_info_strs.len()
-            )));
+            )).into());
         }
         extra_info_strs[6]
             .parse::<i32>()
-            .map_err(|_| IllegalArgument("parse queue_id error".to_string()))
+            .map_err(|_| IllegalArgument("parse queue_id error".to_string()).into())
     }
 
     /// Get the queue offset from the extra info
@@ -176,11 +175,11 @@ impl ExtraInfoUtil {
             return Err(IllegalArgument(format!(
                 "getQueueOffset fail, extraInfoStrs length {}",
                 extra_info_strs.len()
-            )));
+            )).into());
         }
         extra_info_strs[7]
             .parse::<i64>()
-            .map_err(|_| IllegalArgument("parse queue_offset error".to_string()))
+            .map_err(|_| IllegalArgument("parse queue_offset error".to_string()).into())
     }
 
     /// Build extra info string
@@ -332,14 +331,14 @@ impl ExtraInfoUtil {
         for one in array {
             let split: Vec<&str> = one.split(MessageConst::KEY_SEPARATOR).collect();
             if split.len() != 3 {
-                return Err(IllegalArgument("parse msgOffsetInfo error".to_string()));
+                return Err(IllegalArgument("parse msgOffsetInfo error".to_string()).into());
             }
 
             let key = format!("{}@{}", split[0], split[1]);
             if msg_offset_map.contains_key(&key) {
                 return Err(IllegalArgument(
                     "parse msgOffsetMap error, duplicate".to_string(),
-                ));
+                ).into());
             }
 
             msg_offset_map.insert(key.clone(), Vec::with_capacity(8));
@@ -375,14 +374,14 @@ impl ExtraInfoUtil {
             if split.len() != 3 {
                 return Err(IllegalArgument(format!(
                     "parse startOffsetInfo error, {start_offset_info}"
-                )));
+                )).into());
             }
 
             let key = format!("{}@{}", split[0], split[1]);
             if start_offset_map.contains_key(&key) {
                 return Err(IllegalArgumentError(
                     "parse startOffsetMap error, duplicate".to_string(),
-                ));
+                ).into());
             }
 
             start_offset_map.insert(
@@ -413,14 +412,14 @@ impl ExtraInfoUtil {
             if split.len() != 3 {
                 return Err(IllegalArgument(format!(
                     "parse orderCountInfo error {order_count_info}"
-                )));
+                )).into());
             }
 
             let key = format!("{}@{}", split[0], split[1]);
             if order_count_map.contains_key(&key) {
                 return Err(IllegalArgument(format!(
                     "parse orderCountInfo error, duplicate, {order_count_info}"
-                )));
+                )).into());
             }
 
             order_count_map.insert(
@@ -926,3 +925,5 @@ mod tests {
         assert!(!result);
     }
 }
+
+

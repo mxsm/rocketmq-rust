@@ -19,8 +19,8 @@ use std::sync::Arc;
 use clap::Parser;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_error::RocketmqError;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
@@ -67,10 +67,10 @@ impl CommandExecute for UpdateKvConfigCommand {
             MQAdminExt::start(&mut default_mqadmin_ext)
                 .await
                 .map_err(|e| {
-                    RocketmqError::SubCommand(
-                        "UpdateKvConfigCommand".parse().unwrap(),
-                        e.to_string(),
-                    )
+                    RocketMQError::Internal(format!(
+                        "UpdateKvConfigCommand: Failed to start MQAdminExt: {}",
+                        e
+                    ))
                 })?;
 
             default_mqadmin_ext
@@ -81,10 +81,10 @@ impl CommandExecute for UpdateKvConfigCommand {
                 )
                 .await
                 .map_err(|e| {
-                    RocketmqError::SubCommand(
-                        "UpdateKvConfigCommand".parse().unwrap(),
-                        e.to_string(),
-                    )
+                    RocketMQError::Internal(format!(
+                        "UpdateKvConfigCommand: Failed to update kv config: {}",
+                        e
+                    ))
                 })?;
 
             println!("update kv config in namespace success.");

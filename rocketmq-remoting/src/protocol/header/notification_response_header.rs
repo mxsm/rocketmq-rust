@@ -24,3 +24,4 @@ pub struct NotificationResponseHeader {
     #[required]
     pub has_msg: bool,
 }
+

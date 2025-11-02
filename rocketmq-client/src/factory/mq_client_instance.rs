@@ -32,7 +32,7 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::TimeUtils::get_current_millis;
-use rocketmq_error::mq_client_err;
+
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::heartbeat::consumer_data::ConsumerData;
@@ -331,10 +331,10 @@ impl MQClientInstance {
             ServiceState::Running => {}
             ServiceState::ShutdownAlready => {}
             ServiceState::StartFailed => {
-                return mq_client_err!(format!(
+                return Err(mq_client_err!(format!(
                     "The Factory object[{}] has been created before, and failed.",
                     self.client_id
-                ));
+                )));
             }
         }
         Ok(())
@@ -997,8 +997,8 @@ impl MQClientInstance {
                     {
                         Ok(_) => {}
                         Err(e) => match e {
-                            rocketmq_error::RocketmqError::MQClientErr(err) => {
-                                return Err(rocketmq_error::RocketmqError::MQClientErr(err));
+                            rocketmq_error::RocketMQError::IllegalArgument(_) => {
+                                return Err(e);
                             }
                             _ => {
                                 let desc = format!(
@@ -1010,7 +1010,6 @@ impl MQClientInstance {
                                      the log!",
                                     subscription_data.expression_type
                                 );
-                                return mq_client_err!(desc);
                             }
                         },
                     }
@@ -1229,7 +1228,7 @@ impl MQClientInstance {
                         )
                         .await
                 }
-                None => mq_client_err!("mq_client_api_impl is None"),
+                None => Err(mq_client_err!("mq_client_api_impl is None")),
             }
         } else {
             Ok(None)

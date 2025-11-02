@@ -214,3 +214,4 @@ impl TopicRequestHeaderTrait for GetMaxOffsetRequestHeader {
         self.queue_id = queue_id;
     }
 }
+

@@ -76,7 +76,7 @@ impl RpcClientImpl {
             None => Err(RpcError(
                 From::from(ResponseCode::SystemError),
                 format!("cannot find addr for broker {broker_name}"),
-            )),
+            ).into()),
             Some(value) => Ok(value),
         }
     }
@@ -115,7 +115,7 @@ impl RpcClientImpl {
             Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
                 format!("process failed. addr: {addr}. Request"),
-            )),
+            ).into()),
         }
     }
 
@@ -150,7 +150,7 @@ impl RpcClientImpl {
             Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
                 format!("process failed. addr: {addr}. Request"),
-            )),
+            ).into()),
         }
     }
     async fn handle_get_max_offset<H: CommandCustomHeader + TopicRequestHeaderTrait>(
@@ -184,7 +184,7 @@ impl RpcClientImpl {
             Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
                 format!("process failed. addr: {addr}. Request"),
-            )),
+            ).into()),
         }
     }
     async fn handle_search_offset<H: CommandCustomHeader + TopicRequestHeaderTrait>(
@@ -218,7 +218,7 @@ impl RpcClientImpl {
             Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
                 format!("process failed. addr: {addr}. Request"),
-            )),
+            ).into()),
         }
     }
     async fn handle_get_earliest_msg_storetime<H: CommandCustomHeader + TopicRequestHeaderTrait>(
@@ -252,7 +252,7 @@ impl RpcClientImpl {
             Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
                 format!("process failed. addr: {addr}. Request"),
-            )),
+            ).into()),
         }
     }
     async fn handle_query_consumer_offset<H: CommandCustomHeader + TopicRequestHeaderTrait>(
@@ -290,7 +290,7 @@ impl RpcClientImpl {
             Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
                 format!("process failed. addr: {addr}. Request"),
-            )),
+            ).into()),
         }
     }
     async fn handle_update_consumer_offset<H: CommandCustomHeader + TopicRequestHeaderTrait>(
@@ -324,7 +324,7 @@ impl RpcClientImpl {
             Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
                 format!("process failed. addr: {addr}. Request"),
-            )),
+            ).into()),
         }
     }
     async fn handle_common_body_request<H: CommandCustomHeader + TopicRequestHeaderTrait>(
@@ -355,7 +355,7 @@ impl RpcClientImpl {
             Err(_error) => Err(RpcError(
                 From::from(ResponseCode::SystemError),
                 format!("process failed. addr: {addr}. Request"),
-            )),
+            ).into()),
         }
     }
 }
@@ -421,7 +421,7 @@ impl RpcClient for RpcClientImpl {
                 return Err(RpcError(
                     From::from(ResponseCode::RequestCodeNotSupported),
                     format!("unknown request code {}", request.code),
-                ))
+                ).into())
             }
         };
         Ok(result)
@@ -439,3 +439,4 @@ impl RpcClient for RpcClientImpl {
         self.invoke(request, timeout_millis).await
     }
 }
+

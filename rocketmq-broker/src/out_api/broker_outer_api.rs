@@ -40,7 +40,7 @@ use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::get_current_millis;
-use rocketmq_error::RocketmqError;
+use rocketmq_error::RocketMQError;
 use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -385,16 +385,17 @@ impl BrokerOuterAPI {
                         LockBatchResponseBody::decode(response.get_body().unwrap()).unwrap();
                     Ok(lock_batch_response_body.lock_ok_mq_set)
                 } else {
-                    Err(RocketmqError::MQBrokerError(
-                        response.code(),
-                        response
+                    Err(RocketMQError::BrokerOperationFailed {
+                        operation: "lock_batch_mq",
+                        code: response.code(),
+                        message: response
                             .remark()
                             .cloned()
                             .unwrap_or(CheetahString::empty())
                             .to_json()
                             .expect("to json failed"),
-                        "".to_string(),
-                    ))
+                        broker_addr: Some("".to_string()),
+                    })
                 }
             }
             Err(e) => Err(e),
@@ -421,15 +422,16 @@ impl BrokerOuterAPI {
                 if ResponseCode::from(response.code()) == ResponseCode::Success {
                     Ok(())
                 } else {
-                    Err(RocketmqError::MQBrokerError(
-                        response.code(),
-                        response
+                    Err(RocketMQError::BrokerOperationFailed {
+                        operation: "unlock_batch_mq",
+                        code: response.code(),
+                        message: response
                             .remark()
                             .cloned()
                             .unwrap_or(CheetahString::empty())
                             .to_string(),
-                        "".to_string(),
-                    ))
+                        broker_addr: Some("".to_string()),
+                    })
                 }
             }
             Err(e) => Err(e),
@@ -469,15 +471,16 @@ impl BrokerOuterAPI {
             }
             _ => {}
         }
-        Err(RocketmqError::MQBrokerError(
-            response.code(),
-            response
+        Err(RocketMQError::BrokerOperationFailed {
+            operation: "notify_min_broker_id_changed",
+            code: response.code(),
+            message: response
                 .remark()
                 .cloned()
                 .unwrap_or(CheetahString::empty())
                 .to_string(),
-            "".to_string(),
-        ))
+            broker_addr: Some("".to_string()),
+        })
     }
 
     pub async fn send_message_to_specific_broker(
@@ -618,11 +621,12 @@ impl BrokerOuterAPI {
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             Ok(())
         } else {
-            Err(RocketmqError::MQBrokerError(
-                response.code(),
-                response.remark().map_or("".to_string(), |s| s.to_string()),
-                broker_addr.to_string(),
-            ))
+            Err(RocketMQError::BrokerOperationFailed {
+                operation: "sync_consumer_offset_all",
+                code: response.code(),
+                message: response.remark().map_or("".to_string(), |s| s.to_string()),
+                broker_addr: Some(broker_addr.to_string()),
+            })
         }
     }
 
@@ -646,11 +650,12 @@ impl BrokerOuterAPI {
             }
             Ok(None)
         } else {
-            Err(RocketmqError::MQBrokerError(
-                response.code(),
-                response.remark().map_or("".to_string(), |s| s.to_string()),
-                addr.to_string(),
-            ))
+            Err(RocketMQError::BrokerOperationFailed {
+                operation: "get_all_topic_config",
+                code: response.code(),
+                message: response.remark().map_or("".to_string(), |s| s.to_string()),
+                broker_addr: Some(addr.to_string()),
+            })
         }
     }
 
@@ -671,11 +676,12 @@ impl BrokerOuterAPI {
             }
             Ok(None)
         } else {
-            Err(RocketmqError::MQBrokerError(
-                response.code(),
-                response.remark().map_or("".to_string(), |s| s.to_string()),
-                addr.to_string(),
-            ))
+            Err(RocketMQError::BrokerOperationFailed {
+                operation: "get_all_consumer_offset",
+                code: response.code(),
+                message: response.remark().map_or("".to_string(), |s| s.to_string()),
+                broker_addr: Some(addr.to_string()),
+            })
         }
     }
 
@@ -694,11 +700,12 @@ impl BrokerOuterAPI {
             }
             Ok(None)
         } else {
-            Err(RocketmqError::MQBrokerError(
-                response.code(),
-                response.remark().map_or("".to_string(), |s| s.to_string()),
-                addr.to_string(),
-            ))
+            Err(RocketMQError::BrokerOperationFailed {
+                operation: "get_delay_offset",
+                code: response.code(),
+                message: response.remark().map_or("".to_string(), |s| s.to_string()),
+                broker_addr: Some(addr.to_string()),
+            })
         }
     }
 
@@ -718,11 +725,12 @@ impl BrokerOuterAPI {
             }
             Ok(None)
         } else {
-            Err(RocketmqError::MQBrokerError(
-                response.code(),
-                response.remark().map_or("".to_string(), |s| s.to_string()),
-                addr.to_string(),
-            ))
+            Err(RocketMQError::BrokerOperationFailed {
+                operation: "get_all_subscription_group_config",
+                code: response.code(),
+                message: response.remark().map_or("".to_string(), |s| s.to_string()),
+                broker_addr: Some(addr.to_string()),
+            })
         }
     }
 
@@ -744,11 +752,12 @@ impl BrokerOuterAPI {
             }
             Ok(None)
         } else {
-            Err(RocketmqError::MQBrokerError(
-                response.code(),
-                response.remark().map_or("".to_string(), |s| s.to_string()),
-                addr.to_string(),
-            ))
+            Err(RocketMQError::BrokerOperationFailed {
+                operation: "get_message_request_mode",
+                code: response.code(),
+                message: response.remark().map_or("".to_string(), |s| s.to_string()),
+                broker_addr: Some(addr.to_string()),
+            })
         }
     }
 
@@ -784,11 +793,12 @@ impl BrokerOuterAPI {
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             Ok(())
         } else {
-            Err(RocketmqError::MQBrokerError(
-                response.code(),
-                response.remark().map_or("".to_string(), |s| s.to_string()),
-                broker_addr.to_string(),
-            ))
+            Err(RocketMQError::BrokerOperationFailed {
+                operation: "sync_broker_member_group",
+                code: response.code(),
+                message: response.remark().map_or("".to_string(), |s| s.to_string()),
+                broker_addr: Some(broker_addr.to_string()),
+            })
         }
     }
 
@@ -815,11 +825,12 @@ impl BrokerOuterAPI {
             });
         }
 
-        Err(RocketmqError::MQBrokerError(
-            response.code(),
-            response.remark().map_or("".to_string(), |s| s.to_string()),
-            master_broker_addr.map_or("".to_string(), |s| s.to_string()),
-        ))
+        Err(RocketMQError::BrokerOperationFailed {
+            operation: "retrieve_broker_ha_info",
+            code: response.code(),
+            message: response.remark().map_or("".to_string(), |s| s.to_string()),
+            broker_addr: master_broker_addr.map(|s| s.to_string()),
+        })
     }
 
     pub fn close_channel(&self, addr_list: Vec<String>) {
@@ -875,11 +886,12 @@ fn process_pull_response(
         ResponseCode::PullRetryImmediately => PullStatus::NoMatchedMsg,
         ResponseCode::PullOffsetMoved => PullStatus::OffsetIllegal,
         _ => {
-            return Err(RocketmqError::MQBrokerError(
-                response.code(),
-                response.remark().map_or("".to_string(), |s| s.to_string()),
-                addr.to_string(),
-            ))
+            return Err(RocketMQError::BrokerOperationFailed {
+                operation: "pull_message",
+                code: response.code(),
+                message: response.remark().map_or("".to_string(), |s| s.to_string()),
+                broker_addr: Some(addr.to_string()),
+            })
         }
     };
     let response_header = response.decode_command_custom_header::<PullMessageResponseHeader>()?;
@@ -1026,11 +1038,12 @@ pub fn process_send_response(
     }
 
     // If send_status is None, we throw an error
-    Err(RocketmqError::MQBrokerError(
-        response.code(),
-        "".to_string(),
-        response.remark().map_or("".to_string(), |s| s.to_string()),
-    ))
+    Err(RocketMQError::BrokerOperationFailed {
+        operation: "send_message",
+        code: response.code(),
+        message: response.remark().map_or("".to_string(), |s| s.to_string()),
+        broker_addr: None,
+    })
 }
 
 #[cfg(test)]

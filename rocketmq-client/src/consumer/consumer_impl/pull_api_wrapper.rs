@@ -31,7 +31,6 @@ use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::get_current_millis;
-use rocketmq_error::mq_client_err;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageRequestHeader;
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
@@ -287,13 +286,13 @@ impl PullAPIWrapper {
                 if !ExpressionType::is_tag_type(Some(expression_type.as_str()))
                     && find_broker_result.broker_version < RocketMqVersion::V4_1_0_SNAPSHOT as i32
                 {
-                    return mq_client_err!(format!(
+                    return Err(mq_client_err!(format!(
                         "The broker[{}],[{}] does not support consumer to filter message by \
                          tag[{}]",
                         mq.get_broker_name(),
                         find_broker_result.broker_version,
                         expression_type
-                    ));
+                    )));
                 }
             }
 
@@ -348,7 +347,10 @@ impl PullAPIWrapper {
             )
             .await
         } else {
-            mq_client_err!(format!("The broker[{}] not exist", mq.get_broker_name(),))
+            Err(mq_client_err!(format!(
+                "The broker[{}] not exist",
+                mq.get_broker_name(),
+            )))
         }
     }
 
@@ -365,17 +367,17 @@ impl PullAPIWrapper {
             .get(broker_addr);
         if let Some(vec) = vec {
             return vec.get(random_num() as usize % vec.len()).map_or(
-                mq_client_err!(format!(
+                Err(mq_client_err!(format!(
                     "Find Filter Server Failed, Broker Addr: {},topic:{}",
                     broker_addr, topic
-                )),
+                ))),
                 |v| Ok(v.clone()),
             );
         }
-        mq_client_err!(format!(
+        Err(mq_client_err!(format!(
             "Find Filter Server Failed, Broker Addr: {},topic:{}",
             broker_addr, topic
-        ))
+        )))
     }
 
     pub async fn pop_async<PC>(
@@ -449,7 +451,10 @@ impl PullAPIWrapper {
                 )
                 .await
         } else {
-            mq_client_err!(format!("The broker[{}] not exist", mq.get_broker_name(),))
+            Err(mq_client_err!(format!(
+                "The broker[{}] not exist",
+                mq.get_broker_name(),
+            )))
         }
     }
 }

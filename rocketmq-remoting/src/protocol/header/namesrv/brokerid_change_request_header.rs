@@ -98,3 +98,4 @@ mod tests {
         assert_eq!(header.ha_broker_addr, None);
     }
 }
+

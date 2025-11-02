@@ -43,9 +43,7 @@ use rocketmq_common::utils::correlation_id_util::CorrelationIdUtil;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::get_current_millis;
-use rocketmq_error::mq_client_err;
 use rocketmq_error::ClientErr;
-use rocketmq_error::RequestTimeoutErr;
 use rocketmq_error::RocketmqError::RemotingTooMuchRequestError;
 use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
@@ -259,19 +257,18 @@ impl DefaultMQProducerImpl {
         Validators::check_message(Some(&msg), self.producer_config.as_ref())?;
 
         if msg.get_topic() != mq.get_topic() {
-            return mq_client_err!(format!(
+            return Err(mq_client_err!(format!(
                 "message topic [{}] is not equal with message queue topic [{}]",
                 msg.get_topic(),
                 mq.get_topic()
-            ));
+            )));
         }
         let cost_time = begin_start_time.elapsed().as_millis() as u64;
         if timeout < cost_time {
-            return Err(rocketmq_error::RocketmqError::RequestTimeoutError(
-                RequestTimeoutErr::new(format!(
-                    "send message timeout {timeout}ms is required, but {cost_time}ms is given",
-                )),
-            ));
+            return Err(rocketmq_error::RocketMQError::Timeout {
+                operation: "send_with_timeout",
+                timeout_ms: timeout,
+            });
         }
         self.send_kernel_impl(
             &mut msg,
@@ -409,9 +406,10 @@ impl DefaultMQProducerImpl {
                 let message_queue = selector(&message_queue_list, &msg, &arg);
                 let cost_time = begin_start_time.elapsed().as_millis() as u64;
                 if timeout < cost_time {
-                    return Err(rocketmq_error::RocketmqError::RemotingTooMuchRequestError(
-                        "sendSelectImpl call timeout".to_string(),
-                    ));
+                    return Err(rocketmq_error::RocketMQError::Timeout {
+                        operation: "sendSelectImpl",
+                        timeout_ms: timeout,
+                    });
                 }
                 if let Some(message_queue) = message_queue {
                     return self
@@ -425,11 +423,14 @@ impl DefaultMQProducerImpl {
                         )
                         .await;
                 }
-                return mq_client_err!("select message queue return null.");
+                return Err(mq_client_err!("select message queue return null."));
             }
         }
         self.validate_name_server_setting()?;
-        mq_client_err!(format!("No route info for this topic, {}", msg.get_topic()))
+        Err(mq_client_err!(format!(
+            "No route info for this topic, {}",
+            msg.get_topic()
+        )))
     }
 
     #[inline]
@@ -685,7 +686,7 @@ impl DefaultMQProducerImpl {
             if topic_publish_info.ok() {
                 let mut call_timeout = false;
                 let mut mq: Option<MessageQueue> = None;
-                let mut exception: Option<rocketmq_error::RocketmqError> = None;
+                let mut exception: Option<rocketmq_error::RocketMQError> = None;
                 let mut send_result: Option<SendResult> = None;
                 let times_total = if communication_mode == CommunicationMode::Sync {
                     self.producer_config.retry_times_when_send_failed() + 1
@@ -768,7 +769,7 @@ impl DefaultMQProducerImpl {
                                 };
                             }
                             Err(err) => match err {
-                                rocketmq_error::RocketmqError::MQClientErr(_) => {
+                                rocketmq_error::RocketMQError::IllegalArgument(_) => {
                                     end_timestamp = Instant::now();
                                     let elapsed =
                                         (end_timestamp - begin_timestamp_prev).as_millis() as u64;
@@ -791,7 +792,10 @@ impl DefaultMQProducerImpl {
                                     exception = Some(err);
                                     continue;
                                 }
-                                rocketmq_error::RocketmqError::MQClientBrokerError(ref er) => {
+                                rocketmq_error::RocketMQError::BrokerOperationFailed {
+                                    code,
+                                    ..
+                                } => {
                                     end_timestamp = Instant::now();
                                     let elapsed =
                                         (end_timestamp - begin_timestamp_prev).as_millis() as u64;
@@ -802,11 +806,7 @@ impl DefaultMQProducerImpl {
                                         false,
                                     )
                                     .await;
-                                    if self
-                                        .producer_config
-                                        .retry_response_codes()
-                                        .contains(&er.response_code())
-                                    {
+                                    if self.producer_config.retry_response_codes().contains(&code) {
                                         exception = Some(err);
                                         continue;
                                     } else {
@@ -816,7 +816,7 @@ impl DefaultMQProducerImpl {
                                         return Err(err);
                                     }
                                 }
-                                rocketmq_error::RocketmqError::RemoteError(_) => {
+                                rocketmq_error::RocketMQError::Network(_) => {
                                     end_timestamp = Instant::now();
                                     let elapsed =
                                         (end_timestamp - begin_timestamp_prev).as_millis() as u64;
@@ -855,9 +855,10 @@ impl DefaultMQProducerImpl {
                 }
 
                 if call_timeout {
-                    return Err(rocketmq_error::RocketmqError::RemotingTooMuchRequestError(
-                        "sendDefaultImpl call timeout".to_string(),
-                    ));
+                    return Err(rocketmq_error::RocketMQError::Timeout {
+                        operation: "sendDefaultImpl",
+                        timeout_ms: self.producer_config.send_msg_timeout() as u64,
+                    });
                 }
 
                 let info = format!(
@@ -871,42 +872,37 @@ impl DefaultMQProducerImpl {
 
                 return if let Some(err) = exception {
                     match err {
-                        rocketmq_error::RocketmqError::MQClientErr(_) => {
-                            mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info)
-                        }
-                        RemotingTooMuchRequestError(_) => {
-                            mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info)
-                        }
-                        rocketmq_error::RocketmqError::MQClientBrokerError(_) => {
-                            mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info)
-                        }
-                        rocketmq_error::RocketmqError::RequestTimeoutError(_) => {
-                            mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info)
-                        }
-                        rocketmq_error::RocketmqError::OffsetNotFoundError(_, _, _) => {
-                            mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info)
-                        }
-                        rocketmq_error::RocketmqError::RemoteError(_) => {
-                            mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info)
-                        }
-                        _ => {
-                            unimplemented!("not support error type");
-                        }
+                        rocketmq_error::RocketMQError::IllegalArgument(_) => Err(mq_client_err!(
+                            ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
+                            info
+                        )),
+                        rocketmq_error::RocketMQError::Timeout { .. } => Err(mq_client_err!(
+                            ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
+                            info
+                        )),
+                        rocketmq_error::RocketMQError::BrokerOperationFailed { .. } => Err(
+                            mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info),
+                        ),
+                        rocketmq_error::RocketMQError::Network(_) => Err(mq_client_err!(
+                            ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
+                            info
+                        )),
+                        _ => Err(err),
                     }
                 } else {
-                    mq_client_err!(info)
+                    Err(mq_client_err!(info))
                 };
             }
         }
         self.validate_name_server_setting()?;
-        mq_client_err!(
+        Err(mq_client_err!(
             ClientErrorCode::NOT_FOUND_TOPIC_EXCEPTION,
             format!(
                 "No route info of this topic:{},{}",
                 topic,
                 FAQUrl::suggest_todo(FAQUrl::NO_TOPIC_ROUTE_INFO)
             )
-        )
+        ))
     }
 
     #[inline]
@@ -965,7 +961,10 @@ impl DefaultMQProducerImpl {
         }
 
         if broker_addr.is_none() {
-            return mq_client_err!(format!("The broker[{}] not exist", broker_name,));
+            return Err(mq_client_err!(format!(
+                "The broker[{}] not exist",
+                broker_name,
+            )));
         }
         let mut broker_addr = broker_addr.unwrap();
         broker_addr = mix_all::broker_vip_channel(
@@ -1142,9 +1141,10 @@ impl DefaultMQProducerImpl {
             CommunicationMode::Oneway | CommunicationMode::Sync => {
                 let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
                 if timeout < cost_time_sync {
-                    return Err(RemotingTooMuchRequestError(
-                        "sendKernelImpl call timeout".to_string(),
-                    ));
+                    return Err(rocketmq_error::RocketMQError::Timeout {
+                        operation: "sendKernelImpl",
+                        timeout_ms: timeout,
+                    });
                 }
                 self.client_instance
                     .as_ref()
@@ -1262,13 +1262,13 @@ impl DefaultMQProducerImpl {
             .get_mq_client_api_impl();
         let ns_list = binding.get_name_server_address_list();
         if ns_list.is_empty() {
-            return mq_client_err!(
+            return Err(mq_client_err!(
                 ClientErrorCode::NO_NAME_SERVER_EXCEPTION,
                 format!(
                     "No name remoting_server address, please set it. {}",
                     FAQUrl::suggest_todo(FAQUrl::NAME_SERVER_ADDR_NOT_EXIST_URL)
                 )
-            );
+            ));
         }
         Ok(())
     }
@@ -1316,11 +1316,11 @@ impl DefaultMQProducerImpl {
 
     fn make_sure_state_ok(&self) -> rocketmq_error::RocketMQResult<()> {
         if self.service_state != ServiceState::Running {
-            return mq_client_err!(format!(
+            return Err(mq_client_err!(format!(
                 "The producer service state not OK, {:?} {}",
                 self.service_state,
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_SERVICE_NOT_OK)
-            ));
+            )));
         }
         Ok(())
     }
@@ -1363,18 +1363,19 @@ impl DefaultMQProducerImpl {
                 let message_queue = selector(&message_queue_list, msg, arg);
                 let cost_time = begin_start_time.elapsed().as_millis() as u64;
                 if timeout < cost_time {
-                    return Err(rocketmq_error::RocketmqError::RemotingTooMuchRequestError(
-                        "sendSelectImpl call timeout".to_string(),
-                    ));
+                    return Err(rocketmq_error::RocketMQError::Timeout {
+                        operation: "sendSelectImpl",
+                        timeout_ms: timeout,
+                    });
                 }
                 if let Some(message_queue) = message_queue {
                     return Ok(message_queue);
                 }
-                return mq_client_err!("select message queue return None.");
+                return Err(mq_client_err!("select message queue return None."));
             }
         }
         self.validate_name_server_setting();
-        mq_client_err!("select message queue return null.")
+        Err(mq_client_err!("select message queue return null."))
     }
 
     pub async fn send_with_selector_timeout<M, T>(
@@ -1782,23 +1783,18 @@ impl DefaultMQProducerImpl {
         if let Some(response_message) = response_message {
             Ok(response_message)
         } else if request_response_future.is_send_request_ok().await {
-            Err(rocketmq_error::RocketmqError::RequestTimeoutError(
-                RequestTimeoutErr::new_with_code(
-                    ClientErrorCode::REQUEST_TIMEOUT_EXCEPTION,
-                    format!(
-                        "send request message to <{topic}> OK, but wait reply message timeout, \
-                         {timeout} ms."
-                    ),
-                ),
-            ))
+            Err(rocketmq_error::RocketMQError::Timeout {
+                operation: "send request message",
+                timeout_ms: timeout,
+            })
         } else {
-            mq_client_err!(format!(
+            Err(mq_client_err!(format!(
                 "send request message to <{}> fail, {}",
                 topic,
                 request_response_future
                     .get_cause()
                     .map_or("".to_string(), |cause| { cause.to_string() })
-            ))
+            )))
         }
     }
 
@@ -1873,7 +1869,10 @@ impl DefaultMQProducerImpl {
         );
         let result = self.send(&mut msg).await;
         if let Err(e) = result {
-            return mq_client_err!(format!("send message in transaction error, {}", e));
+            return Err(mq_client_err!(format!(
+                "send message in transaction error, {}",
+                e
+            )));
         }
         let send_result = result.unwrap().expect("send result is none");
         let local_transaction_state = match send_result.send_status {
@@ -2229,12 +2228,12 @@ impl DefaultMQProducerImpl {
                     .await;
                 if !register_ok {
                     self.service_state = ServiceState::CreateJust;
-                    return mq_client_err!(format!(
+                    return Err(mq_client_err!(format!(
                         "The producer group[{}] has been created before, specify another name \
                          please. {}",
                         self.producer_config.producer_group(),
                         FAQUrl::suggest_todo(FAQUrl::GROUP_NAME_DUPLICATE_URL)
-                    ));
+                    )));
                 }
                 if start_factory {
                     let cloned = self.client_instance.as_mut().cloned().unwrap();
@@ -2247,17 +2246,19 @@ impl DefaultMQProducerImpl {
                 self.service_state = ServiceState::Running;
             }
             ServiceState::Running => {
-                return mq_client_err!("The producer service state is Running");
+                return Err(mq_client_err!("The producer service state is Running"));
             }
             ServiceState::ShutdownAlready => {
-                return mq_client_err!("The producer service state is ShutdownAlready");
+                return Err(mq_client_err!(
+                    "The producer service state is ShutdownAlready"
+                ));
             }
             ServiceState::StartFailed => {
-                return mq_client_err!(format!(
+                return Err(mq_client_err!(format!(
                     "The producer service state not OK, maybe started once,{:?},{}",
                     self.service_state,
                     FAQUrl::suggest_todo(FAQUrl::CLIENT_SERVICE_NOT_OK)
-                ));
+                )));
             }
         }
         Ok(())
@@ -2275,11 +2276,11 @@ impl DefaultMQProducerImpl {
     fn check_config(&self) -> rocketmq_error::RocketMQResult<()> {
         Validators::check_group(self.producer_config.producer_group())?;
         if self.producer_config.producer_group() == DEFAULT_PRODUCER_GROUP {
-            return mq_client_err!(format!(
+            return Err(mq_client_err!(format!(
                 "The specified group name[{}] is equal to default group, please specify another \
                  one.",
                 DEFAULT_PRODUCER_GROUP
-            ));
+            )));
         }
         Ok(())
     }
