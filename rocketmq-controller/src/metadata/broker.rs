@@ -17,15 +17,20 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
+use std::time::SystemTime;
 
 use dashmap::DashMap;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use tokio::time;
-use tracing::{debug, info, warn};
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
 
 use crate::config::ControllerConfig;
-use crate::error::{ControllerError, Result};
+use crate::error::ControllerError;
+use crate::error::Result;
 
 /// Broker information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,12 +148,12 @@ impl BrokerManager {
     pub async fn heartbeat(&self, broker_name: &str) -> Result<()> {
         debug!("Heartbeat from broker: {}", broker_name);
 
-        let mut broker = self
-            .brokers
-            .get_mut(broker_name)
-            .ok_or_else(|| ControllerError::MetadataNotFound {
-                key: broker_name.to_string(),
-            })?;
+        let mut broker =
+            self.brokers
+                .get_mut(broker_name)
+                .ok_or_else(|| ControllerError::MetadataNotFound {
+                    key: broker_name.to_string(),
+                })?;
 
         broker.last_heartbeat = SystemTime::now();
 

@@ -15,10 +15,12 @@
  * limitations under the License.
  */
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::criterion_group;
+use criterion::criterion_main;
+use criterion::Criterion;
 
 /// Controller benchmark placeholder
-/// 
+///
 /// TODO: Implement actual benchmarks:
 /// - Leader election latency
 /// - Heartbeat processing throughput

@@ -20,22 +20,26 @@ mod node;
 mod storage;
 mod transport;
 
-pub use network::NetworkManager;
-pub use node::RaftNode;
-pub use storage::MemStorage;
-pub use transport::{MessageCodec, PeerConnection, RaftTransport};
-
 use std::sync::Arc;
 use std::time::Duration;
 
+pub use network::NetworkManager;
+pub use node::RaftNode;
 use raft::prelude::*;
+pub use storage::MemStorage;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio::time;
-use tracing::{debug, error, info};
+use tracing::debug;
+use tracing::error;
+use tracing::info;
+pub use transport::MessageCodec;
+pub use transport::PeerConnection;
+pub use transport::RaftTransport;
 
 use crate::config::ControllerConfig;
-use crate::error::{ControllerError, Result};
+use crate::error::ControllerError;
+use crate::error::Result;
 
 /// Messages that can be sent to the Raft controller
 #[derive(Debug)]
@@ -46,9 +50,7 @@ pub enum RaftMessage {
         response: tokio::sync::oneshot::Sender<Result<Vec<u8>>>,
     },
     /// Process a Raft message from peer
-    Step {
-        message: Message,
-    },
+    Step { message: Message },
     /// Tick the Raft state machine
     Tick,
     /// Query current state (read-only)
@@ -150,12 +152,12 @@ impl RaftController {
     /// Shutdown the Raft controller
     pub async fn shutdown(&self) -> Result<()> {
         info!("Shutting down Raft controller for node {}", self.node_id);
-        
+
         // Shutdown network manager
         if let Some(network) = self.network.read().await.as_ref() {
             network.shutdown().await?;
         }
-        
+
         self.tx
             .send(RaftMessage::Shutdown)
             .map_err(|_| ControllerError::Shutdown)?;
@@ -221,7 +223,9 @@ impl RaftController {
                     let result = if let Some(n) = node.read().await.as_ref() {
                         n.propose(data).await
                     } else {
-                        Err(ControllerError::Internal("Node not initialized".to_string()))
+                        Err(ControllerError::Internal(
+                            "Node not initialized".to_string(),
+                        ))
                     };
                     let _ = response.send(result);
                 }
@@ -243,7 +247,9 @@ impl RaftController {
                     let result = if let Some(n) = node.read().await.as_ref() {
                         n.query(data).await
                     } else {
-                        Err(ControllerError::Internal("Node not initialized".to_string()))
+                        Err(ControllerError::Internal(
+                            "Node not initialized".to_string(),
+                        ))
                     };
                     let _ = response.send(result);
                 }
@@ -261,16 +267,19 @@ impl RaftController {
         tx: mpsc::UnboundedSender<RaftMessage>,
     ) {
         info!("Starting incoming message loop");
-        
+
         while let Some(message) = incoming_rx.recv().await {
-            debug!("Received Raft message from network: {:?}", message.get_msg_type());
-            
+            debug!(
+                "Received Raft message from network: {:?}",
+                message.get_msg_type()
+            );
+
             if tx.send(RaftMessage::Step { message }).is_err() {
                 error!("Failed to forward incoming message to Raft");
                 break;
             }
         }
-        
+
         info!("Incoming message loop stopped");
     }
 }

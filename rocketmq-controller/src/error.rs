@@ -102,9 +102,7 @@ mod tests {
 
     #[test]
     fn test_error_display() {
-        let err = ControllerError::NotLeader {
-            leader_id: Some(1),
-        };
+        let err = ControllerError::NotLeader { leader_id: Some(1) };
         assert!(err.to_string().contains("Not leader"));
     }
 

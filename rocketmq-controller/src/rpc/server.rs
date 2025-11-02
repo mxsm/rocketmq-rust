@@ -20,14 +20,20 @@ use std::sync::Arc;
 
 use futures::stream::StreamExt;
 use futures::SinkExt;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
+use tokio::net::TcpStream;
 use tokio::sync::RwLock;
 use tokio_util::codec::Framed;
-use tracing::{debug, error, info, warn};
+use tracing::debug;
+use tracing::error;
+use tracing::info;
+use tracing::warn;
 
 use crate::error::Result;
 use crate::processor::ProcessorManager;
-use crate::rpc::codec::{RpcCodec, RpcRequest, RpcResponse};
+use crate::rpc::codec::RpcCodec;
+use crate::rpc::codec::RpcRequest;
+use crate::rpc::codec::RpcResponse;
 
 /// RPC server
 ///
@@ -37,10 +43,10 @@ use crate::rpc::codec::{RpcCodec, RpcRequest, RpcResponse};
 pub struct RpcServer {
     /// Listen address
     listen_addr: SocketAddr,
-    
+
     /// Processor manager
     processor_manager: Arc<ProcessorManager>,
-    
+
     /// Server state
     state: Arc<RwLock<ServerState>>,
 }
@@ -50,10 +56,10 @@ pub struct RpcServer {
 enum ServerState {
     /// Server is not started
     Stopped,
-    
+
     /// Server is running
     Running,
-    
+
     /// Server is shutting down
     ShuttingDown,
 }
@@ -106,11 +112,13 @@ impl RpcServer {
                 match listener.accept().await {
                     Ok((stream, addr)) => {
                         debug!("Accepted connection from {}", addr);
-                        
+
                         // Spawn handler for this connection
                         let processor_manager = processor_manager.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = Self::handle_connection(stream, addr, processor_manager).await {
+                            if let Err(e) =
+                                Self::handle_connection(stream, addr, processor_manager).await
+                            {
                                 error!("Error handling connection from {}: {}", addr, e);
                             }
                         });
@@ -191,10 +199,7 @@ impl RpcServer {
                 }
             }
             Err(e) => {
-                error!(
-                    "Failed to process request {}: {}",
-                    request.request_id, e
-                );
+                error!("Failed to process request {}: {}", request.request_id, e);
                 RpcResponse {
                     request_id: request.request_id,
                     success: false,
@@ -245,7 +250,7 @@ mod tests {
         let state = ServerState::Stopped;
         assert_eq!(state, ServerState::Stopped);
         assert_ne!(state, ServerState::Running);
-        
+
         // Test codec creation
         let _codec = RpcCodec::new();
     }

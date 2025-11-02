@@ -18,11 +18,13 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use tracing::info;
 
 use crate::config::ControllerConfig;
-use crate::error::{ControllerError, Result};
+use crate::error::ControllerError;
+use crate::error::Result;
 
 /// Configuration information
 #[derive(Debug, Clone, Serialize, Deserialize)]

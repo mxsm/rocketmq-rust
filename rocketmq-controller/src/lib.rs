@@ -48,17 +48,18 @@
 //! ## Usage
 //!
 //! ```rust,no_run
-//! use rocketmq_controller::{ControllerManager, ControllerConfig};
+//! use rocketmq_controller::ControllerConfig;
+//! use rocketmq_controller::ControllerManager;
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
 //!     let config = ControllerConfig::default();
 //!     let mut controller = ControllerManager::new(config)?;
-//!     
+//!
 //!     controller.start().await?;
-//!     
+//!
 //!     // Controller is now running...
-//!     
+//!
 //!     controller.shutdown().await?;
 //!     Ok(())
 //! }
@@ -79,7 +80,8 @@ pub mod rpc;
 pub mod storage;
 
 pub use config::ControllerConfig;
-pub use error::{ControllerError, Result};
+pub use error::ControllerError;
+pub use error::Result;
 pub use manager::ControllerManager;
 
 /// Controller module version

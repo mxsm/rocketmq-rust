@@ -20,13 +20,20 @@ mod config;
 mod replica;
 mod topic;
 
-pub use broker::{BrokerInfo, BrokerManager, BrokerRole};
-pub use config::{ConfigInfo, ConfigManager};
-pub use replica::{BrokerReplicaInfo, ReplicaRole, ReplicasManager, SyncStateSet};
-pub use topic::{TopicConfig, TopicInfo, TopicManager};
-
 use std::sync::Arc;
 
+pub use broker::BrokerInfo;
+pub use broker::BrokerManager;
+pub use broker::BrokerRole;
+pub use config::ConfigInfo;
+pub use config::ConfigManager;
+pub use replica::BrokerReplicaInfo;
+pub use replica::ReplicaRole;
+pub use replica::ReplicasManager;
+pub use replica::SyncStateSet;
+pub use topic::TopicConfig;
+pub use topic::TopicInfo;
+pub use topic::TopicManager;
 use tracing::info;
 
 use crate::config::ControllerConfig;

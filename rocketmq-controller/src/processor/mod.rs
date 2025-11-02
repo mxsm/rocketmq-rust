@@ -23,21 +23,24 @@ pub mod topic_processor;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tracing::info;
-
-use crate::config::ControllerConfig;
-use crate::error::{ControllerError, Result};
-use crate::metadata::MetadataStore;
-use crate::raft::RaftController;
-
 // Re-export processors
 pub use broker_processor::{
     BrokerHeartbeatProcessor, ElectMasterProcessor, RegisterBrokerProcessor,
     UnregisterBrokerProcessor,
 };
 pub use metadata_processor::GetMetadataProcessor;
-pub use request::{RequestType, *};
-pub use topic_processor::{CreateTopicProcessor, DeleteTopicProcessor, UpdateTopicProcessor};
+pub use request::RequestType;
+pub use request::*;
+pub use topic_processor::CreateTopicProcessor;
+pub use topic_processor::DeleteTopicProcessor;
+pub use topic_processor::UpdateTopicProcessor;
+use tracing::info;
+
+use crate::config::ControllerConfig;
+use crate::error::ControllerError;
+use crate::error::Result;
+use crate::metadata::MetadataStore;
+use crate::raft::RaftController;
 
 /// Request processor trait
 #[async_trait::async_trait]
@@ -77,10 +80,7 @@ impl ProcessorManager {
         // Register broker processors
         processors.insert(
             RequestType::RegisterBroker,
-            Arc::new(RegisterBrokerProcessor::new(
-                metadata.clone(),
-                raft.clone(),
-            )),
+            Arc::new(RegisterBrokerProcessor::new(metadata.clone(), raft.clone())),
         );
         processors.insert(
             RequestType::UnregisterBroker,
@@ -129,10 +129,9 @@ impl ProcessorManager {
     /// Process a request
     pub async fn process_request(&self, request_type: RequestType, data: &[u8]) -> Result<Vec<u8>> {
         // Find the processor
-        let processor = self
-            .processors
-            .get(&request_type)
-            .ok_or_else(|| ControllerError::InvalidRequest(format!("Unknown request type: {:?}", request_type)))?;
+        let processor = self.processors.get(&request_type).ok_or_else(|| {
+            ControllerError::InvalidRequest(format!("Unknown request type: {:?}", request_type))
+        })?;
 
         // Process the request
         processor.process(data).await
@@ -140,7 +139,10 @@ impl ProcessorManager {
 
     /// Start the processor manager
     pub async fn start(&self) -> Result<()> {
-        info!("Starting processor manager with {} processors", self.processors.len());
+        info!(
+            "Starting processor manager with {} processors",
+            self.processors.len()
+        );
         // TODO: Start network server to handle incoming requests
         Ok(())
     }

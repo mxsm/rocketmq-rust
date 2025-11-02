@@ -17,9 +17,12 @@
 
 use std::net::SocketAddr;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::metadata::{BrokerInfo, BrokerRole, TopicInfo};
+use crate::metadata::BrokerInfo;
+use crate::metadata::BrokerRole;
+use crate::metadata::TopicInfo;
 
 /// Request type enumeration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -41,22 +44,22 @@ pub enum RequestType {
 pub struct RegisterBrokerRequest {
     /// Broker name
     pub broker_name: String,
-    
+
     /// Broker ID
     pub broker_id: u64,
-    
+
     /// Cluster name
     pub cluster_name: String,
-    
+
     /// Broker address
     pub broker_addr: SocketAddr,
-    
+
     /// Broker version
     pub version: String,
-    
+
     /// Broker role
     pub role: BrokerRole,
-    
+
     /// Additional metadata
     pub metadata: serde_json::Value,
 }
@@ -66,10 +69,10 @@ pub struct RegisterBrokerRequest {
 pub struct RegisterBrokerResponse {
     /// Success flag
     pub success: bool,
-    
+
     /// Error message if failed
     pub error: Option<String>,
-    
+
     /// Assigned broker ID
     pub broker_id: Option<u64>,
 }
@@ -86,7 +89,7 @@ pub struct UnregisterBrokerRequest {
 pub struct UnregisterBrokerResponse {
     /// Success flag
     pub success: bool,
-    
+
     /// Error message if failed
     pub error: Option<String>,
 }
@@ -96,7 +99,7 @@ pub struct UnregisterBrokerResponse {
 pub struct BrokerHeartbeatRequest {
     /// Broker name
     pub broker_name: String,
-    
+
     /// Timestamp
     pub timestamp: u64,
 }
@@ -106,7 +109,7 @@ pub struct BrokerHeartbeatRequest {
 pub struct BrokerHeartbeatResponse {
     /// Success flag
     pub success: bool,
-    
+
     /// Error message if failed
     pub error: Option<String>,
 }
@@ -116,7 +119,7 @@ pub struct BrokerHeartbeatResponse {
 pub struct ElectMasterRequest {
     /// Cluster name
     pub cluster_name: String,
-    
+
     /// Broker name
     pub broker_name: String,
 }
@@ -126,13 +129,13 @@ pub struct ElectMasterRequest {
 pub struct ElectMasterResponse {
     /// Success flag
     pub success: bool,
-    
+
     /// Error message if failed
     pub error: Option<String>,
-    
+
     /// Master broker name
     pub master_broker: Option<String>,
-    
+
     /// Master broker address
     pub master_addr: Option<SocketAddr>,
 }
@@ -142,7 +145,7 @@ pub struct ElectMasterResponse {
 pub struct GetMetadataRequest {
     /// Metadata type
     pub metadata_type: MetadataType,
-    
+
     /// Filter key (optional)
     pub key: Option<String>,
 }
@@ -161,16 +164,16 @@ pub enum MetadataType {
 pub struct GetMetadataResponse {
     /// Success flag
     pub success: bool,
-    
+
     /// Error message if failed
     pub error: Option<String>,
-    
+
     /// Brokers
     pub brokers: Vec<BrokerInfo>,
-    
+
     /// Topics
     pub topics: Vec<TopicInfo>,
-    
+
     /// Configs
     pub configs: serde_json::Value,
 }
@@ -180,16 +183,16 @@ pub struct GetMetadataResponse {
 pub struct CreateTopicRequest {
     /// Topic name
     pub topic_name: String,
-    
+
     /// Read queue nums
     pub read_queue_nums: u32,
-    
+
     /// Write queue nums
     pub write_queue_nums: u32,
-    
+
     /// Permission
     pub perm: u32,
-    
+
     /// Topic system flag
     pub topic_sys_flag: u32,
 }
@@ -199,7 +202,7 @@ pub struct CreateTopicRequest {
 pub struct CreateTopicResponse {
     /// Success flag
     pub success: bool,
-    
+
     /// Error message if failed
     pub error: Option<String>,
 }
@@ -209,7 +212,7 @@ pub struct CreateTopicResponse {
 pub struct UpdateTopicRequest {
     /// Topic name
     pub topic_name: String,
-    
+
     /// Topic info
     pub topic_info: TopicInfo,
 }
@@ -219,7 +222,7 @@ pub struct UpdateTopicRequest {
 pub struct UpdateTopicResponse {
     /// Success flag
     pub success: bool,
-    
+
     /// Error message if failed
     pub error: Option<String>,
 }
@@ -236,7 +239,7 @@ pub struct DeleteTopicRequest {
 pub struct DeleteTopicResponse {
     /// Success flag
     pub success: bool,
-    
+
     /// Error message if failed
     pub error: Option<String>,
 }

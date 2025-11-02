@@ -20,9 +20,12 @@ use std::sync::Arc;
 use serde_json::json;
 use tracing::info;
 
-use crate::error::{ControllerError, Result};
+use crate::error::ControllerError;
+use crate::error::Result;
 use crate::metadata::MetadataStore;
-use crate::processor::request::{GetMetadataRequest, GetMetadataResponse, MetadataType};
+use crate::processor::request::GetMetadataRequest;
+use crate::processor::request::GetMetadataResponse;
+use crate::processor::request::MetadataType;
 use crate::processor::RequestProcessor;
 
 /// Get metadata processor
@@ -42,7 +45,10 @@ impl GetMetadataProcessor {
         &self,
         request: GetMetadataRequest,
     ) -> Result<GetMetadataResponse> {
-        info!("Processing get metadata request, type: {:?}", request.metadata_type);
+        info!(
+            "Processing get metadata request, type: {:?}",
+            request.metadata_type
+        );
 
         let (brokers, topics, configs) = match request.metadata_type {
             MetadataType::Broker => {
@@ -92,7 +98,8 @@ impl RequestProcessor for GetMetadataProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ControllerConfig, RaftPeer};
+    use crate::config::ControllerConfig;
+    use crate::config::RaftPeer;
 
     #[tokio::test]
     async fn test_get_metadata_processor() {

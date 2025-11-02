@@ -20,8 +20,11 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use dashmap::DashMap;
-use serde::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
+use serde::Deserialize;
+use serde::Serialize;
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
 
 use crate::config::ControllerConfig;
 use crate::error::Result;
@@ -464,9 +467,10 @@ impl ReplicasManager {
         }
 
         // Update sync state set
-        if let (Some(master), Some(mut sync_state_set)) =
-            (new_master.as_ref(), self.sync_state_sets.get_mut(broker_name))
-        {
+        if let (Some(master), Some(mut sync_state_set)) = (
+            new_master.as_ref(),
+            self.sync_state_sets.get_mut(broker_name),
+        ) {
             sync_state_set.master_broker_id = new_master_id;
             sync_state_set.master_addr = master.broker_addr.clone();
             sync_state_set.master_epoch = master.epoch;
@@ -481,7 +485,10 @@ impl ReplicasManager {
 
     /// List all broker sets
     pub async fn list_broker_sets(&self) -> Vec<String> {
-        self.replicas.iter().map(|entry| entry.key().clone()).collect()
+        self.replicas
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
     }
 
     /// Get statistics
@@ -490,11 +497,7 @@ impl ReplicasManager {
         stats.insert("broker_sets".to_string(), self.replicas.len());
         stats.insert("sync_state_sets".to_string(), self.sync_state_sets.len());
 
-        let total_replicas: usize = self
-            .replicas
-            .iter()
-            .map(|entry| entry.value().len())
-            .sum();
+        let total_replicas: usize = self.replicas.iter().map(|entry| entry.value().len()).sum();
         stats.insert("total_replicas".to_string(), total_replicas);
 
         stats
@@ -535,11 +538,8 @@ mod tests {
 
     #[test]
     fn test_sync_state_set() {
-        let mut sync_state = SyncStateSet::new(
-            "broker-a".to_string(),
-            0,
-            "127.0.0.1:10911".to_string(),
-        );
+        let mut sync_state =
+            SyncStateSet::new("broker-a".to_string(), 0, "127.0.0.1:10911".to_string());
 
         assert_eq!(sync_state.size(), 1);
         assert!(sync_state.contains(0));

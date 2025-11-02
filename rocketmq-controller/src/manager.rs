@@ -18,7 +18,9 @@
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::error;
+use tracing::info;
+use tracing::warn;
 
 use crate::config::ControllerConfig;
 use crate::error::Result;

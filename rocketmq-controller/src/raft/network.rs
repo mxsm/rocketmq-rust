@@ -20,7 +20,9 @@ use std::sync::Arc;
 
 use raft::prelude::Message;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::debug;
+use tracing::error;
+use tracing::info;
 
 use crate::config::ControllerConfig;
 use crate::error::Result;
@@ -33,16 +35,16 @@ use crate::raft::RaftTransport;
 pub struct NetworkManager {
     /// Configuration
     config: Arc<ControllerConfig>,
-    
+
     /// Transport layer
     transport: Arc<RaftTransport>,
-    
+
     /// Message receiver for outgoing messages
     outgoing_rx: Option<mpsc::UnboundedReceiver<Message>>,
-    
+
     /// Message sender for incoming messages
     incoming_tx: mpsc::UnboundedSender<Message>,
-    
+
     /// Running state
     running: Arc<tokio::sync::RwLock<bool>>,
 }
@@ -55,16 +57,13 @@ impl NetworkManager {
         for peer in &config.raft_peers {
             peer_addrs.insert(peer.id, peer.addr);
         }
-        
+
         // Create transport
-        let (transport, outgoing_rx, incoming_rx) = RaftTransport::new(
-            config.node_id,
-            config.listen_addr,
-            peer_addrs,
-        );
-        
+        let (transport, outgoing_rx, incoming_rx) =
+            RaftTransport::new(config.node_id, config.listen_addr, peer_addrs);
+
         let incoming_tx = transport.message_sender();
-        
+
         let manager = Self {
             config,
             transport: Arc::new(transport),
@@ -72,7 +71,7 @@ impl NetworkManager {
             incoming_tx,
             running: Arc::new(tokio::sync::RwLock::new(false)),
         };
-        
+
         (manager, incoming_rx)
     }
 
@@ -92,23 +91,27 @@ impl NetworkManager {
         if let Some(mut outgoing_rx) = self.outgoing_rx.take() {
             let transport = self.transport.clone();
             let running_clone = self.running.clone();
-            
+
             tokio::spawn(async move {
                 info!("Starting outgoing message handler");
-                
+
                 while let Some(msg) = outgoing_rx.recv().await {
                     if !*running_clone.read().await {
                         break;
                     }
-                    
+
                     let to = msg.get_to();
-                    debug!("Sending message to peer {}, type: {:?}", to, msg.get_msg_type());
-                    
+                    debug!(
+                        "Sending message to peer {}, type: {:?}",
+                        to,
+                        msg.get_msg_type()
+                    );
+
                     if let Err(e) = transport.send_to_peer(to, msg).await {
                         error!("Failed to send message to peer {}: {}", to, e);
                     }
                 }
-                
+
                 info!("Outgoing message handler stopped");
             });
         }

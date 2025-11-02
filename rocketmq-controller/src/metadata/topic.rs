@@ -18,11 +18,13 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use tracing::info;
 
 use crate::config::ControllerConfig;
-use crate::error::{ControllerError, Result};
+use crate::error::ControllerError;
+use crate::error::Result;
 
 /// Topic configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,7 +154,8 @@ impl TopicManager {
         }
 
         // Convert config to info (preserving brokers list)
-        let old_brokers = self.topics
+        let old_brokers = self
+            .topics
             .get(&config.topic_name)
             .map(|v| v.brokers.clone())
             .unwrap_or_default();

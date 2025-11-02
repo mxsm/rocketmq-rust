@@ -18,9 +18,11 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
-use crate::error::{ControllerError, Result};
+use crate::error::ControllerError;
+use crate::error::Result;
 use crate::storage::StorageConfig;
 
 /// Raft peer configuration
@@ -38,10 +40,10 @@ pub struct RaftPeer {
 pub enum StorageBackendType {
     /// RocksDB storage
     RocksDB,
-    
+
     /// File-based storage
     File,
-    
+
     /// In-memory storage (for testing)
     Memory,
 }
@@ -151,14 +153,14 @@ impl ControllerConfig {
             StorageBackendType::RocksDB => StorageConfig::RocksDB {
                 path: self.storage_path.join("rocksdb"),
             },
-            
+
             #[cfg(feature = "storage-file")]
             StorageBackendType::File => StorageConfig::File {
                 path: self.storage_path.join("filedb"),
             },
-            
+
             StorageBackendType::Memory => StorageConfig::Memory,
-            
+
             #[allow(unreachable_patterns)]
             _ => StorageConfig::Memory,
         }

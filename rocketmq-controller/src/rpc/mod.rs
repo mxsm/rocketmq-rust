@@ -23,5 +23,7 @@
 pub mod codec;
 pub mod server;
 
-pub use codec::{RpcCodec, RpcRequest, RpcResponse};
+pub use codec::RpcCodec;
+pub use codec::RpcRequest;
+pub use codec::RpcResponse;
 pub use server::RpcServer;

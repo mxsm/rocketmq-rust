@@ -15,12 +15,18 @@
  * limitations under the License.
  */
 
-use bytes::{Buf, BufMut, BytesMut};
-use serde::{Deserialize, Serialize};
-use tokio_util::codec::{Decoder, Encoder};
-use tracing::{debug, trace};
+use bytes::Buf;
+use bytes::BufMut;
+use bytes::BytesMut;
+use serde::Deserialize;
+use serde::Serialize;
+use tokio_util::codec::Decoder;
+use tokio_util::codec::Encoder;
+use tracing::debug;
+use tracing::trace;
 
-use crate::error::{ControllerError, Result};
+use crate::error::ControllerError;
+use crate::error::Result;
 use crate::processor::RequestType;
 
 /// RPC request message
@@ -28,10 +34,10 @@ use crate::processor::RequestType;
 pub struct RpcRequest {
     /// Request ID for correlation
     pub request_id: u64,
-    
+
     /// Request type
     pub request_type: RequestType,
-    
+
     /// Request payload (JSON-encoded)
     pub payload: Vec<u8>,
 }
@@ -41,13 +47,13 @@ pub struct RpcRequest {
 pub struct RpcResponse {
     /// Request ID for correlation
     pub request_id: u64,
-    
+
     /// Success flag
     pub success: bool,
-    
+
     /// Error message if failed
     pub error: Option<String>,
-    
+
     /// Response payload (JSON-encoded)
     pub payload: Vec<u8>,
 }
@@ -68,7 +74,7 @@ pub struct RpcCodec;
 impl RpcCodec {
     /// Maximum frame size (16MB)
     const MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
-    
+
     /// Create a new RPC codec
     pub fn new() -> Self {
         Self
@@ -110,11 +116,7 @@ impl Decoder for RpcCodec {
 
         // Check if we have the complete frame
         if src.len() < 4 + length {
-            trace!(
-                "Incomplete frame: have {}, need {}",
-                src.len(),
-                4 + length
-            );
+            trace!("Incomplete frame: have {}, need {}", src.len(), 4 + length);
             // Reserve space for the rest of the frame
             src.reserve(4 + length - src.len());
             return Ok(None);
@@ -229,7 +231,7 @@ mod tests {
     #[test]
     fn test_codec_encode_decode() {
         let mut codec = RpcCodec::new();
-        
+
         // Create a request
         let request = RpcRequest {
             request_id: 789,
@@ -239,7 +241,7 @@ mod tests {
 
         // Serialize manually to get the data
         let request_data = serde_json::to_vec(&request).unwrap();
-        
+
         // Create a buffer with length prefix + data
         let mut encode_buf = BytesMut::new();
         encode_buf.put_u32(request_data.len() as u32);
@@ -248,7 +250,7 @@ mod tests {
         // Decode
         let decoded = codec.decode(&mut encode_buf).unwrap();
         assert!(decoded.is_some());
-        
+
         let decoded_request = decoded.unwrap();
         assert_eq!(decoded_request.request_id, request.request_id);
         assert_eq!(decoded_request.request_type, request.request_type);
@@ -272,7 +274,7 @@ mod tests {
 
         // Check that length prefix is present
         assert!(buf.len() >= 4);
-        
+
         // Read length
         let length = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
         assert_eq!(buf.len(), 4 + length);
