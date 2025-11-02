@@ -40,12 +40,12 @@ use crate::storage::StorageStats;
 ///
 /// File structure:
 /// ```
-/// data_dir/
-///   ├── metadata.json (index of all keys)
-///   └── data/
-///       ├── <key_hash_1>.dat
-///       ├── <key_hash_2>.dat
-///       └── ...
+///  data_dir/
+///    ├── metadata.json (index of all keys)
+///    └── data/
+///         ├── <key_hash_1>.dat
+///         ├── <key_hash_2>.dat
+///         └── ...
 /// ```
 pub struct FileBackend {
     /// Data directory path
