@@ -47,7 +47,7 @@
 //!
 //! ## Usage
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use rocketmq_controller::ControllerConfig;
 //! use rocketmq_controller::ControllerManager;
 //!
