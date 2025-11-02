@@ -1,0 +1,79 @@
+[package]
+name = "rocketmq-controller"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+readme = "README.md"
+description = "RocketMQ Controller Module - High Availability Raft-based Controller"
+keywords = ["rocketmq", "controller", "raft", "distributed", "messaging"]
+categories = ["network-programming", "asynchronous"]
+
+[dependencies]
+# Core async runtime
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+
+# Raft consensus algorithm
+raft = "0.7"
+raft-proto = "0.7"
+prost = "0.13"
+protobuf = "2.28"
+slog = { version = "2.7", features = ["max_level_trace", "release_max_level_info"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+bincode = "1.3"
+
+# Networking and protocols
+bytes = { workspace = true }
+prost-types = "0.13"
+futures = "0.3"
+
+# Concurrent data structures
+dashmap = { workspace = true }
+parking_lot = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging and tracing
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Time utilities
+chrono = "0.4"
+
+# Async trait support
+async-trait = "0.1"
+
+# Storage backends
+rocksdb = { version = "0.22", optional = true }
+
+# Internal dependencies (rocketmq-rust modules)
+rocketmq-common = { workspace = true }
+rocketmq-remoting = { workspace = true }
+rocketmq-runtime = { workspace = true }
+rocketmq-store = { workspace = true }
+rocketmq-rust = { workspace = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio"] }
+tempfile = "3.10"
+env_logger = "0.11"
+proptest = "1.4"
+
+[[bench]]
+name = "controller_bench"
+harness = false
+
+[features]
+default = ["storage-file"]
+storage-rocksdb = ["rocksdb"]
+storage-file = []
+metrics = []
+debug = []
