@@ -2192,7 +2192,7 @@ impl MQClientAPIImpl {
                 }
                 code => {
                     return Err(mq_client_err!(
-                        response.code() as i32,
+                        response.code(),
                         response.remark().map_or("".to_string(), |s| s.to_string())
                     ));
                 }
