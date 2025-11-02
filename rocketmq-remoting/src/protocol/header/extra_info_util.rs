@@ -23,7 +23,8 @@ use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::mix_all;
 use rocketmq_error::RocketMQResult;
-use rocketmq_error::RocketmqError::{IllegalArgument, IllegalArgumentError};
+use rocketmq_error::RocketmqError::IllegalArgument;
+use rocketmq_error::RocketmqError::IllegalArgumentError;
 
 pub struct ExtraInfoUtil;
 
@@ -47,7 +48,8 @@ impl ExtraInfoUtil {
             return Err(IllegalArgument(format!(
                 "getCkQueueOffset fail, extraInfoStrs length {}",
                 extra_info_strs.len()
-            )).into());
+            ))
+            .into());
         }
         extra_info_strs[0]
             .parse::<i64>()
@@ -60,7 +62,8 @@ impl ExtraInfoUtil {
             return Err(IllegalArgument(format!(
                 "getPopTime fail, extraInfoStrs length {}",
                 extra_info_strs.len()
-            )).into());
+            ))
+            .into());
         }
         extra_info_strs[1]
             .parse::<i64>()
@@ -73,7 +76,8 @@ impl ExtraInfoUtil {
             return Err(IllegalArgument(format!(
                 "getInvisibleTime fail, extraInfoStrs length {}",
                 extra_info_strs.len()
-            )).into());
+            ))
+            .into());
         }
         extra_info_strs[2]
             .parse::<i64>()
@@ -86,7 +90,8 @@ impl ExtraInfoUtil {
             return Err(IllegalArgument(format!(
                 "getReviveQid fail, extraInfoStrs length {}",
                 extra_info_strs.len()
-            )).into());
+            ))
+            .into());
         }
         extra_info_strs[3]
             .parse::<i32>()
@@ -103,7 +108,8 @@ impl ExtraInfoUtil {
             return Err(IllegalArgument(format!(
                 "getRealTopic fail, extraInfoStrs length {}",
                 extra_info_strs.len()
-            )).into());
+            ))
+            .into());
         }
 
         if RETRY_TOPIC == extra_info_strs[4] {
@@ -128,9 +134,7 @@ impl ExtraInfoUtil {
         } else if retry == RETRY_TOPIC_V2 {
             Ok(KeyBuilder::build_pop_retry_topic_v2(topic, cid))
         } else {
-            Err(IllegalArgument(
-                "getRetry fail, format is wrong".to_string(),
-            ).into())
+            Err(IllegalArgument("getRetry fail, format is wrong".to_string()).into())
         }
     }
 
@@ -140,7 +144,8 @@ impl ExtraInfoUtil {
             return Err(IllegalArgument(format!(
                 "getRetry fail, extraInfoStrs length {}",
                 extra_info_strs.len()
-            )).into());
+            ))
+            .into());
         }
         Ok(extra_info_strs[4].clone())
     }
@@ -151,7 +156,8 @@ impl ExtraInfoUtil {
             return Err(IllegalArgument(format!(
                 "getBrokerName fail, extraInfoStrs length {}",
                 extra_info_strs.len()
-            )).into());
+            ))
+            .into());
         }
         Ok(extra_info_strs[5].clone())
     }
@@ -162,7 +168,8 @@ impl ExtraInfoUtil {
             return Err(IllegalArgument(format!(
                 "getQueueId fail, extraInfoStrs length {}",
                 extra_info_strs.len()
-            )).into());
+            ))
+            .into());
         }
         extra_info_strs[6]
             .parse::<i32>()
@@ -175,7 +182,8 @@ impl ExtraInfoUtil {
             return Err(IllegalArgument(format!(
                 "getQueueOffset fail, extraInfoStrs length {}",
                 extra_info_strs.len()
-            )).into());
+            ))
+            .into());
         }
         extra_info_strs[7]
             .parse::<i64>()
@@ -336,9 +344,9 @@ impl ExtraInfoUtil {
 
             let key = format!("{}@{}", split[0], split[1]);
             if msg_offset_map.contains_key(&key) {
-                return Err(IllegalArgument(
-                    "parse msgOffsetMap error, duplicate".to_string(),
-                ).into());
+                return Err(
+                    IllegalArgument("parse msgOffsetMap error, duplicate".to_string()).into(),
+                );
             }
 
             msg_offset_map.insert(key.clone(), Vec::with_capacity(8));
@@ -374,14 +382,16 @@ impl ExtraInfoUtil {
             if split.len() != 3 {
                 return Err(IllegalArgument(format!(
                     "parse startOffsetInfo error, {start_offset_info}"
-                )).into());
+                ))
+                .into());
             }
 
             let key = format!("{}@{}", split[0], split[1]);
             if start_offset_map.contains_key(&key) {
                 return Err(IllegalArgumentError(
                     "parse startOffsetMap error, duplicate".to_string(),
-                ).into());
+                )
+                .into());
             }
 
             start_offset_map.insert(
@@ -412,14 +422,16 @@ impl ExtraInfoUtil {
             if split.len() != 3 {
                 return Err(IllegalArgument(format!(
                     "parse orderCountInfo error {order_count_info}"
-                )).into());
+                ))
+                .into());
             }
 
             let key = format!("{}@{}", split[0], split[1]);
             if order_count_map.contains_key(&key) {
                 return Err(IllegalArgument(format!(
                     "parse orderCountInfo error, duplicate, {order_count_info}"
-                )).into());
+                ))
+                .into());
             }
 
             order_count_map.insert(
@@ -925,5 +937,3 @@ mod tests {
         assert!(!result);
     }
 }
-
-

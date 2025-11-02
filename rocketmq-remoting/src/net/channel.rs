@@ -667,4 +667,3 @@ impl ChannelInner {
         self.connection.is_healthy()
     }
 }
-

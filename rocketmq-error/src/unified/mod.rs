@@ -16,7 +16,7 @@
  */
 
 //! Unified error system for RocketMQ Rust implementation
-//! 
+//!
 //! This module provides a centralized, semantic, and performant error handling system
 //! for all RocketMQ operations. All errors are categorized into logical groups for
 //! better debuggability and maintainability.
@@ -25,12 +25,11 @@ mod network;
 mod protocol;
 mod serialization;
 
+use std::io;
+
 pub use network::NetworkError;
 pub use protocol::ProtocolError;
 pub use serialization::SerializationError;
-
-use std::io;
-
 use thiserror::Error;
 
 // Re-export legacy error types for backward compatibility (will be deprecated)
@@ -42,27 +41,28 @@ pub use crate::client_error::*;
 pub use crate::common_error::*;
 
 /// Main error type for all RocketMQ operations
-/// 
+///
 /// This enum provides a unified error system across all RocketMQ crates.
 /// Each variant represents a logical category of errors with rich context information.
-/// 
+///
 /// # Design Principles
 /// - **Semantic**: Each error clearly expresses what went wrong
 /// - **Performance**: Minimal heap allocations, use of &'static str where possible
 /// - **Debuggability**: Rich context for production debugging
 /// - **Ergonomics**: Automatic conversions via From trait
-/// 
+///
 /// # Examples
-/// 
+///
 /// ```rust
-/// use rocketmq_error::{RocketMQError, RocketMQResult};
-/// 
+/// use rocketmq_error::RocketMQError;
+/// use rocketmq_error::RocketMQResult;
+///
 /// fn send_message(addr: &str) -> RocketMQResult<()> {
 ///     // Create a network error
 ///     if addr.is_empty() {
 ///         return Err(RocketMQError::network_connection_failed(
 ///             "localhost:9876",
-///             "empty address"
+///             "empty address",
 ///         ));
 ///     }
 ///     Ok(())
@@ -374,14 +374,14 @@ pub enum ServiceError {
 // ============================================================================
 
 /// Result type alias for RocketMQ operations
-/// 
+///
 /// This is the standard result type used across all RocketMQ crates.
-/// 
+///
 /// # Examples
-/// 
+///
 /// ```rust
 /// use rocketmq_error::RocketMQResult;
-/// 
+///
 /// fn send_message() -> RocketMQResult<()> {
 ///     // ... operation
 ///     Ok(())
@@ -390,7 +390,7 @@ pub enum ServiceError {
 pub type RocketMQResult<T> = std::result::Result<T, RocketMQError>;
 
 /// Alias for anyhow::Result for internal use
-/// 
+///
 /// Use this for internal error handling where you don't need
 /// to expose specific error types to the public API.
 pub type Result<T> = anyhow::Result<T>;
@@ -416,7 +416,7 @@ mod tests {
     fn test_broker_operation_with_addr() {
         let err = RocketMQError::broker_operation_failed("SEND_MESSAGE", 1, "failed")
             .with_broker_addr("127.0.0.1:10911");
-        
+
         if let RocketMQError::BrokerOperationFailed { broker_addr, .. } = err {
             assert_eq!(broker_addr, Some("127.0.0.1:10911".to_string()));
         } else {

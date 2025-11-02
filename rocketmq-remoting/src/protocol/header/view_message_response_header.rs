@@ -20,4 +20,3 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodec, Default)]
 pub struct ViewMessageResponseHeader;
-

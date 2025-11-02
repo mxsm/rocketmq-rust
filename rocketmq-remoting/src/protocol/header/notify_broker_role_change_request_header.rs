@@ -51,4 +51,3 @@ impl Display for NotifyBrokerRoleChangedRequestHeader {
         )
     }
 }
-

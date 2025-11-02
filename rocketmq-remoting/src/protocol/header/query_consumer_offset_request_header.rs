@@ -142,4 +142,3 @@ impl TopicRequestHeaderTrait for QueryConsumerOffsetRequestHeader {
         self.queue_id = queue_id;
     }
 }
-

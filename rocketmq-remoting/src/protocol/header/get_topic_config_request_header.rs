@@ -39,4 +39,3 @@ impl GetTopicConfigRequestHeader {
         self.topic = topic;
     }
 }
-

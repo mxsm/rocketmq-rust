@@ -65,4 +65,3 @@ mod tests {
         assert_eq!(header.consumer_group, "test_group");
     }
 }
-

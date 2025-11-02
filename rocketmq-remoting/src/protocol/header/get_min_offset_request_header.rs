@@ -186,4 +186,3 @@ impl TopicRequestHeaderTrait for GetMinOffsetRequestHeader {
         self.queue_id = queue_id;
     }
 }
-

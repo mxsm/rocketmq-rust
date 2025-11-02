@@ -69,14 +69,14 @@ impl MessageBatch {
     ) -> rocketmq_error::RocketMQResult<MessageBatch> {
         if messages.is_empty() {
             return Err(RocketMQError::illegal_argument(
-                "MessageBatch::generate_from_vec: messages is empty"
+                "MessageBatch::generate_from_vec: messages is empty",
             ));
         }
         let mut first: Option<&Message> = None;
         for message in &messages {
             if message.get_delay_time_level() > 0 {
                 return Err(RocketMQError::illegal_argument(
-                    "TimeDelayLevel is not supported for batching"
+                    "TimeDelayLevel is not supported for batching",
                 ));
             }
             if message
@@ -84,7 +84,7 @@ impl MessageBatch {
                 .starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
             {
                 return Err(RocketMQError::illegal_argument(
-                    "Retry group topic is not supported for batching"
+                    "Retry group topic is not supported for batching",
                 ));
             }
 
@@ -92,12 +92,12 @@ impl MessageBatch {
                 let first_message = first.unwrap();
                 if first_message.get_topic() != message.get_topic() {
                     return Err(RocketMQError::illegal_argument(
-                        "The topic of the messages in one batch should be the same"
+                        "The topic of the messages in one batch should be the same",
                     ));
                 }
                 if first_message.is_wait_store_msg_ok() != message.is_wait_store_msg_ok() {
                     return Err(RocketMQError::illegal_argument(
-                        "The waitStoreMsgOK of the messages in one batch should the same"
+                        "The waitStoreMsgOK of the messages in one batch should the same",
                     ));
                 }
             } else {

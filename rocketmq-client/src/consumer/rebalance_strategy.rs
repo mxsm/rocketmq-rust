@@ -33,19 +33,13 @@ pub fn check(
     cid_all: &[CheetahString],
 ) -> rocketmq_error::RocketMQResult<bool> {
     if current_cid.is_empty() {
-        return Err(mq_client_err!(
-            "currentCID is empty".to_string()
-        ));
+        return Err(mq_client_err!("currentCID is empty".to_string()));
     }
     if mq_all.is_empty() {
-        return Err(mq_client_err!(
-            "mqAll is null or mqAll empty".to_string()
-        ));
+        return Err(mq_client_err!("mqAll is null or mqAll empty".to_string()));
     }
     if cid_all.is_empty() {
-        return Err(mq_client_err!(
-            "cidAll is null or cidAll empty".to_string()
-        ));
+        return Err(mq_client_err!("cidAll is null or cidAll empty".to_string()));
     }
 
     let cid_set: HashSet<_> = cid_all.iter().collect();

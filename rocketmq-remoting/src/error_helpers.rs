@@ -16,7 +16,7 @@
  */
 
 //! Error helper functions for rocketmq-remoting
-//! 
+//!
 //! This module provides convenient helper functions to create unified errors
 //! for common remoting scenarios.
 
@@ -70,9 +70,9 @@ pub fn decoding_error(required: usize, available: usize) -> RocketMQError {
 /// Create an unsupported serialize type error
 #[inline]
 pub fn unsupported_serialize_type(serialize_type: u8) -> RocketMQError {
-    RocketMQError::Protocol(rocketmq_error::unified::ProtocolError::UnsupportedSerializationType {
-        serialize_type,
-    })
+    RocketMQError::Protocol(
+        rocketmq_error::unified::ProtocolError::UnsupportedSerializationType { serialize_type },
+    )
 }
 
 /// Create an illegal argument error

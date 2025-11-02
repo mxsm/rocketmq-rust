@@ -51,4 +51,3 @@ mod tests {
         assert!(serialized.contains("\"masterAddress\":\"127.0.0.1\""));
     }
 }
-

@@ -128,4 +128,3 @@ mod tests {
         assert!(header.rpc_request_header.is_some());
     }
 }
-

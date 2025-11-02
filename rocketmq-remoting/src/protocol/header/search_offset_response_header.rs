@@ -22,4 +22,3 @@ use serde::Serialize;
 pub struct SearchOffsetResponseHeader {
     pub offset: i64,
 }
-

@@ -35,13 +35,11 @@ impl CommandUtil {
             )
         })?;
         let broker_names = cluster_addr_table.get(cluster_name).ok_or_else(|| {
-            RocketMQError::Internal(
-                format!(
-                    "CommandUtil: Make sure the specified clusterName exists or the nameserver which connected \
-                     to is correct. Cluster: {}",
-                    cluster_name
-                ),
-            )
+            RocketMQError::Internal(format!(
+                "CommandUtil: Make sure the specified clusterName exists or the nameserver which \
+                 connected to is correct. Cluster: {}",
+                cluster_name
+            ))
         })?;
         let broker_addr_table = cluster_info.broker_addr_table.as_ref().ok_or_else(|| {
             RocketMQError::Internal(
@@ -72,9 +70,10 @@ impl CommandUtil {
                 }
             }
         }
-        Err(RocketMQError::Internal(
-            format!("CommandUtil: No broker address for broker name: {}", broker_name),
-        ))
+        Err(RocketMQError::Internal(format!(
+            "CommandUtil: No broker address for broker name: {}",
+            broker_name
+        )))
     }
 
     #[allow(unused)]
@@ -87,13 +86,11 @@ impl CommandUtil {
                 return Ok(broker_names.iter().map(|n| n.to_string()).collect());
             }
         }
-        Err(RocketMQError::Internal(
-            format!(
-                "CommandUtil: Make sure the specified clusterName exists or the nameserver which connected to \
-                 is correct. Cluster: {}",
-                cluster_name
-            ),
-        ))
+        Err(RocketMQError::Internal(format!(
+            "CommandUtil: Make sure the specified clusterName exists or the nameserver which \
+             connected to is correct. Cluster: {}",
+            cluster_name
+        )))
     }
 
     #[allow(unused)]
@@ -110,12 +107,10 @@ impl CommandUtil {
                 }
             }
         }
-        Err(RocketMQError::Internal(
-            format!(
-                "CommandUtil: Make sure the specified broker address exists. Address: {}",
-                broker_addr
-            ),
-        ))
+        Err(RocketMQError::Internal(format!(
+            "CommandUtil: Make sure the specified broker address exists. Address: {}",
+            broker_addr
+        )))
     }
 }
 

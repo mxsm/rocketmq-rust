@@ -130,4 +130,3 @@ impl FastCodesHeader for SendMessageResponseHeader {
         }
     }
 }
-

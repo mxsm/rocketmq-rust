@@ -22,4 +22,3 @@ use serde::Serialize;
 pub struct GetEarliestMsgStoretimeResponseHeader {
     pub timestamp: i64,
 }
-

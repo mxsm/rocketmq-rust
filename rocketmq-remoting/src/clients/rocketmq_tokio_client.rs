@@ -1028,12 +1028,10 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                         .await
                         {
                             Ok(_) => Ok::<(), rocketmq_error::RocketMQError>(()),
-                            Err(_) => {
-                                Err(rocketmq_error::RocketMQError::Timeout {
-                                    operation: "send_oneway",
-                                    timeout_ms: timeout_millis,
-                                })
-                            }
+                            Err(_) => Err(rocketmq_error::RocketMQError::Timeout {
+                                operation: "send_oneway",
+                                timeout_ms: timeout_millis,
+                            }),
                         }
                     });
             }
@@ -1057,4 +1055,3 @@ fn init_value_index() -> i32 {
     let mut rng = rand::rng();
     rng.random_range(0..999)
 }
-

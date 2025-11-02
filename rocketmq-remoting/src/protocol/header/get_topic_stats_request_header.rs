@@ -30,4 +30,3 @@ pub struct GetTopicStatsRequestHeader {
     #[serde(flatten)]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
-

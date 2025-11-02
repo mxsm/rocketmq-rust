@@ -22,4 +22,3 @@ pub mod perm_broker_header;
 pub mod query_data_version_header;
 pub mod register_broker_header;
 pub mod topic_operation_header;
-

@@ -38,10 +38,7 @@ pub enum SerializationError {
 
     /// Invalid data format
     #[error("Invalid format: expected {expected}, got {got}")]
-    InvalidFormat {
-        expected: &'static str,
-        got: String,
-    },
+    InvalidFormat { expected: &'static str, got: String },
 
     /// Missing required field
     #[error("Missing required field: {field}")]
@@ -49,10 +46,7 @@ pub enum SerializationError {
 
     /// Invalid field value
     #[error("Invalid value for field '{field}': {reason}")]
-    InvalidValue {
-        field: &'static str,
-        reason: String,
-    },
+    InvalidValue { field: &'static str, reason: String },
 
     /// UTF-8 encoding error
     #[error("UTF-8 encoding error: {0}")]

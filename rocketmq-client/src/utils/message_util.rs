@@ -22,7 +22,6 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 
-
 use crate::common::client_error_code::ClientErrorCode;
 
 pub struct MessageUtil;

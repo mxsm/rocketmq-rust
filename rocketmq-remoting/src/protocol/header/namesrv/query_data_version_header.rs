@@ -118,4 +118,3 @@ mod tests {
         assert!(deserialized.changed);
     }
 }
-

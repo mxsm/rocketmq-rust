@@ -47,7 +47,9 @@ pub enum ProtocolError {
     InvalidMessage { reason: String },
 
     /// Protocol decode error
-    #[error("Protocol decode error: ext_fields_length={ext_fields_len}, header_length={header_len}")]
+    #[error(
+        "Protocol decode error: ext_fields_length={ext_fields_len}, header_length={header_len}"
+    )]
     DecodeError {
         ext_fields_len: usize,
         header_len: usize,

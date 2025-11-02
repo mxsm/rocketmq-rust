@@ -22,4 +22,3 @@ use serde::Serialize;
 pub struct GetMaxOffsetResponseHeader {
     pub offset: i64,
 }
-

@@ -251,4 +251,3 @@ mod tests {
         assert_eq!(header.election_priority, Some(1));
     }
 }
-

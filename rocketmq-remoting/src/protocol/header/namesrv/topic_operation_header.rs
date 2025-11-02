@@ -147,4 +147,3 @@ mod tests {
         assert_eq!(deserialized.cluster, CheetahString::from("cluster1"));
     }
 }
-

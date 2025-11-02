@@ -75,7 +75,8 @@ pub(crate) mod inner {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use rocketmq_error::{RocketMQError, RocketMQResult};
+    use rocketmq_error::RocketMQError;
+    use rocketmq_error::RocketMQResult;
     use rocketmq_rust::ArcMut;
     use tracing::error;
     use tracing::warn;
@@ -318,4 +319,3 @@ pub(crate) mod inner {
         GoHead,
     }
 }
-

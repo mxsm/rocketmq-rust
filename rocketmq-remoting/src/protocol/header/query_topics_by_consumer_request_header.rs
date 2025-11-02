@@ -40,4 +40,3 @@ impl QueryTopicsByConsumerRequestHeader {
         self.group = group;
     }
 }
-

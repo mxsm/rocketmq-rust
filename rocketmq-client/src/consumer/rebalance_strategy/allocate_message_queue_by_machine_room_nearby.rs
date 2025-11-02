@@ -64,9 +64,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByMachineRoomNearby {
                     .or_default()
                     .push(mq.clone());
             } else {
-                return Err(mq_client_err!(
-                    format!("Machine room is null for mq {mq}")
-                ));
+                return Err(mq_client_err!(format!("Machine room is null for mq {mq}")));
             }
         }
 
@@ -78,9 +76,9 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByMachineRoomNearby {
                     .or_default()
                     .push(cid.clone());
             } else {
-                return Err(mq_client_err!(
-                    format!("Machine room is null for consumer id {cid}")
-                ));
+                return Err(mq_client_err!(format!(
+                    "Machine room is null for consumer id {cid}"
+                )));
             }
         }
 

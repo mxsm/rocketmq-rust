@@ -32,7 +32,6 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::MESSAGE_COMPRESS_LEVEL;
 use rocketmq_common::common::mix_all::MESSAGE_COMPRESS_TYPE;
 use rocketmq_common::common::topic::TopicValidator;
-
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;

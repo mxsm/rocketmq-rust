@@ -143,4 +143,3 @@ mod tests {
         assert!(header.peers.is_none());
     }
 }
-

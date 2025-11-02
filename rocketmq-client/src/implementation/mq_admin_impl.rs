@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 use rocketmq_common::common::message::message_queue::MessageQueue;
-
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_rust::ArcMut;
 

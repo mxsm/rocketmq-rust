@@ -35,4 +35,3 @@ pub struct GetConsumerListByGroupResponseHeader;
 //         Ok(Self {})
 //     }
 // }
-

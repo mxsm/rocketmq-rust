@@ -628,4 +628,3 @@ impl Connection {
         self.is_healthy()
     }
 }
-

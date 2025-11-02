@@ -17,15 +17,14 @@
 
 use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
-
-// Import error helpers for convenient error creation
-use crate::error_helpers::{connection_invalid, io_error, remote_error};
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::Receiver;
 
 use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::response_future::ResponseFuture;
 use crate::connection::Connection;
+// Import error helpers for convenient error creation
+use crate::error_helpers::{connection_invalid, io_error, remote_error};
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
 use crate::protocol::remoting_command::RemotingCommand;
