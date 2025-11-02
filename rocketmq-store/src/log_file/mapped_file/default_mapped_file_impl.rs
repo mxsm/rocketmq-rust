@@ -27,13 +27,11 @@ use std::sync::atomic::AtomicI32;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use memmap2::MmapMut;
-use parking_lot::RwLock;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -67,7 +65,6 @@ pub struct DefaultMappedFile {
     reference_resource: ReferenceResourceCounter,
     file: File,
     mmapped_file: ArcMut<MmapMut>,
-    mmapped_file_v2: Option<Arc<RwLock<MmapMut>>>,
     transient_store_pool: Option<TransientStorePool>,
     file_name: CheetahString,
     file_from_offset: u64,
@@ -142,7 +139,6 @@ impl DefaultMappedFile {
             reference_resource: ReferenceResourceCounter::new(),
             file,
             mmapped_file: ArcMut::new(mmap),
-            mmapped_file_v2: None,
             file_name,
             file_from_offset,
             mapped_byte_buffer: None,
@@ -257,7 +253,6 @@ impl DefaultMappedFile {
             transient_store_pool: Some(transient_store_pool),
             stop_timestamp: 0,
             mmapped_file: ArcMut::new(mmap),
-            mmapped_file_v2: None,
             metrics: Some(MappedFileMetrics::new()),
             flush_strategy: FlushStrategy::Async,
         }
@@ -985,6 +980,11 @@ impl DefaultMappedFile {
     }
 
     #[inline]
+    pub fn get_mapped_file_arcmut(&self) -> ArcMut<MmapMut> {
+        self.mmapped_file.clone()
+    }
+
+    #[inline]
     fn is_able_to_flush(&self, flush_least_pages: i32) -> bool {
         if self.is_full() {
             return true;
@@ -1156,28 +1156,14 @@ impl DefaultMappedFile {
             return None;
         }
 
-        let mmap = self.mmapped_file.deref();
-        let slice = &mmap[pos..pos + size];
-
-        // Performance optimization: Use aligned access for medium-sized reads
-        // This fixes the 16KB performance regression
-        let is_aligned = (slice.as_ptr() as usize) % 64 == 0;
-
-        if (8192..=65536).contains(&size) && is_aligned {
-            // Medium-sized aligned reads: Use optimized vectorized copy
-            let mut vec = vec![0u8; size];
-
-            // SAFETY: vec is fully initialized with zeros, safe to copy into
-            unsafe {
-                // Use fast non-temporal copy for aligned data
-                std::ptr::copy_nonoverlapping(slice.as_ptr(), vec.as_mut_ptr(), size);
-            }
-
-            Some(Bytes::from(vec))
-        } else {
-            // Small or unaligned reads: Standard copy
-            Some(Bytes::copy_from_slice(slice))
-        }
+        // True zero-copy: Create a Bytes view over the mmap region without copying data
+        // This uses MmapRegionSlice which implements Deref<Target=[u8]> and keeps
+        // a reference to the mmap, allowing Bytes to share ownership
+        Some(Bytes::from_owner(MmapRegionSlice::new(
+            self.mmapped_file.clone(),
+            pos,
+            size,
+        )))
     }
 
     /// Appends multiple messages in a batch with single lock acquisition.
