@@ -19,7 +19,7 @@ tokio-util = { workspace = true }
 # Raft consensus algorithm
 raft = "0.7"
 raft-proto = "0.7"
-prost = "0.13"
+prost = "0.14"
 protobuf = "2.28"
 slog = { version = "2.7", features = ["max_level_trace", "release_max_level_info"] }
 
