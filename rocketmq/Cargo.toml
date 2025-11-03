@@ -23,7 +23,7 @@ uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 cron = "0.15"
 anyhow = { workspace = true }
-tokio-util = "0.7.16"
+tokio-util = "0.7.17"
 parking_lot = { workspace = true }
 serde = { workspace = true }
 
