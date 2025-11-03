@@ -505,7 +505,6 @@ impl ExtraInfoUtil {
 #[cfg(test)]
 mod tests {
     use rocketmq_common::common::key_builder::KeyBuilder;
-    use rocketmq_error::RocketmqError::IllegalArgument;
 
     use super::*;
 
@@ -526,7 +525,7 @@ mod tests {
         let result = ExtraInfoUtil::get_ck_queue_offset(&["abc".to_string()]).unwrap_err();
         assert_eq!(
             result.to_string(),
-            IllegalArgument("parse ck_queue_offset error".to_string()).to_string()
+            "Illegal argument: parse ck_queue_offset error"
         );
     }
 
@@ -541,7 +540,7 @@ mod tests {
         let result = ExtraInfoUtil::get_pop_time(&["123".to_string()]).unwrap_err();
         assert_eq!(
             result.to_string(),
-            IllegalArgument("getPopTime fail, extraInfoStrs length 1".to_string()).to_string()
+            "Illegal argument: getPopTime fail, extraInfoStrs length 1"
         );
     }
 
@@ -562,8 +561,7 @@ mod tests {
             ExtraInfoUtil::get_invisible_time(&["123".to_string(), "456".to_string()]).unwrap_err();
         assert_eq!(
             result.to_string(),
-            IllegalArgument("getInvisibleTime fail, extraInfoStrs length 2".to_string())
-                .to_string()
+            "Illegal argument: getInvisibleTime fail, extraInfoStrs length 2"
         );
     }
 
@@ -589,7 +587,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             result.to_string(),
-            IllegalArgument("getReviveQid fail, extraInfoStrs length 3".to_string()).to_string()
+            "Illegal argument: getReviveQid fail, extraInfoStrs length 3"
         );
     }
 
@@ -659,7 +657,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             result.to_string(),
-            IllegalArgument("getRealTopic fail, extraInfoStrs length 4".to_string()).to_string()
+            "Illegal argument: getRealTopic fail, extraInfoStrs length 4"
         );
     }
 
@@ -668,7 +666,7 @@ mod tests {
         let result = ExtraInfoUtil::get_real_topic_with_retry("topic", "cid", "3").unwrap_err();
         assert_eq!(
             result.to_string(),
-            IllegalArgument("getRetry fail, format is wrong".to_string()).to_string()
+            "Illegal argument: getRetry fail, format is wrong"
         );
     }
 
@@ -696,7 +694,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             result.to_string(),
-            IllegalArgument("getRetry fail, extraInfoStrs length 4".to_string()).to_string()
+            "Illegal argument: getRetry fail, extraInfoStrs length 4"
         );
     }
 
@@ -726,7 +724,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             result.to_string(),
-            IllegalArgument("getBrokerName fail, extraInfoStrs length 5".to_string()).to_string()
+            "Illegal argument: getBrokerName fail, extraInfoStrs length 5"
         );
     }
 
@@ -758,7 +756,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             result.to_string(),
-            IllegalArgument("getQueueId fail, extraInfoStrs length 6".to_string()).to_string()
+            "Illegal argument: getQueueId fail, extraInfoStrs length 6"
         );
     }
 
@@ -792,7 +790,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             result.to_string(),
-            IllegalArgument("getQueueOffset fail, extraInfoStrs length 7".to_string()).to_string()
+            "Illegal argument: getQueueOffset fail, extraInfoStrs length 7"
         );
     }
 
