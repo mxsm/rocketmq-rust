@@ -14,23 +14,91 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+//! # RocketMQ Error Handling System
+//!
+//! This crate provides a unified, semantic, and performant error handling system
+//! for the RocketMQ Rust implementation.
+//!
+//! ## New Unified Error System (v0.7.0+)
+//!
+//! The new error system provides:
+//! - **Semantic clarity**: Each error type clearly expresses what went wrong
+//! - **Performance**: Minimal heap allocations, optimized for hot paths
+//! - **Ergonomics**: Automatic error conversions via `From` trait
+//! - **Debuggability**: Rich context for production debugging
+//!
+//! ### Usage
+//!
+//! ```rust
+//! use rocketmq_error::RocketMQError;
+//! use rocketmq_error::RocketMQResult;
+//!
+//! fn send_message(addr: &str) -> RocketMQResult<()> {
+//!     if addr.is_empty() {
+//!         return Err(RocketMQError::network_connection_failed(
+//!             "localhost:9876",
+//!             "invalid address",
+//!         ));
+//!     }
+//!     Ok(())
+//! }
+//! # send_message("localhost:9876").unwrap();
+//! ```
+//!
+//! ## Legacy Error System (Deprecated)
+//!
+//! The legacy `RocketmqError` enum is still available for backward compatibility
+//! but will be removed in a future version. Please migrate to the new unified system.
+
+// New unified error system
+pub mod unified;
+
+// Re-export new error types as primary API
+pub use unified::NetworkError;
+pub use unified::ProtocolError;
+pub use unified::RocketMQError;
+pub use unified::SerializationError;
+// Re-export result types (but don't conflict with legacy ones below)
+pub use unified::ServiceError as UnifiedServiceError;
+
+// Legacy error modules (deprecated but kept for compatibility)
+#[deprecated(since = "0.7.0", note = "Use unified error system instead")]
 mod broker_error;
+#[deprecated(since = "0.7.0", note = "Use unified error system instead")]
 mod cli_error;
+#[deprecated(since = "0.7.0", note = "Use unified error system instead")]
 mod client_error;
+#[deprecated(since = "0.7.0", note = "Use unified error system instead")]
 mod common_error;
+#[deprecated(since = "0.7.0", note = "Use unified error system instead")]
 mod name_srv_error;
+#[deprecated(since = "0.7.0", note = "Use unified error system instead")]
 mod remoting_error;
+#[deprecated(since = "0.7.0", note = "Use unified error system instead")]
 mod store_error;
+#[deprecated(since = "0.7.0", note = "Use unified error system instead")]
 mod tools_error;
+#[deprecated(since = "0.7.0", note = "Use unified error system instead")]
 mod tui_error;
 
 use std::io;
 
-pub type RocketMQResult<T> = std::result::Result<T, RocketmqError>;
-
-pub type Result<T> = anyhow::Result<T>;
-
 use thiserror::Error;
+
+// Legacy type aliases (deprecated - use RocketMQResult and Result from unified module)
+// Kept for backward compatibility with existing code
+#[deprecated(since = "0.7.0", note = "Use unified::RocketMQResult instead")]
+pub type LegacyRocketMQResult<T> = std::result::Result<T, RocketmqError>;
+
+#[deprecated(since = "0.7.0", note = "Use unified::Result instead")]
+pub type LegacyResult<T> = anyhow::Result<T>;
+
+// Re-export unified result types as the primary API
+pub use unified::Result;
+pub use unified::RocketMQResult;
+// Import ServiceError for use in legacy RocketmqError enum
+use unified::ServiceError;
 
 #[derive(Debug, Error)]
 pub enum RocketmqError {
@@ -266,9 +334,13 @@ impl ClientErr {
     }
 }
 
-// Create a macro to simplify error creation
+// Legacy macro - deprecated in favor of new unified error system
+#[deprecated(
+    since = "0.7.0",
+    note = "Use unified error system and macros from rocketmq-client instead"
+)]
 #[macro_export]
-macro_rules! mq_client_err {
+macro_rules! mq_client_err_legacy {
     // Handle errors with a custom ResponseCode and formatted string
     ($response_code:expr, $fmt:expr, $($arg:expr),*) => {{
         let formatted_msg = format!($fmt, $($arg),*);
@@ -365,11 +437,14 @@ macro_rules! request_timeout_err {
     }};
 }
 
-//------------------ServiceError------------------
+//------------------Legacy ServiceError (deprecated)------------------
 
-/// Service error enumeration
+/// Service error enumeration (LEGACY - deprecated)
+///
+/// Use `unified::ServiceError` instead
+#[deprecated(since = "0.7.0", note = "Use unified::ServiceError instead")]
 #[derive(Debug, thiserror::Error)]
-pub enum ServiceError {
+pub enum LegacyServiceError {
     #[error("Service is already running")]
     AlreadyRunning,
 
@@ -387,4 +462,145 @@ pub enum ServiceError {
 
     #[error("Service interrupted")]
     Interrupted,
+}
+
+// Note: ServiceError is re-exported at the top of this file from unified module
+
+//------------------Automatic conversion from legacy to unified------------------
+
+/// Automatic conversion from legacy `RocketmqError` to unified `RocketMQError`
+///
+/// This allows legacy error-producing code to work with new error-expecting code
+impl From<RocketmqError> for unified::RocketMQError {
+    fn from(err: RocketmqError) -> Self {
+        match err {
+            // Network errors
+            RocketmqError::RemoteError(msg) => Self::network_connection_failed("unknown", msg),
+            RocketmqError::RemotingConnectError(addr) => {
+                Self::network_connection_failed(addr, "connection failed")
+            }
+            RocketmqError::RemotingSendRequestError(addr) => {
+                Self::network_connection_failed(addr, "send request failed")
+            }
+            RocketmqError::RemotingTimeoutError(addr, timeout) => {
+                Self::Network(unified::NetworkError::RequestTimeout {
+                    addr: addr.to_string(),
+                    timeout_ms: timeout,
+                })
+            }
+            RocketmqError::RemotingTooMuchRequestError(msg) => Self::illegal_argument(msg),
+
+            // Protocol errors
+            RocketmqError::DeserializeHeaderError(msg) => {
+                Self::Serialization(unified::SerializationError::DecodeFailed {
+                    format: "header",
+                    message: msg,
+                })
+            }
+            RocketmqError::RemotingCommandDecoderError(_msg) => {
+                Self::Protocol(unified::ProtocolError::DecodeError {
+                    ext_fields_len: 0,
+                    header_len: 0,
+                })
+            }
+            RocketmqError::DecodingError(required, available) => {
+                Self::Serialization(unified::SerializationError::DecodeFailed {
+                    format: "binary",
+                    message: format!("required {} bytes, got {}", required, available),
+                })
+            }
+            RocketmqError::NotSupportSerializeType(t) => {
+                Self::Protocol(unified::ProtocolError::UnsupportedSerializationType {
+                    serialize_type: t,
+                })
+            }
+
+            // Broker errors
+            RocketmqError::MQBrokerError(code, msg, addr) => {
+                Self::broker_operation_failed("BROKER_OPERATION", code, msg).with_broker_addr(addr)
+            }
+            RocketmqError::MQClientBrokerError(err) => {
+                let mut e = Self::broker_operation_failed(
+                    "BROKER_OPERATION",
+                    err.response_code(),
+                    err.error_message().unwrap_or(&String::new()).clone(),
+                );
+                if let Some(addr) = err.broker_addr() {
+                    e = e.with_broker_addr(addr.clone());
+                }
+                e
+            }
+            RocketmqError::OffsetNotFoundError(code, addr, msg) => {
+                Self::broker_operation_failed("OFFSET_NOT_FOUND", code, msg).with_broker_addr(addr)
+            }
+
+            // Client errors
+            RocketmqError::MQClientErr(err) => {
+                Self::illegal_argument(err.error_message().unwrap_or(&String::new()).clone())
+            }
+            RocketmqError::RequestTimeoutError(_) => Self::Timeout {
+                operation: "request",
+                timeout_ms: 3000,
+            },
+
+            // System errors
+            RocketmqError::Io(err) => Self::IO(err),
+            RocketmqError::IllegalArgument(msg) | RocketmqError::IllegalArgumentError(msg) => {
+                Self::illegal_argument(msg)
+            }
+            RocketmqError::UnsupportedOperationException(msg) => Self::illegal_argument(msg),
+            RocketmqError::IpError(msg) => Self::illegal_argument(format!("IP error: {}", msg)),
+            RocketmqError::ChannelError(msg) => Self::Internal(format!("Channel error: {}", msg)),
+            RocketmqError::NoneError(msg) => Self::Internal(format!("None error: {}", msg)),
+            RocketmqError::TokioHandlerError(msg) => {
+                Self::Internal(format!("Tokio handler error: {}", msg))
+            }
+            RocketmqError::SubCommand(cmd, msg) => {
+                Self::Internal(format!("{} command failed: {}", cmd, msg))
+            }
+            RocketmqError::StoreCustomError(msg) => Self::StorageReadFailed {
+                path: "unknown".to_string(),
+                reason: msg,
+            },
+
+            // Other errors
+            RocketmqError::ServiceTaskError(err) => Self::Service(err),
+
+            #[cfg(feature = "with_serde")]
+            RocketmqError::SerdeJsonError(err) => {
+                Self::Serialization(unified::SerializationError::JsonError(err.to_string()))
+            }
+
+            #[cfg(feature = "with_config")]
+            RocketmqError::ConfigError(err) => Self::ConfigParseFailed {
+                key: "unknown",
+                reason: err.to_string(),
+            },
+
+            // Handle remaining variants
+            RocketmqError::RpcError(code, msg) => Self::broker_operation_failed("RPC", code, msg),
+            RocketmqError::FromStrErr(msg) => Self::illegal_argument(msg),
+            RocketmqError::Utf8Error(err) => {
+                Self::Serialization(unified::SerializationError::Utf8Error(err))
+            }
+            RocketmqError::ConnectionInvalid(msg) => {
+                Self::network_connection_failed("unknown", msg)
+            }
+            RocketmqError::AbortProcessError(code, msg) => {
+                Self::Internal(format!("Abort process error {}: {}", code, msg))
+            }
+            RocketmqError::ChannelSendRequestFailed(msg) => {
+                Self::network_connection_failed("channel", msg)
+            }
+            RocketmqError::ChannelRecvRequestFailed(msg) => {
+                Self::network_connection_failed("channel", msg)
+            }
+            RocketmqError::RemotingCommandEncoderError(msg) => {
+                Self::Serialization(unified::SerializationError::EncodeFailed {
+                    format: "command",
+                    message: msg,
+                })
+            }
+        }
+    }
 }

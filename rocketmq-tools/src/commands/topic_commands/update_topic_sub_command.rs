@@ -23,8 +23,8 @@ use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::common::TopicSysFlag;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_error::RocketmqError;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
@@ -126,21 +126,19 @@ pub struct UpdateTopicSubCommand {
 impl CommandExecute for UpdateTopicSubCommand {
     async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         if self.broker_addr.is_none() && self.cluster_name.is_none() {
-            return Err(RocketmqError::SubCommand(
-                "UpdateTopicSubCommand".into(),
-                "Either brokerAddr (-b) or clusterName (-c) must be provided".into(),
+            return Err(RocketMQError::IllegalArgument(
+                "UpdateTopicSubCommand: Either brokerAddr (-b) or clusterName (-c) must be \
+                 provided"
+                    .into(),
             ));
         }
 
         let validation_result = TopicValidator::validate_topic(&self.topic);
         if !validation_result.valid() {
-            return Err(RocketmqError::SubCommand(
-                "UpdateTopicSubCommand".into(),
-                format!(
-                    "Invalid topic name: {}",
-                    validation_result.remark().as_str()
-                ),
-            ));
+            return Err(RocketMQError::IllegalArgument(format!(
+                "UpdateTopicSubCommand: Invalid topic name: {}",
+                validation_result.remark().as_str()
+            )));
         }
 
         let mut default_mqadmin_ext = DefaultMQAdminExt::new();
@@ -156,10 +154,10 @@ impl CommandExecute for UpdateTopicSubCommand {
             MQAdminExt::start(&mut default_mqadmin_ext)
                 .await
                 .map_err(|e| {
-                    RocketmqError::SubCommand(
-                        "UpdateTopicSubCommand".into(),
-                        format!("Failed to start MQAdminExt: {}", e),
-                    )
+                    RocketMQError::Internal(format!(
+                        "UpdateTopicSubCommand: Failed to start MQAdminExt: {}",
+                        e
+                    ))
                 })?;
 
             let mut topic_config = TopicConfig {
@@ -198,10 +196,10 @@ impl CommandExecute for UpdateTopicSubCommand {
                     )
                     .await
                     .map_err(|e| {
-                        RocketmqError::SubCommand(
-                            "UpdateTopicSubCommand".into(),
-                            format!("Failed to create/update topic: {}", e),
-                        )
+                        RocketMQError::Internal(format!(
+                            "UpdateTopicSubCommand: Failed to create/update topic: {}",
+                            e
+                        ))
                     })?;
 
                 if is_order {
@@ -245,20 +243,20 @@ impl CommandExecute for UpdateTopicSubCommand {
                     .examine_broker_cluster_info()
                     .await
                     .map_err(|e| {
-                        RocketmqError::SubCommand(
-                            "UpdateTopicSubCommand".into(),
-                            format!("Failed to get cluster info: {}", e),
-                        )
+                        RocketMQError::Internal(format!(
+                            "UpdateTopicSubCommand: Failed to get cluster info: {}",
+                            e
+                        ))
                     })?;
 
                 let master_addrs =
                     CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name)?;
 
                 if master_addrs.is_empty() {
-                    return Err(RocketmqError::SubCommand(
-                        "UpdateTopicSubCommand".into(),
-                        format!("No master brokers found in cluster: {}", cluster_name),
-                    ));
+                    return Err(RocketMQError::Internal(format!(
+                        "UpdateTopicSubCommand: No master brokers found in cluster: {}",
+                        cluster_name
+                    )));
                 }
 
                 for addr in &master_addrs {
@@ -266,10 +264,10 @@ impl CommandExecute for UpdateTopicSubCommand {
                         .create_and_update_topic_config(addr.clone(), topic_config.clone())
                         .await
                         .map_err(|e| {
-                            RocketmqError::SubCommand(
-                                "UpdateTopicSubCommand".into(),
-                                format!("Failed to create/update topic on {}: {}", addr, e),
-                            )
+                            RocketMQError::Internal(format!(
+                                "UpdateTopicSubCommand: Failed to create/update topic on {}: {}",
+                                addr, e
+                            ))
                         })?;
                     println!("create topic to {} success.", addr);
                 }

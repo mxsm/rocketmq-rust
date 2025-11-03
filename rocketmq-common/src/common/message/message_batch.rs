@@ -24,7 +24,8 @@ use std::path::Iter;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketmqError::UnsupportedOperationException;
+// Use new unified error system
+use rocketmq_error::RocketMQError;
 
 use crate::common::message::message_decoder;
 use crate::common::message::message_ext_broker_inner::MessageExtBrokerInner;
@@ -67,39 +68,36 @@ impl MessageBatch {
         messages: Vec<Message>,
     ) -> rocketmq_error::RocketMQResult<MessageBatch> {
         if messages.is_empty() {
-            return Err(UnsupportedOperationException(
-                "MessageBatch::generate_from_vec: messages is empty".to_string(),
+            return Err(RocketMQError::illegal_argument(
+                "MessageBatch::generate_from_vec: messages is empty",
             ));
         }
         let mut first: Option<&Message> = None;
         for message in &messages {
             if message.get_delay_time_level() > 0 {
-                return Err(
-                    rocketmq_error::RocketmqError::UnsupportedOperationException(
-                        "TimeDelayLevel is not supported for batching".to_string(),
-                    ),
-                );
+                return Err(RocketMQError::illegal_argument(
+                    "TimeDelayLevel is not supported for batching",
+                ));
             }
             if message
                 .get_topic()
                 .starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
             {
-                return Err(UnsupportedOperationException(
-                    "Retry group topic is not supported for batching".to_string(),
+                return Err(RocketMQError::illegal_argument(
+                    "Retry group topic is not supported for batching",
                 ));
             }
 
             if let Some(first_message) = first {
                 let first_message = first.unwrap();
                 if first_message.get_topic() != message.get_topic() {
-                    return Err(UnsupportedOperationException(
-                        "The topic of the messages in one batch should be the same".to_string(),
+                    return Err(RocketMQError::illegal_argument(
+                        "The topic of the messages in one batch should be the same",
                     ));
                 }
                 if first_message.is_wait_store_msg_ok() != message.is_wait_store_msg_ok() {
-                    return Err(UnsupportedOperationException(
-                        "The waitStoreMsgOK of the messages in one batch should the same"
-                            .to_string(),
+                    return Err(RocketMQError::illegal_argument(
+                        "The waitStoreMsgOK of the messages in one batch should the same",
                     ));
                 }
             } else {

@@ -280,16 +280,13 @@ impl ClientRemotingProcessor {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header =
             request.decode_command_custom_header::<ConsumeMessageDirectlyResultRequestHeader>()?;
-        let body =
-            request
-                .get_body_mut()
-                .ok_or(rocketmq_error::RocketmqError::IllegalArgumentError(
-                    "body is empty".to_string(),
-                ))?;
+        let body = request
+            .get_body_mut()
+            .ok_or(rocketmq_error::RocketMQError::IllegalArgument(
+                "body is empty".to_string(),
+            ))?;
         let msg = message_decoder::decode(body, true, true, false, false, false).ok_or(
-            rocketmq_error::RocketmqError::IllegalArgumentError(
-                "decode message failed".to_string(),
-            ),
+            rocketmq_error::RocketMQError::IllegalArgument("decode message failed".to_string()),
         )?;
 
         let result = self
@@ -302,9 +299,7 @@ impl ClientRemotingProcessor {
             .await;
         if let Some(result) = result {
             let body = result.encode().map_err(|_| {
-                rocketmq_error::RocketmqError::IllegalArgumentError(
-                    "encode result failed".to_string(),
-                )
+                rocketmq_error::RocketMQError::IllegalArgument("encode result failed".to_string())
             })?;
             Ok(Some(
                 RemotingCommand::create_response_command().set_body(body),

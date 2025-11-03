@@ -370,7 +370,10 @@ pub fn get_ip() -> rocketmq_error::RocketMQResult<Vec<u8>> {
                 IpAddr::V4(ip) => Ok(ip.octets().to_vec()),
                 IpAddr::V6(ip) => Ok(ip.octets().to_vec()),
             },
-            Err(value) => Err(rocketmq_error::RocketmqError::IpError(value.to_string())),
+            Err(value) => Err(rocketmq_error::RocketMQError::illegal_argument(format!(
+                "IP error: {}",
+                value
+            ))),
         },
     }
 }

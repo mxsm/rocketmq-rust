@@ -207,7 +207,7 @@ where
                     return true;
                 }
                 Err(e) => match e {
-                    rocketmq_error::RocketmqError::RequestTimeoutError(_) => {
+                    rocketmq_error::RocketMQError::Timeout { .. } => {
                         // Continue to retry on timeout errors
                     }
                     _ => {

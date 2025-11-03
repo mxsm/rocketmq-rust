@@ -921,13 +921,16 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                 self.latency_tracker.record_error(addr);
             }
 
-            rocketmq_error::RocketmqError::RemoteError(format!("Failed to connect to {}", target))
+            rocketmq_error::RocketMQError::network_connection_failed(
+                target.to_string(),
+                "Failed to connect",
+            )
         })?;
 
         // === PHASE 2: Send request with timeout ===
         let runtime = self.client_runtime.as_ref().ok_or_else(|| {
             error!("Client runtime has been shut down");
-            rocketmq_error::RocketmqError::RemoteError("Client runtime unavailable".to_string())
+            rocketmq_error::RocketMQError::ClientNotStarted
         })?;
 
         let send_task = runtime.get_handle().spawn(async move {
@@ -939,10 +942,10 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
             .await
             {
                 Ok(result) => result,
-                Err(_) => Err(rocketmq_error::RocketmqError::RemoteError(format!(
-                    "Request timed out after {}ms",
-                    timeout_millis
-                ))),
+                Err(_) => Err(rocketmq_error::RocketMQError::Timeout {
+                    operation: "send_request",
+                    timeout_ms: timeout_millis,
+                }),
             }
         });
 
@@ -992,7 +995,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                     self.latency_tracker.record_error(addr);
                 }
 
-                Err(rocketmq_error::RocketmqError::RemoteError(format!(
+                Err(rocketmq_error::RocketMQError::Internal(format!(
                     "Send task error: {}",
                     join_err
                 )))
@@ -1024,10 +1027,11 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                         })
                         .await
                         {
-                            Ok(_) => Ok(()),
-                            Err(err) => {
-                                Err(rocketmq_error::RocketmqError::RemoteError(err.to_string()))
-                            }
+                            Ok(_) => Ok::<(), rocketmq_error::RocketMQError>(()),
+                            Err(_) => Err(rocketmq_error::RocketMQError::Timeout {
+                                operation: "send_oneway",
+                                timeout_ms: timeout_millis,
+                            }),
                         }
                     });
             }

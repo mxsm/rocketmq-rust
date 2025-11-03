@@ -41,13 +41,7 @@ use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::MessageDecoder;
-use rocketmq_error::client_broker_err;
-use rocketmq_error::mq_client_err;
-use rocketmq_error::ClientErr;
-use rocketmq_error::MQBrokerErr;
 use rocketmq_error::RocketMQResult;
-use rocketmq_error::RocketmqError;
-use rocketmq_error::RocketmqError::MQClientBrokerError;
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
 use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
@@ -178,12 +172,12 @@ impl MQClientAPIImpl {
         }
 
         if let Some(err_response) = err_response {
-            return mq_client_err!(
+            return Err(mq_client_err!(
                 err_response.code(),
                 err_response
                     .remark()
                     .map_or("".to_string(), |s| s.to_string())
-            );
+            ));
         }
         Ok(())
     }
@@ -213,12 +207,12 @@ impl MQClientAPIImpl {
         }
 
         if let Some(err_response) = err_response {
-            return mq_client_err!(
+            return Err(mq_client_err!(
                 err_response.code(),
                 err_response
                     .remark()
                     .map_or("".to_string(), |s| s.to_string())
-            );
+            ));
         }
         Ok(())
     }
@@ -263,12 +257,12 @@ impl MQClientAPIImpl {
         }
 
         if let Some(err_response) = err_response {
-            return mq_client_err!(
+            return Err(mq_client_err!(
                 err_response.code(),
                 err_response
                     .remark()
                     .map_or("".to_string(), |s| s.to_string())
-            );
+            ));
         }
         Ok(())
     }
@@ -294,10 +288,10 @@ impl MQClientAPIImpl {
                 .decode_command_custom_header_fast::<AddWritePermOfBrokerResponseHeader>()?;
             return Ok(request_header.get_add_topic_count());
         }
-        mq_client_err!(
+        Err(mq_client_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string())
-        )
+        ))
     }
 
     pub(crate) async fn wipe_write_perm_of_broker(
@@ -321,10 +315,10 @@ impl MQClientAPIImpl {
                 .decode_command_custom_header_fast::<WipeWritePermOfBrokerResponseHeader>()?;
             return Ok(request_header.get_wipe_topic_count());
         }
-        mq_client_err!(
+        Err(mq_client_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string())
-        )
+        ))
     }
 }
 
@@ -466,16 +460,16 @@ impl MQClientAPIImpl {
                         }
                     }
                     _ => {
-                        return mq_client_err!(
+                        return Err(mq_client_err!(
                             code,
                             result.remark().cloned().unwrap_or_default().to_string()
-                        )
+                        ))
                     }
                 }
-                mq_client_err!(
+                Err(mq_client_err!(
                     code,
                     result.remark().cloned().unwrap_or_default().to_string()
-                )
+                ))
             }
             Err(err) => Err(err),
         }
@@ -553,9 +547,10 @@ impl MQClientAPIImpl {
             CommunicationMode::Sync => {
                 let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
                 if cost_time_sync > timeout_millis {
-                    return Err(rocketmq_error::RocketmqError::RemotingTooMuchRequestError(
-                        "sendMessage call timeout".to_string(),
-                    ));
+                    return Err(rocketmq_error::RocketMQError::Timeout {
+                        operation: "sendMessage",
+                        timeout_ms: timeout_millis,
+                    });
                 }
                 let result = self
                     .send_message_sync(
@@ -572,9 +567,10 @@ impl MQClientAPIImpl {
                 let times = AtomicU32::new(0);
                 let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
                 if cost_time_sync > timeout_millis {
-                    return Err(rocketmq_error::RocketmqError::RemotingTooMuchRequestError(
-                        "sendMessage call timeout".to_string(),
-                    ));
+                    return Err(rocketmq_error::RocketMQError::Timeout {
+                        operation: "sendMessage",
+                        timeout_ms: timeout_millis,
+                    });
                 }
                 Box::pin(self.send_message_async(
                     addr,
@@ -927,12 +923,10 @@ impl MQClientAPIImpl {
             ResponseCode::SlaveNotAvailable => SendStatus::SlaveNotAvailable,
             ResponseCode::Success => SendStatus::SendOk,
             _ => {
-                return Err(rocketmq_error::RocketmqError::MQClientBrokerError(
-                    rocketmq_error::MQBrokerErr::new_with_broker(
-                        response.code(),
-                        response.remark().map_or("".to_string(), |s| s.to_string()),
-                        addr.to_string(),
-                    ),
+                return Err(client_broker_err!(
+                    response.code(),
+                    response.remark().map_or("".to_string(), |s| s.to_string()),
+                    addr.to_string()
                 ))
             }
         };
@@ -1114,11 +1108,11 @@ impl MQClientAPIImpl {
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             return Ok(response.version());
         }
-        client_broker_err!(
+        Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
             addr.to_string()
-        )
+        ))
     }
 
     pub async fn check_client_in_broker(
@@ -1151,10 +1145,10 @@ impl MQClientAPIImpl {
             )
             .await?;
         if ResponseCode::from(response.code()) != ResponseCode::Success {
-            return mq_client_err!(
+            return Err(mq_client_err!(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string())
-            );
+            ));
         }
         Ok(())
     }
@@ -1190,27 +1184,25 @@ impl MQClientAPIImpl {
                 if let Some(body) = response.body() {
                     return match GetConsumerListByGroupResponseBody::decode(body) {
                         Ok(value) => Ok(value.consumer_id_list),
-                        Err(e) => mq_client_err!(response
+                        Err(e) => Err(mq_client_err!(response
                             .remark()
-                            .map_or("".to_string(), |s| s.to_string())),
+                            .map_or("".to_string(), |s| s.to_string()))),
                     };
                 }
             }
             _ => {
-                return Err(rocketmq_error::RocketmqError::MQClientBrokerError(
-                    MQBrokerErr::new_with_broker(
-                        response.code(),
-                        response.remark().map_or("".to_string(), |s| s.to_string()),
-                        addr.to_string(),
-                    ),
+                return Err(client_broker_err!(
+                    response.code(),
+                    response.remark().map_or("".to_string(), |s| s.to_string()),
+                    addr.to_string()
                 ));
             }
         }
-        client_broker_err!(
+        Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
             addr.to_string()
-        )
+        ))
     }
 
     pub async fn update_consumer_offset_oneway(
@@ -1248,12 +1240,10 @@ impl MQClientAPIImpl {
             .invoke_request(Some(addr), request, timeout_millis)
             .await?;
         if ResponseCode::from(response.code()) != ResponseCode::Success {
-            Err(rocketmq_error::RocketmqError::MQClientBrokerError(
-                MQBrokerErr::new_with_broker(
-                    response.code(),
-                    response.remark().map_or("".to_string(), |s| s.to_string()),
-                    addr.to_string(),
-                ),
+            Err(client_broker_err!(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                addr.to_string()
             ))
         } else {
             Ok(())
@@ -1289,19 +1279,19 @@ impl MQClientAPIImpl {
                 return Ok(response_header.offset.unwrap());
             }
             ResponseCode::QueryNotFound => {
-                return Err(rocketmq_error::RocketmqError::OffsetNotFoundError(
+                return Err(client_broker_err!(
                     response.code(),
                     response.remark().map_or("".to_string(), |s| s.to_string()),
-                    addr.to_string(),
+                    addr.to_string()
                 ))
             }
             _ => {}
         }
-        client_broker_err!(
+        Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
             addr.to_string()
-        )
+        ))
     }
 
     pub async fn pull_message<PCB>(
@@ -1397,11 +1387,11 @@ impl MQClientAPIImpl {
             ResponseCode::PullRetryImmediately => PullStatus::NoMatchedMsg,
             ResponseCode::PullOffsetMoved => PullStatus::OffsetIllegal,
             _ => {
-                return client_broker_err!(
+                return Err(client_broker_err!(
                     response.code(),
                     response.remark().map_or("".to_string(), |s| s.to_string()),
                     addr.to_string()
-                )
+                ))
             }
         };
         let response_header = response
@@ -1464,11 +1454,11 @@ impl MQClientAPIImpl {
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             Ok(())
         } else {
-            client_broker_err!(
+            Err(client_broker_err!(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string()),
                 addr.to_string()
-            )
+            ))
         }
     }
 
@@ -1495,11 +1485,11 @@ impl MQClientAPIImpl {
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             Ok(())
         } else {
-            client_broker_err!(
+            Err(client_broker_err!(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string()),
                 addr.to_string()
-            )
+            ))
         }
     }
 
@@ -1539,11 +1529,11 @@ impl MQClientAPIImpl {
             if ResponseCode::from(response.code()) == ResponseCode::Success {
                 Ok(())
             } else {
-                client_broker_err!(
+                Err(client_broker_err!(
                     response.code(),
                     response.remark().map_or("".to_string(), |s| s.to_string()),
                     addr.to_string()
-                )
+                ))
             }
         }
     }
@@ -1579,25 +1569,21 @@ impl MQClientAPIImpl {
                 LockBatchResponseBody::decode(body.as_ref())
                     .map(|body| body.lock_ok_mq_set)
                     .map_err(|e| {
-                        MQClientBrokerError(MQBrokerErr::new_with_broker(
-                            response.code(),
-                            e.to_string(),
-                            addr.to_string(),
-                        ))
+                        client_broker_err!(response.code(), e.to_string(), addr.to_string())
                     })
             } else {
-                client_broker_err!(
+                Err(client_broker_err!(
                     response.code(),
                     "Response body is empty".to_string(),
                     addr.to_string()
-                )
+                ))
             }
         } else {
-            client_broker_err!(
+            Err(client_broker_err!(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string()),
                 addr.to_string()
-            )
+            ))
         }
     }
 
@@ -1657,11 +1643,11 @@ impl MQClientAPIImpl {
                 .expect("decode error");
             return Ok(response_header.offset);
         }
-        client_broker_err!(
+        Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
             addr.to_string()
-        )
+        ))
     }
 
     pub async fn set_message_request_mode(
@@ -1696,10 +1682,10 @@ impl MQClientAPIImpl {
             )
             .await?;
         if ResponseCode::from(response.code()) != ResponseCode::Success {
-            return mq_client_err!(
+            return Err(mq_client_err!(
                 response.code(),
                 response.remark().cloned().unwrap_or_default().to_string()
-            );
+            ));
         }
         Ok(())
     }
@@ -1750,11 +1736,11 @@ impl MQClientAPIImpl {
             return Ok(None);
         }
 
-        client_broker_err!(
+        Err(client_broker_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string()),
             addr.to_string()
-        )
+        ))
     }
 
     pub async fn change_invisible_time_async(
@@ -1874,10 +1860,10 @@ impl MQClientAPIImpl {
                 (PopStatus::PollingNotFound, vec![])
             }
             _ => {
-                return client_broker_err!(
+                return Err(client_broker_err!(
                     response.code(),
                     response.remark().cloned().unwrap_or_default()
-                )
+                ))
             }
         };
         let mut pop_result = PopResult {
@@ -2201,18 +2187,14 @@ impl MQClientAPIImpl {
 
                             config_map.insert(name_server.clone(), properties);
                         }
-                        None => {
-                            return Err(RocketmqError::MQClientErr(ClientErr::new(
-                                "Body is empty".to_string(),
-                            )))
-                        }
+                        None => return Err(mq_client_err!("Body is empty".to_string())),
                     }
                 }
                 code => {
-                    return Err(RocketmqError::MQClientErr(ClientErr::new_with_code(
+                    return Err(mq_client_err!(
                         response.code(),
-                        response.remark().map_or("".to_string(), |s| s.to_string()),
-                    )));
+                        response.remark().map_or("".to_string(), |s| s.to_string())
+                    ));
                 }
             }
         }

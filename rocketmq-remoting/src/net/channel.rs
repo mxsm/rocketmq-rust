@@ -26,7 +26,7 @@ use cheetah_string::CheetahString;
 // Use flume for high-performance async channel (40-60% faster than tokio::mpsc)
 // Lock-free design provides better throughput under high load
 use flume::{Receiver, Sender};
-use rocketmq_error::RocketmqError;
+use rocketmq_error::RocketMQError;
 use rocketmq_rust::ArcMut;
 use tokio::time::timeout;
 use tracing::error;
@@ -394,7 +394,7 @@ pub(crate) async fn handle_send(
         match connection.send_command(send).await {
             Ok(_) => {}
             Err(error) => match error {
-                RocketmqError::Io(error) => {
+                rocketmq_error::RocketMQError::IO(error) => {
                     // I/O error means connection is broken
                     // Connection state is automatically marked as degraded by send_command()
                     error!("send request failed: {}", error);
@@ -519,7 +519,7 @@ impl ChannelInner {
     /// # Example
     ///
     /// ```ignore
-    /// let request = RemotingCommand::create_request_command(10, header);
+    /// let request = RemotingCommand::create_request_command(10, header).into();
     /// let response = channel_inner.send_wait_response(request, 3000).await?;
     /// println!("Got response: {:?}", response);
     /// ```
@@ -539,7 +539,10 @@ impl ChannelInner {
             .send_async((request, Some(response_tx), Some(timeout_millis)))
             .await
         {
-            return Err(RocketmqError::ChannelSendRequestFailed(err.to_string()));
+            return Err(RocketMQError::network_connection_failed(
+                "channel",
+                format!("send failed: {}", err),
+            ));
         }
 
         // Wait for response with timeout
@@ -549,13 +552,19 @@ impl ChannelInner {
                 Err(e) => {
                     // Response channel closed without sending (connection dropped?)
                     self.response_table.remove(&opaque);
-                    Err(RocketmqError::ChannelRecvRequestFailed(e.to_string()))
+                    Err(RocketMQError::network_connection_failed(
+                        "channel",
+                        format!("connection dropped: {}", e),
+                    ))
                 }
             },
-            Err(e) => {
+            Err(_) => {
                 // Timeout expired
                 self.response_table.remove(&opaque);
-                Err(RocketmqError::ChannelRecvRequestFailed(e.to_string()))
+                Err(RocketMQError::Timeout {
+                    operation: "channel_recv",
+                    timeout_ms: timeout_millis,
+                })
             }
         }
     }
@@ -571,7 +580,7 @@ impl ChannelInner {
     ///
     /// # Returns
     ///
-    /// - `Ok(())`: Request successfully enqueued
+    /// - `Ok(().into())`: Request successfully enqueued
     /// - `Err(ChannelSendRequestFailed)`: Failed to enqueue
     ///
     /// # Use Case
@@ -592,7 +601,10 @@ impl ChannelInner {
             .await
         {
             error!("send oneway request failed: {}", err);
-            return Err(RocketmqError::ChannelSendRequestFailed(err.to_string()));
+            return Err(RocketMQError::network_connection_failed(
+                "channel",
+                format!("send oneway failed: {}", err),
+            ));
         }
         Ok(())
     }
@@ -623,7 +635,10 @@ impl ChannelInner {
             .await
         {
             error!("send request failed: {}", err);
-            return Err(RocketmqError::ChannelSendRequestFailed(err.to_string()));
+            return Err(RocketMQError::network_connection_failed(
+                "channel",
+                format!("send failed: {}", err),
+            ));
         }
         Ok(())
     }

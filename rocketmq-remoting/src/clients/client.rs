@@ -16,9 +16,6 @@
  */
 
 use rocketmq_error::RocketMQResult;
-use rocketmq_error::RocketmqError::ConnectionInvalid;
-use rocketmq_error::RocketmqError::Io;
-use rocketmq_error::RocketmqError::RemoteError;
 use rocketmq_rust::ArcMut;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::Receiver;
@@ -26,6 +23,8 @@ use tokio::sync::mpsc::Receiver;
 use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::response_future::ResponseFuture;
 use crate::connection::Connection;
+// Import error helpers for convenient error creation
+use crate::error_helpers::{connection_invalid, io_error, remote_error};
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
 use crate::protocol::remoting_command::RemotingCommand;
@@ -80,7 +79,7 @@ where
     {
         let tcp_stream = tokio::net::TcpStream::connect(addr).await;
         if tcp_stream.is_err() {
-            return Err(Io(tcp_stream.err().unwrap()));
+            return Err(io_error(tcp_stream.err().unwrap()));
         }
         let stream = tcp_stream?;
         let local_addr = stream.local_addr()?;
@@ -166,17 +165,16 @@ where
         }
         match self.ctx.connection_mut().send_command(request).await {
             Ok(_) => Ok(()),
-            Err(error) => match error {
-                Io(value) => {
-                    // Connection state is automatically marked as degraded by send_command()
+            Err(error) => {
+                // For I/O errors, mark connection as invalid
+                if matches!(error, rocketmq_error::RocketMQError::IO(_)) {
                     self.cmd_handler.response_table.remove(&opaque);
-                    Err(ConnectionInvalid(value.to_string()))
+                    return Err(connection_invalid(error.to_string()));
                 }
-                _ => {
-                    self.cmd_handler.response_table.remove(&opaque);
-                    Err(error)
-                }
-            },
+                // For other errors, just remove the response future
+                self.cmd_handler.response_table.remove(&opaque);
+                Err(error)
+            }
         }
     }
 }
@@ -234,11 +232,11 @@ where
             .send((request, Some(tx), Some(timeout_millis)))
             .await
         {
-            return Err(RemoteError(err.to_string()));
+            return Err(remote_error(err.to_string()));
         }
         match rx.await {
             Ok(value) => value,
-            Err(error) => Err(RemoteError(error.to_string())),
+            Err(error) => Err(remote_error(error.to_string())),
         }
     }
 
@@ -268,7 +266,7 @@ where
     /// A `Result` indicating success or failure in sending the request.
     pub async fn send(&mut self, request: RemotingCommand) -> RocketMQResult<()> {
         if let Err(err) = self.tx.send((request, None, None)).await {
-            return Err(RemoteError(err.to_string()));
+            return Err(remote_error(err.to_string()));
         }
         Ok(())
     }
@@ -311,7 +309,7 @@ where
         // The underlying connection will buffer them efficiently
         for request in requests {
             if let Err(err) = self.tx.send((request, None, None)).await {
-                return Err(RemoteError(err.to_string()));
+                return Err(remote_error(err.to_string()));
             }
         }
         Ok(())
@@ -364,7 +362,7 @@ where
                 .send((request, Some(tx), Some(timeout_millis)))
                 .await
             {
-                return Err(RemoteError(err.to_string()));
+                return Err(remote_error(err.to_string()));
             }
 
             receivers.push(rx);
@@ -375,7 +373,7 @@ where
         for rx in receivers {
             let result = match rx.await {
                 Ok(value) => value,
-                Err(error) => Err(RemoteError(error.to_string())),
+                Err(error) => Err(remote_error(error.to_string())),
             };
             results.push(result);
         }

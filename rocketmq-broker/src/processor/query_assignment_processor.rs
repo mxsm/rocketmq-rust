@@ -472,17 +472,17 @@ fn allocate(
     cid_all: &[CheetahString],
 ) -> rocketmq_error::RocketMQResult<HashSet<MessageQueue>> {
     if current_cid.is_empty() {
-        return Err(rocketmq_error::RocketmqError::IllegalArgumentError(
+        return Err(rocketmq_error::RocketMQError::IllegalArgument(
             "currentCID is empty".to_string(),
         ));
     }
     if mq_all.is_empty() {
-        return Err(rocketmq_error::RocketmqError::IllegalArgumentError(
+        return Err(rocketmq_error::RocketMQError::IllegalArgument(
             "mqAll is null or mqAll empty".to_string(),
         ));
     }
     if cid_all.is_empty() {
-        return Err(rocketmq_error::RocketmqError::IllegalArgumentError(
+        return Err(rocketmq_error::RocketMQError::IllegalArgument(
             "cidAll is null or cidAll empty".to_string(),
         ));
     }

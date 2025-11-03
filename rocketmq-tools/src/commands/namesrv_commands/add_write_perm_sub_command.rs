@@ -19,8 +19,8 @@ use std::sync::Arc;
 use clap::Parser;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
-use rocketmq_error::RocketmqError;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
@@ -52,10 +52,10 @@ impl CommandExecute for AddWritePermSubCommand {
             MQAdminExt::start(&mut default_mqadmin_ext)
                 .await
                 .map_err(|e| {
-                    RocketmqError::SubCommand(
-                        "AddWritePermSubCommand".parse().unwrap(),
-                        e.to_string(),
-                    )
+                    RocketMQError::Internal(format!(
+                        "AddWritePermSubCommand: Failed to start MQAdminExt: {}",
+                        e
+                    ))
                 })?;
             let broker_name = self.broker_name.trim();
             for namesrv_addr in default_mqadmin_ext.get_name_server_address_list().await {
@@ -63,10 +63,10 @@ impl CommandExecute for AddWritePermSubCommand {
                     .add_write_perm_of_broker(namesrv_addr.clone(), broker_name.into())
                     .await
                     .map_err(|e| {
-                        RocketmqError::SubCommand(
-                            "AddWritePermSubCommand".parse().unwrap(),
-                            e.to_string(),
-                        )
+                        RocketMQError::Internal(format!(
+                            "AddWritePermSubCommand: Failed to add write perm: {}",
+                            e
+                        ))
                     }) {
                     Ok(add_topic_count) => {
                         println!(

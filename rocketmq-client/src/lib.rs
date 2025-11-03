@@ -21,9 +21,59 @@
 
 extern crate core;
 
+// Define macros at crate root so they're available throughout the crate
+/// Create a client error with optional response code
+#[macro_export]
+macro_rules! mq_client_err {
+    // Handle errors with a custom ResponseCode and formatted string
+    ($response_code:expr, $fmt:expr, $($arg:expr),*) => {{
+        let formatted_msg = format!($fmt, $($arg),*);
+        let error_message = format!("CODE: {}  DESC: {}", $response_code as i32, formatted_msg);
+        let faq_msg = rocketmq_common::common::FAQUrl::attach_default_url(Some(error_message.as_str()));
+        rocketmq_error::RocketMQError::illegal_argument(faq_msg)
+    }};
+
+    ($response_code:expr, $error_message:expr) => {{
+        let error_message = format!("CODE: {}  DESC: {}", $response_code as i32, $error_message);
+        let faq_msg = rocketmq_common::common::FAQUrl::attach_default_url(Some(error_message.as_str()));
+        rocketmq_error::RocketMQError::illegal_argument(faq_msg)
+    }};
+
+    // Handle errors without a ResponseCode, using only the error message (accepts both &str and String)
+    ($error_message:expr) => {{
+        let error_msg: &str = "Body is empty";
+        let faq_msg = rocketmq_common::common::FAQUrl::attach_default_url(Some(error_msg));
+        rocketmq_error::RocketMQError::illegal_argument(faq_msg)
+    }};
+}
+
+/// Create a broker operation error
+#[macro_export]
+macro_rules! client_broker_err {
+    // Handle errors with a custom ResponseCode and formatted string
+    ($response_code:expr, $error_message:expr, $broker_addr:expr) => {{
+        rocketmq_error::RocketMQError::broker_operation_failed(
+            "BROKER_OPERATION",
+            $response_code as i32,
+            $error_message,
+        )
+        .with_broker_addr($broker_addr)
+    }};
+    // Handle errors without a ResponseCode, using only the error message
+    ($response_code:expr, $error_message:expr) => {{
+        rocketmq_error::RocketMQError::broker_operation_failed(
+            "BROKER_OPERATION",
+            $response_code as i32,
+            $error_message,
+        )
+    }};
+}
+
+// Define client_error module
+pub mod client_error;
+
 pub mod admin;
 pub mod base;
-pub mod client_error;
 pub mod common;
 pub mod consumer;
 pub mod factory;

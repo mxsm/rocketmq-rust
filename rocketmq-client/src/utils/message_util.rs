@@ -21,7 +21,6 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_error::mq_client_err;
 
 use crate::common::client_error_code::ClientErrorCode;
 
@@ -74,13 +73,14 @@ impl MessageUtil {
             }
             Ok(reply_message)
         } else {
-            mq_client_err!(
+            let error = mq_client_err!(
                 ClientErrorCode::CREATE_REPLY_MESSAGE_EXCEPTION,
                 format!(
                     "create reply message fail, requestMessage error, property[{}] is null.",
                     MessageConst::PROPERTY_CLUSTER
                 )
-            )
+            );
+            Err(error)
         }
     }
 

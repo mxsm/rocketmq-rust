@@ -75,8 +75,8 @@ pub(crate) mod inner {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use rocketmq_error::RocketMQError;
     use rocketmq_error::RocketMQResult;
-    use rocketmq_error::RocketmqError;
     use rocketmq_rust::ArcMut;
     use tracing::error;
     use tracing::warn;
@@ -190,7 +190,7 @@ pub(crate) mod inner {
             match result {
                 Ok(_) => {}
                 Err(err) => match err {
-                    RocketmqError::Io(io_error) => {
+                    RocketMQError::IO(io_error) => {
                         error!("connection disconnect: {}", io_error);
                         return Ok(());
                     }
@@ -211,7 +211,7 @@ pub(crate) mod inner {
                 match future.tx.send(Ok(cmd)) {
                     Ok(_) => {}
                     Err(e) => {
-                        warn!("send response to future failed, maybe timeout",);
+                        warn!("send response to future failed, maybe timeout");
                     }
                 }
             } else {
@@ -260,11 +260,12 @@ pub(crate) mod inner {
         ctx: &mut ConnectionHandlerContext,
         oneway_rpc: bool,
         opaque: i32,
-        exception: Option<RocketmqError>,
+        exception: Option<RocketMQError>,
     ) -> HandleErrorResult {
         if let Some(exception_inner) = exception {
             match exception_inner {
-                RocketmqError::AbortProcessError(code, message) => {
+                RocketMQError::Internal(message) if message.starts_with("Abort") => {
+                    let code = ResponseCode::SystemError;
                     if oneway_rpc {
                         return HandleErrorResult::ReturnMethod;
                     }
@@ -275,7 +276,7 @@ pub(crate) mod inner {
                             Ok(_) =>{},
                             Err(err) => {
                                 match err {
-                                    RocketmqError::Io(io_error) => {
+                                    RocketMQError::IO(io_error) => {
                                         error!("send response failed: {}", io_error);
                                         return HandleErrorResult::ReturnMethod;
                                     }
@@ -296,7 +297,7 @@ pub(crate) mod inner {
                                 Ok(_) =>{},
                                 Err(err) => {
                                     match err {
-                                        RocketmqError::Io(io_error) => {
+                                        RocketMQError::IO(io_error) => {
                                             error!("send response failed: {}", io_error);
                                             return HandleErrorResult::ReturnMethod;
                                         }

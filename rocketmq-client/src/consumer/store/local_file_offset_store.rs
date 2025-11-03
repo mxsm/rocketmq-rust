@@ -25,7 +25,6 @@ use cheetah_string::CheetahString;
 use once_cell::sync::Lazy;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::utils::file_utils;
-use rocketmq_error::mq_client_err;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_rust::ArcMut;
@@ -87,7 +86,10 @@ impl LocalFileOffsetStore {
         } else {
             match OffsetSerialize::decode(content.as_bytes()) {
                 Ok(value) => Ok(Some(value.into())),
-                Err(e) => mq_client_err!(format!("Failed to deserialize local offset: {}", e)),
+                Err(e) => Err(mq_client_err!(format!(
+                    "Failed to deserialize local offset: {}",
+                    e
+                ))),
             }
         }
     }
@@ -101,10 +103,10 @@ impl LocalFileOffsetStore {
         } else {
             match OffsetSerialize::decode(content.as_bytes()) {
                 Ok(value) => Ok(Some(value.into())),
-                Err(_) => mq_client_err!(format!(
+                Err(_) => Err(mq_client_err!(format!(
                     "read local offset bak failed, content: {}",
                     content
-                )),
+                ))),
             }
         }
     }
