@@ -52,7 +52,7 @@ chrono = "0.4"
 async-trait = "0.1"
 
 # Storage backends
-rocksdb = { version = "0.22", optional = true }
+rocksdb = { version = "0.24", optional = true }
 
 # Internal dependencies (rocketmq-rust modules)
 rocketmq-common = { workspace = true }
