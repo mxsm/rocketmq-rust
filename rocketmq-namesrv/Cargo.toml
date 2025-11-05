@@ -40,6 +40,13 @@ clap = { version = "4.5.51", features = ["derive"] }
 cheetah-string = { workspace = true }
 thiserror = { workspace = true }
 
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
 [[bin]]
 name = "rocketmq-namesrv-rust"
 path = "src/bin/namesrv_bootstrap_server.rs"
+
+[[bench]]
+name = "route_manager_benchmark"
+harness = false

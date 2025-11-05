@@ -219,7 +219,10 @@ impl DefaultRequestProcessor {
         if let Some(value) = self
             .name_server_runtime_inner
             .route_info_manager()
-            .query_broker_topic_config(request_header.cluster_name, request_header.broker_addr)
+            .query_broker_topic_config(
+                request_header.cluster_name.clone(),
+                request_header.broker_addr.clone(),
+            )
         {
             command = command.set_body(value.encode().expect("encode DataVersion failed"));
         }
@@ -267,18 +270,22 @@ impl DefaultRequestProcessor {
             .name_server_runtime_inner
             .route_info_manager()
             .register_broker(
-                request_header.cluster_name,
-                request_header.broker_addr,
-                request_header.broker_name,
+                request_header.cluster_name.to_string(),
+                request_header.broker_addr.to_string(),
+                request_header.broker_name.to_string(),
                 request_header.broker_id,
-                request_header.ha_server_addr,
+                request_header.ha_server_addr.to_string(),
                 request
                     .ext_fields()
-                    .and_then(|map| map.get(mix_all::ZONE_NAME).cloned()),
+                    .and_then(|map| map.get(mix_all::ZONE_NAME).cloned())
+                    .map(|s| s.to_string()),
                 request_header.heartbeat_timeout_millis,
                 request_header.enable_acting_master,
                 topic_config_wrapper,
-                filter_server_list,
+                filter_server_list
+                    .into_iter()
+                    .map(|s| s.to_string())
+                    .collect(),
                 channel,
             );
         if result.is_none() {
@@ -343,8 +350,8 @@ impl DefaultRequestProcessor {
         self.name_server_runtime_inner
             .route_info_manager_mut()
             .update_broker_info_update_timestamp(
-                request_header.cluster_name,
-                request_header.broker_addr,
+                request_header.cluster_name.clone(),
+                request_header.broker_addr.clone(),
             );
         Ok(RemotingCommand::create_response_command())
     }
@@ -442,7 +449,10 @@ impl DefaultRequestProcessor {
             request.decode_command_custom_header::<DeleteTopicFromNamesrvRequestHeader>()?;
         self.name_server_runtime_inner
             .route_info_manager_mut()
-            .delete_topic(request_header.topic, request_header.cluster_name);
+            .delete_topic(
+                request_header.topic.to_string(),
+                request_header.cluster_name.map(|s| s.to_string()),
+            );
         Ok(RemotingCommand::create_response_command())
     }
 
@@ -457,7 +467,10 @@ impl DefaultRequestProcessor {
             if !topic_route_data.queue_datas.is_empty() {
                 self.name_server_runtime_inner
                     .route_info_manager_mut()
-                    .register_topic(request_header.topic, topic_route_data.queue_datas)
+                    .register_topic(
+                        request_header.topic.to_string(),
+                        topic_route_data.queue_datas,
+                    )
             }
         }
         Ok(RemotingCommand::create_response_command())

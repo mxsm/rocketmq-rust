@@ -15,6 +15,17 @@
  * limitations under the License.
  */
 
-pub(crate) mod batch_unregistration_service;
-pub mod route_info_manager;
-pub(crate) mod zone_route_rpc_hook;
+//! Concurrent data table modules for route management
+//!
+//! These modules use DashMap for lock-free concurrent access,
+//! replacing the previous global RwLock approach.
+
+mod broker_table;
+mod cluster_table;
+mod live_table;
+mod topic_table;
+
+pub use broker_table::BrokerAddrTable;
+pub use cluster_table::ClusterAddrTable;
+pub use live_table::{BrokerLiveInfo, BrokerLiveTable};
+pub use topic_table::TopicQueueTable;

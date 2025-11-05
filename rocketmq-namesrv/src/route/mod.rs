@@ -14,18 +14,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(clippy::result_large_err)]
 
-pub use self::kvconfig::kvconfig_mananger::KVConfigManager;
-pub use self::namesrv_config_parse::parse_command_and_config_file;
-pub use self::route::route_info_manager::RouteInfoManager;
-pub use self::route::route_info_manager_v2::RouteInfoManagerV2;
-pub use self::route::route_info_manager_wrapper::RouteInfoManagerWrapper;
+//! Route management module for NameServer
+//!
+//! This module handles broker registration, topic routing, and cluster management.
 
-pub mod bootstrap;
-mod kvconfig;
-mod namesrv_config_parse;
-pub mod processor;
-mod route;
-mod route_info;
+pub mod batch_unregistration_service;
+pub mod error;
+pub mod route_info_manager;
+pub mod route_info_manager_trait;
+pub mod route_info_manager_v2;
+pub mod route_info_manager_wrapper;
+pub mod tables;
+pub mod types;
+pub(crate) mod zone_route_rpc_hook;
+
+// Re-exports for convenience (kept for external API compatibility)
