@@ -32,23 +32,23 @@ pub type RouteResult<T> = RocketMQResult<T>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_broker_not_found_error() {
         let err = RocketMQError::BrokerNotFound {
             name: "DefaultCluster/broker-a".to_string(),
         };
-        
+
         assert!(err.to_string().contains("broker-a"));
         assert!(err.to_string().contains("DefaultCluster"));
     }
-    
+
     #[test]
     fn test_topic_not_exist() {
         let err = RocketMQError::TopicNotExist {
             topic: "TestTopic".to_string(),
         };
-        
+
         match err {
             RocketMQError::TopicNotExist { topic } => {
                 assert_eq!(topic, "TestTopic");
@@ -56,14 +56,14 @@ mod tests {
             _ => panic!("Expected TopicNotExist error"),
         }
     }
-    
+
     #[test]
     fn test_route_version_conflict() {
         let err = RocketMQError::RouteVersionConflict {
             expected: 100,
             actual: 50,
         };
-        
+
         let err_str = err.to_string();
         assert!(err_str.contains("100"));
         assert!(err_str.contains("50"));
@@ -72,14 +72,14 @@ mod tests {
     #[test]
     fn test_cluster_not_found() {
         let err = RocketMQError::cluster_not_found("TestCluster");
-        
+
         assert!(err.to_string().contains("TestCluster"));
     }
 
     #[test]
     fn test_route_registration_conflict() {
         let err = RocketMQError::route_registration_conflict("broker-a", "duplicate broker ID");
-        
+
         let err_str = err.to_string();
         assert!(err_str.contains("broker-a"));
         assert!(err_str.contains("duplicate"));

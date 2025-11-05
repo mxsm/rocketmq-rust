@@ -25,10 +25,12 @@
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_remoting::protocol::route::route_data_view::{BrokerData, QueueData};
+use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
+use rocketmq_remoting::protocol::route::route_data_view::QueueData;
 use rocketmq_remoting::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
 
-use crate::route_info::broker_addr_info::{BrokerAddrInfo, BrokerLiveInfo};
+use crate::route_info::broker_addr_info::BrokerAddrInfo;
+use crate::route_info::broker_addr_info::BrokerLiveInfo;
 
 /// Topic name type - uses CheetahString for zero-copy sharing
 pub type TopicName = CheetahString;
@@ -62,16 +64,16 @@ pub type SharedBrokerAddrInfo = Arc<BrokerAddrInfo>;
 pub struct RouteManagerConfig {
     /// Broker channel expired time in milliseconds
     pub broker_channel_expired_time: i64,
-    
+
     /// Enable automatic topic cleanup when broker unregisters
     pub delete_topic_with_broker_registration: bool,
-    
+
     /// Enable batch unregistration
     pub enable_batch_unregistration: bool,
-    
+
     /// Maximum batch size for unregistration
     pub max_batch_unregister_size: usize,
-    
+
     /// Scan interval for inactive brokers (milliseconds)
     pub scan_not_active_broker_interval: u64,
 }
@@ -131,12 +133,13 @@ impl BrokerRegistration {
     pub fn with_zone(mut self, zone_name: impl Into<CheetahString>) -> Self {
         self.zone_name = Some(zone_name.into());
         self
-    }    /// Set timeout
+    }
+    /// Set timeout
     pub fn with_timeout(mut self, timeout_millis: i64) -> Self {
         self.timeout_millis = Some(timeout_millis);
         self
     }
-    
+
     /// Enable acting master
     pub fn with_acting_master(mut self, enable: bool) -> Self {
         self.enable_acting_master = Some(enable);
@@ -185,7 +188,7 @@ impl TopicRouteQuery {
             include_inactive_brokers: false,
         }
     }
-    
+
     /// Include inactive brokers in the result
     pub fn include_inactive(mut self) -> Self {
         self.include_inactive_brokers = true;
@@ -196,7 +199,7 @@ impl TopicRouteQuery {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_broker_registration_builder() {
         let reg = BrokerRegistration::new("cluster1", "192.168.1.1:10911", "broker-a", 0)
@@ -204,18 +207,18 @@ mod tests {
             .with_zone("zone1")
             .with_timeout(5000)
             .with_acting_master(true);
-        
+
         assert_eq!(reg.cluster_name.as_str(), "cluster1");
         assert_eq!(reg.broker_id, 0);
         assert_eq!(reg.zone_name.as_ref().map(|s| s.as_str()), Some("zone1"));
         assert_eq!(reg.timeout_millis, Some(5000));
         assert_eq!(reg.enable_acting_master, Some(true));
     }
-    
+
     #[test]
     fn test_topic_route_query() {
         let query = TopicRouteQuery::new("TestTopic").include_inactive();
-        
+
         assert_eq!(query.topic.as_str(), "TestTopic");
         assert!(query.include_inactive_brokers);
     }

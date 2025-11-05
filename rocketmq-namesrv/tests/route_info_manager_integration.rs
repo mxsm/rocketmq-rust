@@ -21,7 +21,8 @@
 //! and can be imported. Full functional testing requires NameServerRuntimeInner
 //! setup and is better suited for end-to-end integration tests.
 
-use rocketmq_namesrv::{RouteInfoManagerV2, RouteInfoManagerWrapper};
+use rocketmq_namesrv::RouteInfoManagerV2;
+use rocketmq_namesrv::RouteInfoManagerWrapper;
 
 #[test]
 fn test_v2_type_exists() {

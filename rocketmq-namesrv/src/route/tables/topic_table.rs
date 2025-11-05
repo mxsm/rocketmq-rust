@@ -24,7 +24,8 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use rocketmq_remoting::protocol::route::route_data_view::QueueData;
 
-use crate::route::types::{BrokerName, TopicName};
+use crate::route::types::BrokerName;
+use crate::route::types::TopicName;
 
 /// Topic queue table: Topic -> (Broker -> QueueData)
 ///
@@ -38,8 +39,9 @@ use crate::route::types::{BrokerName, TopicName};
 ///
 /// # Example
 /// ```no_run
-/// use rocketmq_namesrv::route::tables::TopicQueueTable;
 /// use std::sync::Arc;
+///
+/// use rocketmq_namesrv::route::tables::TopicQueueTable;
 ///
 /// let table = TopicQueueTable::new();
 /// // Operations are thread-safe without explicit locking
@@ -58,7 +60,7 @@ impl TopicQueueTable {
             inner: DashMap::new(),
         }
     }
-    
+
     /// Create with estimated capacity
     ///
     /// Pre-allocates space to avoid rehashing for better performance.
@@ -70,7 +72,7 @@ impl TopicQueueTable {
             inner: DashMap::with_capacity(capacity),
         }
     }
-    
+
     /// Insert or update queue data for a topic-broker pair
     ///
     /// # Arguments
@@ -91,7 +93,7 @@ impl TopicQueueTable {
             .or_default()
             .insert(broker, Arc::new(queue_data))
     }
-    
+
     /// Get queue data for a specific topic-broker pair
     ///
     /// # Arguments
@@ -105,7 +107,7 @@ impl TopicQueueTable {
             .get(topic)
             .and_then(|brokers| brokers.get(broker).map(|entry| Arc::clone(entry.value())))
     }
-    
+
     /// Get all queue data for a topic
     ///
     /// # Arguments
@@ -124,7 +126,7 @@ impl TopicQueueTable {
             })
             .unwrap_or_default()
     }
-    
+
     /// Remove a broker from a topic
     ///
     /// # Arguments
@@ -138,7 +140,7 @@ impl TopicQueueTable {
             .get(topic)
             .and_then(|brokers| brokers.remove(broker).map(|(_, v)| v))
     }
-    
+
     /// Remove entire topic
     ///
     /// # Arguments
@@ -149,38 +151,35 @@ impl TopicQueueTable {
     pub fn remove_topic(&self, topic: &str) -> bool {
         self.inner.remove(topic).is_some()
     }
-    
+
     /// Check if topic exists
     pub fn contains_topic(&self, topic: &str) -> bool {
         self.inner.contains_key(topic)
     }
-    
+
     /// Get all topic names
     ///
     /// # Returns
     /// Vector of topic names (CheetahString for zero-copy)
     pub fn get_all_topics(&self) -> Vec<TopicName> {
-        self.inner
-            .iter()
-            .map(|entry| entry.key().clone())
-            .collect()
+        self.inner.iter().map(|entry| entry.key().clone()).collect()
     }
-    
+
     /// Get number of topics
     pub fn topic_count(&self) -> usize {
         self.inner.len()
     }
-    
+
     /// Get total number of topic-broker pairs
     pub fn total_queue_count(&self) -> usize {
         self.inner.iter().map(|entry| entry.value().len()).sum()
     }
-    
+
     /// Clear all data
     pub fn clear(&self) {
         self.inner.clear();
     }
-    
+
     /// Clean up empty topic entries
     ///
     /// Removes topics that have no brokers registered.
@@ -254,40 +253,35 @@ impl Default for TopicQueueTable {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
+
     use super::*;
-    
+
     fn create_test_queue_data(read_count: u32, write_count: u32) -> QueueData {
-        QueueData::new(
-            "test-broker".into(),
-            read_count,
-            write_count,
-            6,
-            0,
-        )
+        QueueData::new("test-broker".into(), read_count, write_count, 6, 0)
     }
-    
+
     #[test]
     fn test_insert_and_get() {
         let table = TopicQueueTable::new();
         let topic: TopicName = CheetahString::from_string("TestTopic".to_string());
         let broker: BrokerName = CheetahString::from_string("broker-a".to_string());
         let queue_data = create_test_queue_data(8, 8);
-        
+
         // Insert
         let old = table.insert(topic.clone(), broker.clone(), queue_data);
         assert!(old.is_none());
-        
+
         // Get
         let retrieved = table.get("TestTopic", "broker-a").unwrap();
         assert_eq!(retrieved.read_queue_nums(), 8);
         assert_eq!(retrieved.write_queue_nums(), 8);
     }
-    
+
     #[test]
     fn test_get_topic_queues() {
         let table = TopicQueueTable::new();
         let topic: TopicName = CheetahString::from_string("TestTopic".to_string());
-        
+
         // Insert multiple brokers
         table.insert(
             topic.clone(),
@@ -299,35 +293,35 @@ mod tests {
             CheetahString::from_string("broker-b".to_string()),
             create_test_queue_data(16, 16),
         );
-        
+
         let queues = table.get_topic_queues("TestTopic");
         assert_eq!(queues.len(), 2);
     }
-    
+
     #[test]
     fn test_remove_broker() {
         let table = TopicQueueTable::new();
         let topic: TopicName = CheetahString::from_string("TestTopic".to_string());
-        
+
         table.insert(
             topic.clone(),
             CheetahString::from_string("broker-a".to_string()),
             create_test_queue_data(8, 8),
         );
-        
+
         // Remove
         let removed = table.remove_broker("TestTopic", "broker-a");
         assert!(removed.is_some());
         assert_eq!(removed.unwrap().read_queue_nums(), 8);
-        
+
         // Verify removed
         assert!(table.get("TestTopic", "broker-a").is_none());
     }
-    
+
     #[test]
     fn test_cleanup_empty_topics() {
         let table = TopicQueueTable::new();
-        
+
         // Insert and then remove broker, leaving empty topic
         let topic: TopicName = CheetahString::from_string("EmptyTopic".to_string());
         table.insert(
@@ -336,20 +330,20 @@ mod tests {
             create_test_queue_data(8, 8),
         );
         table.remove_broker("EmptyTopic", "broker-a");
-        
+
         // Cleanup
         let removed = table.cleanup_empty_topics();
         assert_eq!(removed, 1);
         assert!(!table.contains_topic("EmptyTopic"));
     }
-    
+
     #[test]
     fn test_concurrent_access() {
         use std::thread;
-        
+
         let table = Arc::new(TopicQueueTable::new());
         let mut handles = vec![];
-        
+
         // Spawn multiple threads
         for i in 0..10 {
             let table_clone = table.clone();
@@ -359,16 +353,14 @@ mod tests {
                 table_clone.insert(topic, broker, create_test_queue_data(8, 8));
             }));
         }
-        
+
         // Wait for completion
         for handle in handles {
             handle.join().unwrap();
         }
-        
+
         // Verify data
         assert!(table.topic_count() <= 3); // At most 3 topics
         assert_eq!(table.total_queue_count(), 10); // 10 total entries
     }
 }
-
-

@@ -37,8 +37,9 @@ use crate::route::types::BrokerName;
 ///
 /// # Example
 /// ```no_run
-/// use rocketmq_namesrv::route::tables::BrokerAddrTable;
 /// use std::sync::Arc;
+///
+/// use rocketmq_namesrv::route::tables::BrokerAddrTable;
 ///
 /// let table = BrokerAddrTable::new();
 /// // Thread-safe operations without explicit locking
@@ -55,7 +56,7 @@ impl BrokerAddrTable {
             inner: DashMap::new(),
         }
     }
-    
+
     /// Create with estimated capacity
     ///
     /// # Arguments
@@ -65,7 +66,7 @@ impl BrokerAddrTable {
             inner: DashMap::with_capacity(capacity),
         }
     }
-    
+
     /// Insert or update broker data
     ///
     /// # Arguments
@@ -74,10 +75,14 @@ impl BrokerAddrTable {
     ///
     /// # Returns
     /// Previous broker data if existed
-    pub fn insert(&self, broker_name: BrokerName, broker_data: BrokerData) -> Option<Arc<BrokerData>> {
+    pub fn insert(
+        &self,
+        broker_name: BrokerName,
+        broker_data: BrokerData,
+    ) -> Option<Arc<BrokerData>> {
         self.inner.insert(broker_name, Arc::new(broker_data))
     }
-    
+
     /// Get broker data by name
     ///
     /// # Arguments
@@ -86,9 +91,11 @@ impl BrokerAddrTable {
     /// # Returns
     /// Cloned Arc to broker data if exists
     pub fn get(&self, broker_name: &str) -> Option<Arc<BrokerData>> {
-        self.inner.get(broker_name).map(|entry| Arc::clone(entry.value()))
+        self.inner
+            .get(broker_name)
+            .map(|entry| Arc::clone(entry.value()))
     }
-    
+
     /// Remove broker by name
     ///
     /// # Arguments
@@ -99,23 +106,20 @@ impl BrokerAddrTable {
     pub fn remove(&self, broker_name: &str) -> Option<Arc<BrokerData>> {
         self.inner.remove(broker_name).map(|(_, v)| v)
     }
-    
+
     /// Check if broker exists
     pub fn contains(&self, broker_name: &str) -> bool {
         self.inner.contains_key(broker_name)
     }
-    
+
     /// Get all broker names
     ///
     /// # Returns
     /// Vector of broker names (CheetahString for zero-copy)
     pub fn get_all_broker_names(&self) -> Vec<BrokerName> {
-        self.inner
-            .iter()
-            .map(|entry| entry.key().clone())
-            .collect()
+        self.inner.iter().map(|entry| entry.key().clone()).collect()
     }
-    
+
     /// Get all broker data entries
     ///
     /// # Returns
@@ -126,7 +130,7 @@ impl BrokerAddrTable {
             .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
             .collect()
     }
-    
+
     /// Get brokers by cluster name
     ///
     /// # Arguments
@@ -141,22 +145,22 @@ impl BrokerAddrTable {
             .map(|entry| entry.key().clone())
             .collect()
     }
-    
+
     /// Get number of brokers
     pub fn len(&self) -> usize {
         self.inner.len()
     }
-    
+
     /// Check if table is empty
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
-    
+
     /// Clear all data
     pub fn clear(&self) {
         self.inner.clear();
     }
-    
+
     /// Update broker address for a specific broker ID
     ///
     /// # Arguments
@@ -166,18 +170,25 @@ impl BrokerAddrTable {
     ///
     /// # Returns
     /// true if broker exists and address was updated
-    pub fn update_broker_address(&self, broker_name: &str, broker_id: u64, address: impl Into<cheetah_string::CheetahString>) -> bool {
+    pub fn update_broker_address(
+        &self,
+        broker_name: &str,
+        broker_id: u64,
+        address: impl Into<cheetah_string::CheetahString>,
+    ) -> bool {
         if let Some(mut entry) = self.inner.get_mut(broker_name) {
             // Clone the BrokerData, update it, and replace
             let mut new_data = (**entry.value()).clone();
-            new_data.broker_addrs_mut().insert(broker_id, address.into());
+            new_data
+                .broker_addrs_mut()
+                .insert(broker_id, address.into());
             *entry.value_mut() = Arc::new(new_data);
             true
         } else {
             false
         }
     }
-    
+
     /// Remove broker address for a specific broker ID
     ///
     /// # Arguments
@@ -208,59 +219,56 @@ impl Default for BrokerAddrTable {
 
 #[cfg(test)]
 mod tests {
-    use cheetah_string::CheetahString;
-    use super::*;
     use std::collections::HashMap;
-    
+
+    use cheetah_string::CheetahString;
+
+    use super::*;
+
     fn create_test_broker_data(cluster: &str, broker_name: &str) -> BrokerData {
         let mut broker_addrs = HashMap::new();
         broker_addrs.insert(0, format!("{}:10911", broker_name).into());
-        
-        BrokerData::new(
-            cluster.into(),
-            broker_name.into(),
-            broker_addrs,
-            None,
-        )
+
+        BrokerData::new(cluster.into(), broker_name.into(), broker_addrs, None)
     }
-    
+
     #[test]
     fn test_insert_and_get() {
         let table = BrokerAddrTable::new();
         let broker_name: BrokerName = CheetahString::from_string("broker-a".to_string());
         let broker_data = create_test_broker_data("DefaultCluster", "broker-a");
-        
+
         // Insert
         let old = table.insert(broker_name.clone(), broker_data);
         assert!(old.is_none());
-        
+
         // Get
         let retrieved = table.get("broker-a").unwrap();
         assert_eq!(retrieved.cluster(), "DefaultCluster");
         assert_eq!(retrieved.broker_name().as_str(), "broker-a");
     }
-    
+
     #[test]
     fn test_remove() {
         let table = BrokerAddrTable::new();
         let broker_name: BrokerName = CheetahString::from_string("broker-a".to_string());
         let broker_data = create_test_broker_data("DefaultCluster", "broker-a");
-        
+
         table.insert(broker_name.clone(), broker_data);
-        
+
         // Remove
         let removed = table.remove("broker-a");
         assert!(removed.is_some());
         assert_eq!(removed.unwrap().broker_name().as_str(), "broker-a");
-        
+
         // Verify removed
         assert!(!table.contains("broker-a"));
     }
-    
+
     #[test]
     fn test_get_brokers_by_cluster() {
         let table = BrokerAddrTable::new();
-        
+
         // Insert brokers in different clusters
         table.insert(
             CheetahString::from_string("broker-a".to_string()),
@@ -274,57 +282,62 @@ mod tests {
             CheetahString::from_string("broker-c".to_string()),
             create_test_broker_data("ClusterB", "broker-c"),
         );
-        
+
         let cluster_a_brokers = table.get_brokers_by_cluster("ClusterA");
         assert_eq!(cluster_a_brokers.len(), 2);
-        
+
         let cluster_b_brokers = table.get_brokers_by_cluster("ClusterB");
         assert_eq!(cluster_b_brokers.len(), 1);
     }
-    
+
     #[test]
     fn test_update_broker_address() {
         let table = BrokerAddrTable::new();
         let broker_name: BrokerName = CheetahString::from_string("broker-a".to_string());
         let broker_data = create_test_broker_data("DefaultCluster", "broker-a");
-        
+
         table.insert(broker_name.clone(), broker_data);
-        
+
         // Update address
         let updated = table.update_broker_address("broker-a", 1, "slave1:10911".to_string());
         assert!(updated);
-        
+
         // Verify update
         let broker = table.get("broker-a").unwrap();
-        assert_eq!(broker.broker_addrs().get(&1).unwrap().as_str(), "slave1:10911");
+        assert_eq!(
+            broker.broker_addrs().get(&1).unwrap().as_str(),
+            "slave1:10911"
+        );
     }
-    
+
     #[test]
     fn test_remove_broker_address() {
         let table = BrokerAddrTable::new();
         let broker_name: BrokerName = CheetahString::from_string("broker-a".to_string());
         let mut broker_data = create_test_broker_data("DefaultCluster", "broker-a");
-        broker_data.broker_addrs_mut().insert(1, "slave1:10911".into());
-        
+        broker_data
+            .broker_addrs_mut()
+            .insert(1, "slave1:10911".into());
+
         table.insert(broker_name.clone(), broker_data);
-        
+
         // Remove slave address
         let removed = table.remove_broker_address("broker-a", 1);
         assert!(removed);
-        
+
         // Verify removal
         let broker = table.get("broker-a").unwrap();
         assert!(!broker.broker_addrs().contains_key(&1));
         assert!(broker.broker_addrs().contains_key(&0)); // Master still exists
     }
-    
+
     #[test]
     fn test_concurrent_access() {
         use std::thread;
-        
+
         let table = Arc::new(BrokerAddrTable::new());
         let mut handles = vec![];
-        
+
         // Spawn multiple threads
         for i in 0..10 {
             let table_clone = table.clone();
@@ -334,16 +347,14 @@ mod tests {
                 table_clone.insert(broker_name, broker_data);
             }));
         }
-        
+
         // Wait for completion
         for handle in handles {
             handle.join().unwrap();
         }
-        
+
         // Verify data
         assert_eq!(table.len(), 10);
         assert_eq!(table.get_brokers_by_cluster("TestCluster").len(), 10);
     }
 }
-
-

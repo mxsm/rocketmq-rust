@@ -55,19 +55,19 @@ impl BrokerLiveInfo {
             ha_server_addr: None,
         }
     }
-    
+
     /// Create with HA server address
     pub fn with_ha_server(mut self, ha_server_addr: String) -> Self {
         self.ha_server_addr = Some(ha_server_addr);
         self
     }
-    
+
     /// Set custom heartbeat timeout
     pub fn with_timeout(mut self, timeout_millis: u64) -> Self {
         self.heartbeat_timeout_millis = timeout_millis;
         self
     }
-    
+
     /// Check if broker is alive based on current time
     ///
     /// # Arguments
@@ -75,7 +75,7 @@ impl BrokerLiveInfo {
     pub fn is_alive(&self, current_time: u64) -> bool {
         current_time.saturating_sub(self.last_update_timestamp) < self.heartbeat_timeout_millis
     }
-    
+
     /// Update last heartbeat timestamp
     pub fn update_timestamp(&mut self, timestamp: u64) {
         self.last_update_timestamp = timestamp;
@@ -94,15 +94,14 @@ impl BrokerLiveInfo {
 ///
 /// # Example
 /// ```no_run
-/// use rocketmq_namesrv::route::tables::{BrokerLiveTable, BrokerLiveInfo};
-/// use rocketmq_remoting::protocol::DataVersion;
 /// use std::sync::Arc;
 ///
+/// use rocketmq_namesrv::route::tables::BrokerLiveInfo;
+/// use rocketmq_namesrv::route::tables::BrokerLiveTable;
+/// use rocketmq_remoting::protocol::DataVersion;
+///
 /// let table = BrokerLiveTable::new();
-/// let info = BrokerLiveInfo::new(
-///     1000000,
-///     DataVersion::default(),
-/// );
+/// let info = BrokerLiveInfo::new(1000000, DataVersion::default());
 /// // Thread-safe operations
 /// ```
 #[derive(Clone)]
@@ -117,7 +116,7 @@ impl BrokerLiveTable {
             inner: DashMap::new(),
         }
     }
-    
+
     /// Create with estimated capacity
     ///
     /// # Arguments
@@ -127,7 +126,7 @@ impl BrokerLiveTable {
             inner: DashMap::with_capacity(capacity),
         }
     }
-    
+
     /// Register or update broker live status
     ///
     /// # Arguments
@@ -143,7 +142,7 @@ impl BrokerLiveTable {
     ) -> Option<Arc<BrokerLiveInfo>> {
         self.inner.insert(broker_addr_info, Arc::new(live_info))
     }
-    
+
     /// Update heartbeat for a broker
     ///
     /// # Arguments
@@ -162,7 +161,7 @@ impl BrokerLiveTable {
             false
         }
     }
-    
+
     /// Get broker live info
     ///
     /// # Arguments
@@ -175,12 +174,12 @@ impl BrokerLiveTable {
             .get(broker_addr_info)
             .map(|entry| Arc::clone(entry.value()))
     }
-    
+
     /// Check if broker is registered
     pub fn contains(&self, broker_addr_info: &BrokerAddrInfo) -> bool {
         self.inner.contains_key(broker_addr_info)
     }
-    
+
     /// Remove broker
     ///
     /// # Arguments
@@ -191,7 +190,7 @@ impl BrokerLiveTable {
     pub fn remove(&self, broker_addr_info: &BrokerAddrInfo) -> Option<Arc<BrokerLiveInfo>> {
         self.inner.remove(broker_addr_info).map(|(_, v)| v)
     }
-    
+
     /// Get all live brokers
     ///
     /// # Returns
@@ -202,7 +201,7 @@ impl BrokerLiveTable {
             .map(|entry| (Arc::clone(entry.key()), Arc::clone(entry.value())))
             .collect()
     }
-    
+
     /// Get expired brokers
     ///
     /// Returns brokers whose last heartbeat exceeds their timeout threshold.
@@ -219,7 +218,7 @@ impl BrokerLiveTable {
             .map(|entry| Arc::clone(entry.key()))
             .collect()
     }
-    
+
     /// Remove expired brokers
     ///
     /// # Arguments
@@ -230,29 +229,29 @@ impl BrokerLiveTable {
     pub fn remove_expired_brokers(&self, current_time: u64) -> usize {
         let expired = self.get_expired_brokers(current_time);
         let count = expired.len();
-        
+
         for broker in expired {
             self.inner.remove(&*broker);
         }
-        
+
         count
     }
-    
+
     /// Get number of live brokers
     pub fn len(&self) -> usize {
         self.inner.len()
     }
-    
+
     /// Check if table is empty
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
-    
+
     /// Clear all data
     pub fn clear(&self) {
         self.inner.clear();
     }
-    
+
     /// Get brokers with stale data versions
     ///
     /// Useful for detecting brokers that need configuration updates.
@@ -262,7 +261,10 @@ impl BrokerLiveTable {
     ///
     /// # Returns
     /// Vector of broker address info with stale versions
-    pub fn get_stale_version_brokers(&self, expected_version: &DataVersion) -> Vec<Arc<BrokerAddrInfo>> {
+    pub fn get_stale_version_brokers(
+        &self,
+        expected_version: &DataVersion,
+    ) -> Vec<Arc<BrokerAddrInfo>> {
         self.inner
             .iter()
             .filter(|entry| &entry.value().data_version != expected_version)
@@ -298,10 +300,7 @@ impl BrokerLiveTable {
             if key_addr == broker_addr {
                 // Create new BrokerLiveInfo with updated timestamp
                 let old_info = entry.value();
-                let new_info = BrokerLiveInfo::new(
-                    timestamp,
-                    old_info.data_version.clone(),
-                );
+                let new_info = BrokerLiveInfo::new(timestamp, old_info.data_version.clone());
                 *entry.value_mut() = Arc::new(new_info);
                 return;
             }
@@ -318,95 +317,94 @@ impl Default for BrokerLiveTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     fn create_test_broker_addr_info(name: &str, _id: u64) -> Arc<BrokerAddrInfo> {
         Arc::new(BrokerAddrInfo::new(
             "DefaultCluster",
             format!("{}:10911", name),
         ))
     }
-    
+
     fn create_test_live_info(timestamp: u64) -> BrokerLiveInfo {
         BrokerLiveInfo::new(timestamp, DataVersion::default())
     }
-    
+
     #[test]
     fn test_register_and_get() {
         let table = BrokerLiveTable::new();
         let broker_info = create_test_broker_addr_info("broker-a", 0);
         let live_info = create_test_live_info(1000);
-        
+
         // Register
         let old = table.register(broker_info.clone(), live_info);
         assert!(old.is_none());
-        
+
         // Get
         let retrieved = table.get(&broker_info).unwrap();
         assert_eq!(retrieved.last_update_timestamp, 1000);
     }
-    
+
     #[test]
     fn test_update_heartbeat() {
         let table = BrokerLiveTable::new();
         let broker_info = create_test_broker_addr_info("broker-a", 0);
         let live_info = create_test_live_info(1000);
-        
+
         table.register(broker_info.clone(), live_info);
-        
+
         // Update heartbeat
         assert!(table.update_heartbeat(&broker_info, 2000));
-        
+
         // Verify update
         let updated = table.get(&broker_info).unwrap();
         assert_eq!(updated.last_update_timestamp, 2000);
     }
-    
+
     #[test]
     fn test_is_alive() {
         let live_info = BrokerLiveInfo::new(1000, DataVersion::default());
-        
+
         // Within timeout
         assert!(live_info.is_alive(1000 + 60_000)); // 1 minute later
-        
+
         // Exceeded timeout (default 2 minutes)
         assert!(!live_info.is_alive(1000 + 150_000)); // 2.5 minutes later
     }
-    
+
     #[test]
     fn test_custom_timeout() {
-        let live_info = BrokerLiveInfo::new(1000, DataVersion::default())
-            .with_timeout(30_000); // 30 seconds
-        
+        let live_info = BrokerLiveInfo::new(1000, DataVersion::default()).with_timeout(30_000); // 30 seconds
+
         assert!(live_info.is_alive(1000 + 20_000)); // 20s later - alive
         assert!(!live_info.is_alive(1000 + 40_000)); // 40s later - dead
     }
-    
+
     #[test]
     fn test_get_expired_brokers() {
         let table = BrokerLiveTable::new();
-        
+
         // Register brokers with different timestamps
         let broker1 = create_test_broker_addr_info("broker-1", 0);
         let broker2 = create_test_broker_addr_info("broker-2", 0);
-        
+
         table.register(broker1.clone(), create_test_live_info(1000));
         table.register(broker2.clone(), create_test_live_info(100_000));
-        
+
         // Check expired at 150000ms (broker1 should be expired)
         let expired = table.get_expired_brokers(150_000);
         assert_eq!(expired.len(), 1);
     }
-    
+
     #[test]
     fn test_remove_expired_brokers() {
         let table = BrokerLiveTable::new();
-        
+
         let broker1 = create_test_broker_addr_info("broker-1", 0);
         let broker2 = create_test_broker_addr_info("broker-2", 0);
-        
+
         table.register(broker1.clone(), create_test_live_info(1000));
         table.register(broker2.clone(), create_test_live_info(100_000));
-        
+
         // Remove expired
         let removed = table.remove_expired_brokers(150_000);
         assert_eq!(removed, 1);
@@ -414,22 +412,25 @@ mod tests {
         assert!(table.contains(&broker2));
         assert!(!table.contains(&broker1));
     }
-    
+
     #[test]
     fn test_with_ha_server() {
         let live_info = BrokerLiveInfo::new(1000, DataVersion::default())
             .with_ha_server("ha-server:10912".to_string());
-        
-        assert_eq!(live_info.ha_server_addr, Some("ha-server:10912".to_string()));
+
+        assert_eq!(
+            live_info.ha_server_addr,
+            Some("ha-server:10912".to_string())
+        );
     }
-    
+
     #[test]
     fn test_concurrent_access() {
         use std::thread;
-        
+
         let table = Arc::new(BrokerLiveTable::new());
         let mut handles = vec![];
-        
+
         // Spawn multiple threads
         for i in 0..10 {
             let table_clone = table.clone();
@@ -439,15 +440,13 @@ mod tests {
                 table_clone.register(broker_info, live_info);
             }));
         }
-        
+
         // Wait for completion
         for handle in handles {
             handle.join().unwrap();
         }
-        
+
         // Verify data
         assert_eq!(table.len(), 10);
     }
 }
-
-

@@ -28,10 +28,16 @@
 //! - CheetahString provides zero-copy cloning
 //! - Concurrent operations scale linearly with thread count
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::sync::Arc;
 use std::thread;
+
 use cheetah_string::CheetahString;
+use criterion::black_box;
+use criterion::criterion_group;
+use criterion::criterion_main;
+use criterion::BenchmarkId;
+use criterion::Criterion;
+use criterion::Throughput;
 use dashmap::DashMap;
 
 // Type aliases matching the actual implementation
@@ -56,42 +62,40 @@ fn create_topic_name(i: usize) -> TopicName {
 
 fn bench_dashmap_insertion(c: &mut Criterion) {
     let mut group = c.benchmark_group("dashmap_insert");
-    
+
     for size in [100, 1000, 10000].iter() {
         group.throughput(Throughput::Elements(*size as u64));
-        
+
         group.bench_with_input(BenchmarkId::new("single_value", size), size, |b, &size| {
             b.iter(|| {
                 let map: DashMap<ClusterName, BrokerName> = DashMap::new();
-                
+
                 for i in 0..size {
                     let cluster = create_cluster_name(i);
                     let broker = create_broker_name(i);
                     map.insert(cluster, broker);
                 }
-                
+
                 black_box(map)
             });
         });
-        
+
         group.bench_with_input(BenchmarkId::new("vec_values", size), size, |b, &size| {
             b.iter(|| {
                 let map: DashMap<ClusterName, Vec<BrokerName>> = DashMap::new();
-                
+
                 for i in 0..size {
                     let cluster = create_cluster_name(i % 100); // 100 clusters
                     let broker = create_broker_name(i);
-                    
-                    map.entry(cluster)
-                        .or_default()
-                        .push(broker);
+
+                    map.entry(cluster).or_default().push(broker);
                 }
-                
+
                 black_box(map)
             });
         });
     }
-    
+
     group.finish();
 }
 
@@ -99,20 +103,18 @@ fn bench_dashmap_insertion(c: &mut Criterion) {
 
 fn bench_concurrent_reads(c: &mut Criterion) {
     let mut group = c.benchmark_group("concurrent_reads");
-    
+
     // Pre-populate DashMap
     let map: Arc<DashMap<ClusterName, Vec<BrokerName>>> = Arc::new(DashMap::new());
-    
+
     // Insert 1000 entries with 10 brokers per cluster
     for i in 0..1000 {
         let cluster = create_cluster_name(i % 100);
         let broker = create_broker_name(i);
-        
-        map.entry(cluster)
-            .or_default()
-            .push(broker);
+
+        map.entry(cluster).or_default().push(broker);
     }
-    
+
     for thread_count in [1, 2, 4, 8, 16, 32].iter() {
         group.bench_with_input(
             BenchmarkId::new("lookup", thread_count),
@@ -120,7 +122,7 @@ fn bench_concurrent_reads(c: &mut Criterion) {
             |b, &thread_count| {
                 b.iter(|| {
                     let mut handles = vec![];
-                    
+
                     for _ in 0..thread_count {
                         let map_clone = Arc::clone(&map);
                         handles.push(thread::spawn(move || {
@@ -130,7 +132,7 @@ fn bench_concurrent_reads(c: &mut Criterion) {
                             }
                         }));
                     }
-                    
+
                     for handle in handles {
                         handle.join().unwrap();
                     }
@@ -138,7 +140,7 @@ fn bench_concurrent_reads(c: &mut Criterion) {
             },
         );
     }
-    
+
     group.finish();
 }
 
@@ -146,7 +148,7 @@ fn bench_concurrent_reads(c: &mut Criterion) {
 
 fn bench_concurrent_writes(c: &mut Criterion) {
     let mut group = c.benchmark_group("concurrent_writes");
-    
+
     for thread_count in [1, 2, 4, 8, 16, 32].iter() {
         group.bench_with_input(
             BenchmarkId::new("insert", thread_count),
@@ -155,32 +157,29 @@ fn bench_concurrent_writes(c: &mut Criterion) {
                 b.iter(|| {
                     let map: Arc<DashMap<ClusterName, Vec<BrokerName>>> = Arc::new(DashMap::new());
                     let mut handles = vec![];
-                    
+
                     for t in 0..thread_count {
                         let map_clone = Arc::clone(&map);
                         handles.push(thread::spawn(move || {
                             for i in 0..100 {
                                 let cluster = create_cluster_name((t * 100 + i) % 50);
                                 let broker = create_broker_name(t * 100 + i);
-                                
-                                map_clone
-                                    .entry(cluster)
-                                    .or_default()
-                                    .push(broker);
+
+                                map_clone.entry(cluster).or_default().push(broker);
                             }
                         }));
                     }
-                    
+
                     for handle in handles {
                         handle.join().unwrap();
                     }
-                    
+
                     black_box(map)
                 });
             },
         );
     }
-    
+
     group.finish();
 }
 
@@ -188,7 +187,7 @@ fn bench_concurrent_writes(c: &mut Criterion) {
 
 fn bench_mixed_operations(c: &mut Criterion) {
     let mut group = c.benchmark_group("mixed_operations");
-    
+
     for thread_count in [2, 4, 8, 16, 32].iter() {
         group.bench_with_input(
             BenchmarkId::new("50_read_50_write", thread_count),
@@ -196,18 +195,16 @@ fn bench_mixed_operations(c: &mut Criterion) {
             |b, &thread_count| {
                 b.iter(|| {
                     let map: Arc<DashMap<ClusterName, Vec<BrokerName>>> = Arc::new(DashMap::new());
-                    
+
                     // Pre-populate
                     for i in 0..100 {
                         let cluster = create_cluster_name(i % 20);
                         let broker = create_broker_name(i);
-                        map.entry(cluster)
-                            .or_default()
-                            .push(broker);
+                        map.entry(cluster).or_default().push(broker);
                     }
-                    
+
                     let mut handles = vec![];
-                    
+
                     // Half threads do reads
                     for t in 0..(thread_count / 2) {
                         let map_clone = Arc::clone(&map);
@@ -218,7 +215,7 @@ fn bench_mixed_operations(c: &mut Criterion) {
                             }
                         }));
                     }
-                    
+
                     // Half threads do writes
                     for t in (thread_count / 2)..thread_count {
                         let map_clone = Arc::clone(&map);
@@ -226,24 +223,21 @@ fn bench_mixed_operations(c: &mut Criterion) {
                             for i in 0..100 {
                                 let cluster = create_cluster_name((t * 100 + i) % 20);
                                 let broker = create_broker_name(t * 100 + i + 1000);
-                                map_clone
-                                    .entry(cluster)
-                                    .or_default()
-                                    .push(broker);
+                                map_clone.entry(cluster).or_default().push(broker);
                             }
                         }));
                     }
-                    
+
                     for handle in handles {
                         handle.join().unwrap();
                     }
-                    
+
                     black_box(map)
                 });
             },
         );
     }
-    
+
     group.finish();
 }
 
@@ -251,7 +245,7 @@ fn bench_mixed_operations(c: &mut Criterion) {
 
 fn bench_string_operations(c: &mut Criterion) {
     let mut group = c.benchmark_group("string_operations");
-    
+
     group.bench_function("cheetah_string_clone_1k", |b| {
         let s = CheetahString::from_string("TestClusterName".to_string());
         b.iter(|| {
@@ -260,7 +254,7 @@ fn bench_string_operations(c: &mut Criterion) {
             }
         });
     });
-    
+
     group.bench_function("string_clone_1k", |b| {
         let s = "TestClusterName".to_string();
         b.iter(|| {
@@ -269,7 +263,7 @@ fn bench_string_operations(c: &mut Criterion) {
             }
         });
     });
-    
+
     group.bench_function("arc_str_clone_1k", |b| {
         let s: Arc<str> = Arc::from("TestClusterName");
         b.iter(|| {
@@ -278,7 +272,7 @@ fn bench_string_operations(c: &mut Criterion) {
             }
         });
     });
-    
+
     // Test with longer strings (typical broker address)
     group.bench_function("cheetah_string_clone_long", |b| {
         let s = CheetahString::from_string("broker-a-192.168.1.100:10911".to_string());
@@ -288,7 +282,7 @@ fn bench_string_operations(c: &mut Criterion) {
             }
         });
     });
-    
+
     group.bench_function("string_clone_long", |b| {
         let s = "broker-a-192.168.1.100:10911".to_string();
         b.iter(|| {
@@ -297,7 +291,7 @@ fn bench_string_operations(c: &mut Criterion) {
             }
         });
     });
-    
+
     group.finish();
 }
 
@@ -305,26 +299,25 @@ fn bench_string_operations(c: &mut Criterion) {
 
 fn bench_iteration(c: &mut Criterion) {
     let mut group = c.benchmark_group("iteration");
-    
+
     // Pre-populate DashMap with various sizes
     for size in [100, 1000, 10000].iter() {
         let map: DashMap<TopicName, Vec<BrokerName>> = DashMap::new();
-        
+
         for i in 0..*size {
             let topic = create_topic_name(i);
-            let brokers: Vec<BrokerName> = (0..10)
-                .map(|j| create_broker_name(i * 10 + j))
-                .collect();
+            let brokers: Vec<BrokerName> =
+                (0..10).map(|j| create_broker_name(i * 10 + j)).collect();
             map.insert(topic, brokers);
         }
-        
+
         group.bench_with_input(BenchmarkId::new("iter_keys", size), &map, |b, map| {
             b.iter(|| {
                 let count = map.iter().count();
                 black_box(count)
             });
         });
-        
+
         group.bench_with_input(BenchmarkId::new("iter_values", size), &map, |b, map| {
             b.iter(|| {
                 let total: usize = map.iter().map(|entry| entry.value().len()).sum();
@@ -332,7 +325,7 @@ fn bench_iteration(c: &mut Criterion) {
             });
         });
     }
-    
+
     group.finish();
 }
 
@@ -340,42 +333,38 @@ fn bench_iteration(c: &mut Criterion) {
 
 fn bench_memory_usage(c: &mut Criterion) {
     let mut group = c.benchmark_group("memory_comparison");
-    
+
     // Benchmark memory allocation patterns
     group.bench_function("dashmap_with_cheetahstring", |b| {
         b.iter(|| {
             let map: DashMap<CheetahString, Vec<CheetahString>> = DashMap::new();
-            
+
             for i in 0..1000 {
                 let cluster = CheetahString::from_string(format!("Cluster{}", i % 100));
                 let broker = CheetahString::from_string(format!("Broker{}", i));
-                
-                map.entry(cluster)
-                    .or_default()
-                    .push(broker);
+
+                map.entry(cluster).or_default().push(broker);
             }
-            
+
             black_box(map)
         });
     });
-    
+
     group.bench_function("dashmap_with_string", |b| {
         b.iter(|| {
             let map: DashMap<String, Vec<String>> = DashMap::new();
-            
+
             for i in 0..1000 {
                 let cluster = format!("Cluster{}", i % 100);
                 let broker = format!("Broker{}", i);
-                
-                map.entry(cluster)
-                    .or_default()
-                    .push(broker);
+
+                map.entry(cluster).or_default().push(broker);
             }
-            
+
             black_box(map)
         });
     });
-    
+
     group.finish();
 }
 

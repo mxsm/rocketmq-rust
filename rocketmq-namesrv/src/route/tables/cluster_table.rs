@@ -22,7 +22,8 @@
 use dashmap::DashMap;
 use dashmap::DashSet;
 
-use crate::route::types::{BrokerName, ClusterName};
+use crate::route::types::BrokerName;
+use crate::route::types::ClusterName;
 
 /// Cluster address table: ClusterName -> Set<BrokerName>
 ///
@@ -36,8 +37,9 @@ use crate::route::types::{BrokerName, ClusterName};
 ///
 /// # Example
 /// ```no_run
-/// use rocketmq_namesrv::route::tables::ClusterAddrTable;
 /// use std::sync::Arc;
+///
+/// use rocketmq_namesrv::route::tables::ClusterAddrTable;
 ///
 /// let table = ClusterAddrTable::new();
 /// // Thread-safe operations without explicit locking
@@ -54,7 +56,7 @@ impl ClusterAddrTable {
             inner: DashMap::new(),
         }
     }
-    
+
     /// Create with estimated capacity
     ///
     /// # Arguments
@@ -64,7 +66,7 @@ impl ClusterAddrTable {
             inner: DashMap::with_capacity(capacity),
         }
     }
-    
+
     /// Add a broker to a cluster
     ///
     /// # Arguments
@@ -79,7 +81,7 @@ impl ClusterAddrTable {
             .or_default()
             .insert(broker_name)
     }
-    
+
     /// Remove a broker from a cluster
     ///
     /// # Arguments
@@ -97,7 +99,7 @@ impl ClusterAddrTable {
             })
             .unwrap_or(false)
     }
-    
+
     /// Remove entire cluster
     ///
     /// # Arguments
@@ -108,7 +110,7 @@ impl ClusterAddrTable {
     pub fn remove_cluster(&self, cluster_name: &str) -> bool {
         self.inner.remove(cluster_name).is_some()
     }
-    
+
     /// Get all broker names in a cluster
     ///
     /// # Arguments
@@ -119,20 +121,15 @@ impl ClusterAddrTable {
     pub fn get_brokers(&self, cluster_name: &str) -> Vec<BrokerName> {
         self.inner
             .get(cluster_name)
-            .map(|brokers| {
-                brokers
-                    .iter()
-                    .map(|broker| broker.key().clone())
-                    .collect()
-            })
+            .map(|brokers| brokers.iter().map(|broker| broker.key().clone()).collect())
             .unwrap_or_default()
     }
-    
+
     /// Check if cluster exists
     pub fn contains_cluster(&self, cluster_name: &str) -> bool {
         self.inner.contains_key(cluster_name)
     }
-    
+
     /// Check if broker exists in cluster
     ///
     /// # Arguments
@@ -144,18 +141,15 @@ impl ClusterAddrTable {
             .map(|brokers| brokers.iter().any(|b| b.key().as_str() == broker_name))
             .unwrap_or(false)
     }
-    
+
     /// Get all cluster names
     ///
     /// # Returns
     /// Vector of cluster names (CheetahString for zero-copy)
     pub fn get_all_clusters(&self) -> Vec<ClusterName> {
-        self.inner
-            .iter()
-            .map(|entry| entry.key().clone())
-            .collect()
+        self.inner.iter().map(|entry| entry.key().clone()).collect()
     }
-    
+
     /// Get all clusters with their brokers
     ///
     /// # Returns
@@ -165,21 +159,17 @@ impl ClusterAddrTable {
             .iter()
             .map(|entry| {
                 let cluster = entry.key().clone();
-                let brokers = entry
-                    .value()
-                    .iter()
-                    .map(|b| b.key().clone())
-                    .collect();
+                let brokers = entry.value().iter().map(|b| b.key().clone()).collect();
                 (cluster, brokers)
             })
             .collect()
     }
-    
+
     /// Get number of clusters
     pub fn cluster_count(&self) -> usize {
         self.inner.len()
     }
-    
+
     /// Get number of brokers in a cluster
     ///
     /// # Arguments
@@ -190,20 +180,17 @@ impl ClusterAddrTable {
             .map(|brokers| brokers.len())
             .unwrap_or(0)
     }
-    
+
     /// Get total number of brokers across all clusters
     pub fn total_broker_count(&self) -> usize {
-        self.inner
-            .iter()
-            .map(|entry| entry.value().len())
-            .sum()
+        self.inner.iter().map(|entry| entry.value().len()).sum()
     }
-    
+
     /// Clear all data
     pub fn clear(&self) {
         self.inner.clear();
     }
-    
+
     /// Clean up empty clusters
     ///
     /// Removes clusters that have no brokers.
@@ -230,111 +217,151 @@ impl Default for ClusterAddrTable {
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
+
     use super::*;
-    
+
     #[test]
     fn test_add_and_get_brokers() {
         let table = ClusterAddrTable::new();
         let cluster: ClusterName = CheetahString::from_string("DefaultCluster".to_string());
         let broker_a: BrokerName = CheetahString::from_string("broker-a".to_string());
         let broker_b: BrokerName = CheetahString::from_string("broker-b".to_string());
-        
+
         // Add brokers
         assert!(table.add_broker(cluster.clone(), broker_a.clone()));
         assert!(table.add_broker(cluster.clone(), broker_b.clone()));
-        
+
         // Try adding duplicate
         assert!(!table.add_broker(cluster.clone(), broker_a.clone()));
-        
+
         // Get brokers
         let brokers = table.get_brokers("DefaultCluster");
         assert_eq!(brokers.len(), 2);
     }
-    
+
     #[test]
     fn test_remove_broker() {
         let table = ClusterAddrTable::new();
         let cluster: ClusterName = CheetahString::from_string("DefaultCluster".to_string());
         let broker: BrokerName = CheetahString::from_string("broker-a".to_string());
-        
+
         table.add_broker(cluster.clone(), broker.clone());
-        
+
         // Remove
         assert!(table.remove_broker("DefaultCluster", "broker-a"));
         assert!(!table.contains_broker("DefaultCluster", "broker-a"));
-        
+
         // Try removing again
         assert!(!table.remove_broker("DefaultCluster", "broker-a"));
     }
-    
+
     #[test]
     fn test_remove_cluster() {
         let table = ClusterAddrTable::new();
         let cluster: ClusterName = CheetahString::from_string("DefaultCluster".to_string());
-        
-        table.add_broker(cluster.clone(), CheetahString::from_string("broker-a".to_string()));
-        table.add_broker(cluster.clone(), CheetahString::from_string("broker-b".to_string()));
-        
+
+        table.add_broker(
+            cluster.clone(),
+            CheetahString::from_string("broker-a".to_string()),
+        );
+        table.add_broker(
+            cluster.clone(),
+            CheetahString::from_string("broker-b".to_string()),
+        );
+
         // Remove cluster
         assert!(table.remove_cluster("DefaultCluster"));
         assert!(!table.contains_cluster("DefaultCluster"));
     }
-    
+
     #[test]
     fn test_get_all_clusters() {
         let table = ClusterAddrTable::new();
-        
-        table.add_broker(CheetahString::from_string("ClusterA".to_string()), CheetahString::from_string("broker-a".to_string()));
-        table.add_broker(CheetahString::from_string("ClusterB".to_string()), CheetahString::from_string("broker-b".to_string()));
-        table.add_broker(CheetahString::from_string("ClusterC".to_string()), CheetahString::from_string("broker-c".to_string()));
-        
+
+        table.add_broker(
+            CheetahString::from_string("ClusterA".to_string()),
+            CheetahString::from_string("broker-a".to_string()),
+        );
+        table.add_broker(
+            CheetahString::from_string("ClusterB".to_string()),
+            CheetahString::from_string("broker-b".to_string()),
+        );
+        table.add_broker(
+            CheetahString::from_string("ClusterC".to_string()),
+            CheetahString::from_string("broker-c".to_string()),
+        );
+
         let clusters = table.get_all_clusters();
         assert_eq!(clusters.len(), 3);
     }
-    
+
     #[test]
     fn test_broker_counts() {
         let table = ClusterAddrTable::new();
-        
-        table.add_broker(CheetahString::from_string("ClusterA".to_string()), CheetahString::from_string("broker-a1".to_string()));
-        table.add_broker(CheetahString::from_string("ClusterA".to_string()), CheetahString::from_string("broker-a2".to_string()));
-        table.add_broker(CheetahString::from_string("ClusterB".to_string()), CheetahString::from_string("broker-b1".to_string()));
-        
+
+        table.add_broker(
+            CheetahString::from_string("ClusterA".to_string()),
+            CheetahString::from_string("broker-a1".to_string()),
+        );
+        table.add_broker(
+            CheetahString::from_string("ClusterA".to_string()),
+            CheetahString::from_string("broker-a2".to_string()),
+        );
+        table.add_broker(
+            CheetahString::from_string("ClusterB".to_string()),
+            CheetahString::from_string("broker-b1".to_string()),
+        );
+
         assert_eq!(table.cluster_count(), 2);
         assert_eq!(table.broker_count_in_cluster("ClusterA"), 2);
         assert_eq!(table.broker_count_in_cluster("ClusterB"), 1);
         assert_eq!(table.total_broker_count(), 3);
     }
-    
+
     #[test]
     fn test_cleanup_empty_clusters() {
         let table = ClusterAddrTable::new();
-        
+
         // Add and then remove all brokers
-        table.add_broker(CheetahString::from_string("EmptyCluster".to_string()), CheetahString::from_string("broker-a".to_string()));
+        table.add_broker(
+            CheetahString::from_string("EmptyCluster".to_string()),
+            CheetahString::from_string("broker-a".to_string()),
+        );
         table.remove_broker("EmptyCluster", "broker-a");
-        
+
         // Add a non-empty cluster
-        table.add_broker(CheetahString::from_string("NonEmptyCluster".to_string()), CheetahString::from_string("broker-b".to_string()));
-        
+        table.add_broker(
+            CheetahString::from_string("NonEmptyCluster".to_string()),
+            CheetahString::from_string("broker-b".to_string()),
+        );
+
         // Cleanup
         let removed = table.cleanup_empty_clusters();
         assert_eq!(removed, 1);
         assert!(!table.contains_cluster("EmptyCluster"));
         assert!(table.contains_cluster("NonEmptyCluster"));
     }
-    
+
     #[test]
     fn test_get_all_cluster_brokers() {
         let table = ClusterAddrTable::new();
-        
-        table.add_broker(CheetahString::from_string("ClusterA".to_string()), CheetahString::from_string("broker-a1".to_string()));
-        table.add_broker(CheetahString::from_string("ClusterA".to_string()), CheetahString::from_string("broker-a2".to_string()));
-        table.add_broker(CheetahString::from_string("ClusterB".to_string()), CheetahString::from_string("broker-b1".to_string()));
-        
+
+        table.add_broker(
+            CheetahString::from_string("ClusterA".to_string()),
+            CheetahString::from_string("broker-a1".to_string()),
+        );
+        table.add_broker(
+            CheetahString::from_string("ClusterA".to_string()),
+            CheetahString::from_string("broker-a2".to_string()),
+        );
+        table.add_broker(
+            CheetahString::from_string("ClusterB".to_string()),
+            CheetahString::from_string("broker-b1".to_string()),
+        );
+
         let all_data = table.get_all_cluster_brokers();
         assert_eq!(all_data.len(), 2);
-        
+
         // Verify ClusterA has 2 brokers
         let cluster_a_data = all_data
             .iter()
@@ -342,15 +369,15 @@ mod tests {
             .unwrap();
         assert_eq!(cluster_a_data.1.len(), 2);
     }
-    
+
     #[test]
     fn test_concurrent_access() {
         use std::sync::Arc;
         use std::thread;
-        
+
         let table = Arc::new(ClusterAddrTable::new());
         let mut handles = vec![];
-        
+
         // Spawn multiple threads
         for i in 0..10 {
             let table_clone = table.clone();
@@ -360,15 +387,14 @@ mod tests {
                 table_clone.add_broker(cluster, broker);
             }));
         }
-        
+
         // Wait for completion
         for handle in handles {
             handle.join().unwrap();
         }
-        
+
         // Verify data
         assert!(table.cluster_count() <= 3);
         assert_eq!(table.total_broker_count(), 10);
     }
 }
-

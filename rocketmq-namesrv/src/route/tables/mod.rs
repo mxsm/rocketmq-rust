@@ -27,5 +27,6 @@ mod topic_table;
 
 pub use broker_table::BrokerAddrTable;
 pub use cluster_table::ClusterAddrTable;
-pub use live_table::{BrokerLiveInfo, BrokerLiveTable};
+pub use live_table::BrokerLiveInfo;
+pub use live_table::BrokerLiveTable;
 pub use topic_table::TopicQueueTable;

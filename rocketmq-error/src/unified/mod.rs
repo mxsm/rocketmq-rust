@@ -132,10 +132,7 @@ pub enum RocketMQError {
 
     /// Broker registration conflict
     #[error("Broker registration conflict for '{broker_name}': {reason}")]
-    RouteRegistrationConflict {
-        broker_name: String,
-        reason: String,
-    },
+    RouteRegistrationConflict { broker_name: String, reason: String },
 
     /// Route state version conflict
     #[error("Route state version conflict: expected={expected}, actual={actual}")]
