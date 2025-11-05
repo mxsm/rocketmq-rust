@@ -27,5 +27,5 @@ pub mod bootstrap;
 mod kvconfig;
 mod namesrv_config_parse;
 pub mod processor;
-mod route;
+pub mod route;
 mod route_info;

@@ -29,8 +29,8 @@ use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
 use rocketmq_remoting::protocol::route::route_data_view::QueueData;
 use rocketmq_remoting::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
 
+use crate::route::tables::BrokerLiveInfo;
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
-use crate::route_info::broker_addr_info::BrokerLiveInfo;
 
 /// Topic name type - uses CheetahString for zero-copy sharing
 pub type TopicName = CheetahString;

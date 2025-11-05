@@ -10,13 +10,13 @@ use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-pub(crate) struct BrokerAddrInfo {
+pub struct BrokerAddrInfo {
     // mq cluster name
     #[serde(rename = "clusterName")]
-    pub(crate) cluster_name: CheetahString,
+    pub cluster_name: CheetahString,
     // broker ip address
     #[serde(rename = "brokerAddr")]
-    pub(crate) broker_addr: CheetahString,
+    pub broker_addr: CheetahString,
 }
 
 impl BrokerAddrInfo {
