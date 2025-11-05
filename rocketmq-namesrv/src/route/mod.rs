@@ -15,6 +15,18 @@
  * limitations under the License.
  */
 
-pub(crate) mod batch_unregistration_service;
+//! Route management module for NameServer
+//!
+//! This module handles broker registration, topic routing, and cluster management.
+
+pub mod batch_unregistration_service;
+pub mod error;
 pub mod route_info_manager;
+pub mod route_info_manager_trait;
+pub mod route_info_manager_v2;
+pub mod route_info_manager_wrapper;
+pub mod tables;
+pub mod types;
 pub(crate) mod zone_route_rpc_hook;
+
+// Re-exports for convenience (kept for external API compatibility)

@@ -120,6 +120,29 @@ pub enum RocketMQError {
     QueueNotExist { topic: String, queue_id: i32 },
 
     // ============================================================================
+    // NameServer/Route Errors
+    // ============================================================================
+    /// Route information not found
+    #[error("Route information not found for topic '{topic}'")]
+    RouteNotFound { topic: String },
+
+    /// Route data inconsistency detected
+    #[error("Route data inconsistency detected for topic '{topic}': {reason}")]
+    RouteInconsistent { topic: String, reason: String },
+
+    /// Broker registration conflict
+    #[error("Broker registration conflict for '{broker_name}': {reason}")]
+    RouteRegistrationConflict { broker_name: String, reason: String },
+
+    /// Route state version conflict
+    #[error("Route state version conflict: expected={expected}, actual={actual}")]
+    RouteVersionConflict { expected: u64, actual: u64 },
+
+    /// Cluster not found
+    #[error("Cluster '{cluster}' not found")]
+    ClusterNotFound { cluster: String },
+
+    // ============================================================================
     // Client Errors
     // ============================================================================
     /// Client not started
@@ -287,6 +310,34 @@ impl RocketMQError {
     #[inline]
     pub fn illegal_argument(message: impl Into<String>) -> Self {
         Self::IllegalArgument(message.into())
+    }
+
+    /// Create a route not found error
+    #[inline]
+    pub fn route_not_found(topic: impl Into<String>) -> Self {
+        Self::RouteNotFound {
+            topic: topic.into(),
+        }
+    }
+
+    /// Create a route registration conflict error
+    #[inline]
+    pub fn route_registration_conflict(
+        broker_name: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self::RouteRegistrationConflict {
+            broker_name: broker_name.into(),
+            reason: reason.into(),
+        }
+    }
+
+    /// Create a cluster not found error
+    #[inline]
+    pub fn cluster_not_found(cluster: impl Into<String>) -> Self {
+        Self::ClusterNotFound {
+            cluster: cluster.into(),
+        }
     }
 
     /// Add broker address context to broker operation error

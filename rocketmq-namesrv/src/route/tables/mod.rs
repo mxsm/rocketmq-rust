@@ -14,18 +14,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#![allow(dead_code)]
-#![allow(clippy::result_large_err)]
 
-pub use self::kvconfig::kvconfig_mananger::KVConfigManager;
-pub use self::namesrv_config_parse::parse_command_and_config_file;
-pub use self::route::route_info_manager::RouteInfoManager;
-pub use self::route::route_info_manager_v2::RouteInfoManagerV2;
-pub use self::route::route_info_manager_wrapper::RouteInfoManagerWrapper;
+//! Concurrent data table modules for route management
+//!
+//! These modules use DashMap for lock-free concurrent access,
+//! replacing the previous global RwLock approach.
 
-pub mod bootstrap;
-mod kvconfig;
-mod namesrv_config_parse;
-pub mod processor;
-pub mod route;
-mod route_info;
+mod broker_table;
+mod cluster_table;
+mod live_table;
+mod topic_table;
+
+pub use broker_table::BrokerAddrTable;
+pub use cluster_table::ClusterAddrTable;
+pub use live_table::BrokerLiveInfo;
+pub use live_table::BrokerLiveTable;
+pub use topic_table::TopicQueueTable;
+
+// Re-export BrokerAddrInfo for public API usage
+pub use crate::route_info::broker_addr_info::BrokerAddrInfo;

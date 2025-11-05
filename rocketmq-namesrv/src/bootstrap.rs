@@ -41,10 +41,12 @@ use tracing::warn;
 use crate::processor::ClientRequestProcessor;
 use crate::processor::NameServerRequestProcessor;
 use crate::processor::NameServerRequestProcessorWrapper;
+use crate::route::route_info_manager::RouteInfoManager;
+use crate::route::route_info_manager_v2::RouteInfoManagerV2;
+use crate::route::route_info_manager_wrapper::RouteInfoManagerWrapper;
 use crate::route::zone_route_rpc_hook::ZoneRouteRPCHook;
 use crate::route_info::broker_housekeeping_service::BrokerHousekeepingService;
 use crate::KVConfigManager;
-use crate::RouteInfoManager;
 
 pub struct NameServerBootstrap {
     name_server_runtime: NameServerRuntime,
@@ -181,8 +183,7 @@ impl NameServerRuntime {
         self.scheduled_task_manager.cancel_all();
         self.inner
             .route_info_manager_mut()
-            .un_register_service
-            .shutdown();
+            .shutdown_unregister_service();
         /*if let Some(runtime) = self.name_server_runtime.take() {
             runtime.shutdown();
         }*/
@@ -264,6 +265,9 @@ impl Builder {
             DefaultRemotingRequestProcessor,
         ));
         let server_config = self.server_config.unwrap_or_default();
+        // Check configuration flag before moving name_server_config
+        let use_v2 = name_server_config.use_route_info_manager_v2;
+
         let mut inner = ArcMut::new(NameServerRuntimeInner {
             name_server_config,
             tokio_client_config,
@@ -274,7 +278,21 @@ impl Builder {
             broker_housekeeping_service: None,
         });
 
-        let route_info_manager = RouteInfoManager::new(inner.clone());
+        // Select RouteInfoManager implementation based on configuration
+        // V2 is the default (production-ready as of v0.7.0)
+        let route_info_manager = if use_v2 {
+            info!(
+                "Using RouteInfoManager V2 (DashMap-based, 5-50x faster for concurrent operations)"
+            );
+            RouteInfoManagerWrapper::V2(RouteInfoManagerV2::new(inner.clone()))
+        } else {
+            warn!(
+                "Using RouteInfoManager V1 (legacy RwLock-based implementation). Consider \
+                 migrating to V2 for better performance."
+            );
+            RouteInfoManagerWrapper::V1(RouteInfoManager::new(inner.clone()))
+        };
+
         let kv_config_manager = KVConfigManager::new(inner.clone());
 
         inner.kvconfig_manager = Some(kv_config_manager);
@@ -298,7 +316,7 @@ pub(crate) struct NameServerRuntimeInner {
     name_server_config: NamesrvConfig,
     tokio_client_config: TokioClientConfig,
     server_config: ServerConfig,
-    route_info_manager: Option<RouteInfoManager>,
+    route_info_manager: Option<RouteInfoManagerWrapper>,
     kvconfig_manager: Option<KVConfigManager>,
     remoting_client: ArcMut<RocketmqDefaultClient>,
     broker_housekeeping_service: Option<Arc<BrokerHousekeepingService>>,
@@ -321,7 +339,7 @@ impl NameServerRuntimeInner {
     }
 
     #[inline]
-    pub fn route_info_manager_mut(&mut self) -> &mut RouteInfoManager {
+    pub fn route_info_manager_mut(&mut self) -> &mut RouteInfoManagerWrapper {
         self.route_info_manager
             .as_mut()
             .expect("route_info_manager is None")
@@ -355,7 +373,7 @@ impl NameServerRuntimeInner {
     }
 
     #[inline]
-    pub fn route_info_manager(&self) -> &RouteInfoManager {
+    pub fn route_info_manager(&self) -> &RouteInfoManagerWrapper {
         self.route_info_manager
             .as_ref()
             .expect("route_info_manager is None")
@@ -389,7 +407,7 @@ impl NameServerRuntimeInner {
     }
 
     #[inline]
-    pub fn set_route_info_manager(&mut self, route_info_manager: RouteInfoManager) {
+    pub fn set_route_info_manager(&mut self, route_info_manager: RouteInfoManagerWrapper) {
         self.route_info_manager = Some(route_info_manager);
     }
 
