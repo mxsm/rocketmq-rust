@@ -127,6 +127,34 @@ impl TopicQueueTable {
             .unwrap_or_default()
     }
 
+    /// Get the broker-to-queue mapping for a specific topic
+    ///
+    /// This method retrieves the `DashMap` containing the mapping of brokers to their
+    /// respective `QueueData` for a given topic. The returned value is an `Option`
+    /// that contains a reference to the inner `DashMap` if the topic exists.
+    ///
+    /// # Arguments
+    /// * `topic` - A string slice representing the name of the topic to look up.
+    ///
+    /// # Returns
+    /// * `Option<dashmap::mapref::one::Ref<'_, TopicName, DashMap<BrokerName, Arc<QueueData>>>>`
+    ///   - `Some` if the topic exists, containing a reference to the `DashMap` of brokers and their
+    ///     queue data.
+    ///   - `None` if the topic does not exist.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let topic_map = table.get_topic_queues_map("example_topic");
+    /// if let Some(broker_map) = topic_map {
+    ///     // Access broker-specific queue data
+    /// }
+    pub fn get_topic_queues_map(
+        &self,
+        topic: &str,
+    ) -> Option<dashmap::mapref::one::Ref<'_, TopicName, DashMap<BrokerName, Arc<QueueData>>>> {
+        self.inner.get(topic)
+    }
+
     /// Remove a broker from a topic
     ///
     /// # Arguments
