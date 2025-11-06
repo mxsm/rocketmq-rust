@@ -462,7 +462,7 @@ impl RouteInfoManagerV2 {
         if queue_data_vec.is_empty() {
             return;
         }
-        
+
         // Validate all brokers exist before inserting
         for queue_data in &queue_data_vec {
             if !self.broker_addr_table.contains(&queue_data.broker_name) {
@@ -473,7 +473,7 @@ impl RouteInfoManagerV2 {
                 return;
             }
         }
-        
+
         // All brokers valid, proceed with insertion
         for queue_data in queue_data_vec {
             self.topic_queue_table.insert(
