@@ -401,16 +401,15 @@ impl RouteInfoManagerWrapper {
     /// Register topic
     pub fn register_topic(
         &self,
-        topic: String,
+        topic: CheetahString,
         queue_data_vec: Vec<rocketmq_remoting::protocol::route::route_data_view::QueueData>,
     ) {
-        use cheetah_string::CheetahString;
         match self {
             RouteInfoManagerWrapper::V1(manager) => {
-                manager.register_topic(CheetahString::from_string(topic), queue_data_vec);
+                manager.register_topic(topic, queue_data_vec);
             }
-            RouteInfoManagerWrapper::V2(_manager) => {
-                // V2 doesn't have this method yet
+            RouteInfoManagerWrapper::V2(manager) => {
+                manager.register_topic(topic, queue_data_vec);
             }
         }
     }

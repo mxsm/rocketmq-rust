@@ -467,10 +467,7 @@ impl DefaultRequestProcessor {
             if !topic_route_data.queue_datas.is_empty() {
                 self.name_server_runtime_inner
                     .route_info_manager_mut()
-                    .register_topic(
-                        request_header.topic.to_string(),
-                        topic_route_data.queue_datas,
-                    )
+                    .register_topic(request_header.topic, topic_route_data.queue_datas)
             }
         }
         Ok(RemotingCommand::create_response_command())
