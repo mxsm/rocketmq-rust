@@ -505,10 +505,10 @@ impl RouteInfoManagerV2 {
                     let removed_qd = self
                         .topic_queue_table
                         .remove_broker(topic.as_ref(), broker_name.as_ref());
-                    if removed_qd.is_some() {
+                    if let Some(qd) = removed_qd {
                         info!(
                             "deleteTopic, remove one broker's topic {} {} {:?}",
-                            broker_name, topic, removed_qd
+                            broker_name, topic, qd
                         );
                     }
                 }
