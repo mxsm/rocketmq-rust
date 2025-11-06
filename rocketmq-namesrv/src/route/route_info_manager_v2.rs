@@ -457,6 +457,37 @@ impl RouteInfoManagerV2 {
             BrokerAddrInfo::new(cluster_name.to_string(), broker_addr.to_string());
         self.broker_live_table.get(&broker_addr_info)
     }
+
+    pub(crate) fn register_topic(&self, topic: CheetahString, queue_data_vec: Vec<QueueData>) {
+        if queue_data_vec.is_empty() {
+            return;
+        }
+
+        // Validate all brokers exist before inserting
+        for queue_data in &queue_data_vec {
+            if !self.broker_addr_table.contains(&queue_data.broker_name) {
+                warn!(
+                    "Register topic contains illegal broker, {}, {:?}",
+                    topic, queue_data
+                );
+                return;
+            }
+        }
+
+        // All brokers valid, proceed with insertion
+        for queue_data in queue_data_vec {
+            self.topic_queue_table.insert(
+                topic.clone(),
+                queue_data.broker_name.clone(),
+                queue_data,
+            );
+        }
+        info!(
+            "Register topic route.{}, {:?}",
+            topic,
+            self.topic_queue_table.get_topic_queues(&topic)
+        )
+    }
 }
 
 // ============================================================================
