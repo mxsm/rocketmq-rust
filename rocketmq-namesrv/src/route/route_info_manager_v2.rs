@@ -513,7 +513,7 @@ impl RouteInfoManagerV2 {
                     }
                 }
                 let queue_data_map = self.topic_queue_table.get_topic_queues_map(topic.as_str());
-                if queue_data_map.is_none() || queue_data_map.as_ref().unwrap().is_empty() {
+                if queue_data_map.map_or(true, |map| map.is_empty()) {
                     self.topic_queue_table.remove_topic(topic.as_ref());
                     info!(
                         "deleteTopic, remove the Cluster {:?} topic {} completely",
