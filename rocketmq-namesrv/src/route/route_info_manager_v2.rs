@@ -500,7 +500,7 @@ impl RouteInfoManagerV2 {
                 return;
             }
             let queue_data_map = self.topic_queue_table.get_topic_queues_map(topic.as_str());
-            if queue_data_map.is_some() && !queue_data_map.as_ref().unwrap().is_empty() {
+            if queue_data_map.is_some_and(|map| !map.is_empty()) {
                 for broker_name in broker_names {
                     let removed_qd = self
                         .topic_queue_table
