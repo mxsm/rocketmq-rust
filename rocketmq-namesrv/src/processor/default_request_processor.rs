@@ -449,10 +449,7 @@ impl DefaultRequestProcessor {
             request.decode_command_custom_header::<DeleteTopicFromNamesrvRequestHeader>()?;
         self.name_server_runtime_inner
             .route_info_manager_mut()
-            .delete_topic(
-                request_header.topic.to_string(),
-                request_header.cluster_name.map(|s| s.to_string()),
-            );
+            .delete_topic(request_header.topic, request_header.cluster_name);
         Ok(RemotingCommand::create_response_command())
     }
 

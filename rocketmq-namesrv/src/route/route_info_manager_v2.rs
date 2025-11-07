@@ -488,6 +488,43 @@ impl RouteInfoManagerV2 {
             self.topic_queue_table.get_topic_queues(&topic)
         )
     }
+
+    pub(crate) fn delete_topic(
+        &mut self,
+        topic: CheetahString,
+        cluster_name: Option<CheetahString>,
+    ) {
+        if let Some(cluster_name) = cluster_name {
+            let broker_names = self.cluster_addr_table.get_brokers(cluster_name.as_str());
+            if broker_names.is_empty() {
+                return;
+            }
+            let queue_data_map = self.topic_queue_table.get_topic_queues_map(topic.as_str());
+            if queue_data_map.is_some_and(|map| !map.is_empty()) {
+                for broker_name in broker_names {
+                    let removed_qd = self
+                        .topic_queue_table
+                        .remove_broker(topic.as_ref(), broker_name.as_ref());
+                    if let Some(qd) = removed_qd {
+                        info!(
+                            "deleteTopic, remove one broker's topic {} {} {:?}",
+                            broker_name, topic, qd
+                        );
+                    }
+                }
+                let queue_data_map = self.topic_queue_table.get_topic_queues_map(topic.as_str());
+                if queue_data_map.is_none_or(|map| map.is_empty()) {
+                    self.topic_queue_table.remove_topic(topic.as_ref());
+                    info!(
+                        "deleteTopic, remove the Cluster {:?} topic {} completely",
+                        cluster_name, topic
+                    );
+                }
+            }
+        } else {
+            self.topic_queue_table.remove_topic(topic.as_ref());
+        }
+    }
 }
 
 // ============================================================================

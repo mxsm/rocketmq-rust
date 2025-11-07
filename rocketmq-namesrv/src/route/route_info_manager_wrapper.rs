@@ -383,17 +383,13 @@ impl RouteInfoManagerWrapper {
     }
 
     /// Delete topic
-    pub fn delete_topic(&mut self, topic: String, cluster_name: Option<String>) {
-        use cheetah_string::CheetahString;
+    pub fn delete_topic(&mut self, topic: CheetahString, cluster_name: Option<CheetahString>) {
         match self {
             RouteInfoManagerWrapper::V1(manager) => {
-                manager.delete_topic(
-                    CheetahString::from_string(topic),
-                    cluster_name.map(CheetahString::from_string),
-                );
+                manager.delete_topic(topic, cluster_name);
             }
-            RouteInfoManagerWrapper::V2(_manager) => {
-                // V2 doesn't have this method yet
+            RouteInfoManagerWrapper::V2(manager) => {
+                manager.delete_topic(topic, cluster_name);
             }
         }
     }
