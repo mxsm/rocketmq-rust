@@ -35,6 +35,7 @@ use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_rust::wait_for_signal;
 use rocketmq_rust::ArcMut;
 use tokio::sync::broadcast;
+use tracing::error;
 use tracing::info;
 use tracing::warn;
 
@@ -52,17 +53,17 @@ pub struct NameServerBootstrap {
     name_server_runtime: NameServerRuntime,
 }
 
+/// Builder for creating NameServerBootstrap with custom configuration
 pub struct Builder {
     name_server_config: Option<NamesrvConfig>,
     server_config: Option<ServerConfig>,
 }
 
+/// Core runtime managing NameServer lifecycle and operations
 struct NameServerRuntime {
-    //name_server_runtime: Option<RocketMQRuntime>,
     inner: ArcMut<NameServerRuntimeInner>,
     scheduled_task_manager: ScheduledTaskManager,
-    // receiver for shutdown signal
-    shutdown_rx: Option<tokio::sync::broadcast::Receiver<()>>,
+    shutdown_rx: Option<broadcast::Receiver<()>>,
     server_inner: Option<RocketMQServer<NameServerRequestProcessor>>,
 }
 
@@ -93,11 +94,11 @@ async fn wait_for_signal_inner(shutdown_tx: broadcast::Sender<()>) {
 impl NameServerRuntime {
     pub async fn initialize(&mut self) -> RocketMQResult<()> {
         self.load_config().await?;
-        self.initiate_network_components();
+        self.initialize_network_components();
         self.register_processor();
         self.start_schedule_service();
-        self.initiate_ssl_context();
-        self.initiate_rpc_hooks();
+        self.initialize_ssl_context();
+        self.initialize_rpc_hooks();
         Ok(())
     }
 
@@ -107,21 +108,26 @@ impl NameServerRuntime {
         }
         Ok(())
     }
-    fn initiate_network_components(&mut self) {
-        //nothing to do
+
+    /// Initialize network components for handling client requests
+    fn initialize_network_components(&mut self) {
         let server = RocketMQServer::new(Arc::new(self.inner.server_config.clone()));
         self.server_inner = Some(server);
     }
 
+    /// Register request processors for handling different types of requests
     fn register_processor(&mut self) {
-        //nothing to do
+        // Processor registration is handled in init_processors()
     }
+
+    /// Start scheduled tasks for broker health monitoring
     fn start_schedule_service(&self) {
         let scan_not_active_broker_interval = self
             .inner
             .name_server_config
             .scan_not_active_broker_interval;
         let mut name_server_runtime_inner = self.inner.clone();
+
         self.scheduled_task_manager.add_fixed_rate_task_async(
             Duration::from_secs(5),
             Duration::from_millis(scan_not_active_broker_interval),
@@ -135,10 +141,14 @@ impl NameServerRuntime {
             },
         );
     }
-    fn initiate_ssl_context(&mut self) {
+
+    /// Initialize SSL context (not implemented yet)
+    fn initialize_ssl_context(&mut self) {
         warn!("SSL is not supported yet");
     }
-    fn initiate_rpc_hooks(&mut self) {
+
+    /// Initialize RPC hooks for request pre-processing
+    fn initialize_rpc_hooks(&mut self) {
         if let Some(server) = self.server_inner.as_mut() {
             server.register_rpc_hook(Arc::new(ZoneRouteRPCHook));
         }
@@ -148,48 +158,72 @@ impl NameServerRuntime {
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
         let receiver = notify_conn_disconnect.subscribe();
         let request_processor = self.init_processors(receiver);
-        let mut server = self.server_inner.take().unwrap();
+
+        // Take server instance for async execution
+        let mut server = self
+            .server_inner
+            .take()
+            .expect("Server not initialized - call initialize() first");
+
         let channel_event_listener = self
             .inner
             .broker_housekeeping_service
             .take()
             .map(|item| item as Arc<dyn ChannelEventListener>);
+
         tokio::spawn(async move {
             server.run(request_processor, channel_event_listener).await;
         });
+
+        // Setup remoting client with name server address
+        let local_address = NetworkUtil::get_local_address().unwrap_or_else(|| {
+            warn!("Failed to get local address, using 127.0.0.1");
+            "127.0.0.1".to_string()
+        });
+
         let namesrv = CheetahString::from_string(format!(
             "{}:{}",
-            NetworkUtil::get_local_address().unwrap(),
-            self.inner.server_config.listen_port
+            local_address, self.inner.server_config.listen_port
         ));
+
         let weak_arc_mut = ArcMut::downgrade(&self.inner.remoting_client);
         self.inner
             .remoting_client
             .update_name_server_address_list(vec![namesrv])
             .await;
         self.inner.remoting_client.start(weak_arc_mut).await;
-        info!("Rocketmq NameServer(Rust) started");
 
+        info!("RocketMQ NameServer (Rust) started successfully");
+
+        // Wait for shutdown signal
         tokio::select! {
-            _ = self.shutdown_rx.as_mut().unwrap().recv() => {
-                info!("Shutdown received, initiating graceful shutdown...");
+            result = self.shutdown_rx.as_mut()
+                .expect("Shutdown channel not initialized")
+                .recv() => {
+                match result {
+                    Ok(_) => info!("Shutdown signal received, initiating graceful shutdown..."),
+                    Err(err) => error!("Error receiving shutdown signal: {}", err),
+                }
                 self.shutdown();
             }
         }
     }
 
+    /// Gracefully shutdown the NameServer
     #[inline]
     fn shutdown(&mut self) {
+        info!("Shutting down scheduled tasks...");
         self.scheduled_task_manager.cancel_all();
+
+        info!("Shutting down route info manager...");
         self.inner
             .route_info_manager_mut()
             .shutdown_unregister_service();
-        /*if let Some(runtime) = self.name_server_runtime.take() {
-            runtime.shutdown();
-        }*/
-        info!("Rocketmq NameServer(Rust) gracefully shutdown completed");
+
+        info!("RocketMQ NameServer (Rust) gracefully shutdown completed");
     }
 
+    /// Initialize and register request processors
     #[inline]
     fn init_processors(
         &self,
@@ -202,18 +236,24 @@ impl NameServerRuntime {
             crate::processor::default_request_processor::DefaultRequestProcessor::new(
                 self.inner.clone(),
             );
+
         let mut name_server_request_processor = NameServerRequestProcessor::new();
+
+        // Register topic route query processor
         name_server_request_processor.register_processor(
             RequestCode::GetRouteinfoByTopic,
             NameServerRequestProcessorWrapper::ClientRequestProcessor(ArcMut::new(
                 client_request_processor,
             )),
         );
+
+        // Register default processor for other requests
         name_server_request_processor.register_default_processor(
             NameServerRequestProcessorWrapper::DefaultRequestProcessor(ArcMut::new(
                 default_request_processor,
             )),
         );
+
         name_server_request_processor
     }
 }
@@ -221,9 +261,7 @@ impl NameServerRuntime {
 impl Drop for NameServerRuntime {
     #[inline]
     fn drop(&mut self) {
-        /*if let Some(runtime) = self.name_server_runtime.take() {
-            runtime.shutdown();
-        }*/
+        // Cleanup is handled in shutdown()
     }
 }
 
@@ -255,17 +293,24 @@ impl Builder {
         self
     }
 
+    /// Build the NameServerBootstrap with the configured settings
+    ///
+    /// Creates all necessary components:
+    /// - RouteInfoManager (V1 or V2 based on configuration)
+    /// - KVConfigManager for key-value storage
+    /// - RemotingClient for broker communication
+    /// - BrokerHousekeepingService for broker lifecycle management
     #[inline]
     pub fn build(self) -> NameServerBootstrap {
         let name_server_config = self.name_server_config.unwrap_or_default();
-        //let runtime = RocketMQRuntime::new_multi(10, "namesrv-thread");
         let tokio_client_config = TokioClientConfig::default();
         let remoting_client = ArcMut::new(RocketmqDefaultClient::new(
             Arc::new(tokio_client_config.clone()),
             DefaultRemotingRequestProcessor,
         ));
         let server_config = self.server_config.unwrap_or_default();
-        // Check configuration flag before moving name_server_config
+
+        // Check configuration flag for RouteInfoManager version
         let use_v2 = name_server_config.use_route_info_manager_v2;
 
         let mut inner = ArcMut::new(NameServerRuntimeInner {
@@ -295,6 +340,7 @@ impl Builder {
 
         let kv_config_manager = KVConfigManager::new(inner.clone());
 
+        // Initialize components
         inner.kvconfig_manager = Some(kv_config_manager);
         inner.route_info_manager = Some(route_info_manager);
         inner.broker_housekeeping_service =
@@ -302,7 +348,6 @@ impl Builder {
 
         NameServerBootstrap {
             name_server_runtime: NameServerRuntime {
-                //name_server_runtime: Some(runtime),
                 inner,
                 scheduled_task_manager: ScheduledTaskManager::new(),
                 shutdown_rx: None,
@@ -312,6 +357,7 @@ impl Builder {
     }
 }
 
+/// Internal runtime state shared across components
 pub(crate) struct NameServerRuntimeInner {
     name_server_config: NamesrvConfig,
     tokio_client_config: TokioClientConfig,
@@ -323,6 +369,8 @@ pub(crate) struct NameServerRuntimeInner {
 }
 
 impl NameServerRuntimeInner {
+    // Mutable accessors
+
     #[inline]
     pub fn name_server_config_mut(&mut self) -> &mut NamesrvConfig {
         &mut self.name_server_config
@@ -342,20 +390,22 @@ impl NameServerRuntimeInner {
     pub fn route_info_manager_mut(&mut self) -> &mut RouteInfoManagerWrapper {
         self.route_info_manager
             .as_mut()
-            .expect("route_info_manager is None")
+            .expect("RouteInfoManager not initialized - this is a bug in bootstrap logic")
     }
 
     #[inline]
     pub fn kvconfig_manager_mut(&mut self) -> &mut KVConfigManager {
         self.kvconfig_manager
             .as_mut()
-            .expect("kvconfig_manager is None")
+            .expect("KVConfigManager not initialized - this is a bug in bootstrap logic")
     }
 
     #[inline]
     pub fn remoting_client_mut(&mut self) -> &mut RocketmqDefaultClient {
         &mut self.remoting_client
     }
+
+    // Immutable accessors
 
     #[inline]
     pub fn name_server_config(&self) -> &NamesrvConfig {
@@ -376,20 +426,22 @@ impl NameServerRuntimeInner {
     pub fn route_info_manager(&self) -> &RouteInfoManagerWrapper {
         self.route_info_manager
             .as_ref()
-            .expect("route_info_manager is None")
+            .expect("RouteInfoManager not initialized - this is a bug in bootstrap logic")
     }
 
     #[inline]
     pub fn kvconfig_manager(&self) -> &KVConfigManager {
         self.kvconfig_manager
             .as_ref()
-            .expect("kvconfig_manager is None")
+            .expect("KVConfigManager not initialized - this is a bug in bootstrap logic")
     }
 
     #[inline]
     pub fn remoting_client(&self) -> &RocketmqDefaultClient {
         &self.remoting_client
     }
+
+    // Setters
 
     #[inline]
     pub fn set_name_server_config(&mut self, name_server_config: NamesrvConfig) {
