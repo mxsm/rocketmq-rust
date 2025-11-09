@@ -232,7 +232,7 @@ impl Default for NamesrvConfig {
             wait_seconds_for_service: 45,
             delete_topic_with_broker_registration: false,
             config_black_list: "configBlackList;configStorePath;kvConfigPath".to_string(),
-            use_route_info_manager_v2: true, // Default to V2 (production-ready)
+            use_route_info_manager_v2: false, // Default to V2 (production-ready)
         }
     }
 }
