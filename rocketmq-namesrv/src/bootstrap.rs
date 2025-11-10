@@ -20,7 +20,8 @@
 //! Provides the core runtime infrastructure for RocketMQ NameServer.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::AtomicU8;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,7 +29,8 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::namesrv::namesrv_config::NamesrvConfig;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::utils::network_util::NetworkUtil;
-use rocketmq_error::{RocketMQError, RocketMQResult};
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
@@ -41,7 +43,11 @@ use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_rust::wait_for_signal;
 use rocketmq_rust::ArcMut;
 use tokio::sync::broadcast;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::debug;
+use tracing::error;
+use tracing::info;
+use tracing::instrument;
+use tracing::warn;
 
 use crate::processor::ClientRequestProcessor;
 use crate::processor::NameServerRequestProcessor;
@@ -110,20 +116,20 @@ impl RuntimeState {
             // Created can only go to Initialized or Stopped (on error)
             (Self::Created, Self::Initialized) => true,
             (Self::Created, Self::Stopped) => true,
-            
+
             // Initialized can go to Running or Stopped (on error)
             (Self::Initialized, Self::Running) => true,
             (Self::Initialized, Self::Stopped) => true,
-            
+
             // Running can only go to ShuttingDown
             (Self::Running, Self::ShuttingDown) => true,
-            
+
             // ShuttingDown can only go to Stopped
             (Self::ShuttingDown, Self::Stopped) => true,
-            
+
             // Stopped is terminal
             (Self::Stopped, _) => false,
-            
+
             // All other transitions are invalid
             _ => false,
         }
@@ -170,16 +176,16 @@ impl NameServerBootstrap {
     #[instrument(skip(self), name = "nameserver_boot")]
     pub async fn boot(mut self) -> RocketMQResult<()> {
         info!("Booting RocketMQ NameServer (Rust)...");
-        
+
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         self.name_server_runtime.shutdown_rx = Some(shutdown_rx);
         self.name_server_runtime.initialize().await?;
-        
+
         tokio::join!(
             self.name_server_runtime.start(),
             wait_for_signal_inner(shutdown_tx)
         );
-        
+
         info!("NameServer shutdown completed");
         Ok(())
     }
@@ -204,11 +210,10 @@ impl NameServerRuntime {
     #[inline]
     fn current_state(&self) -> RuntimeState {
         let value = self.state.load(Ordering::Acquire);
-        RuntimeState::from_u8(value)
-            .unwrap_or_else(|| {
-                error!("Invalid runtime state value: {}", value);
-                RuntimeState::Stopped
-            })
+        RuntimeState::from_u8(value).unwrap_or_else(|| {
+            error!("Invalid runtime state value: {}", value);
+            RuntimeState::Stopped
+        })
     }
 
     /// Attempt to transition to a new state
@@ -217,7 +222,7 @@ impl NameServerRuntime {
     #[inline]
     fn transition_to(&self, next: RuntimeState) -> RocketMQResult<()> {
         let current = self.current_state();
-        
+
         if !current.can_transition_to(next) {
             let error_msg = format!(
                 "Invalid state transition: {} -> {}. Current state does not allow this transition.",
@@ -231,13 +236,9 @@ impl NameServerRuntime {
         // Perform atomic state transition
         let old_value = self.state.swap(next as u8, Ordering::AcqRel);
         let old_state = RuntimeState::from_u8(old_value).unwrap_or(RuntimeState::Stopped);
-        
-        info!(
-            "State transition: {} -> {}",
-            old_state.name(),
-            next.name()
-        );
-        
+
+        info!("State transition: {} -> {}", old_state.name(), next.name());
+
         Ok(())
     }
 
@@ -245,7 +246,7 @@ impl NameServerRuntime {
     #[inline]
     fn validate_state(&self, expected: &[RuntimeState], operation: &str) -> RocketMQResult<()> {
         let current = self.current_state();
-        
+
         if !expected.contains(&current) {
             let expected_names: Vec<_> = expected.iter().map(|s| s.name()).collect();
             let error_msg = format!(
@@ -257,7 +258,7 @@ impl NameServerRuntime {
             error!("{}", error_msg);
             return Err(RocketMQError::Internal(error_msg));
         }
-        
+
         Ok(())
     }
 
@@ -272,39 +273,39 @@ impl NameServerRuntime {
     pub async fn initialize(&mut self) -> RocketMQResult<()> {
         // Validate we're in Created state
         self.validate_state(&[RuntimeState::Created], "initialize")?;
-        
+
         info!("Phase 1/4: Loading configuration...");
         if let Err(e) = self.load_config().await {
             error!("Initialization failed during config load: {}", e);
             let _ = self.transition_to(RuntimeState::Stopped);
             return Err(e);
         }
-        
+
         info!("Phase 2/4: Initializing network server...");
         self.initialize_network_components();
-        
+
         info!("Phase 3/4: Registering RPC hooks...");
         self.initialize_rpc_hooks();
-        
+
         info!("Phase 4/4: Starting scheduled tasks...");
         self.start_schedule_service();
-        
+
         // Transition to Initialized state
         self.transition_to(RuntimeState::Initialized)?;
-        
+
         info!("Initialization completed successfully");
         Ok(())
     }
 
     async fn load_config(&mut self) -> RocketMQResult<()> {
         // KVConfigManager is now always initialized
-        self.inner
-            .kvconfig_manager_mut()
-            .load()
-            .map_err(|e| {
-                error!("KV config load failed: {}", e);
-                RocketMQError::storage_read_failed("kv_config", format!("Configuration load error: {}", e))
-            })?;
+        self.inner.kvconfig_manager_mut().load().map_err(|e| {
+            error!("KV config load failed: {}", e);
+            RocketMQError::storage_read_failed(
+                "kv_config",
+                format!("Configuration load error: {}", e),
+            )
+        })?;
         debug!("KV configuration loaded successfully");
         Ok(())
     }
@@ -330,7 +331,7 @@ impl NameServerRuntime {
         let mut name_server_runtime_inner = self.inner.clone();
 
         self.scheduled_task_manager.add_fixed_rate_task_async(
-            Duration::from_secs(5),  // Initial delay
+            Duration::from_secs(5), // Initial delay
             Duration::from_millis(scan_not_active_broker_interval),
             async move |_ctx| {
                 debug!("Running scheduled broker health check");
@@ -342,7 +343,7 @@ impl NameServerRuntime {
                 Ok(())
             },
         );
-        
+
         info!(
             "Scheduled task started: broker health check (interval: {}ms)",
             scan_not_active_broker_interval
@@ -362,7 +363,7 @@ impl NameServerRuntime {
     /// This method:
     /// 1. Initializes request processors
     /// 2. Starts the network server in async task
-    /// 3. Starts the remoting client  
+    /// 3. Starts the remoting client
     /// 4. Waits for shutdown signal
     /// 5. Performs graceful shutdown
     #[instrument(skip(self), name = "runtime_start")]
@@ -372,9 +373,9 @@ impl NameServerRuntime {
             error!("Cannot start: {}", e);
             return;
         }
-        
+
         info!("Starting NameServer main loop...");
-        
+
         let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
         let receiver = notify_conn_disconnect.subscribe();
         let request_processor = self.init_processors(receiver);
@@ -386,9 +387,8 @@ impl NameServerRuntime {
             .expect("Server not initialized - call initialize() first");
 
         // Get broker housekeeping service for server
-        let channel_event_listener = Some(
-            self.inner.broker_housekeeping_service().clone() as Arc<dyn ChannelEventListener>
-        );
+        let channel_event_listener =
+            Some(self.inner.broker_housekeeping_service().clone() as Arc<dyn ChannelEventListener>);
 
         // Spawn server task and retain handle for graceful shutdown
         let server_handle = tokio::spawn(async move {
@@ -406,9 +406,10 @@ impl NameServerRuntime {
 
         let namesrv = CheetahString::from_string(format!(
             "{}:{}",
-            local_address, self.inner.server_config().listen_port
+            local_address,
+            self.inner.server_config().listen_port
         ));
-        
+
         debug!("NameServer address: {}", namesrv);
 
         let weak_arc_mut = ArcMut::downgrade(&self.inner.remoting_client);
@@ -416,7 +417,7 @@ impl NameServerRuntime {
             .remoting_client
             .update_name_server_address_list(vec![namesrv])
             .await;
-        
+
         // Start remoting client directly (no spawn needed as it's managed by self.inner)
         self.inner.remoting_client.start(weak_arc_mut).await;
 
@@ -457,19 +458,22 @@ impl NameServerRuntime {
             warn!("Shutdown called in unexpected state: {}", e);
             // Allow shutdown even in unexpected state for safety
         }
-        
+
         if let Err(e) = self.transition_to(RuntimeState::ShuttingDown) {
             error!("Failed to transition to ShuttingDown state: {}", e);
         }
-        
+
         const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
         const TASK_JOIN_TIMEOUT: Duration = Duration::from_secs(10);
-        
-        info!("Phase 1/4: Waiting for in-flight requests (timeout: {}s)...", SHUTDOWN_TIMEOUT.as_secs());
+
+        info!(
+            "Phase 1/4: Waiting for in-flight requests (timeout: {}s)...",
+            SHUTDOWN_TIMEOUT.as_secs()
+        );
         if let Err(e) = self.wait_for_inflight_requests(SHUTDOWN_TIMEOUT).await {
             warn!("In-flight request wait timeout or error: {}", e);
         }
-        
+
         info!("Phase 2/4: Stopping scheduled tasks...");
         self.scheduled_task_manager.cancel_all();
 
@@ -478,7 +482,10 @@ impl NameServerRuntime {
             .route_info_manager_mut()
             .shutdown_unregister_service();
 
-        info!("Phase 4/4: Waiting for server task (timeout: {}s)...", TASK_JOIN_TIMEOUT.as_secs());
+        info!(
+            "Phase 4/4: Waiting for server task (timeout: {}s)...",
+            TASK_JOIN_TIMEOUT.as_secs()
+        );
         if let Err(e) = self.wait_for_server_task(TASK_JOIN_TIMEOUT).await {
             warn!("Task join timeout or error: {}", e);
         }
@@ -490,7 +497,7 @@ impl NameServerRuntime {
 
         info!("Graceful shutdown completed");
     }
-    
+
     /// Wait for all in-flight requests to complete
     ///
     /// This provides a grace period for ongoing requests to finish before shutdown.
@@ -507,14 +514,12 @@ impl NameServerRuntime {
             debug!("In-flight request grace period completed");
         })
         .await
-        .map_err(|_| {
-            RocketMQError::Timeout {
-                operation: "wait_for_inflight_requests",
-                timeout_ms: timeout.as_millis() as u64,
-            }
+        .map_err(|_| RocketMQError::Timeout {
+            operation: "wait_for_inflight_requests",
+            timeout_ms: timeout.as_millis() as u64,
         })
     }
-    
+
     /// Wait for server task to complete
     ///
     /// Attempts graceful join with timeout. If timeout is exceeded,
@@ -529,10 +534,16 @@ impl NameServerRuntime {
                 }
                 Ok(Err(e)) => {
                     error!("Server task panicked: {}", e);
-                    Err(RocketMQError::Internal(format!("Server task panicked: {}", e)))
+                    Err(RocketMQError::Internal(format!(
+                        "Server task panicked: {}",
+                        e
+                    )))
                 }
                 Err(_) => {
-                    warn!("Server task join timeout ({}s), task may still be running", timeout.as_secs());
+                    warn!(
+                        "Server task join timeout ({}s), task may still be running",
+                        timeout.as_secs()
+                    );
                     Err(RocketMQError::Timeout {
                         operation: "server_task_join",
                         timeout_ms: timeout.as_millis() as u64,
@@ -591,12 +602,12 @@ impl Drop for NameServerRuntime {
     fn drop(&mut self) {
         let current_state = self.current_state();
         debug!("NameServerRuntime dropped in state: {}", current_state);
-        
+
         // Warn if not properly shut down
         if current_state != RuntimeState::Stopped {
             warn!(
-                "NameServerRuntime dropped without proper shutdown (current state: {}). \
-                 This may indicate a panic or abnormal termination.",
+                "NameServerRuntime dropped without proper shutdown (current state: {}). This may \
+                 indicate a panic or abnormal termination.",
                 current_state
             );
         }
@@ -639,11 +650,17 @@ impl Builder {
         let name_server_config = self.name_server_config.unwrap_or_default();
         let tokio_client_config = TokioClientConfig::default();
         let server_config = self.server_config.unwrap_or_default();
-        
+
         info!("Building NameServer with configuration:");
         info!("  - Listen port: {}", server_config.listen_port);
-        info!("  - Scan interval: {}ms", name_server_config.scan_not_active_broker_interval);
-        info!("  - Use V2 RouteManager: {}", name_server_config.use_route_info_manager_v2);
+        info!(
+            "  - Scan interval: {}ms",
+            name_server_config.scan_not_active_broker_interval
+        );
+        info!(
+            "  - Use V2 RouteManager: {}",
+            name_server_config.use_route_info_manager_v2
+        );
 
         // Create remoting client
         let remoting_client = ArcMut::new(RocketmqDefaultClient::new(
@@ -706,7 +723,7 @@ pub(crate) struct NameServerRuntimeInner {
     name_server_config: NamesrvConfig,
     tokio_client_config: TokioClientConfig,
     server_config: ServerConfig,
-    
+
     // Mutable components (Option for delayed initialization)
     route_info_manager: Option<RouteInfoManagerWrapper>,
     kvconfig_manager: Option<KVConfigManager>,
