@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
 pub struct RpcRequestHeader {
     // the namespace name
     #[serde(rename = "namespace")]

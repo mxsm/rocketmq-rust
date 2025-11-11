@@ -1,5 +1,5 @@
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -18,7 +18,7 @@ use rocketmq_macros::RequestHeaderCodec;
  */
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodec)]
+#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct ExchangeHaInfoResponseHeader {
     pub master_ha_address: Option<CheetahString>,

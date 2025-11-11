@@ -14,13 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::CheetahString;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct GetMetaDataResponseHeader {
     pub group: Option<CheetahString>,

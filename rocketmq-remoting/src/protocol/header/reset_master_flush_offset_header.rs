@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodec)]
+#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct ResetMasterFlushOffsetHeader {
     pub master_flush_offset: Option<i64>,

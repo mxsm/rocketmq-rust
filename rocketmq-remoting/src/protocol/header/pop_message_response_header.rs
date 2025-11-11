@@ -17,11 +17,11 @@
 use std::fmt::Display;
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodec, Clone)]
+#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2, Clone)]
 pub struct PopMessageResponseHeader {
     #[serde(rename = "popTime")]
     #[required]

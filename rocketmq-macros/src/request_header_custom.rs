@@ -278,12 +278,287 @@ pub(super) fn request_header_codec_inner(
     TokenStream::from(expanded)
 }
 
+/// Field metadata extracted during macro processing
+struct FieldMetadata {
+    ident: syn::Ident,
+    ty: syn::Type,
+    inner_type: Option<syn::Type>,
+    is_required: bool,
+    camel_key: String,
+    type_category: TypeCategory,
+}
+
+/// Categorize field types for optimized code generation
+#[derive(PartialEq, Eq)]
+enum TypeCategory {
+    CheetahString,
+    String,
+    Primitive,
+    StructFlattened,
+}
+
+impl FieldMetadata {
+    fn from_field(field: &syn::Field) -> Self {
+        let ident = field.ident.as_ref().unwrap().clone();
+        let ty = field.ty.clone();
+        
+        // Parse attributes
+        let mut is_required = false;
+        let mut is_flatten = false;
+        
+        for attr in &field.attrs {
+            if let Some(id) = attr.path().get_ident() {
+                if id == "required" {
+                    is_required = true;
+                }
+                if id == "serde" {
+                    if let syn::Meta::List(meta_list) = &attr.meta {
+                        if meta_list.tokens.to_string().contains("flatten") {
+                            is_flatten = true;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Type analysis
+        let inner_type = is_option_type(&ty).map(|t| (*t).clone());
+        let is_struct = is_struct_type(&ty);
+        
+        // Determine type category for optimized handling
+        // This classification is used throughout code generation to avoid repeated type checking
+        let base_type = inner_type.as_ref().unwrap_or(&ty);
+        let type_name = get_type_name(base_type);
+        
+        let type_category = if is_struct && is_flatten {
+            TypeCategory::StructFlattened
+        } else if type_name == "CheetahString" {
+            TypeCategory::CheetahString
+        } else if type_name == "String" {
+            TypeCategory::String
+        } else {
+            TypeCategory::Primitive
+        };
+        
+        let camel_key = snake_to_camel_case(&ident.to_string());
+        
+        Self {
+            ident,
+            ty,
+            inner_type,
+            is_required,
+            camel_key,
+            type_category,
+        }
+    }
+    
+    /// Generate constant field name declaration
+    fn gen_const_decl(&self) -> TokenStream2 {
+        let const_ident = format_ident!("{}", self.ident.to_string().to_ascii_uppercase());
+        let key_lit = syn::LitStr::new(&self.camel_key, Span::call_site());
+        quote! {
+            const #const_ident: &'static str = #key_lit;
+        }
+    }
+    
+    /// Generate serialization code for to_map()
+    fn gen_to_map(&self) -> TokenStream2 {
+        let field_ident = &self.ident;
+        let const_ident = format_ident!("{}", self.ident.to_string().to_ascii_uppercase());
+        
+        // Handle struct flattening
+        if self.type_category == TypeCategory::StructFlattened {
+            return if self.inner_type.is_some() {
+                quote! {
+                    if let Some(ref value) = self.#field_ident {
+                        if let Some(sub) = value.to_map() {
+                            map.extend(sub);
+                        }
+                    }
+                }
+            } else {
+                quote! {
+                    if let Some(sub) = self.#field_ident.to_map() {
+                        map.extend(sub);
+                    }
+                }
+            };
+        }
+        
+        // Optimized handling for different type categories
+        match (&self.type_category, self.inner_type.is_some()) {
+            (TypeCategory::CheetahString, true) => quote! {
+                if let Some(ref value) = self.#field_ident {
+                    map.insert(
+                        cheetah_string::CheetahString::from_static_str(Self::#const_ident),
+                        value.clone()
+                    );
+                }
+            },
+            (TypeCategory::CheetahString, false) => quote! {
+                map.insert(
+                    cheetah_string::CheetahString::from_static_str(Self::#const_ident),
+                    self.#field_ident.clone()
+                );
+            },
+            (TypeCategory::String, true) => quote! {
+                if let Some(ref value) = self.#field_ident {
+                    map.insert(
+                        cheetah_string::CheetahString::from_static_str(Self::#const_ident),
+                        cheetah_string::CheetahString::from_string(value.clone())
+                    );
+                }
+            },
+            (TypeCategory::String, false) => quote! {
+                map.insert(
+                    cheetah_string::CheetahString::from_static_str(Self::#const_ident),
+                    cheetah_string::CheetahString::from_string(self.#field_ident.clone())
+                );
+            },
+            (TypeCategory::Primitive, true) => quote! {
+                if let Some(ref value) = self.#field_ident {
+                    map.insert(
+                        cheetah_string::CheetahString::from_static_str(Self::#const_ident),
+                        cheetah_string::CheetahString::from_string(value.to_string())
+                    );
+                }
+            },
+            (TypeCategory::Primitive, false) => quote! {
+                map.insert(
+                    cheetah_string::CheetahString::from_static_str(Self::#const_ident),
+                    cheetah_string::CheetahString::from_string(self.#field_ident.to_string())
+                );
+            },
+            _ => quote! {},
+        }
+    }
+    
+    /// Generate local variable declaration for from_map()
+    fn gen_local_decl(&self) -> Option<TokenStream2> {
+        if self.type_category == TypeCategory::StructFlattened {
+            return None;
+        }
+        
+        let local_ident = format_ident!("__{}", self.ident);
+        Some(quote! {
+            let mut #local_ident: Option<cheetah_string::CheetahString> = None;
+        })
+    }
+    
+    /// Generate match arm for key extraction
+    fn gen_match_arm(&self) -> Option<TokenStream2> {
+        if self.type_category == TypeCategory::StructFlattened {
+            return None;
+        }
+        
+        let key_lit = syn::LitStr::new(&self.camel_key, Span::call_site());
+        let local_ident = format_ident!("__{}", self.ident);
+        
+        Some(quote! {
+            #key_lit => {
+                #local_ident = Some(v.clone());
+            }
+        })
+    }
+    
+    /// Generate struct field construction code
+    fn gen_field_construct(&self) -> TokenStream2 {
+        let field_ident = &self.ident;
+        let missing_msg = format!("Missing {} field", self.camel_key);
+        
+        // Handle flattened structs via recursive FromMap call
+        if self.type_category == TypeCategory::StructFlattened {
+            return if let Some(inner_ty) = &self.inner_type {
+                quote! {
+                    #field_ident: Some(<#inner_ty as crate::protocol::command_custom_header::FromMap>::from(map)?),
+                }
+            } else {
+                let ty = &self.ty;
+                quote! {
+                    #field_ident: <#ty as crate::protocol::command_custom_header::FromMap>::from(map)?,
+                }
+            };
+        }
+        
+        let local_ident = format_ident!("__{}", self.ident);
+        
+        // Optimized field construction based on type and optionality
+        match (&self.type_category, self.inner_type.is_some(), self.is_required) {
+            // StructFlattened should never reach here (handled above)
+            (TypeCategory::StructFlattened, _, _) => quote! {},
+            // Option<CheetahString>
+            (TypeCategory::CheetahString, true, _) => quote! {
+                #field_ident: #local_ident,
+            },
+            // CheetahString (required)
+            (TypeCategory::CheetahString, false, true) => quote! {
+                #field_ident: #local_ident.ok_or_else(|| 
+                    rocketmq_error::RocketmqError::DeserializeHeaderError(#missing_msg.to_string())
+                )?,
+            },
+            // CheetahString (optional with default)
+            (TypeCategory::CheetahString, false, false) => quote! {
+                #field_ident: #local_ident.unwrap_or_default(),
+            },
+            // Option<String>
+            (TypeCategory::String, true, _) => quote! {
+                #field_ident: #local_ident.map(|s| s.to_string()),
+            },
+            // String (required)
+            (TypeCategory::String, false, true) => quote! {
+                #field_ident: #local_ident.ok_or_else(|| 
+                    rocketmq_error::RocketmqError::DeserializeHeaderError(#missing_msg.to_string())
+                )?.to_string(),
+            },
+            // String (optional with default)
+            (TypeCategory::String, false, false) => quote! {
+                #field_ident: #local_ident.map(|s| s.to_string()).unwrap_or_default(),
+            },
+            // Option<Primitive>
+            (TypeCategory::Primitive, true, _) => {
+                let inner_ty = self.inner_type.as_ref().unwrap();
+                let parse_error = format!("Parse {} field error", self.camel_key);
+                quote! {
+                    #field_ident: match #local_ident {
+                        Some(s) => s.as_str().parse::<#inner_ty>()
+                            .map(Some)
+                            .map_err(|_| rocketmq_error::RocketmqError::DeserializeHeaderError(#parse_error.to_string()))?,
+                        None => None,
+                    },
+                }
+            },
+            // Primitive (required)
+            (TypeCategory::Primitive, false, true) => {
+                let ty = &self.ty;
+                let parse_error = format!("Parse {} field error", self.camel_key);
+                quote! {
+                    #field_ident: #local_ident
+                        .ok_or_else(|| rocketmq_error::RocketmqError::DeserializeHeaderError(#missing_msg.to_string()))?
+                        .as_str()
+                        .parse::<#ty>()
+                        .map_err(|_| rocketmq_error::RocketmqError::DeserializeHeaderError(#parse_error.to_string()))?,
+                }
+            },
+            // Primitive (optional with default)
+            (TypeCategory::Primitive, false, false) => {
+                let ty = &self.ty;
+                quote! {
+                    #field_ident: #local_ident
+                        .and_then(|s| s.as_str().parse::<#ty>().ok())
+                        .unwrap_or_default(),
+                }
+            },
+        }
+    }
+}
+
 pub(super) fn request_header_codec_inner_v2(
     input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = &input.ident;
 
+    // Extract named fields
     let fields = match input.data {
         Data::Struct(value) => match value.fields {
             Fields::Named(f) => f.named,
@@ -292,294 +567,70 @@ pub(super) fn request_header_codec_inner_v2(
         _ => return quote! {}.into(),
     };
 
-    // Collect metadata for each field
-    struct FieldMeta {
-        ident: syn::Ident,
-        ty: syn::Type,
-        is_option: Option<syn::Type>, // inner type if Option<T>
-        is_struct_type: bool,
-        has_flatten: bool,
-        required: bool,
-        field_name_str: String, // camel case used as key string
-    }
-
-    let mut metas: Vec<FieldMeta> = Vec::new();
-    for field in fields.iter() {
-        let field_name = field.ident.as_ref().unwrap().clone();
-        let ty = field.ty.clone();
-
-        let mut required = false;
-        let mut has_flatten = false;
-        for attr in &field.attrs {
-            if let Some(id) = attr.path().get_ident() {
-                if id == "required" {
-                    required = true;
-                }
-                if id == "serde" {
-                    if let syn::Meta::List(meta_list) = &attr.meta {
-                        let meta_tokens = meta_list.tokens.to_string();
-                        if meta_tokens.contains("flatten") {
-                            has_flatten = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        let is_option_type = crate::is_option_type(&ty);
-        let inner_opt = is_option_type.map(|t| (*t).clone());
-        let is_struct_type_flag = crate::is_struct_type(&ty);
-
-        let field_name_str = crate::snake_to_camel_case(&format!("{}", field_name));
-
-        metas.push(FieldMeta {
-            ident: field_name,
-            ty,
-            is_option: inner_opt,
-            is_struct_type: is_struct_type_flag,
-            has_flatten,
-            required,
-            field_name_str,
-        });
-    }
-
-    // Build static constants (FIELD_X) for the struct as before, using format_ident!
-    let static_fields_tokens: Vec<_> = metas
+    // Build metadata for all fields using the optimized FieldMetadata struct
+    let field_metas: Vec<FieldMetadata> = fields
         .iter()
-        .map(|m| {
-            let const_ident = format_ident!("{}", m.ident.to_string().to_ascii_uppercase());
-            let key_lit = syn::LitStr::new(&m.field_name_str, Span::call_site());
-            quote! {
-                const #const_ident: &'static str = #key_lit;
-            }
-        })
+        .map(FieldMetadata::from_field)
         .collect();
 
-    // Build to_map tokens: pre-allocate capacity and insert shallow clones
-    let to_map_tokens: Vec<_> = metas.iter().map(|m| {
-        let const_ident = format_ident!("{}", m.ident.to_string().to_ascii_uppercase());
-        let field_ident = &m.ident;
-        if m.is_option.is_some() {
-            if let Some(inner_ty) = &m.is_option {
-                let type_name = crate::get_type_name(inner_ty);
-                if type_name == "CheetahString" {
-                    quote! {
-                        if let Some(ref value) = self.#field_ident {
-                            map.insert(
-                                cheetah_string::CheetahString::from_static_str(Self::#const_ident),
-                                value.clone()
-                            );
-                        }
-                    }
-                } else if type_name == "String" {
-                    quote! {
-                        if let Some(ref value) = self.#field_ident {
-                            map.insert(
-                                cheetah_string::CheetahString::from_static_str(Self::#const_ident),
-                                cheetah_string::CheetahString::from_string(value.clone())
-                            );
-                        }
-                    }
-                } else if m.is_struct_type && m.has_flatten {
-                    quote! {
-                        if let Some(ref value) = self.#field_ident {
-                            if let Some(sub) = value.to_map() {
-                                map.extend(sub);
-                            }
-                        }
-                    }
-                } else {
-                    quote! {
-                        if let Some(ref value) = self.#field_ident {
-                            map.insert(
-                                cheetah_string::CheetahString::from_static_str(Self::#const_ident),
-                                cheetah_string::CheetahString::from_string(value.to_string())
-                            );
-                        }
-                    }
-                }
-            } else {
-                quote! {}
-            }
-        } else {
-            let type_name = crate::get_type_name(&m.ty);
-            if type_name == "CheetahString" {
-                quote! {
-                    map.insert(
-                        cheetah_string::CheetahString::from_static_str(Self::#const_ident),
-                        self.#field_ident.clone()
-                    );
-                }
-            } else if type_name == "String" {
-                quote! {
-                    map.insert(
-                        cheetah_string::CheetahString::from_static_str(Self::#const_ident),
-                        cheetah_string::CheetahString::from_string(self.#field_ident.clone())
-                    );
-                }
-            } else if m.is_struct_type && m.has_flatten {
-                quote! {
-                    if let Some(sub) = self.#field_ident.to_map() {
-                        map.extend(sub);
-                    }
-                }
-            } else {
-                quote! {
-                    map.insert(
-                        cheetah_string::CheetahString::from_static_str(Self::#const_ident),
-                        cheetah_string::CheetahString::from_string(self.#field_ident.to_string())
-                    );
-                }
-            }
-        }
-    }).collect();
+    // Generate constant declarations
+    let const_decls: Vec<_> = field_metas.iter().map(|m| m.gen_const_decl()).collect();
 
-    // Build optimized FromMap: single pass over map entries
-    // 1) declare local Option vars for each field; create explicit idents for locals
-    let local_decls: Vec<_> = metas
+    // Generate to_map() implementation with optimized type handling
+    let to_map_stmts: Vec<_> = field_metas.iter().map(|m| m.gen_to_map()).collect();
+    let fields_count = field_metas.len();
+
+    // Generate from_map() implementation with single-pass iteration
+    let local_decls: Vec<_> = field_metas
         .iter()
-        .map(|m| {
-            let local_ident = format_ident!("__{}", m.ident);
-            quote! {
-                let mut #local_ident: Option<cheetah_string::CheetahString> = None;
-            }
-        })
+        .filter_map(|m| m.gen_local_decl())
+        .collect();
+    
+    let match_arms: Vec<_> = field_metas
+        .iter()
+        .filter_map(|m| m.gen_match_arm())
+        .collect();
+    
+    let construct_fields: Vec<_> = field_metas
+        .iter()
+        .map(|m| m.gen_field_construct())
         .collect();
 
-    // Build match arms: when key equals static FIELD, assign local = Some(v.clone())
-    let match_arms: Vec<_> = metas
-        .iter()
-        .map(|m| {
-            // skip flatten struct capturing
-            if m.is_struct_type && m.has_flatten {
-                quote! {}
-            } else {
-                let key_lit = syn::LitStr::new(&m.field_name_str, Span::call_site());
-                let local_ident = format_ident!("__{}", m.ident);
-                quote! {
-                    #key_lit => {
-                        #local_ident = Some(v.clone());
-                    }
-                }
-            }
-        })
-        .collect();
-
-    // After iteration: construct struct fields by parsing or unwraping as required
-    let construct_fields: Vec<_> = metas.iter().map(|m| {
-        let ident = &m.ident;
-        //let const_ident = format_ident!("{}", m.ident.to_string().to_ascii_uppercase());
-        let field_label = &m.field_name_str;
-
-        if m.is_struct_type && m.has_flatten {
-            if let Some(inner_ty) = &m.is_option {
-                let ty_tokens = inner_ty;
-                quote! {
-                    #ident: Some(<#ty_tokens as crate::protocol::command_custom_header::FromMap>::from(map)?),
-                }
-            } else {
-                let ty_tokens = &m.ty;
-                quote! {
-                    #ident: <#ty_tokens as crate::protocol::command_custom_header::FromMap>::from(map)?,
-                }
-            }
-        } else {
-            let local_ident = format_ident!("__{}", m.ident);
-            let type_name = if let Some(inner) = &m.is_option {
-                crate::get_type_name(inner)
-            } else {
-                crate::get_type_name(&m.ty)
-            };
-
-            let missing_msg = format!("Missing {} field", field_label);
-
-            if m.is_option.is_some() {
-                if type_name == "CheetahString" {
-                    quote! {
-                        #ident: #local_ident,
-                    }
-                } else if type_name == "String" {
-                    quote! {
-                        #ident: #local_ident.map(|s| s.to_string()),
-                    }
-                } else {
-                    // Option<primitive>
-                    // parse_ty: for Option<T>, we used inner type string earlier; here we reconstruct syn::Type
-                    let parse_ty: syn::Type = syn::parse_str(&crate::get_type_name(m.is_option.as_ref().unwrap())).unwrap_or_else(|_| syn::parse_str("String").unwrap());
-                    quote! {
-                        #ident: #local_ident.and_then(|s| s.as_str().parse::<#parse_ty>().ok()),
-                    }
-                }
-            } else if type_name == "CheetahString" {
-                    if m.required {
-                        quote! {
-                            #ident: #local_ident.ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
-                                format!(#missing_msg)
-                            ))?,
-                        }
-                    } else {
-                        quote! {
-                            #ident: #local_ident.unwrap_or_default(),
-                        }
-                    }
-                } else if type_name == "String" {
-                    if m.required {
-                        quote! {
-                            #ident: #local_ident.ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
-                                format!(#missing_msg)
-                            ))?.to_string(),
-                        }
-                    } else {
-                        quote! {
-                            #ident: #local_ident.map(|s| s.to_string()).unwrap_or_default(),
-                        }
-                    }
-                } else {
-                    let parse_ty = &m.ty;
-                    if m.required {
-                        quote! {
-                            #ident: #local_ident.ok_or(rocketmq_error::RocketmqError::DeserializeHeaderError(
-                                format!(#missing_msg)
-                            ))?.as_str().parse::<#parse_ty>().map_err(|_| rocketmq_error::RocketmqError::DeserializeHeaderError(format!("Parse {} field error", #field_label)))?,
-                        }
-                    } else {
-                        quote! {
-                            #ident: #local_ident.and_then(|s| s.as_str().parse::<#parse_ty>().ok()).unwrap_or_default(),
-                        }
-                    }
-                }
-
-        }
-    }).collect();
-
-    let fields_count = metas.len();
+    // Generate final implementation
     let expanded = quote! {
         impl #struct_name {
-            #(#static_fields_tokens)*
+            #(#const_decls)*
         }
 
-        impl  rocketmq_remoting::protocol::command_custom_header::CommandCustomHeader for #struct_name {
+        impl crate::protocol::command_custom_header::CommandCustomHeader for #struct_name {
             fn to_map(&self) -> Option<std::collections::HashMap<cheetah_string::CheetahString, cheetah_string::CheetahString>> {
+                // Pre-allocate with exact capacity to avoid rehashing
                 let mut map = std::collections::HashMap::with_capacity(#fields_count);
-                #(#to_map_tokens)*
+                #(#to_map_stmts)*
                 Some(map)
             }
         }
 
-        impl  rocketmq_remoting::protocol::command_custom_header::FromMap for #struct_name {
+        impl crate::protocol::command_custom_header::FromMap for #struct_name {
             type Error = rocketmq_error::RocketmqError;
             type Target = Self;
 
             fn from(map: &std::collections::HashMap<cheetah_string::CheetahString, cheetah_string::CheetahString>) -> Result<Self::Target, Self::Error> {
+                // Declare local variables for capturing values
                 #(#local_decls)*
 
+                // Single-pass iteration over map entries
+                // This is O(m) instead of O(n * log m) for multiple lookups
                 for (k, v) in map.iter() {
                     match k.as_str() {
                         #(#match_arms)*
-                        _ => {}
+                        _ => {
+                            // Silently ignore unknown keys for forward compatibility
+                        }
                     }
                 }
 
+                // Construct struct with validation
                 Ok(#struct_name {
                     #(#construct_fields)*
                 })

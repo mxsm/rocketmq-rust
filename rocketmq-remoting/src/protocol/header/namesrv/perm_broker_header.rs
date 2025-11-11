@@ -16,11 +16,11 @@
  */
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct WipeWritePermOfBrokerRequestHeader {
     #[required]
@@ -35,7 +35,7 @@ impl WipeWritePermOfBrokerRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct WipeWritePermOfBrokerResponseHeader {
     pub wipe_topic_count: i32,
@@ -51,7 +51,7 @@ impl WipeWritePermOfBrokerResponseHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct AddWritePermOfBrokerRequestHeader {
     pub broker_name: CheetahString,
@@ -65,7 +65,7 @@ impl AddWritePermOfBrokerRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct AddWritePermOfBrokerResponseHeader {
     pub add_topic_count: i32,

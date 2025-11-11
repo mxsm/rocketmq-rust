@@ -15,14 +15,14 @@
  * limitations under the License.
  */
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
 /// Represents the request header for acknowledging a message.
-#[derive(Debug, Serialize, Deserialize, Clone, RequestHeaderCodec)]
+#[derive(Debug, Serialize, Deserialize, Clone, RequestHeaderCodecV2)]
 pub struct AckMessageRequestHeader {
     /// Consumer group name (required)
     #[serde(rename = "consumerGroup")]

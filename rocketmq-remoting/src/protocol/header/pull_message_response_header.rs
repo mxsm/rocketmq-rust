@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone, RequestHeaderCodec)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct PullMessageResponseHeader {
     #[required]

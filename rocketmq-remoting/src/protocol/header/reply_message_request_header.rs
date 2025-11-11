@@ -15,14 +15,14 @@
  * limitations under the License.
  */
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 
 /// Represents the header of a reply message request.
-#[derive(Serialize, Deserialize, Debug, Default, RequestHeaderCodec)]
+#[derive(Serialize, Deserialize, Debug, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplyMessageRequestHeader {
     /// Producer group associated with the message.

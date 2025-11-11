@@ -15,13 +15,13 @@
  * limitations under the License.
  */
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryConsumeTimeSpanRequestHeader {
     #[required]

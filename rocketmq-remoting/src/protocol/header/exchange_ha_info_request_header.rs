@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct ExchangeHAInfoRequestHeader {
     pub master_ha_address: Option<CheetahString>,

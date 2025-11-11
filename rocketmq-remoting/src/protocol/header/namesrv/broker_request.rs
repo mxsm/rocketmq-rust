@@ -17,11 +17,11 @@
 use std::fmt::Display;
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct UnRegisterBrokerRequestHeader {
     #[required]
@@ -48,7 +48,7 @@ impl Display for UnRegisterBrokerRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct BrokerHeartbeatRequestHeader {
     #[required]
@@ -67,7 +67,7 @@ pub struct BrokerHeartbeatRequestHeader {
     pub election_priority: Option<i32>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct GetBrokerMemberGroupRequestHeader {
     #[required]

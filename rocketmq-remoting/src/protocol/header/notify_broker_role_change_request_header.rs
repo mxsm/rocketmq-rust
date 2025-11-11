@@ -18,11 +18,11 @@
 use std::fmt::Display;
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Serialize, Deserialize, Debug, RequestHeaderCodec)]
+#[derive(Serialize, Deserialize, Debug, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct NotifyBrokerRoleChangedRequestHeader {
     #[required]

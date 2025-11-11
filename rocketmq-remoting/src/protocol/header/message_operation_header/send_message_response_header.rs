@@ -17,13 +17,13 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::FastCodesHeader;
 
-#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
+#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct SendMessageResponseHeader {
     msg_id: CheetahString,
