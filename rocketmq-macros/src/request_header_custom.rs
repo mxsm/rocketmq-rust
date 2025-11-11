@@ -301,11 +301,11 @@ impl FieldMetadata {
     fn from_field(field: &syn::Field) -> Self {
         let ident = field.ident.as_ref().unwrap().clone();
         let ty = field.ty.clone();
-        
+
         // Parse attributes
         let mut is_required = false;
         let mut is_flatten = false;
-        
+
         for attr in &field.attrs {
             if let Some(id) = attr.path().get_ident() {
                 if id == "required" {
@@ -320,16 +320,16 @@ impl FieldMetadata {
                 }
             }
         }
-        
+
         // Type analysis
         let inner_type = is_option_type(&ty).map(|t| (*t).clone());
         let is_struct = is_struct_type(&ty);
-        
+
         // Determine type category for optimized handling
         // This classification is used throughout code generation to avoid repeated type checking
         let base_type = inner_type.as_ref().unwrap_or(&ty);
         let type_name = get_type_name(base_type);
-        
+
         let type_category = if is_struct && is_flatten {
             TypeCategory::StructFlattened
         } else if type_name == "CheetahString" {
@@ -339,9 +339,9 @@ impl FieldMetadata {
         } else {
             TypeCategory::Primitive
         };
-        
+
         let camel_key = snake_to_camel_case(&ident.to_string());
-        
+
         Self {
             ident,
             ty,
@@ -351,7 +351,7 @@ impl FieldMetadata {
             type_category,
         }
     }
-    
+
     /// Generate constant field name declaration
     fn gen_const_decl(&self) -> TokenStream2 {
         let const_ident = format_ident!("{}", self.ident.to_string().to_ascii_uppercase());
@@ -360,12 +360,12 @@ impl FieldMetadata {
             const #const_ident: &'static str = #key_lit;
         }
     }
-    
+
     /// Generate serialization code for to_map()
     fn gen_to_map(&self) -> TokenStream2 {
         let field_ident = &self.ident;
         let const_ident = format_ident!("{}", self.ident.to_string().to_ascii_uppercase());
-        
+
         // Handle struct flattening
         if self.type_category == TypeCategory::StructFlattened {
             return if self.inner_type.is_some() {
@@ -384,7 +384,7 @@ impl FieldMetadata {
                 }
             };
         }
-        
+
         // Optimized handling for different type categories
         match (&self.type_category, self.inner_type.is_some()) {
             (TypeCategory::CheetahString, true) => quote! {
@@ -432,40 +432,40 @@ impl FieldMetadata {
             _ => quote! {},
         }
     }
-    
+
     /// Generate local variable declaration for from_map()
     fn gen_local_decl(&self) -> Option<TokenStream2> {
         if self.type_category == TypeCategory::StructFlattened {
             return None;
         }
-        
+
         let local_ident = format_ident!("__{}", self.ident);
         Some(quote! {
             let mut #local_ident: Option<cheetah_string::CheetahString> = None;
         })
     }
-    
+
     /// Generate match arm for key extraction
     fn gen_match_arm(&self) -> Option<TokenStream2> {
         if self.type_category == TypeCategory::StructFlattened {
             return None;
         }
-        
+
         let key_lit = syn::LitStr::new(&self.camel_key, Span::call_site());
         let local_ident = format_ident!("__{}", self.ident);
-        
+
         Some(quote! {
             #key_lit => {
                 #local_ident = Some(v.clone());
             }
         })
     }
-    
+
     /// Generate struct field construction code
     fn gen_field_construct(&self) -> TokenStream2 {
         let field_ident = &self.ident;
         let missing_msg = format!("Missing {} field", self.camel_key);
-        
+
         // Handle flattened structs via recursive FromMap call
         if self.type_category == TypeCategory::StructFlattened {
             return if let Some(inner_ty) = &self.inner_type {
@@ -479,11 +479,15 @@ impl FieldMetadata {
                 }
             };
         }
-        
+
         let local_ident = format_ident!("__{}", self.ident);
-        
+
         // Optimized field construction based on type and optionality
-        match (&self.type_category, self.inner_type.is_some(), self.is_required) {
+        match (
+            &self.type_category,
+            self.inner_type.is_some(),
+            self.is_required,
+        ) {
             // StructFlattened should never reach here (handled above)
             (TypeCategory::StructFlattened, _, _) => quote! {},
             // Option<CheetahString>
@@ -492,7 +496,7 @@ impl FieldMetadata {
             },
             // CheetahString (required)
             (TypeCategory::CheetahString, false, true) => quote! {
-                #field_ident: #local_ident.ok_or_else(|| 
+                #field_ident: #local_ident.ok_or_else(||
                     rocketmq_error::RocketmqError::DeserializeHeaderError(#missing_msg.to_string())
                 )?,
             },
@@ -506,7 +510,7 @@ impl FieldMetadata {
             },
             // String (required)
             (TypeCategory::String, false, true) => quote! {
-                #field_ident: #local_ident.ok_or_else(|| 
+                #field_ident: #local_ident.ok_or_else(||
                     rocketmq_error::RocketmqError::DeserializeHeaderError(#missing_msg.to_string())
                 )?.to_string(),
             },
@@ -526,7 +530,7 @@ impl FieldMetadata {
                         None => None,
                     },
                 }
-            },
+            }
             // Primitive (required)
             (TypeCategory::Primitive, false, true) => {
                 let ty = &self.ty;
@@ -538,7 +542,7 @@ impl FieldMetadata {
                         .parse::<#ty>()
                         .map_err(|_| rocketmq_error::RocketmqError::DeserializeHeaderError(#parse_error.to_string()))?,
                 }
-            },
+            }
             // Primitive (optional with default)
             (TypeCategory::Primitive, false, false) => {
                 let ty = &self.ty;
@@ -547,7 +551,7 @@ impl FieldMetadata {
                         .and_then(|s| s.as_str().parse::<#ty>().ok())
                         .unwrap_or_default(),
                 }
-            },
+            }
         }
     }
 }
@@ -568,10 +572,7 @@ pub(super) fn request_header_codec_inner_v2(
     };
 
     // Build metadata for all fields using the optimized FieldMetadata struct
-    let field_metas: Vec<FieldMetadata> = fields
-        .iter()
-        .map(FieldMetadata::from_field)
-        .collect();
+    let field_metas: Vec<FieldMetadata> = fields.iter().map(FieldMetadata::from_field).collect();
 
     // Generate constant declarations
     let const_decls: Vec<_> = field_metas.iter().map(|m| m.gen_const_decl()).collect();
@@ -585,12 +586,12 @@ pub(super) fn request_header_codec_inner_v2(
         .iter()
         .filter_map(|m| m.gen_local_decl())
         .collect();
-    
+
     let match_arms: Vec<_> = field_metas
         .iter()
         .filter_map(|m| m.gen_match_arm())
         .collect();
-    
+
     let construct_fields: Vec<_> = field_metas
         .iter()
         .map(|m| m.gen_field_construct())
