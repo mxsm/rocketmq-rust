@@ -16,11 +16,11 @@
  */
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 pub struct PutKVConfigRequestHeader {
     #[required]
     pub namespace: CheetahString,
@@ -53,7 +53,7 @@ impl PutKVConfigRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 pub struct GetKVConfigRequestHeader {
     #[required]
     pub namespace: CheetahString,
@@ -71,7 +71,7 @@ impl GetKVConfigRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 pub struct GetKVConfigResponseHeader {
     #[required]
     pub value: Option<CheetahString>,
@@ -83,7 +83,7 @@ impl GetKVConfigResponseHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 pub struct DeleteKVConfigRequestHeader {
     #[required]
     pub namespace: CheetahString,
@@ -101,7 +101,7 @@ impl DeleteKVConfigRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 pub struct GetKVListByNamespaceRequestHeader {
     #[required]
     pub namespace: CheetahString,

@@ -16,13 +16,13 @@
  */
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct DeleteTopicFromNamesrvRequestHeader {
     #[required]
@@ -42,7 +42,7 @@ impl DeleteTopicFromNamesrvRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterTopicRequestHeader {
     #[required]
@@ -60,7 +60,7 @@ impl RegisterTopicRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 pub struct GetTopicsByClusterRequestHeader {
     #[required]
     pub cluster: CheetahString,
@@ -74,7 +74,7 @@ impl GetTopicsByClusterRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct TopicRequestHeader {
     pub lo: Option<bool>,

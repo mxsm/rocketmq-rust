@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodec, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV2, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryConsumerOffsetResponseHeader {
     pub offset: Option<i64>,

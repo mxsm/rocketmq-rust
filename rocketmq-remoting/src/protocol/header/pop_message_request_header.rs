@@ -18,13 +18,13 @@ use std::fmt::Display;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::TimeUtils::get_current_millis;
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 
-#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodec)]
+#[derive(Clone, Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct PopMessageRequestHeader {
     #[required]

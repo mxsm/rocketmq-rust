@@ -16,12 +16,12 @@
  */
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
 /// Represents the header for a broker registration request.
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 pub struct RegisterBrokerRequestHeader {
     /// The name of the broker.
     #[serde(rename = "brokerName")]
@@ -110,7 +110,7 @@ impl RegisterBrokerRequestHeader {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodec)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterBrokerResponseHeader {
     pub ha_server_addr: Option<CheetahString>,

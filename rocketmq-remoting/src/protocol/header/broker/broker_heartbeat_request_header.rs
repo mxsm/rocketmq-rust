@@ -16,11 +16,11 @@
  */
 
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodec)]
+#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
 pub struct BrokerHeartbeatRequestHeader {
     #[serde(rename = "clusterName")]
     #[required]

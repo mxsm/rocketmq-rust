@@ -15,13 +15,13 @@
  * limitations under the License.
  */
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 
-#[derive(Debug, Serialize, Deserialize, RequestHeaderCodec)]
+#[derive(Debug, Serialize, Deserialize, RequestHeaderCodecV2)]
 pub struct NotificationRequestHeader {
     #[serde(rename = "consumerGroup")]
     #[required]

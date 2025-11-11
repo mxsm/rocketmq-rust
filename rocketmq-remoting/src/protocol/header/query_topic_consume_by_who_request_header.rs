@@ -15,13 +15,13 @@
  * limitations under the License.
  */
 use cheetah_string::CheetahString;
-use rocketmq_macros::RequestHeaderCodec;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Serialize, Deserialize, Debug, RequestHeaderCodec)]
+#[derive(Serialize, Deserialize, Debug, RequestHeaderCodecV2)]
 pub struct QueryTopicConsumeByWhoRequestHeader {
     #[required]
     #[serde(rename = "topic")]
