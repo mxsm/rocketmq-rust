@@ -250,7 +250,7 @@ impl CommandCustomHeader for ConsumerSendMsgBackRequestHeader {
 }
 
 impl FromMap for ConsumerSendMsgBackRequestHeader {
-    type Error = rocketmq_error::RocketmqError;
+    type Error = rocketmq_error::RocketMQError;
 
     type Target = Self;
 
@@ -261,26 +261,38 @@ impl FromMap for ConsumerSendMsgBackRequestHeader {
             offset: map
                 .get(&CheetahString::from_static_str(Self::OFFSET))
                 .cloned()
-                .ok_or(Self::Error::RemotingCommandError(
-                    "Missing offset".to_string(),
-                ))?
+                .ok_or_else(|| {
+                    rocketmq_error::RocketMQError::Protocol(
+                        rocketmq_error::ProtocolError::header_missing("offset"),
+                    )
+                })?
                 .parse()
-                .map_err(|_| Self::Error::RemotingCommandError("Invalid offset".to_string()))?,
+                .map_err(|_| {
+                    rocketmq_error::RocketMQError::Protocol(
+                        rocketmq_error::ProtocolError::invalid_message("Invalid offset"),
+                    )
+                })?,
             group: map
                 .get(&CheetahString::from_static_str(Self::GROUP))
                 .cloned()
-                .ok_or(Self::Error::RemotingCommandError(
-                    "Missing group".to_string(),
-                ))?,
+                .ok_or_else(|| {
+                    rocketmq_error::RocketMQError::Protocol(
+                        rocketmq_error::ProtocolError::header_missing("group"),
+                    )
+                })?,
             delay_level: map
                 .get(&CheetahString::from_static_str(Self::DELAY_LEVEL))
                 .cloned()
-                .ok_or(Self::Error::RemotingCommandError(
-                    "Missing delay level".to_string(),
-                ))?
+                .ok_or_else(|| {
+                    rocketmq_error::RocketMQError::Protocol(
+                        rocketmq_error::ProtocolError::header_missing("delay_level"),
+                    )
+                })?
                 .parse()
                 .map_err(|_| {
-                    Self::Error::RemotingCommandError("Invalid delay level".to_string())
+                    rocketmq_error::RocketMQError::Protocol(
+                        rocketmq_error::ProtocolError::invalid_message("Invalid delay level"),
+                    )
                 })?,
             origin_msg_id: map
                 .get(&CheetahString::from_static_str(Self::ORIGIN_MSG_ID))

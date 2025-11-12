@@ -18,7 +18,6 @@ use std::any::Any;
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketmqError;
 
 use crate::rocketmq_serializable::RocketMQSerializable;
 
@@ -98,12 +97,12 @@ pub trait CommandCustomHeader: AsAny {
     /// # Returns
     ///
     /// * `Ok(CheetahString)` - If the field is found in the map, returns the associated value.
-    /// * `Err(RocketmqError::DeserializeHeaderError)` - If the field is not found in the map,
-    ///   returns an error indicating the field is required.
+    /// * `Err(RocketMQError::Serialization)` - If the field is not found in the map, returns an
+    ///   error indicating the field is required.
     ///
     /// # Errors
     ///
-    /// This function returns a `RocketmqError::DeserializeHeaderError` if the specified field is
+    /// This function returns a `SerializationError::DecodeFailed` if the specified field is
     /// not found in the map.
     #[inline(always)]
     fn get_and_check_not_none(
@@ -113,12 +112,12 @@ pub trait CommandCustomHeader: AsAny {
     ) -> rocketmq_error::RocketMQResult<CheetahString> {
         match map.get(field) {
             Some(value) => Ok(value.clone()),
-            None => Err(
-                rocketmq_error::RocketmqError::DeserializeHeaderError(format!(
-                    "The field {field} is required."
-                ))
-                .into(),
-            ),
+            None => Err(rocketmq_error::RocketMQError::Serialization(
+                rocketmq_error::SerializationError::DecodeFailed {
+                    format: "header",
+                    message: format!("The field {field} is required."),
+                },
+            )),
         }
     }
 }
@@ -140,7 +139,7 @@ impl<T: CommandCustomHeader> AsAny for T {
 }
 
 pub trait FromMap {
-    type Error: From<RocketmqError>;
+    type Error: From<rocketmq_error::RocketMQError>;
 
     type Target;
     /// Converts the implementing type from a map.

@@ -108,7 +108,7 @@ impl GetBrokerMemberGroupRequestHeader {
 }
 
 impl FromMap for GetBrokerMemberGroupRequestHeader {
-    type Error = rocketmq_error::RocketmqError;
+    type Error = rocketmq_error::RocketMQError;
     type Target = Self;
 
     fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {

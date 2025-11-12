@@ -263,7 +263,7 @@ pub(super) fn request_header_codec_inner(
 
         impl crate::protocol::command_custom_header::FromMap for #struct_name {
 
-            type Error = rocketmq_error::RocketmqError;
+            type Error = rocketmq_error::RocketMQError;
 
             type Target = Self;
 
@@ -613,7 +613,7 @@ pub(super) fn request_header_codec_inner_v2(
         }
 
         impl crate::protocol::command_custom_header::FromMap for #struct_name {
-            type Error = rocketmq_error::RocketmqError;
+            type Error = rocketmq_error::RocketMQError;
             type Target = Self;
 
             fn from(map: &std::collections::HashMap<cheetah_string::CheetahString, cheetah_string::CheetahString>) -> Result<Self::Target, Self::Error> {
