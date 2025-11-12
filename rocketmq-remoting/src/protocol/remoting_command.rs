@@ -32,8 +32,6 @@ use lazy_static::lazy_static;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::EnvUtils::EnvUtils;
-// Temporarily import legacy error constructors for backward compatibility
-use rocketmq_error::RocketmqError;
 use rocketmq_rust::ArcMut;
 use serde::Deserialize;
 use serde::Serialize;
@@ -567,10 +565,12 @@ impl RemotingCommand {
 
         // Validate total_size to prevent overflow attacks (check max first)
         if total_size > 16 * 1024 * 1024 {
-            return Err(RocketmqError::RemotingCommandDecoderError(format!(
-                "Frame size {total_size} exceeds maximum allowed (16MB)"
-            ))
-            .into());
+            return Err(rocketmq_error::RocketMQError::Serialization(
+                rocketmq_error::SerializationError::DecodeFailed {
+                    format: "remoting_command",
+                    message: format!("Frame size {total_size} exceeds maximum allowed (16MB)"),
+                },
+            ));
         }
 
         // Wait for complete frame
@@ -581,10 +581,14 @@ impl RemotingCommand {
 
         // Now validate minimum total_size (we have the complete frame)
         if total_size < MIN_PAYLOAD_SIZE {
-            return Err(RocketmqError::RemotingCommandDecoderError(format!(
-                "Invalid total_size {total_size}, minimum required is {MIN_PAYLOAD_SIZE}"
-            ))
-            .into());
+            return Err(rocketmq_error::RocketMQError::Serialization(
+                rocketmq_error::SerializationError::DecodeFailed {
+                    format: "remoting_command",
+                    message: format!(
+                        "Invalid total_size {total_size}, minimum required is {MIN_PAYLOAD_SIZE}"
+                    ),
+                },
+            ));
         }
 
         // Extract complete frame (zero-copy split)
@@ -593,10 +597,12 @@ impl RemotingCommand {
 
         // Ensure we have serialize_type field (should always pass after above checks)
         if cmd_data.remaining() < SERIALIZE_TYPE_SIZE {
-            return Err(RocketmqError::RemotingCommandDecoderError(
-                "Incomplete serialize_type field".to_string(),
-            )
-            .into());
+            return Err(rocketmq_error::RocketMQError::Serialization(
+                rocketmq_error::SerializationError::DecodeFailed {
+                    format: "remoting_command",
+                    message: "Incomplete serialize_type field".to_string(),
+                },
+            ));
         }
 
         // Parse header length and protocol type
@@ -605,10 +611,14 @@ impl RemotingCommand {
 
         // Validate header length
         if header_length > total_size - SERIALIZE_TYPE_SIZE {
-            return Err(RocketmqError::RemotingCommandDecoderError(format!(
-                "Invalid header length {header_length}, total size {total_size}"
-            ))
-            .into());
+            return Err(rocketmq_error::RocketMQError::Serialization(
+                rocketmq_error::SerializationError::DecodeFailed {
+                    format: "remoting_command",
+                    message: format!(
+                        "Invalid header length {header_length}, total size {total_size}"
+                    ),
+                },
+            ));
         }
 
         let protocol_type = parse_serialize_type(ori_header_length)?;
@@ -627,11 +637,15 @@ impl RemotingCommand {
                 if cmd_data.remaining() >= body_length {
                     cmd.set_body_mut_ref(cmd_data.split_to(body_length).freeze());
                 } else {
-                    return Err(RocketmqError::RemotingCommandDecoderError(format!(
-                        "Insufficient body data: expected {body_length}, available {}",
-                        cmd_data.remaining()
-                    ))
-                    .into());
+                    return Err(rocketmq_error::RocketMQError::Serialization(
+                        rocketmq_error::SerializationError::DecodeFailed {
+                            format: "remoting_command",
+                            message: format!(
+                                "Insufficient body data: expected {body_length}, available {}",
+                                cmd_data.remaining()
+                            ),
+                        },
+                    ));
                 }
             }
         }
@@ -651,9 +665,12 @@ impl RemotingCommand {
                 // Deserialize JSON header
                 let cmd =
                     SerdeJsonUtils::from_json_slice::<RemotingCommand>(src).map_err(|error| {
-                        RocketmqError::RemotingCommandDecoderError(format!(
-                            "JSON deserialization error: {error}"
-                        ))
+                        rocketmq_error::RocketMQError::Serialization(
+                            rocketmq_error::SerializationError::DecodeFailed {
+                                format: "json",
+                                message: format!("JSON deserialization error: {error}"),
+                            },
+                        )
                     })?;
 
                 Ok(Some(cmd.set_serialize_type(SerializeType::JSON)))
@@ -752,32 +769,38 @@ impl RemotingCommand {
 
     pub fn decode_command_custom_header<T>(&self) -> rocketmq_error::RocketMQResult<T>
     where
-        T: FromMap<Target = T, Error = RocketmqError>,
+        T: FromMap<Target = T, Error = rocketmq_error::RocketMQError>,
     {
         match self.ext_fields {
-            None => {
-                Err(RocketmqError::DeserializeHeaderError("ExtFields is None".to_string()).into())
-            }
-            Some(ref header) => T::from(header).map_err(|e| e.into()),
+            None => Err(rocketmq_error::RocketMQError::Serialization(
+                rocketmq_error::SerializationError::DecodeFailed {
+                    format: "header",
+                    message: "ExtFields is None".to_string(),
+                },
+            )),
+            Some(ref header) => T::from(header),
         }
     }
 
     pub fn decode_command_custom_header_fast<T>(&self) -> rocketmq_error::RocketMQResult<T>
     where
-        T: FromMap<Target = T, Error = RocketmqError>,
+        T: FromMap<Target = T, Error = rocketmq_error::RocketMQError>,
         T: Default + CommandCustomHeader,
     {
         match self.ext_fields {
-            None => {
-                Err(RocketmqError::DeserializeHeaderError("ExtFields is None".to_string()).into())
-            }
+            None => Err(rocketmq_error::RocketMQError::Serialization(
+                rocketmq_error::SerializationError::DecodeFailed {
+                    format: "header",
+                    message: "ExtFields is None".to_string(),
+                },
+            )),
             Some(ref header) => {
                 let mut target = T::default();
                 if target.support_fast_codec() {
                     target.decode_fast(header)?;
                     Ok(target)
                 } else {
-                    T::from(header).map_err(|e| e.into())
+                    T::from(header)
                 }
             }
         }
@@ -933,7 +956,13 @@ pub fn mark_protocol_type(source: i32, serialize_type: SerializeType) -> i32 {
 #[inline]
 pub fn parse_serialize_type(size: i32) -> rocketmq_error::RocketMQResult<SerializeType> {
     let code = (size >> 24) as u8;
-    SerializeType::value_of(code).ok_or_else(|| RocketmqError::NotSupportSerializeType(code).into())
+    SerializeType::value_of(code).ok_or({
+        rocketmq_error::RocketMQError::Protocol(
+            rocketmq_error::ProtocolError::UnsupportedSerializationType {
+                serialize_type: code,
+            },
+        )
+    })
 }
 
 impl AsRef<RemotingCommand> for RemotingCommand {

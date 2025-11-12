@@ -19,8 +19,6 @@ use std::str::FromStr;
 
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
-use rocketmq_error::RocketmqError;
-use rocketmq_error::RocketmqError::DeserializeHeaderError;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -198,23 +196,58 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         self.d = self
             .get_and_check_not_none(fields, &KEY_D)?
             .parse()
-            .map_err(|_| DeserializeHeaderError("Parse field d error".to_string()))?; //defaultTopicQueueNums
+            .map_err(|_| {
+                rocketmq_error::RocketMQError::Serialization(
+                    rocketmq_error::SerializationError::DecodeFailed {
+                        format: "header",
+                        message: "Parse field d error".to_string(),
+                    },
+                )
+            })?; //defaultTopicQueueNums
         self.e = self
             .get_and_check_not_none(fields, &KEY_E)?
             .parse()
-            .map_err(|_| DeserializeHeaderError("Parse field e error".to_string()))?; //queueId
+            .map_err(|_| {
+                rocketmq_error::RocketMQError::Serialization(
+                    rocketmq_error::SerializationError::DecodeFailed {
+                        format: "header",
+                        message: "Parse field e error".to_string(),
+                    },
+                )
+            })?; //queueId
         self.f = self
             .get_and_check_not_none(fields, &KEY_F)?
             .parse()
-            .map_err(|_| DeserializeHeaderError("Parse field f error".to_string()))?; //sysFlag
+            .map_err(|_| {
+                rocketmq_error::RocketMQError::Serialization(
+                    rocketmq_error::SerializationError::DecodeFailed {
+                        format: "header",
+                        message: "Parse field f error".to_string(),
+                    },
+                )
+            })?; //sysFlag
         self.g = self
             .get_and_check_not_none(fields, &KEY_G)?
             .parse()
-            .map_err(|_| DeserializeHeaderError("Parse field g error".to_string()))?; //bornTimestamp
+            .map_err(|_| {
+                rocketmq_error::RocketMQError::Serialization(
+                    rocketmq_error::SerializationError::DecodeFailed {
+                        format: "header",
+                        message: "Parse field g error".to_string(),
+                    },
+                )
+            })?; //bornTimestamp
         self.h = self
             .get_and_check_not_none(fields, &KEY_H)?
             .parse()
-            .map_err(|_| DeserializeHeaderError("Parse field h error".to_string()))?; //flag
+            .map_err(|_| {
+                rocketmq_error::RocketMQError::Serialization(
+                    rocketmq_error::SerializationError::DecodeFailed {
+                        format: "header",
+                        message: "Parse field h error".to_string(),
+                    },
+                )
+            })?; //flag
 
         if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_I)) {
             self.i = Some(v.clone());
@@ -225,24 +258,36 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         }
 
         if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_K)) {
-            self.k = Some(
-                v.parse()
-                    .map_err(|_| DeserializeHeaderError("Parse field k error".to_string()))?,
-            );
+            self.k = Some(v.parse().map_err(|_| {
+                rocketmq_error::RocketMQError::Serialization(
+                    rocketmq_error::SerializationError::DecodeFailed {
+                        format: "header",
+                        message: "Parse field k error".to_string(),
+                    },
+                )
+            })?);
         }
 
         if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_L)) {
-            self.l = Some(
-                v.parse()
-                    .map_err(|_| DeserializeHeaderError("Parse field l error".to_string()))?,
-            );
+            self.l = Some(v.parse().map_err(|_| {
+                rocketmq_error::RocketMQError::Serialization(
+                    rocketmq_error::SerializationError::DecodeFailed {
+                        format: "header",
+                        message: "Parse field l error".to_string(),
+                    },
+                )
+            })?);
         }
 
         if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_M)) {
-            self.m = Some(
-                v.parse()
-                    .map_err(|_| DeserializeHeaderError("Parse field m error".to_string()))?,
-            );
+            self.m = Some(v.parse().map_err(|_| {
+                rocketmq_error::RocketMQError::Serialization(
+                    rocketmq_error::SerializationError::DecodeFailed {
+                        format: "header",
+                        message: "Parse field m error".to_string(),
+                    },
+                )
+            })?);
         }
 
         if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_N)) {
@@ -257,7 +302,7 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
 }
 
 impl FromMap for SendMessageRequestHeaderV2 {
-    type Error = rocketmq_error::RocketmqError;
+    type Error = rocketmq_error::RocketMQError;
 
     type Target = Self;
 
@@ -267,9 +312,14 @@ impl FromMap for SendMessageRequestHeaderV2 {
             map: &'a HashMap<CheetahString, CheetahString>,
             key: &CheetahString,
             field: &'static str,
-        ) -> Result<&'a CheetahString, rocketmq_error::RocketmqError> {
+        ) -> Result<&'a CheetahString, rocketmq_error::RocketMQError> {
             map.get(key).ok_or_else(|| {
-                RocketmqError::DeserializeHeaderError(format!("Missing field: {}", field))
+                rocketmq_error::RocketMQError::Serialization(
+                    rocketmq_error::SerializationError::DecodeFailed {
+                        format: "header",
+                        message: format!("Missing field: {}", field),
+                    },
+                )
             })
         }
 
@@ -278,12 +328,17 @@ impl FromMap for SendMessageRequestHeaderV2 {
             map: &HashMap<CheetahString, CheetahString>,
             key: &CheetahString,
             field: &'static str,
-        ) -> Result<T, RocketmqError> {
+        ) -> Result<T, rocketmq_error::RocketMQError> {
             get_required(map, key, field)?
                 .as_str()
                 .parse::<T>()
                 .map_err(|_| {
-                    RocketmqError::DeserializeHeaderError(format!("Parse {} field error", field))
+                    rocketmq_error::RocketMQError::Serialization(
+                        rocketmq_error::SerializationError::DecodeFailed {
+                            format: "header",
+                            message: format!("Parse {} field error", field),
+                        },
+                    )
                 })
         }
 

@@ -94,7 +94,7 @@ mod query_message_request_header_tests {
         map.insert("key".into(), "test_key".into());
         map.insert("maxNum".into(), "invalid".into());
 
-        let header: Result<QueryMessageRequestHeader, rocketmq_error::RocketmqError> =
+        let header: Result<QueryMessageRequestHeader, rocketmq_error::RocketMQError> =
             <QueryMessageRequestHeader as FromMap>::from(&map);
 
         assert!(header.is_err());

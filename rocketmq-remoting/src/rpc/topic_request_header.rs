@@ -50,7 +50,7 @@ impl TopicRequestHeader {
 }
 
 impl FromMap for TopicRequestHeader {
-    type Error = rocketmq_error::RocketmqError;
+    type Error = rocketmq_error::RocketMQError;
 
     type Target = Self;
 

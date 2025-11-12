@@ -85,7 +85,7 @@ impl CommandCustomHeader for CheckTransactionStateRequestHeader {
 }
 
 impl FromMap for CheckTransactionStateRequestHeader {
-    type Error = rocketmq_error::RocketmqError;
+    type Error = rocketmq_error::RocketMQError;
 
     type Target = Self;
 

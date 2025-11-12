@@ -81,7 +81,7 @@ impl CommandCustomHeader for UpdateConsumerOffsetRequestHeader {
 }
 
 impl FromMap for UpdateConsumerOffsetRequestHeader {
-    type Error = rocketmq_error::RocketmqError;
+    type Error = rocketmq_error::RocketMQError;
 
     type Target = Self;
 
