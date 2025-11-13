@@ -17,6 +17,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::TokenTree;
 use quote::format_ident;
 use quote::quote;
 use syn::parse_macro_input;
@@ -24,6 +25,7 @@ use syn::Data;
 use syn::DeriveInput;
 use syn::Fields;
 use syn::Ident;
+use syn::Meta;
 
 use crate::get_type_name;
 use crate::has_serde_flatten_attribute;
@@ -313,7 +315,7 @@ impl FieldMetadata {
                 }
                 if id == "serde" {
                     if let Meta::List(meta_list) = &attr.meta {
-                        for token in meta_list.tokens {
+                        for token in meta_list.tokens.clone().into_iter() {
                                 if let TokenTree::Ident(ident) = token {
                                         if ident.eq("flatten") {
                                                 is_flatten = true;
@@ -321,7 +323,7 @@ impl FieldMetadata {
                                         }
                                 }
                         }
-}
+                        }
                 }
             }
         }
