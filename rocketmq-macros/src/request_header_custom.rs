@@ -316,14 +316,14 @@ impl FieldMetadata {
                 if id == "serde" {
                     if let Meta::List(meta_list) = &attr.meta {
                         for token in meta_list.tokens.clone().into_iter() {
-                                if let TokenTree::Ident(ident) = token {
-                                        if ident.eq("flatten") {
-                                                is_flatten = true;
-                                                break;
-                                        }
+                            if let TokenTree::Ident(ident) = token {
+                                if ident.eq("flatten") {
+                                    is_flatten = true;
+                                    break;
                                 }
+                            }
                         }
-                        }
+                    }
                 }
             }
         }
