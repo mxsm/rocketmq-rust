@@ -15,8 +15,8 @@
  * limitations under the License.
  */
 mod allocate_mq_sub_command;
+mod delete_topic_sub_command;
 mod update_topic_sub_command;
-
 use std::sync::Arc;
 
 use clap::Subcommand;
