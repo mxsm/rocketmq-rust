@@ -122,7 +122,8 @@ impl RegisterBrokerBody {
         broker_version: RocketMqVersion,
     ) -> RegisterBrokerBody {
         if !compressed {
-            return SerdeJsonUtils::decode::<RegisterBrokerBody>(bytes.iter().as_slice()).unwrap();
+            return SerdeJsonUtils::from_json_bytes::<RegisterBrokerBody>(bytes.iter().as_slice())
+                .unwrap();
         }
         let mut decoder = DeflateDecoder::new(bytes.as_ref());
         let mut vec = Vec::new();

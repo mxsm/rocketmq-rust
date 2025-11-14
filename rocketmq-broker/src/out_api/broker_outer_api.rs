@@ -310,7 +310,8 @@ impl BrokerOuterAPI {
                             header.master_addr.clone().unwrap_or(CheetahString::empty());
                     }
                     if let Some(body) = response.body() {
-                        result.kv_table = SerdeJsonUtils::decode::<KVTable>(body.as_ref()).unwrap();
+                        result.kv_table =
+                            SerdeJsonUtils::from_json_bytes::<KVTable>(body.as_ref()).unwrap();
                     }
                     Some(result)
                 }

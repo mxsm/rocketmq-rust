@@ -501,7 +501,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                     }
 
                     let mut point: PopCheckPoint =
-                        SerdeJsonUtils::decode(message_ext.get_body().unwrap()).unwrap();
+                        SerdeJsonUtils::from_json_bytes(message_ext.get_body().unwrap()).unwrap();
                     if point.topic.is_empty() || point.cid.is_empty() {
                         continue;
                     }
@@ -525,7 +525,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                     }
                 } else if PopAckConstants::ACK_TAG == message_ext.get_tags().unwrap_or_default() {
                     let ack_msg: AckMsg =
-                        SerdeJsonUtils::decode(message_ext.get_body().unwrap()).unwrap();
+                        SerdeJsonUtils::from_json_bytes(message_ext.get_body().unwrap()).unwrap();
                     // PopMetricsManager::inc_pop_revive_ack_get_count(&ack_msg, self.queue_id);
                     let merge_key = CheetahString::from_string(format!(
                         "{}{}{}{}{}{}",
@@ -574,7 +574,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                         );
                     }
                     let b_ack_msg: BatchAckMsg =
-                        SerdeJsonUtils::decode(message_ext.get_body().unwrap()).unwrap();
+                        SerdeJsonUtils::from_json_bytes(message_ext.get_body().unwrap()).unwrap();
                     // PopMetricsManager::inc_pop_revive_ack_get_count(&b_ack_msg, self.queue_id);
                     let merge_key = CheetahString::from_string(format!(
                         "{}{}{}{}{}{}",

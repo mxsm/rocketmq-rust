@@ -18,13 +18,31 @@
 pub struct SerdeJsonUtils;
 
 impl SerdeJsonUtils {
+    /// Deserialize JSON from bytes into a Rust type.
+    /// Alias for `from_json_slice` for backward compatibility.
+    #[inline]
+    pub fn from_json_bytes<T>(bytes: &[u8]) -> rocketmq_error::RocketMQResult<T>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        Self::from_json_slice(bytes)
+    }
+
+    /// Deserialize JSON from bytes into a Rust type.
+    #[deprecated(
+        since = "0.7.0",
+        note = "Use `from_json_bytes` or `from_json_slice` instead"
+    )]
+    #[inline]
     pub fn decode<T>(bytes: &[u8]) -> rocketmq_error::RocketMQResult<T>
     where
         T: serde::de::DeserializeOwned,
     {
-        Ok(serde_json::from_slice::<T>(bytes)?)
+        Self::from_json_bytes(bytes)
     }
 
+    /// Deserialize JSON from a string into a Rust type.
+    #[inline]
     pub fn from_json_str<T>(json: &str) -> rocketmq_error::RocketMQResult<T>
     where
         T: serde::de::DeserializeOwned,
@@ -32,6 +50,8 @@ impl SerdeJsonUtils {
         Ok(serde_json::from_str(json)?)
     }
 
+    /// Deserialize JSON from a byte slice into a Rust type.
+    #[inline]
     pub fn from_json_slice<T>(json: &[u8]) -> rocketmq_error::RocketMQResult<T>
     where
         T: serde::de::DeserializeOwned,
@@ -39,6 +59,8 @@ impl SerdeJsonUtils {
         Ok(serde_json::from_slice(json)?)
     }
 
+    /// Serialize a Rust type into a JSON string (compact format).
+    #[inline]
     pub fn to_json<T>(value: &T) -> rocketmq_error::RocketMQResult<String>
     where
         T: serde::Serialize,
@@ -46,6 +68,8 @@ impl SerdeJsonUtils {
         Ok(serde_json::to_string(value)?)
     }
 
+    /// Serialize a Rust type into a JSON string (pretty-printed format).
+    #[inline]
     pub fn to_json_pretty<T>(value: &T) -> rocketmq_error::RocketMQResult<String>
     where
         T: serde::Serialize,
@@ -53,6 +77,8 @@ impl SerdeJsonUtils {
         Ok(serde_json::to_string_pretty(value)?)
     }
 
+    /// Serialize a Rust type into a JSON byte vector (compact format).
+    #[inline]
     pub fn to_json_vec<T>(value: &T) -> rocketmq_error::RocketMQResult<Vec<u8>>
     where
         T: serde::Serialize,
@@ -60,6 +86,8 @@ impl SerdeJsonUtils {
         Ok(serde_json::to_vec(value)?)
     }
 
+    /// Serialize a Rust type into a JSON byte vector (pretty-printed format).
+    #[inline]
     pub fn to_json_vec_pretty<T>(value: &T) -> rocketmq_error::RocketMQResult<Vec<u8>>
     where
         T: serde::Serialize,
