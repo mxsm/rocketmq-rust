@@ -3,6 +3,7 @@ use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::commands::command_util::CommandUtil;
@@ -30,20 +31,20 @@ pub struct DeleteTopicSubCommand {
     topic: String,
 }
 impl DeleteTopicSubCommand {
-    async fn delete_topic(admin_ext: DefaultMQAdminExt, cluster_name: String, topic: String) {
-        let master_broker_address_set = CommandUtil::fetch_master_addr_by_cluster_name(
-            &admin_ext.examine_broker_cluster_info().await.unwrap(),
-            &cluster_name,
-        )
-        .unwrap()
-        .into_iter()
-        .collect();
+    async fn delete_topic(
+        admin_ext: &mut DefaultMQAdminExt,
+        cluster_name: String,
+        topic: String,
+    ) -> RocketMQResult<()> {
+        let cluster_info = admin_ext.examine_broker_cluster_info().await?;
+        let master_broker_address_set =
+            CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, &cluster_name)?;
+        let master_broker_address_set = master_broker_address_set.into_iter().collect();
         admin_ext
             .delete_topic_in_broker(master_broker_address_set, topic.clone().into())
-            .await
-            .unwrap();
+            .await?;
         println!(
-            "delete topic {} from cluster {} success.%n",
+            "delete topic {} from cluster {} success",
             topic, cluster_name
         );
 
@@ -59,9 +60,9 @@ impl DeleteTopicSubCommand {
                 Some(cluster_name.into()),
                 topic.clone().into(),
             )
-            .await
-            .unwrap();
-        println!("delete topic {} from NameServer success.%n", topic);
+            .await?;
+        println!("delete topic {} from NameServer success", topic);
+        Ok(())
     }
 }
 impl CommandExecute for DeleteTopicSubCommand {
@@ -97,11 +98,12 @@ impl CommandExecute for DeleteTopicSubCommand {
                 ))
             })?;
             DeleteTopicSubCommand::delete_topic(
-                admin_ext,
+                &mut admin_ext,
                 cluster_name.to_string(),
                 topic.to_string(),
             )
-            .await;
+            .await?;
+            admin_ext.shutdown().await;
             return Ok(());
         }
 
