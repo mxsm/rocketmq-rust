@@ -177,7 +177,7 @@ where
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let heartbeat_data = SerdeJsonUtils::decode::<HeartbeatData>(
+        let heartbeat_data = SerdeJsonUtils::from_json_bytes::<HeartbeatData>(
             request.body().as_ref().map(|v| v.as_ref()).unwrap(),
         )
         .unwrap();

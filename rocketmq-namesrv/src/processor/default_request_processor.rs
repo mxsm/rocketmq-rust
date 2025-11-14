@@ -685,7 +685,7 @@ fn extract_register_topic_config_from_request(
         if body_inner.is_empty() {
             return TopicConfigAndMappingSerializeWrapper::default();
         }
-        return SerdeJsonUtils::decode::<TopicConfigAndMappingSerializeWrapper>(
+        return SerdeJsonUtils::from_json_bytes::<TopicConfigAndMappingSerializeWrapper>(
             body_inner.as_ref(),
         )
         .expect("decode TopicConfigAndMappingSerializeWrapper failed");

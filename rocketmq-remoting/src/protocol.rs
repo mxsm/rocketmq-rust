@@ -484,7 +484,7 @@ impl<T: Serialize> RemotingSerializable for T {
 impl<T: serde::de::DeserializeOwned> RemotingDeserializable for T {
     type Output = T;
     fn decode(bytes: &[u8]) -> rocketmq_error::RocketMQResult<Self::Output> {
-        SerdeJsonUtils::decode(bytes)
+        SerdeJsonUtils::from_json_bytes(bytes)
     }
 }
 
