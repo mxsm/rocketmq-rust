@@ -86,6 +86,9 @@ impl CommandExecute for DeleteTopicSubCommand {
         admin_ext
             .client_config_mut()
             .set_instance_name(get_current_millis().to_string().into());
+        if let Some(addr) = &self.common_args.namesrv_addr {
+            admin_ext.set_namesrv_addr(addr.trim());
+        }
         let topic = self.topic.trim();
 
         if let Some(cluster_name) = &self.cluster_name {
