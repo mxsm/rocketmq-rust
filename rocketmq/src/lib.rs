@@ -22,8 +22,6 @@
 mod arc_mut;
 mod blocking_queue;
 pub mod count_down_latch;
-mod netty_rust;
-pub use netty_rust::timer::Timer;
 pub mod rocketmq_tokio_lock;
 
 mod shutdown;
