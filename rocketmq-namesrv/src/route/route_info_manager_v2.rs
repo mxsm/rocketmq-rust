@@ -583,7 +583,7 @@ impl RouteInfoManagerV2 {
             );
         }
         info!(
-            "Register topic route: {}, {:?}",
+            "Register topic route. {}, {:?}",
             topic,
             self.topic_queue_table.get_topic_queues(&topic)
         )
