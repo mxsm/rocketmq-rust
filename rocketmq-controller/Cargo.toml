@@ -20,7 +20,7 @@ tokio-util = { workspace = true }
 raft = "0.7"
 raft-proto = "0.7"
 prost = "0.14"
-protobuf = "2.28"
+protobuf = "3.7"
 slog = { version = "2.7", features = ["max_level_trace", "release_max_level_info"] }
 
 # Serialization
