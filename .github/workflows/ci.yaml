@@ -11,15 +11,13 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: full
-  CI: true
 
+# ================================
+#           LINT JOB
+# ================================
 jobs:
-  # ------------------------------
-  #   Lint (fmt + clippy)
-  #   Runs once on Linux + stable
-  # ------------------------------
   lint:
+    name: Lint (fmt + clippy)
     runs-on: ubuntu-latest
 
     steps:
@@ -30,17 +28,18 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Format check
-        run: cargo fmt -- --check
+      - name: Check format
+        run: cargo fmt --all -- --check
 
-      - name: Clippy check
-        run: cargo clippy -- -D warnings
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
 
-  # ------------------------------
-  #   Build and Test Matrix
-  # ------------------------------
+  # ================================
+  #      BUILD & TEST MATRIX
+  # ================================
   build-test:
+    name: Build & Test
     needs: lint
     runs-on: ${{ matrix.os }}
 
@@ -58,10 +57,8 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
 
-      # ------------------------------
-      # Cache Cargo
-      # ------------------------------
-      - name: Cache Cargo registry + index + build
+      # Cargo 缓存
+      - name: Cache Cargo
         uses: actions/cache@v4
         with:
           path: |
@@ -72,11 +69,48 @@ jobs:
           restore-keys: |
             cargo-${{ runner.os }}-${{ matrix.rust }}-
 
-      # ------------------------------
-      # Build + Test
-      # ------------------------------
       - name: Build
         run: cargo build --all-features --verbose
 
       - name: Test
         run: cargo test --all-features --verbose
+
+
+  # ================================
+  #          CODE COVERAGE
+  # ================================
+  coverage:
+    name: Code Coverage (cargo-llvm-cov)
+    needs: build-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Cache Cargo
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-cov-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-cov-
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Run coverage
+        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          fail_ci_if_error: false
