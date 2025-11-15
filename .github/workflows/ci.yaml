@@ -30,7 +30,7 @@ jobs:
           components: rustfmt
 
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: cargo +stable fmt --all -- --check
 
   # Clippy check - fast fail
   clippy:
@@ -49,9 +49,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          shared-key: "clippy-stable"
 
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo +stable clippy --all-targets --all-features -- -D warnings
 
   # Build and test matrix
   build-test:
@@ -79,15 +80,16 @@ jobs:
         with:
           key: ${{ matrix.os }}-${{ matrix.rust }}
           cache-on-failure: true
+          shared-key: "build-${{ matrix.rust }}"
 
       - name: Build
-        run: cargo build --verbose --all-features
+        run: cargo +${{ matrix.rust }} build --verbose --all-features
 
       - name: Run tests
-        run: cargo test --verbose --all-features
+        run: cargo +${{ matrix.rust }} test --verbose --all-features
 
       - name: Run doc tests
-        run: cargo test --doc --verbose --all-features
+        run: cargo +${{ matrix.rust }} test --doc --verbose --all-features
 
   # Check MSRV (Minimum Supported Rust Version)
   msrv:
@@ -104,6 +106,8 @@ jobs:
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "msrv-1.85.0"
 
       - name: Check build
-        run: cargo check --all-features
+        run: cargo +1.85.0 check --all-features
