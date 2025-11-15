@@ -62,7 +62,7 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
 
-      # Cargo 缓存
+      # Cargo cache
       - name: Cache Cargo
         uses: actions/cache@v4
         with:
