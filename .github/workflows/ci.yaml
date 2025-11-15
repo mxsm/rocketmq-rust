@@ -28,6 +28,11 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install dependencies
         run: |
           rustup component add rustfmt
@@ -62,6 +67,11 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
 
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       # Cargo cache
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -91,6 +101,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       # Cache Cargo
       - name: Cache Cargo
