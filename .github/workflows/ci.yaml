@@ -27,6 +27,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: Override nightly from rust-toolchain file
+        run: rustup override set stable
 
       - name: Check format
         run: cargo fmt --all -- --check
