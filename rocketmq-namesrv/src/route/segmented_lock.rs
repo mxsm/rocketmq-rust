@@ -133,7 +133,7 @@ impl<T: Default> SegmentedLock<T> {
 
     /// Calculate segment index for a given key
     ///
-    /// Uses FNV-1a hash for fast and uniform distribution
+    /// Uses Rust's `DefaultHasher` (typically SipHash) for fast and uniform distribution
     ///
     /// # Arguments
     ///
