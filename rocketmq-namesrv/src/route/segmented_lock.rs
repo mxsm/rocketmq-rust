@@ -143,7 +143,7 @@ impl<T: Default> SegmentedLock<T> {
     ///
     /// The segment index (0 to segment_count-1)
     #[inline]
-    fn segment_index<K: Hash>(&self, key: &K) -> usize {
+    fn segment_index<K: ?Sized + Hash>(&self, key: &K) -> usize {
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
         let hash = hasher.finish() as usize;
@@ -160,7 +160,7 @@ impl<T: Default> SegmentedLock<T> {
     /// # Returns
     ///
     /// A read guard for the segment
-    pub fn read_lock<K: Hash>(&self, key: &K) -> RwLockReadGuard<'_, T> {
+    pub fn read_lock<K: ?Sized + Hash>(&self, key: &K) -> RwLockReadGuard<'_, T> {
         let index = self.segment_index(key);
         self.segments[index].read()
     }
@@ -174,7 +174,7 @@ impl<T: Default> SegmentedLock<T> {
     /// # Returns
     ///
     /// A write guard for the segment
-    pub fn write_lock<K: Hash>(&self, key: &K) -> RwLockWriteGuard<'_, T> {
+    pub fn write_lock<K: ?Sized + Hash>(&self, key: &K) -> RwLockWriteGuard<'_, T> {
         let index = self.segment_index(key);
         self.segments[index].write()
     }
@@ -190,7 +190,7 @@ impl<T: Default> SegmentedLock<T> {
     /// # Returns
     ///
     /// Vector of read guards in the order of acquisition
-    pub fn read_lock_multiple<'a, K: Hash + 'a>(
+    pub fn read_lock_multiple<'a, K: ?Sized + Hash + 'a>(
         &'a self,
         keys: impl IntoIterator<Item = &'a K>,
     ) -> Vec<RwLockReadGuard<'a, T>> {
@@ -216,7 +216,7 @@ impl<T: Default> SegmentedLock<T> {
     /// # Returns
     ///
     /// Vector of write guards in the order of acquisition
-    pub fn write_lock_multiple<'a, K: Hash + 'a>(
+    pub fn write_lock_multiple<'a, K: ?Sized + Hash + 'a>(
         &'a self,
         keys: impl IntoIterator<Item = &'a K>,
     ) -> Vec<RwLockWriteGuard<'a, T>> {
