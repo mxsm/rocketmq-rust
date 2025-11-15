@@ -25,8 +25,7 @@ pub mod route_info_manager;
 pub mod route_info_manager_trait;
 pub mod route_info_manager_v2;
 pub mod route_info_manager_wrapper;
+pub mod segmented_lock;
 pub mod tables;
 pub mod types;
 pub(crate) mod zone_route_rpc_hook;
-
-// Re-exports for convenience (kept for external API compatibility)
