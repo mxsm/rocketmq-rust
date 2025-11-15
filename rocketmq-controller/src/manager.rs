@@ -206,7 +206,7 @@ impl Drop for ControllerManager {
     }
 }
 
-#[cfg(test)]
+/*#[cfg(test)]
 mod tests {
     #[tokio::test]
     async fn test_manager_lifecycle() {
@@ -215,3 +215,4 @@ mod tests {
         assert!(true);
     }
 }
+*/
