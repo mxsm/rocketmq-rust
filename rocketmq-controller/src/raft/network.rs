@@ -154,7 +154,6 @@ impl NetworkManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::RaftPeer;
 
     #[tokio::test]
     async fn test_network_manager_creation() {

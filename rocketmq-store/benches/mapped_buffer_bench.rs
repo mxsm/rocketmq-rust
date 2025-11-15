@@ -14,12 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-use std::fs::OpenOptions;
+use std::hint::black_box;
 use std::io::Write as IoWrite;
 use std::sync::Arc;
 
-use criterion::black_box;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::BenchmarkId;

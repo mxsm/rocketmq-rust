@@ -38,7 +38,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::RwLock as StdRwLock;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -67,6 +66,7 @@ impl RouteData {
         }
     }
 
+    #[allow(dead_code)]
     fn add_topic(&mut self, topic: String, queue_data: QueueData) {
         self.topics.entry(topic).or_default().push(queue_data);
     }

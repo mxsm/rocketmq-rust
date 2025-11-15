@@ -121,7 +121,7 @@ impl MetadataStore {
     }
 }
 
-#[cfg(test)]
+/*#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -130,4 +130,4 @@ mod tests {
         // Placeholder test
         assert!(true);
     }
-}
+}*/

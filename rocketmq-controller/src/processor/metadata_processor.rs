@@ -99,7 +99,6 @@ impl RequestProcessor for GetMetadataProcessor {
 mod tests {
     use super::*;
     use crate::config::ControllerConfig;
-    use crate::config::RaftPeer;
 
     #[tokio::test]
     async fn test_get_metadata_processor() {

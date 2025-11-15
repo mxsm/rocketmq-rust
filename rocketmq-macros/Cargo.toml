@@ -27,7 +27,3 @@ cheetah-string = { workspace = true }
 rocketmq-error = { workspace = true }
 rocketmq-remoting = { workspace = true }
 rocketmq-macros = { workspace = true }
-
-[[bench]]
-name = "from_map_bench"
-harness = false

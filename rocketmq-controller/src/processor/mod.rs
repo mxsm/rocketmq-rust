@@ -155,11 +155,11 @@ impl ProcessorManager {
     }
 }
 
-#[cfg(test)]
+/*#[cfg(test)]
 mod tests {
     #[tokio::test]
     async fn test_processor_manager() {
         // Placeholder test
         assert!(true);
     }
-}
+}*/
