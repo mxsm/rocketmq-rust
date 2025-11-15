@@ -1,25 +1,25 @@
 name: CI
+
 permissions:
   contents: read
+
 on:
   push:
     branches: [ "main" ]
   pull_request:
-    branches: [ "main"]
+    branches: [ "main" ]
+  merge_group:
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: full
   CI: true
 
 jobs:
-  build:
+  # Format check - fast fail
+  fmt:
+    name: Format Check
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        rust: [stable,nightly]
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -27,22 +27,83 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          override: true
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  # Clippy check - fast fail
+  clippy:
+    name: Clippy Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  # Build and test matrix
+  build-test:
+    name: Build & Test (${{ matrix.os }}, ${{ matrix.rust }})
+    runs-on: ${{ matrix.os }}
+    needs: [ fmt, clippy ]
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+        rust: [ stable, nightly ]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
           toolchain: ${{ matrix.rust }}
 
-      - name: Install dependencies
-        run: |
-          rustup component add rustfmt
-          rustup component add clippy
-
-      - name: Format check
-        run: cargo fmt -- --check
-
-      - name: Clippy check
-        run: cargo clippy -- -D warnings
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}-${{ matrix.rust }}
+          cache-on-failure: true
 
       - name: Build
         run: cargo build --verbose --all-features
 
-      - name: Test
-        run: cargo test --verbose
+      - name: Run tests
+        run: cargo test --verbose --all-features
+
+      - name: Run doc tests
+        run: cargo test --doc --verbose --all-features
+
+  # Check MSRV (Minimum Supported Rust Version)
+  msrv:
+    name: Check MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85.0"  # Adjust based on your MSRV
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check build
+        run: cargo check --all-features
