@@ -306,6 +306,15 @@ impl RocketMQError {
         }
     }
 
+    /// Create a storage write failed error
+    #[inline]
+    pub fn storage_write_failed(path: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self::StorageWriteFailed {
+            path: path.into(),
+            reason: reason.into(),
+        }
+    }
+
     /// Create an illegal argument error
     #[inline]
     pub fn illegal_argument(message: impl Into<String>) -> Self {
