@@ -25,7 +25,7 @@
 //! ## Architecture
 //!
 //! - **Segment Count**: Default 16 segments (configurable)
-//! - **Hash Distribution**: FNV-1a hash for uniform distribution
+//! - **Hash Distribution**: DefaultHasher for hash distribution
 //! - **Lock Type**: parking_lot::RwLock for each segment
 //! - **Lock Granularity**: Per-segment read-write locks
 //!
