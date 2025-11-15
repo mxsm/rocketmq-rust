@@ -339,10 +339,16 @@ mod tests {
         let keys = vec!["key1", "key2", "key3"];
 
         // Acquire read locks for multiple keys
-        let _guards = lock.read_lock_multiple(&keys);
+        {
+            let _guards = lock.read_lock_multiple(&keys);
+            // Read locks are automatically released at end of this block
+        }
 
-        // Acquire write locks for multiple keys
-        let _guards = lock.write_lock_multiple(&keys);
+        // Acquire write locks for multiple keys (after read locks are released)
+        {
+            let _guards = lock.write_lock_multiple(&keys);
+            // Write locks are automatically released at end of this block
+        }
     }
 
     #[test]
