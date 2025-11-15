@@ -75,7 +75,7 @@ impl<MS: MessageStore> ConfigManager for ConsumerOrderInfoManager<MS> {
         self.auto_clean();
         let wrapper = self.consumer_order_info_wrapper.lock();
         match pretty_format {
-            true => SerdeJsonUtils::to_json_pretty(&wrapper.table)
+            true => SerdeJsonUtils::serialize_json_pretty(&wrapper.table)
                 .expect("Failed to serialize consumer order info wrapper"),
             false => serde_json::to_string(&wrapper.table)
                 .expect("Failed to serialize consumer order info wrapper"),

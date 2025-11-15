@@ -81,10 +81,11 @@ impl ConfigManager for MessageRequestModeManager {
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
         if pretty_format {
-            SerdeJsonUtils::to_json_pretty(&*self.message_request_mode_map.lock())
+            SerdeJsonUtils::serialize_json_pretty(&*self.message_request_mode_map.lock())
                 .expect("encode failed")
         } else {
-            SerdeJsonUtils::to_json(&*self.message_request_mode_map.lock()).expect("encode failed")
+            SerdeJsonUtils::serialize_json(&*self.message_request_mode_map.lock())
+                .expect("encode failed")
         }
     }
 

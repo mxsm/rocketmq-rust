@@ -393,7 +393,7 @@ impl BrokerOuterAPI {
                             .remark()
                             .cloned()
                             .unwrap_or(CheetahString::empty())
-                            .to_json()
+                            .serialize_json()
                             .expect("to json failed"),
                         broker_addr: Some("".to_string()),
                     })

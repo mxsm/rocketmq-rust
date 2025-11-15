@@ -404,7 +404,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             ..Default::default()
         };
         let content = topic_config_and_mapping_serialize_wrapper
-            .to_json()
+            .serialize_json()
             .expect("encode failed");
         if !content.is_empty() {
             response.set_body_mut_ref(content);

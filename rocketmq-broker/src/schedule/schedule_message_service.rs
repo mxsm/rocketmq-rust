@@ -521,11 +521,11 @@ impl<MS: MessageStore> ConfigManager for ScheduleMessageService<MS> {
         );
         if pretty_format {
             delay_offset_serialize_wrapper
-                .to_json_pretty()
+                .serialize_json_pretty()
                 .expect("Failed to encode pretty")
         } else {
             delay_offset_serialize_wrapper
-                .to_json()
+                .serialize_json()
                 .expect("Failed to encode pretty")
         }
     }

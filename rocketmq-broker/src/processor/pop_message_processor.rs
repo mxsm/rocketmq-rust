@@ -1548,7 +1548,7 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
     ) -> MessageExtBrokerInner {
         let mut msg = MessageExtBrokerInner::default();
         msg.set_topic(revive_topic);
-        msg.set_body(Bytes::from(ck.to_json().unwrap()));
+        msg.set_body(Bytes::from(ck.serialize_json().unwrap()));
         msg.message_ext_inner.queue_id = revive_qid;
         msg.set_tags(CheetahString::from_static_str(PopAckConstants::CK_TAG));
         msg.message_ext_inner.born_timestamp = get_current_millis() as i64;
