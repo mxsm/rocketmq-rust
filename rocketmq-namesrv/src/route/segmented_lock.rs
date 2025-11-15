@@ -46,7 +46,7 @@
 //! ```rust
 //! use rocketmq_namesrv::route::segmented_lock::SegmentedLock;
 //!
-//! let lock_manager = SegmentedLock::new(16);
+//! let lock_manager = SegmentedLock::with_segments(16);
 //!
 //! // Acquire read lock for topic
 //! {
