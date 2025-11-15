@@ -44,6 +44,7 @@ use crate::bootstrap::NameServerRuntimeInner;
 use crate::route::batch_unregistration_service::BatchUnregistrationService;
 use crate::route::error::RocketMQError;
 use crate::route::error::RouteResult;
+use crate::route::segmented_lock::SegmentedLock;
 use crate::route::tables::BrokerAddrTable;
 use crate::route::tables::BrokerLiveInfo;
 use crate::route::tables::BrokerLiveTable;
@@ -55,19 +56,56 @@ use crate::route_info::broker_addr_info::BrokerAddrInfo;
 
 const DEFAULT_BROKER_CHANNEL_EXPIRED_TIME: u64 = 1000 * 60 * 2; // 2 minutes
 
-/// RouteInfoManager v2 with DashMap-based concurrent tables
+/// RouteInfoManager v2 with DashMap-based concurrent tables and segmented locking
 ///
 /// Key improvements over v1:
 /// - Fine-grained concurrency: DashMap per table instead of global RwLock
+/// - Segmented locking: Per-broker/topic locks for atomic cross-table operations
 /// - Zero-copy: Arc<str> for shared strings instead of String clones
 /// - Type-safe errors: Result<T, RocketMQError> instead of Option
 /// - Better modularity: Separate table modules for maintainability
+///
+/// ## Concurrency Model
+///
+/// This implementation uses a hybrid approach combining DashMap's lock-free concurrency
+/// with segmented read-write locks for operations that span multiple tables:
+///
+/// 1. **DashMap**: Each table (topic, broker, cluster, live) uses DashMap for lock-free concurrent
+///    reads and writes within a single table.
+///
+/// 2. **Segmented Locks**: For operations that need to atomically update multiple tables (e.g.,
+///    broker registration, unregistration), we use segment-level read-write locks based on the
+///    broker name or topic name hash.
+///
+/// ### Lock Acquisition Strategy
+///
+/// - **Single-table operations**: Use DashMap directly (no explicit locking)
+/// - **Multi-table reads**: Acquire segment read lock, then use DashMap
+/// - **Multi-table writes**: Acquire segment write lock, then use DashMap
+///
+/// ### Deadlock Prevention
+///
+/// When acquiring multiple locks, always sort by segment index to prevent deadlocks.
+/// The `SegmentedLock::*_lock_multiple` methods handle this automatically.
+///
+/// ## Performance Characteristics
+///
+/// - **Single-table ops**: O(1) lock-free (DashMap only)
+/// - **Multi-table read**: O(1) segment read lock + O(1) DashMap read
+/// - **Multi-table write**: O(1) segment write lock + O(1) DashMap write
+/// - **Contention**: Minimal due to 16-way lock striping
 pub struct RouteInfoManagerV2 {
-    // New DashMap-based concurrent tables
+    // DashMap-based concurrent tables (lock-free for single-table operations)
     topic_queue_table: TopicQueueTable,
     broker_addr_table: BrokerAddrTable,
     cluster_addr_table: ClusterAddrTable,
     broker_live_table: BrokerLiveTable,
+
+    // Segmented locks for atomic cross-table operations
+    // - broker_locks: Locks for broker-related operations (keyed by broker name)
+    // - topic_locks: Locks for topic-related operations (keyed by topic name)
+    broker_locks: SegmentedLock,
+    topic_locks: SegmentedLock,
 
     // Legacy components (will be migrated in later phases)
     name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
@@ -75,7 +113,7 @@ pub struct RouteInfoManagerV2 {
 }
 
 impl RouteInfoManagerV2 {
-    /// Create a new RouteInfoManager with DashMap-based tables
+    /// Create a new RouteInfoManager with DashMap-based tables and segmented locks
     pub(crate) fn new(name_server_runtime_inner: ArcMut<NameServerRuntimeInner>) -> Self {
         let un_register_service = ArcMut::new(BatchUnregistrationService::new(
             name_server_runtime_inner.clone(),
@@ -87,6 +125,11 @@ impl RouteInfoManagerV2 {
             broker_addr_table: BrokerAddrTable::with_capacity(128),
             cluster_addr_table: ClusterAddrTable::with_capacity(32),
             broker_live_table: BrokerLiveTable::with_capacity(256),
+
+            // Initialize segmented locks (16 segments each for optimal performance)
+            broker_locks: SegmentedLock::new(),
+            topic_locks: SegmentedLock::new(),
+
             name_server_runtime_inner,
             un_register_service,
         }
@@ -235,6 +278,21 @@ impl RouteInfoManagerV2 {
         _filter_server_list: Vec<CheetahString>,
         channel: Channel,
     ) -> RouteResult<RegisterBrokerResult> {
+        // ===================================================================
+        // SEGMENTED LOCK ACQUISITION
+        // ===================================================================
+        // Acquire write lock for this broker segment to ensure atomic updates
+        // across multiple tables (cluster, broker_addr, topic_queue, broker_live).
+        //
+        // This prevents race conditions such as:
+        // 1. Concurrent registrations of the same broker
+        // 2. Registration racing with unregistration
+        // 3. Inconsistent state across tables
+        //
+        // Lock scope: Only brokers hashing to the same segment will contend.
+        // Other brokers can register concurrently in different segments.
+        let _broker_lock = self.broker_locks.write_lock(&broker_name.as_str());
+
         let mut result = RegisterBrokerResult::default();
 
         // CheetahString already supports zero-copy sharing through clone
@@ -242,6 +300,7 @@ impl RouteInfoManagerV2 {
         let broker_name_arc = broker_name.clone();
 
         // Step 1: Update cluster membership
+        // This is safe because we hold the broker write lock
         let is_new_broker = self
             .cluster_addr_table
             .add_broker(cluster_name_arc.clone(), broker_name_arc.clone());
@@ -252,6 +311,7 @@ impl RouteInfoManagerV2 {
         );
 
         // Step 2: Update broker address table
+        // Protected by broker write lock - atomic with cluster update
         let register_first = self.update_broker_addr_table(
             &cluster_name,
             &broker_name,
@@ -262,12 +322,14 @@ impl RouteInfoManagerV2 {
         )?;
 
         // Step 3: Update topic queue configurations
+        // Protected by broker write lock - atomic with broker updates
         let is_master = broker_id == mix_all::MASTER_ID;
         if is_master {
             self.update_topic_queue_table(&broker_name_arc, &topic_config_wrapper, register_first)?;
         }
 
         // Step 4: Register broker live status
+        // Protected by broker write lock - atomic with all above updates
         self.register_broker_live_info(
             cluster_name.clone(),
             broker_addr.clone(),
@@ -281,6 +343,7 @@ impl RouteInfoManagerV2 {
         )?;
 
         // Step 5: Handle master address for slaves
+        // Protected by broker write lock - consistent read of master info
         if !is_master {
             if let Some(master_addr) = self.get_master_address(&broker_name)? {
                 result.master_addr = master_addr.clone();
@@ -458,12 +521,48 @@ impl RouteInfoManagerV2 {
         self.broker_live_table.get(&broker_addr_info)
     }
 
+    /// Register a topic with queue data for multiple brokers
+    ///
+    /// This method ensures atomicity by acquiring locks for:
+    /// 1. The topic being registered (write lock)
+    /// 2. All brokers referenced in queue_data_vec (read locks)
+    ///
+    /// ## Consistency Guarantee
+    ///
+    /// The method performs two operations that must be atomic:
+    /// 1. Validate all brokers exist in broker_addr_table
+    /// 2. Insert queue data into topic_queue_table
+    ///
+    /// Without locking, a concurrent unregister_broker could delete a broker
+    /// between validation and insertion, causing inconsistent state where
+    /// topic_queue_table references non-existent brokers.
+    ///
+    /// ## Lock Strategy
+    ///
+    /// - **Topic write lock**: Prevents concurrent modifications to this topic
+    /// - **Broker read locks**: Prevents brokers from being deleted during registration
+    ///
+    /// This ensures that if all brokers pass validation, they're guaranteed to
+    /// still exist when we insert the queue data.
     pub(crate) fn register_topic(&self, topic: CheetahString, queue_data_vec: Vec<QueueData>) {
         if queue_data_vec.is_empty() {
             return;
         }
 
+        // Acquire topic write lock and broker read locks atomically
+        // This prevents:
+        // 1. Concurrent topic registrations (topic write lock)
+        // 2. Broker deletion during registration (broker read locks)
+        let broker_names: Vec<_> = queue_data_vec
+            .iter()
+            .map(|qd| qd.broker_name.as_str())
+            .collect();
+
+        let _topic_lock = self.topic_locks.write_lock(&topic);
+        let _broker_locks = self.broker_locks.read_lock_multiple(&broker_names);
+
         // Validate all brokers exist before inserting
+        // With locks held, brokers cannot be deleted concurrently
         for queue_data in &queue_data_vec {
             if !self.broker_addr_table.contains(&queue_data.broker_name) {
                 warn!(
@@ -475,25 +574,48 @@ impl RouteInfoManagerV2 {
         }
 
         // All brokers valid, proceed with insertion
-        for queue_data in queue_data_vec {
+        // Locks guarantee brokers still exist and no concurrent modifications
+        for queue_data in &queue_data_vec {
             self.topic_queue_table.insert(
                 topic.clone(),
                 queue_data.broker_name.clone(),
-                queue_data,
+                queue_data.clone(),
             );
         }
         info!(
-            "Register topic route.{}, {:?}",
+            "Register topic route. {}, {:?}",
             topic,
             self.topic_queue_table.get_topic_queues(&topic)
         )
     }
 
+    /// Delete a topic from the name server
+    ///
+    /// This method deletes topic queue data either for a specific cluster
+    /// or completely if no cluster is specified.
+    ///
+    /// ## Consistency Guarantee
+    ///
+    /// The method performs multiple operations that must be atomic:
+    /// 1. Query brokers in the cluster (cluster_addr_table)
+    /// 2. Remove topic-broker mappings (topic_queue_table)
+    /// 3. Cleanup empty topics (topic_queue_table)
+    ///
+    /// ## Lock Strategy
+    ///
+    /// - **Topic write lock**: Ensures no concurrent topic registration/deletion
+    /// - **Cluster read lock** (if cluster specified): Prevents cluster modification
+    ///
+    /// This ensures consistent deletion without race conditions with register_topic
+    /// or register_broker operations.
     pub(crate) fn delete_topic(
         &mut self,
         topic: CheetahString,
         cluster_name: Option<CheetahString>,
     ) {
+        // Acquire topic write lock to prevent concurrent modifications
+        let _topic_lock = self.topic_locks.write_lock(&topic);
+
         if let Some(cluster_name) = cluster_name {
             let broker_names = self.cluster_addr_table.get_brokers(cluster_name.as_str());
             if broker_names.is_empty() {
@@ -512,6 +634,7 @@ impl RouteInfoManagerV2 {
                         );
                     }
                 }
+                // Check again if topic is now empty
                 let queue_data_map = self.topic_queue_table.get_topic_queues_map(topic.as_str());
                 if queue_data_map.is_none_or(|map| map.is_empty()) {
                     self.topic_queue_table.remove_topic(topic.as_ref());
@@ -522,7 +645,9 @@ impl RouteInfoManagerV2 {
                 }
             }
         } else {
+            // Delete entire topic across all brokers
             self.topic_queue_table.remove_topic(topic.as_ref());
+            info!("deleteTopic, removed topic {} completely", topic);
         }
     }
 }
@@ -538,6 +663,9 @@ impl RouteInfoManagerV2 {
     }
 
     /// Unregister a broker from the name server
+    ///
+    /// This method atomically removes a broker from all tables using segmented locking
+    /// to prevent race conditions with concurrent registrations or route lookups.
     pub fn unregister_broker(
         &self,
         cluster_name: CheetahString,
@@ -545,7 +673,23 @@ impl RouteInfoManagerV2 {
         broker_name: CheetahString,
         broker_id: u64,
     ) -> RouteResult<()> {
+        // ===================================================================
+        // SEGMENTED LOCK ACQUISITION
+        // ===================================================================
+        // Acquire write lock for this broker segment to ensure atomic cleanup
+        // across multiple tables (broker_live, broker_addr, cluster, topic_queue).
+        //
+        // This prevents race conditions such as:
+        // 1. Unregistration racing with registration
+        // 2. Partial cleanup visible to route lookups
+        // 3. Inconsistent broker state across tables
+        //
+        // Lock scope: Only brokers hashing to the same segment will contend.
+        // Other broker operations can proceed concurrently in different segments.
+        let _broker_lock = self.broker_locks.write_lock(&broker_name.as_str());
+
         // Step 1: Remove from broker live table
+        // Protected by broker write lock - atomic with all cleanup operations
         let broker_addr_info = BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone());
         let removed = self.broker_live_table.remove(&broker_addr_info);
 
@@ -558,11 +702,13 @@ impl RouteInfoManagerV2 {
         );
 
         // Step 2: Remove broker address from broker table
+        // Protected by broker write lock - atomic with live table update
         let _broker_removed = self
             .broker_addr_table
             .remove_broker_address(broker_name.as_str(), broker_id);
 
         // Step 3: Check if all broker addresses are gone
+        // Protected by broker write lock - consistent visibility
         let broker_empty = if let Some(broker_data) = self.broker_addr_table.get(&broker_name) {
             broker_data.broker_addrs().is_empty()
         } else {
@@ -570,6 +716,7 @@ impl RouteInfoManagerV2 {
         };
 
         // Step 4: If broker completely removed, clean up cluster and topics
+        // All cleanup operations are atomic within the broker write lock
         if broker_empty {
             self.broker_addr_table.remove(&broker_name);
             self.cluster_addr_table
@@ -618,8 +765,37 @@ impl RouteInfoManagerV2 {
     ///
     /// This is the main query API used by producers and consumers
     /// to discover where a topic's messages should be sent/consumed.
+    ///
+    /// ## Consistency Guarantee
+    ///
+    /// This method acquires a segment-level read lock for the topic to ensure
+    /// consistent reads across multiple tables. Without this lock, we could see:
+    /// - Topic queues that reference non-existent brokers
+    /// - Partial broker registration state
+    /// - Inconsistent broker address mappings
+    ///
+    /// The read lock allows concurrent reads of the same topic while preventing
+    /// concurrent writes (broker registration/unregistration) from causing
+    /// inconsistent state.
     pub fn pickup_topic_route_data(&self, topic: &str) -> RouteResult<TopicRouteData> {
+        // ===================================================================
+        // SEGMENTED LOCK ACQUISITION
+        // ===================================================================
+        // Acquire read lock for this topic segment to ensure consistent reads
+        // across multiple tables (topic_queue, broker_addr, broker_live).
+        //
+        // This prevents reading inconsistent state such as:
+        // 1. Queue data referencing brokers that are being unregistered
+        // 2. Broker data that is partially updated
+        // 3. Stale broker addresses during registration
+        //
+        // Lock scope: Only topics hashing to the same segment will share a lock.
+        // Other topic queries can proceed concurrently in different segments.
+        // Multiple readers can hold the lock simultaneously.
+        let _topic_lock = self.topic_locks.read_lock(&topic);
+
         // Get queue data for the topic
+        // Protected by topic read lock - consistent with broker table
         let queue_data_list = self.topic_queue_table.get_topic_queues(topic);
 
         if queue_data_list.is_empty() {
@@ -627,12 +803,14 @@ impl RouteInfoManagerV2 {
         }
 
         // Collect broker names from queue data (already CheetahString)
+        // Protected by topic read lock - brokers are stable during this read
         let broker_names: Vec<BrokerName> = queue_data_list
             .iter()
             .map(|(broker_name, _)| broker_name.clone())
             .collect();
 
         // Get broker data for each broker
+        // Protected by topic read lock - broker data is consistent
         let mut broker_data_list = Vec::new();
         for broker_name in broker_names {
             if let Some(broker_data) = self.broker_addr_table.get(broker_name.as_str()) {

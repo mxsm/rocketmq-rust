@@ -50,3 +50,8 @@ path = "src/bin/namesrv_bootstrap_server.rs"
 [[bench]]
 name = "route_manager_benchmark"
 harness = false
+
+
+[[bench]]
+name = "route_concurrency_bench"
+harness = false
