@@ -36,10 +36,15 @@ use tracing::warn;
 use crate::bootstrap::NameServerRuntimeInner;
 use crate::processor::NAMESPACE_ORDER_TOPIC_CONFIG;
 
+/// Client request processor for handling route info queries
 pub struct ClientRequestProcessor {
     name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
     need_check_namesrv_ready: AtomicBool,
     startup_time_millis: u64,
+    // Cached configuration values (immutable after construction)
+    wait_seconds_millis: u64,
+    need_wait_for_service: bool,
+    order_message_enable: bool,
 }
 
 impl RequestProcessor for ClientRequestProcessor {
@@ -62,80 +67,86 @@ impl RequestProcessor for ClientRequestProcessor {
 
 impl ClientRequestProcessor {
     pub(crate) fn new(name_server_runtime_inner: ArcMut<NameServerRuntimeInner>) -> Self {
+        let config = name_server_runtime_inner.name_server_config();
+        let wait_seconds_millis = config.wait_seconds_for_service as u64 * 1000;
+        let need_wait_for_service = config.need_wait_for_service;
+        let order_message_enable = config.order_message_enable;
+
         Self {
             need_check_namesrv_ready: AtomicBool::new(true),
             startup_time_millis: TimeUtils::get_current_millis(),
+            wait_seconds_millis,
+            need_wait_for_service,
+            order_message_enable,
             name_server_runtime_inner,
         }
     }
 
+    /// Handles route info query for a specific topic
+    #[inline]
     fn get_route_info_by_topic(
         &self,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<GetRouteInfoRequestHeader>()?;
-        let wait_seconds = self
-            .name_server_runtime_inner
-            .name_server_config()
-            .wait_seconds_for_service as u64;
-        let elapsed_millis =
-            TimeUtils::get_current_millis().saturating_sub(self.startup_time_millis);
-        let namesrv_ready = self.need_check_namesrv_ready.load(Ordering::Relaxed)
-            && elapsed_millis >= wait_seconds * 1000;
 
-        let need_wait_for_service = self
-            .name_server_runtime_inner
-            .name_server_config()
-            .need_wait_for_service;
-        if need_wait_for_service && !namesrv_ready {
-            warn!("name server not ready. request code {} ", request.code());
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code(
-                    RemotingSysResponseCode::SystemError,
-                )
-                .set_remark("name server not ready"),
-            ));
+        // Early return: Check if nameserver is ready (using cached config)
+        if self.need_wait_for_service {
+            let elapsed_millis =
+                TimeUtils::get_current_millis().saturating_sub(self.startup_time_millis);
+            let namesrv_ready = !self.need_check_namesrv_ready.load(Ordering::Relaxed)
+                || elapsed_millis >= self.wait_seconds_millis;
+
+            if !namesrv_ready {
+                warn!("name server not ready. request code {}", request.code());
+                return Ok(Some(
+                    RemotingCommand::create_response_command_with_code(
+                        RemotingSysResponseCode::SystemError,
+                    )
+                    .set_remark("name server not ready"),
+                ));
+            }
         }
-        match self
+
+        // Lookup topic route data
+        let mut topic_route_data = match self
             .name_server_runtime_inner
             .route_info_manager()
             .pickup_topic_route_data(request_header.topic.as_ref())
         {
-            None => Ok(Some(
-                RemotingCommand::create_response_command_with_code(ResponseCode::TopicNotExist)
-                    .set_remark(format!(
-                        "No topic route info in name server for the topic:{}{}",
-                        request_header.topic,
-                        FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
-                    )),
-            )),
-            Some(mut topic_route_data) => {
-                if self.need_check_namesrv_ready.load(Ordering::Acquire) {
-                    self.need_check_namesrv_ready
-                        .store(false, Ordering::Release);
-                }
-                if self
-                    .name_server_runtime_inner
-                    .name_server_config()
-                    .order_message_enable
-                {
-                    //get kv config
-                    let order_topic_config = self
-                        .name_server_runtime_inner
-                        .kvconfig_manager()
-                        .get_kvconfig(
-                            &CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG),
-                            &request_header.topic,
-                        );
-                    topic_route_data.order_topic_conf = order_topic_config;
-                };
-                //Rust only support standard JSON serialization
-                let content = topic_route_data.encode()?;
-                Ok(Some(
-                    RemotingCommand::create_response_command_with_code(ResponseCode::Success)
-                        .set_body(content),
-                ))
+            Some(data) => data,
+            None => {
+                return Ok(Some(
+                    RemotingCommand::create_response_command_with_code(ResponseCode::TopicNotExist)
+                        .set_remark(format!(
+                            "No topic route info in name server for the topic: {}{}",
+                            request_header.topic,
+                            FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
+                        )),
+                ));
             }
+        };
+
+        if self.need_check_namesrv_ready.load(Ordering::Relaxed) {
+            self.need_check_namesrv_ready
+                .store(false, Ordering::Relaxed);
         }
+
+        if self.order_message_enable {
+            topic_route_data.order_topic_conf = self
+                .name_server_runtime_inner
+                .kvconfig_manager()
+                .get_kvconfig(
+                    &CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG),
+                    &request_header.topic,
+                );
+        }
+
+        // Encode and return successful response
+        let content = topic_route_data.encode()?;
+        Ok(Some(
+            RemotingCommand::create_response_command_with_code(ResponseCode::Success)
+                .set_body(content),
+        ))
     }
 }
