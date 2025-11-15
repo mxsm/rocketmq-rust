@@ -50,13 +50,13 @@
 //!
 //! // Acquire read lock for topic
 //! {
-//!     let _guard: SegmentedLock<()> = lock_manager.read_lock("my-topic");
+//!     let _guard: parking_lot::RwLockReadGuard<'_, ()> = lock_manager.read_lock("my-topic");
 //!     // Read operations protected by this segment lock
 //! }
 //!
 //! // Acquire write lock for broker
 //! {
-//!     let _guard: SegmentedLock<()> = lock_manager.write_lock("broker-a");
+//!      let _guard: parking_lot::RwLockWriteGuard<'_, ()> = lock_manager.write_lock("broker-a");
 //!     // Write operations protected by this segment lock
 //! }
 //! ```
