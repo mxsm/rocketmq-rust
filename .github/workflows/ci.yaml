@@ -32,6 +32,7 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+          version: '23.4.0'
 
       - name: Install dependencies
         run: |
@@ -71,6 +72,7 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+          version: '23.4.0'
 
       # Cargo cache
       - name: Cache Cargo
@@ -106,6 +108,7 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+          version: '23.4.0'
 
       # Cache Cargo
       - name: Cache Cargo
