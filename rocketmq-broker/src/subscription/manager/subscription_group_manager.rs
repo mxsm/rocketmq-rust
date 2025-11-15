@@ -183,13 +183,13 @@ impl<MS: MessageStore> ConfigManager for SubscriptionGroupManager<MS> {
                 .subscription_group_wrapper
                 .lock()
                 .clone()
-                .to_json_pretty()
+                .serialize_json_pretty()
                 .expect("encode subscription group pretty failed"),
             false => self
                 .subscription_group_wrapper
                 .lock()
                 .clone()
-                .to_json()
+                .serialize_json()
                 .expect("encode subscription group failed"),
         }
     }

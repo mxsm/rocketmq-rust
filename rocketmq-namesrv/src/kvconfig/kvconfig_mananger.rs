@@ -208,7 +208,7 @@ impl KVConfigManager {
 
         let wrapper = KVConfigSerializeWrapper::new_with_config_table(snapshot);
 
-        let content = wrapper.to_json_pretty()?;
+        let content = wrapper.serialize_json_pretty()?;
 
         FileUtils::string_to_file(content.as_str(), config_path).map_err(|e| {
             error!("Failed to persist KV config to {}: {}", config_path, e);

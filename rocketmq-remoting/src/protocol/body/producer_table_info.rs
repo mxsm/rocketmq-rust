@@ -110,7 +110,7 @@ mod tests {
         assert!(table.data().contains_key("group2"));
 
         // Test JSON serialization/deserialization
-        let json = table.to_json().unwrap();
+        let json = table.serialize_json().unwrap();
         let deserialized = ProducerTableInfo::decode(json.as_bytes()).unwrap();
 
         assert_eq!(deserialized.data().len(), 2);

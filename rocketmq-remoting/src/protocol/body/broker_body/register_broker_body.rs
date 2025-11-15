@@ -92,7 +92,7 @@ impl RegisterBrokerBody {
                 bytes_mut.put_i32(topic_config_bytes.len() as i32);
                 bytes_mut.put(topic_config_bytes.as_bytes());
             }
-            let buffer = SerdeJsonUtils::to_json(&self.filter_server_list).unwrap();
+            let buffer = SerdeJsonUtils::serialize_json(&self.filter_server_list).unwrap();
             bytes_mut.put_i32(buffer.len() as i32);
             bytes_mut.put(buffer.as_bytes());
             let topic_queue_mapping_info_map = self

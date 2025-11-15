@@ -336,7 +336,7 @@ impl NamesrvConfig {
         );
 
         // Convert the HashMap to a JSON value
-        match SerdeJsonUtils::to_json(&json_map) {
+        match SerdeJsonUtils::serialize_json(&json_map) {
             Ok(json) => Ok(json),
             Err(err) => Err(format!("Failed to serialize NamesrvConfig: {err}")),
         }

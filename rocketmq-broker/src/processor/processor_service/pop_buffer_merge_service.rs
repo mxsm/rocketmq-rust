@@ -812,7 +812,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         }
         let mut msg = MessageExtBrokerInner::default();
         msg.set_topic(self.revive_topic.clone());
-        msg.set_body(Bytes::from(batch_ack_msg.to_json().unwrap()));
+        msg.set_body(Bytes::from(batch_ack_msg.serialize_json().unwrap()));
         msg.message_ext_inner.queue_id = point_wrapper.revive_queue_id;
         msg.set_tags(CheetahString::from_static_str(
             PopAckConstants::BATCH_ACK_TAG,
@@ -856,7 +856,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         };
         let mut msg = MessageExtBrokerInner::default();
         msg.set_topic(self.revive_topic.clone());
-        msg.set_body(Bytes::from(ack_msg.to_json().unwrap()));
+        msg.set_body(Bytes::from(ack_msg.serialize_json().unwrap()));
         msg.message_ext_inner.queue_id = point_wrapper.revive_queue_id;
         msg.set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
         msg.message_ext_inner.born_timestamp = get_current_millis() as i64;

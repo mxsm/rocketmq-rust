@@ -34,7 +34,7 @@ impl From<OffsetSerializeWrapper> for OffsetSerialize {
         let mut offset_table = HashMap::new();
         for (k, v) in wrapper.offset_table {
             let result = k
-                .to_json()
+                .serialize_json()
                 .expect("OffsetSerialize::from OffsetSerializeWrapper");
             offset_table.insert(result, v.load(Ordering::Relaxed));
         }

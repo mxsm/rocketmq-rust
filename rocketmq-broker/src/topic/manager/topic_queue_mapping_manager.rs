@@ -227,10 +227,10 @@ impl ConfigManager for TopicQueueMappingManager {
         );
         match pretty_format {
             true => wrapper
-                .to_json_pretty()
+                .serialize_json_pretty()
                 .expect("encode topic queue mapping pretty failed"),
             false => wrapper
-                .to_json()
+                .serialize_json()
                 .expect("encode topic queue mapping failed"),
         }
     }
