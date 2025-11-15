@@ -150,7 +150,7 @@ impl DefaultRequestProcessor {
                 request_header.namespace,
                 request_header.key,
                 request_header.value,
-            );
+            )?;
         Ok(RemotingCommand::create_response_command())
     }
 
