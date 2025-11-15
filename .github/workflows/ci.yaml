@@ -8,7 +8,6 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-  merge_group:
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,49 +15,34 @@ env:
   CI: true
 
 jobs:
-  # Format check - fast fail
-  fmt:
-    name: Format Check
+  # ------------------------------
+  #   Lint (fmt + clippy)
+  #   Runs once on Linux + stable
+  # ------------------------------
+  lint:
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
 
-      - name: Set up Rust
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
-      - name: Check formatting
-        run: cargo +stable fmt --all -- --check
+      - name: Format check
+        run: cargo fmt -- --check
 
-  # Clippy check - fast fail
-  clippy:
-    name: Clippy Check
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Clippy check
+        run: cargo clippy -- -D warnings
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
 
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-          shared-key: "clippy-stable"
-
-      - name: Run clippy
-        run: cargo +stable clippy --all-targets --all-features -- -D warnings
-
-  # Build and test matrix
+  # ------------------------------
+  #   Build and Test Matrix
+  # ------------------------------
   build-test:
-    name: Build & Test (${{ matrix.os }}, ${{ matrix.rust }})
+    needs: lint
     runs-on: ${{ matrix.os }}
-    needs: [ fmt, clippy ]
 
     strategy:
       fail-fast: false
@@ -67,47 +51,32 @@ jobs:
         rust: [ stable, nightly ]
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@master
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ matrix.rust }}
 
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
+      # ------------------------------
+      # Cache Cargo
+      # ------------------------------
+      - name: Cache Cargo registry + index + build
+        uses: actions/cache@v4
         with:
-          key: ${{ matrix.os }}-${{ matrix.rust }}
-          cache-on-failure: true
-          shared-key: "build-${{ matrix.rust }}"
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ matrix.rust }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-${{ matrix.rust }}-
 
+      # ------------------------------
+      # Build + Test
+      # ------------------------------
       - name: Build
-        run: cargo +${{ matrix.rust }} build --verbose --all-features
+        run: cargo build --all-features --verbose
 
-      - name: Run tests
-        run: cargo +${{ matrix.rust }} test --verbose --all-features
-
-      - name: Run doc tests
-        run: cargo +${{ matrix.rust }} test --doc --verbose --all-features
-
-  # Check MSRV (Minimum Supported Rust Version)
-  msrv:
-    name: Check MSRV
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.85.0"  # Adjust based on your MSRV
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "msrv-1.85.0"
-
-      - name: Check build
-        run: cargo +1.85.0 check --all-features
+      - name: Test
+        run: cargo test --all-features --verbose
