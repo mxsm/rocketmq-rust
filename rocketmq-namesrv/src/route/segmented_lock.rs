@@ -56,7 +56,7 @@
 //!
 //! // Acquire write lock for broker
 //! {
-//!      let _guard: parking_lot::RwLockWriteGuard<'_, ()> = lock_manager.write_lock("broker-a");
+//!     let _guard: parking_lot::RwLockWriteGuard<'_, ()> = lock_manager.write_lock("broker-a");
 //!     // Write operations protected by this segment lock
 //! }
 //! ```
