@@ -1,43 +1,34 @@
-name: Auto Approve PR
-
-permissions:
-  pull-requests: write
+name: Auto Approve Pull Requests
 
 on:
-  workflow_run:
-    workflows: ["Rocketmq Rust CI"]
-    types:
-      - completed
+  pull_request_target:
+    types: [ labeled, opened, synchronize, reopened ]
+
+permissions:
+  pull-requests: read
+  contents: read
+  checks: read
 
 jobs:
   auto-approve:
-    name: Auto Approve PR
     runs-on: ubuntu-latest
     if: >
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.conclusion == 'success'
+      github.event.pull_request.merged == false &&
+      contains(github.event.pull_request.labels.*.name, 'auto merge')
+
     steps:
-      - name: Get PR number
-        id: pr
-        uses: actions/github-script@v7
+      - name: Wait for Rocketmq Rust CI to succeed
+        uses: lewagon/wait-on-check-action@v1.1.0
         with:
-          script: |
-            const pulls = await github.rest.pulls.list({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              head: `${context.repo.owner}:${context.payload.workflow_run.head_branch}`
-            });
-            
-            if (pulls.data.length > 0) {
-              return pulls.data[0].number;
-            }
-            return null;
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          repo: ${{ github.repository }}
+          wait-interval: 20
+          running-workflow-name: "Rocketmq Rust CI"
 
       - name: Auto approve PR
-        if: steps.pr.outputs.result != 'null'
         uses: hmarr/auto-approve-action@v4
         with:
           github-token: ${{ secrets.BOT_TOKEN }}
-          pull-request-number: ${{ steps.pr.outputs.result }}
-          review-message: "LGTM - All CI checks passed ✅"
+          pull-request-number: ${{ github.event.pull_request.number }}
+          review-message: "LGTM✅ All required checks passed. Auto-approved for merge."
