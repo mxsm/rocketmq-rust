@@ -1435,9 +1435,9 @@ mod tests {
         let metrics = mapped_file.get_metrics().unwrap();
         assert_eq!(metrics.total_flushes(), 2);
 
-        // Average flush duration should be calculated
-        let avg_duration = metrics.avg_flush_duration();
-        assert!(avg_duration.as_micros() >= 0);
+        // Average flush duration should be calculable (may be 0 on very fast systems)
+        let _avg_duration = metrics.avg_flush_duration();
+        // Duration is always valid, no need to assert non-negative as u128 is always >= 0
     }
 
     #[test]
