@@ -38,16 +38,6 @@ jobs:
           sudo apt-get install -y protobuf-compiler
           protoc --version
 
-      - name: Install protoc (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install protobuf
-          protoc --version
-
-      - name: Install protoc (Windows)
-        if: runner.os == 'Windows'
-        run: choco install protoc
-
       - name: Install dependencies
         run: |
           rustup component add rustfmt
@@ -84,20 +74,20 @@ jobs:
       # Install protoc (platform-specific)
       # ================================
       - name: Install protoc (Linux)
-        if: runner.os == 'Linux'
+        if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
           protoc --version
 
       - name: Install protoc (macOS)
-        if: runner.os == 'macOS'
+        if: matrix.os == 'macos-latest'
         run: |
           brew install protobuf
           protoc --version
 
       - name: Install protoc (Windows)
-        if: runner.os == 'Windows'
+        if: matrix.os == 'windows-latest'
         run: choco install protoc
 
       # Cargo cache
@@ -139,18 +129,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
           protoc --version
-
-      - name: Install protoc (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-osx-universal_binary.zip
-          unzip protoc-23.4-osx-universal_binary.zip -d $HOME/protoc
-          echo "$HOME/protoc/bin" >> $GITHUB_PATH
-          protoc --version
-
-      - name: Install protoc (Windows)
-        if: runner.os == 'Windows'
-        run: choco install protoc
 
       # Cache Cargo
       - name: Cache Cargo
