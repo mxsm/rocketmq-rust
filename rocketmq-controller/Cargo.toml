@@ -77,6 +77,3 @@ storage-rocksdb = ["rocksdb"]
 storage-file = []
 metrics = []
 debug = []
-
-[patch.crates-io]
-protobuf-build = { version = "0.15" }
