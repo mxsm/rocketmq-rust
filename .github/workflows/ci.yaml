@@ -97,11 +97,6 @@ jobs:
       - name: Set up Rust nightly
         uses: dtolnay/rust-toolchain@nightly
 
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -141,13 +136,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install dependencies (ubuntu-latest)
+        run: sudo apt-get install protobuf-compiler
+
       - name: Set up Rust nightly
         uses: dtolnay/rust-toolchain@nightly
-
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache cargo registry
         uses: actions/cache@v4
