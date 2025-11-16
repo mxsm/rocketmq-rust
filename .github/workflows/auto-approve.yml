@@ -1,0 +1,43 @@
+name: Auto Approve PR
+
+permissions:
+  pull-requests: write
+
+on:
+  workflow_run:
+    workflows: ["Rocketmq Rust CI"]
+    types:
+      - completed
+
+jobs:
+  auto-approve:
+    name: Auto Approve PR
+    runs-on: ubuntu-latest
+    if: >
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: Get PR number
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pulls = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              head: `${context.repo.owner}:${context.payload.workflow_run.head_branch}`
+            });
+            
+            if (pulls.data.length > 0) {
+              return pulls.data[0].number;
+            }
+            return null;
+
+      - name: Auto approve PR
+        if: steps.pr.outputs.result != 'null'
+        uses: hmarr/auto-approve-action@v4
+        with:
+          github-token: ${{ secrets.BOT_TOKEN }}
+          pull-request-number: ${{ steps.pr.outputs.result }}
+          review-message: "LGTM - All CI checks passed ✅"
