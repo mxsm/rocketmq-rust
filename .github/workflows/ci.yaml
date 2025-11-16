@@ -88,15 +88,7 @@ jobs:
       - if: matrix.os == 'macos-latest'
         name: Install dependencies (macos-latest)
         run: |
-          PROTOC_VERSION=3.20.3
-          ARCH=$(uname -m)
-          if [[ "$ARCH" == "arm64" ]]; then
-          FILENAME=protoc-${PROTOC_VERSION}-osx-aarch64.zip
-          else
-          FILENAME=protoc-${PROTOC_VERSION}-osx-x86_64.zip
-          fi
-          URL=https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${FILENAME}
-          
+          URL=https://github.com/protocolbuffers/protobuf/releases/download/v3.20.3/protoc-3.20.3-osx-x86_64.zip
           echo "Detected arch: $ARCH, downloading $FILENAME"
           curl -LO "$URL"
           
