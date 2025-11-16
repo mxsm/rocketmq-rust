@@ -1,48 +1,161 @@
 name: CI
+
 permissions:
   contents: read
+
 on:
   push:
     branches: [ "main" ]
   pull_request:
-    branches: [ "main"]
+    branches: [ "main" ]
+
 env:
   CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: full
-  CI: true
 
+# ================================
+#           LINT JOB
+# ================================
 jobs:
-  build:
+  lint:
+    name: Lint (fmt + clippy)
     runs-on: ubuntu-latest
 
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        rust: [stable,nightly]
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (nightly)
+        uses: dtolnay/rust-toolchain@nightly
         with:
-          override: true
-          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+
+      # ================================
+      # Install protoc (platform-specific)
+      # ================================
+      - name: Install protoc (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          protoc --version
 
       - name: Install dependencies
         run: |
           rustup component add rustfmt
           rustup component add clippy
 
-      - name: Format check
-        run: cargo fmt -- --check
+      - name: Check format
+        run: cargo fmt --all -- --check
 
-      - name: Clippy check
-        run: cargo clippy -- -D warnings
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+
+  # ================================
+  #      BUILD & TEST MATRIX
+  # ================================
+  build-test:
+    name: Build & Test
+    needs: lint
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+        rust: [ nightly ]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@nightly
+
+      # ================================
+      # Install protoc (platform-specific)
+      # ================================
+      - name: Install protoc (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          protoc --version
+
+      - name: Install protoc (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protoc-21.12-osx-universal_binary.zip
+          unzip protoc-21.12-osx-universal_binary.zip -d $HOME/protoc
+          echo "$HOME/protoc/bin" >> $GITHUB_PATH
+          protoc --version
+
+      - name: Install protoc (Windows)
+        if: matrix.os == 'windows-latest'
+        run: choco install protoc
+
+      # Cargo cache
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ matrix.rust }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-${{ matrix.rust }}-
 
       - name: Build
-        run: cargo build --verbose --all-features
+        run: cargo build --all-features --verbose
 
       - name: Test
-        run: cargo test --verbose
+        run: cargo test --all-features --verbose
+
+
+  # ================================
+  #          CODE COVERAGE
+  # ================================
+  coverage:
+    name: Code Coverage (cargo-llvm-cov)
+    needs: build-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ================================
+      # Install protoc (platform-specific)
+      # ================================
+      - name: Install protoc (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          protoc --version
+
+      # Cache Cargo
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-cov-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-cov-
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Run coverage
+        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          fail_ci_if_error: false
