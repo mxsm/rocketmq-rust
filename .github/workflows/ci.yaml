@@ -83,7 +83,9 @@ jobs:
       - name: Install protoc (macOS)
         if: matrix.os == 'macos-latest'
         run: |
-          brew install protobuf
+          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protoc-21.12-osx-universal_binary.zip
+          unzip protoc-21.12-osx-universal_binary.zip -d $HOME/protoc
+          echo "$HOME/protoc/bin" >> $GITHUB_PATH
           protoc --version
 
       - name: Install protoc (Windows)
