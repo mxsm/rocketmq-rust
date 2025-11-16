@@ -32,40 +32,24 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-ci
+
       - name: Install dependencies
         run: |
           rustup component add rustfmt
           rustup component add clippy
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry/cache
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-
-
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry/index
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-index-
-
-      - name: Cache cargo build
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-check-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-build-check-
-
       - name: Format check
         run: cargo fmt --all -- --check
 
-      - name: Clippy check
-        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Clippy check (other packages)
+        run: cargo clippy --all-targets --workspace --exclude rocketmq-controller --all-features -- -D warnings
+
+      - name: Clippy check (controller without rocksdb)
+        run: cargo clippy --all-targets -p rocketmq-controller --no-default-features --features storage-file,metrics,debug -- -D warnings
 
   # Build and test on multiple platforms
   build-test:
@@ -76,7 +60,7 @@ jobs:
       fail-fast: true
       matrix:
         os: [ ubuntu-latest, macos-latest, windows-latest ]
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -104,35 +88,22 @@ jobs:
       - name: Set up Rust nightly
         uses: dtolnay/rust-toolchain@nightly
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
         with:
-          path: ~/.cargo/registry/cache
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-
+          shared-key: rust-ci
 
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry/index
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-index-
+      - name: Build (other packages)
+        run: cargo build --verbose --workspace --exclude rocketmq-controller --all-features
 
-      - name: Cache cargo build
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-build-
+      - name: Build (controller without rocksdb)
+        run: cargo build --verbose -p rocketmq-controller --no-default-features --features storage-file,metrics,debug
 
-      - name: Build
-        run: cargo build --verbose --all-features
+      - name: Run tests (other packages)
+        run: cargo test --verbose --workspace --exclude rocketmq-controller --all-features
 
-      - name: Run tests
-        run: cargo test --verbose --all-features
+      - name: Run tests (controller without rocksdb)
+        run: cargo test --verbose -p rocketmq-controller --no-default-features --features storage-file,metrics,debug
 
   # Code coverage (only on Ubuntu)
   coverage:
@@ -149,35 +120,19 @@ jobs:
       - name: Set up Rust nightly
         uses: dtolnay/rust-toolchain@nightly
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
         with:
-          path: ~/.cargo/registry/cache
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-
-
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry/index
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-index-
-
-      - name: Cache cargo build
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-coverage-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-build-coverage-
+          shared-key: rust-ci
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Generate code coverage
-        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+      - name: Generate code coverage (other packages)
+        run: |
+          cargo llvm-cov --workspace --exclude rocketmq-controller --all-features --lcov --output-path lcov-other.info
+          cargo llvm-cov -p rocketmq-controller --no-default-features --features storage-file,metrics,debug --lcov --output-path lcov-controller.info
+          cat lcov-other.info lcov-controller.info > lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -192,7 +147,7 @@ jobs:
     name: Auto Approve PR
     runs-on: ubuntu-latest
     needs: [ check, build-test, coverage ]
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.ref != 'refs/heads/main'
     permissions:
       pull-requests: write
     steps:
@@ -208,7 +163,7 @@ jobs:
     name: Auto Merge PR
     runs-on: ubuntu-latest
     needs: [ auto-approve ]
-    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'auto merge')
+    if: github.event_name == 'pull_request' && github.ref != 'refs/heads/main' && contains(github.event.pull_request.labels.*.name, 'auto merge')
     permissions:
       contents: write
       pull-requests: write
