@@ -31,9 +31,9 @@ jobs:
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
-          version: "25.x"
+          version: "3.20.3"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-          
+
       - name: Install dependencies
         run: |
           rustup component add rustfmt
@@ -89,7 +89,7 @@ jobs:
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
-          version: "25.x"
+          version: "3.20.3"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache cargo registry
@@ -182,7 +182,7 @@ jobs:
   auto-approve:
     name: Auto Approve PR
     runs-on: ubuntu-latest
-    needs: [check, build-test, coverage]
+    needs: [ check, build-test, coverage ]
     if: github.event_name == 'pull_request'
     permissions:
       pull-requests: write
@@ -198,7 +198,7 @@ jobs:
   auto-merge:
     name: Auto Merge PR
     runs-on: ubuntu-latest
-    needs: [auto-approve]
+    needs: [ auto-approve ]
     if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'auto merge')
     permissions:
       contents: write
