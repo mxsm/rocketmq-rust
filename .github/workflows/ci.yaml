@@ -88,6 +88,7 @@ jobs:
       - if: matrix.os == 'macos-latest'
         name: Install dependencies (macos-latest)
         run: |
+          FILENAME="protoc-3.20.3-osx-x86_64.zip"
           URL=https://github.com/protocolbuffers/protobuf/releases/download/v3.20.3/protoc-3.20.3-osx-x86_64.zip
           echo "Detected arch: $ARCH, downloading $FILENAME"
           curl -LO "$URL"
