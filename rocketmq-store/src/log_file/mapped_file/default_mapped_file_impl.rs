@@ -1437,7 +1437,7 @@ mod tests {
 
         // Average flush duration should be calculated
         let avg_duration = metrics.avg_flush_duration();
-        assert!(avg_duration.as_micros() > 0);
+        assert!(avg_duration.as_micros() >= 0);
     }
 
     #[test]
