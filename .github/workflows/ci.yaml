@@ -64,8 +64,11 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
-      - name: Clippy check
-        run: cargo clippy --all-targets --workspace -- -D warnings
+      - name: Clippy check (other packages)
+        run: cargo clippy --all-targets --workspace --exclude rocketmq-controller --all-features -- -D warnings
+
+      - name: Clippy check (controller without rocksdb)
+        run: cargo clippy --all-targets -p rocketmq-controller --no-default-features --features storage-file,metrics,debug -- -D warnings
 
   # Build and test on multiple platforms
   build-test:
@@ -128,11 +131,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-build
 
-      - name: Build
-        run: cargo build --verbose --workspace
+      - name: Build (other packages)
+        run: cargo build --verbose --workspace --exclude rocketmq-controller --all-features
 
-      - name: Run tests
-        run: cargo test --verbose --workspace
+      - name: Build (controller without rocksdb)
+        run: cargo build --verbose -p rocketmq-controller --no-default-features --features storage-file,metrics,debug
+
+      - name: Run tests (other packages)
+        run: cargo test --verbose --workspace --exclude rocketmq-controller --all-features
+
+      - name: Run tests (controller without rocksdb)
+        run: cargo test --verbose -p rocketmq-controller --no-default-features --features storage-file,metrics,debug
 
   # Code coverage (only on Ubuntu)
   coverage:
@@ -176,8 +185,11 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Generate code coverage
-        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+      - name: Generate code coverage (other packages)
+        run: |
+          cargo llvm-cov --workspace --exclude rocketmq-controller --all-features --lcov --output-path lcov-other.info
+          cargo llvm-cov -p rocketmq-controller --no-default-features --features storage-file,metrics,debug --lcov --output-path lcov-controller.info
+          cat lcov-other.info lcov-controller.info > lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
