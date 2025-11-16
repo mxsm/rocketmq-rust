@@ -3,6 +3,8 @@ name: Auto Approve Pull Requests
 on:
   pull_request_target:
     types: [ labeled, opened, synchronize, reopened ]
+  check_suite:
+    types: [ completed ]
 
 permissions:
   pull-requests: read
