@@ -83,12 +83,12 @@ use crate::mqtrace::consume_message_context::ConsumeMessageContext;
 use crate::mqtrace::consume_message_hook::ConsumeMessageHook;
 use crate::mqtrace::send_message_context::SendMessageContext;
 use crate::mqtrace::send_message_hook::SendMessageHook;
-use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
-use crate::transaction::transactional_message_service::TransactionalMessageService;
 use crate::send_message_constants::error_messages;
 use crate::send_message_constants::message_limits;
 use crate::send_message_constants::queue_config;
 use crate::send_message_constants::retry_config;
+use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
+use crate::transaction::transactional_message_service::TransactionalMessageService;
 
 pub struct SendMessageProcessor<MS: MessageStore, TS> {
     inner: ArcMut<Inner<MS, TS>>,
@@ -1069,10 +1069,7 @@ where
             (None, true)
         } else {
             if self.has_send_message_hook() {
-                let request_body_len = request
-                    .body()
-                    .as_ref()
-                    .map_or(0, |body| body.len() as i32);
+                let request_body_len = request.body().as_ref().map_or(0, |body| body.len() as i32);
                 self.update_send_context_on_failure(
                     send_message_context,
                     &put_message_result,
@@ -1201,7 +1198,8 @@ where
                 let topic_ =
                     CheetahString::from_string(mix_all::get_dlq_topic(group_name.as_str()));
                 new_topic = &topic_;
-                let queue_id_int = self.inner.random_queue_id(retry_config::DLQ_NUMS_PER_GROUP) as i32;
+                let queue_id_int =
+                    self.inner.random_queue_id(retry_config::DLQ_NUMS_PER_GROUP) as i32;
                 let new_topic_config = self
                     .inner
                     .broker_runtime_inner
@@ -1357,7 +1355,7 @@ where
 
         // SAFETY: subscription_group_config existence checked above
         let subscription_group_config = subscription_group_config.unwrap();
-        
+
         // Early return: no retry queues configured
         if subscription_group_config.retry_queue_nums() <= 0 {
             return Ok(Some(RemotingCommand::create_remoting_command(
@@ -1393,7 +1391,7 @@ where
         }
         // SAFETY: topic_config existence checked above
         let topic_config = topic_config.unwrap();
-        
+
         // Early return: topic not writable
         if !PermName::is_writeable(topic_config.perm) {
             return Ok(Some(
@@ -1409,8 +1407,9 @@ where
             .message_store()
             .as_ref()
             .ok_or_else(|| RocketMQError::Internal("Message store not initialized".to_string()))?;
-        
-        let msg_ext: Option<MessageExt> = message_store.look_message_by_offset(request_header.offset);
+
+        let msg_ext: Option<MessageExt> =
+            message_store.look_message_by_offset(request_header.offset);
         let Some(mut msg_ext) = msg_ext else {
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code_remark(
@@ -1603,9 +1602,8 @@ where
         send_message_context.born_host(CheetahString::from_string(
             channel.remote_address().to_string(),
         ));
-        send_message_context.broker_addr(CheetahString::from_string(
-            broker_config.get_broker_addr(),
-        ));
+        send_message_context
+            .broker_addr(CheetahString::from_string(broker_config.get_broker_addr()));
         send_message_context.queue_id(Some(request_header.queue_id));
         send_message_context.broker_region_id(CheetahString::from_string(region_id.clone()));
         send_message_context.born_time_stamp(request_header.born_timestamp);
@@ -1773,7 +1771,7 @@ fn rewrite_response_for_static_topic(
 ) -> Option<RemotingCommand> {
     // Early return: no mapping detail
     let mapping_detail = mapping_context.mapping_detail.as_ref()?;
-    
+
     // Early return: no leader item
     let Some(mapping_item) = mapping_context.leader_item.as_ref() else {
         return Some(RemotingCommand::create_response_command_with_code_remark(
@@ -1786,9 +1784,9 @@ fn rewrite_response_for_static_topic(
             ),
         ));
     };
-    
-    let static_logic_offset = mapping_item
-        .compute_static_queue_offset_loosely(response_header.queue_offset());
+
+    let static_logic_offset =
+        mapping_item.compute_static_queue_offset_loosely(response_header.queue_offset());
 
     response_header.set_queue_id(mapping_context.global_id.unwrap());
     response_header.set_queue_offset(static_logic_offset);

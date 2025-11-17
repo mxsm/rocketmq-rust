@@ -101,8 +101,8 @@ pub mod error_messages {
         "In-sync replicas not enough for synchronous replication";
 
     /// LMQ consume queue number exceeded
-    pub const LMQ_QUEUE_NUM_EXCEEDED: &str =
-        "[LMQ_CONSUME_QUEUE_NUM_EXCEEDED] Light message queue number exceeds limit (default: 20000)";
+    pub const LMQ_QUEUE_NUM_EXCEEDED: &str = "[LMQ_CONSUME_QUEUE_NUM_EXCEEDED] Light message \
+                                              queue number exceeds limit (default: 20000)";
 
     /// Timer flow control
     pub const TIMER_FLOW_CONTROL: &str =
