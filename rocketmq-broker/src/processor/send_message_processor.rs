@@ -50,7 +50,7 @@ use rocketmq_common::MessageDecoder;
 use rocketmq_common::MessageDecoder::message_properties_to_string;
 use rocketmq_common::MessageDecoder::string_to_message_properties;
 use rocketmq_common::TimeUtils;
-use rocketmq_error::RocketmqError::NoneError;
+use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketmqError::TokioHandlerError;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
@@ -85,6 +85,10 @@ use crate::mqtrace::send_message_context::SendMessageContext;
 use crate::mqtrace::send_message_hook::SendMessageHook;
 use crate::topic::manager::topic_queue_mapping_manager::TopicQueueMappingManager;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
+use crate::send_message_constants::error_messages;
+use crate::send_message_constants::message_limits;
+use crate::send_message_constants::queue_config;
+use crate::send_message_constants::retry_config;
 
 pub struct SendMessageProcessor<MS: MessageStore, TS> {
     inner: ArcMut<Inner<MS, TS>>,
@@ -301,16 +305,15 @@ where
             .broker_runtime_inner
             .topic_config_manager()
             .select_topic_config(request_header.topic())
-            .ok_or(NoneError(format!(
-                "topic {} not exist",
-                request_header.topic()
-            )))?;
+            .ok_or_else(|| RocketMQError::TopicNotExist {
+                topic: request_header.topic().to_string(),
+            })?;
         let mut queue_id = request_header.queue_id;
         if queue_id < 0 {
             queue_id = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
         }
 
-        if request_header.topic.len() > i8::MAX as usize {
+        if request_header.topic.len() > message_limits::MAX_TOPIC_LENGTH {
             return Ok(Some(
                 response
                     .set_code(ResponseCode::MessageIllegal)
@@ -536,10 +539,9 @@ where
             .broker_runtime_inner
             .topic_config_manager()
             .select_topic_config(request_header.topic())
-            .ok_or(NoneError(format!(
-                "topic {} not exist",
-                request_header.topic()
-            )))?;
+            .ok_or_else(|| RocketMQError::TopicNotExist {
+                topic: request_header.topic().to_string(),
+            })?;
         let mut queue_id = request_header.queue_id;
         if queue_id < 0 {
             queue_id = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
@@ -734,6 +736,259 @@ where
         }
     }
 
+    /// Map PutMessageStatus to response code
+    #[inline]
+    fn map_put_status_to_response_code(
+        &self,
+        status: rocketmq_store::base::message_status_enum::PutMessageStatus,
+        response: &mut RemotingCommand,
+    ) -> bool {
+        use rocketmq_store::base::message_status_enum::PutMessageStatus;
+
+        match status {
+            PutMessageStatus::PutOk => {
+                response.set_code_ref(RemotingSysResponseCode::Success);
+                true
+            }
+            PutMessageStatus::FlushDiskTimeout => {
+                response.set_code_ref(ResponseCode::FlushDiskTimeout);
+                true
+            }
+            PutMessageStatus::FlushSlaveTimeout => {
+                response.set_code_ref(ResponseCode::FlushSlaveTimeout);
+                true
+            }
+            PutMessageStatus::SlaveNotAvailable => {
+                response.set_code_ref(ResponseCode::SlaveNotAvailable);
+                true
+            }
+            PutMessageStatus::ServiceNotAvailable => {
+                response
+                    .set_code_mut(ResponseCode::ServiceNotAvailable)
+                    .set_remark_mut(error_messages::SERVICE_NOT_AVAILABLE);
+                false
+            }
+            PutMessageStatus::CreateMappedFileFailed => {
+                response
+                    .set_code_mut(RemotingSysResponseCode::SystemError)
+                    .set_remark_mut(error_messages::MAPPED_FILE_CREATE_FAILED);
+                false
+            }
+            PutMessageStatus::MessageIllegal | PutMessageStatus::PropertiesSizeExceeded => {
+                response
+                    .set_code_mut(ResponseCode::MessageIllegal)
+                    .set_remark_mut(error_messages::MESSAGE_ILLEGAL);
+                false
+            }
+            PutMessageStatus::OsPageCacheBusy => {
+                response
+                    .set_code_mut(RemotingSysResponseCode::SystemError)
+                    .set_remark_mut(error_messages::OS_PAGE_CACHE_BUSY);
+                false
+            }
+            PutMessageStatus::UnknownError => {
+                response
+                    .set_code_mut(RemotingSysResponseCode::SystemError)
+                    .set_remark_mut("UNKNOWN_ERROR");
+                false
+            }
+            PutMessageStatus::InSyncReplicasNotEnough => {
+                response
+                    .set_code_mut(RemotingSysResponseCode::SystemError)
+                    .set_remark_mut(error_messages::IN_SYNC_REPLICAS_NOT_ENOUGH);
+                false
+            }
+            PutMessageStatus::LmqConsumeQueueNumExceeded => {
+                response
+                    .set_code_mut(RemotingSysResponseCode::SystemError)
+                    .set_remark_mut(error_messages::LMQ_QUEUE_NUM_EXCEEDED);
+                false
+            }
+            PutMessageStatus::WheelTimerFlowControl => {
+                response
+                    .set_code_mut(RemotingSysResponseCode::SystemError)
+                    .set_remark_mut(error_messages::TIMER_FLOW_CONTROL);
+                false
+            }
+            PutMessageStatus::WheelTimerMsgIllegal => {
+                response
+                    .set_code_mut(ResponseCode::MessageIllegal)
+                    .set_remark_mut(error_messages::TIMER_MSG_ILLEGAL);
+                false
+            }
+            PutMessageStatus::WheelTimerNotEnable => {
+                response
+                    .set_code_mut(RemotingSysResponseCode::SystemError)
+                    .set_remark_mut(error_messages::TIMER_NOT_ENABLED);
+                false
+            }
+            _ => {
+                response
+                    .set_code_mut(RemotingSysResponseCode::SystemError)
+                    .set_remark_mut("UNKNOWN_ERROR DEFAULT");
+                false
+            }
+        }
+    }
+
+    /// Update broker statistics for successful message send
+    #[inline]
+    fn update_broker_stats_on_success(
+        &self,
+        topic: &str,
+        queue_id: i32,
+        put_message_result: &PutMessageResult,
+        begin_time_millis: Instant,
+    ) {
+        // SAFETY: When send_ok is true, append_message_result must exist
+        let result = put_message_result
+            .append_message_result()
+            .expect("append_message_result must exist for successful send");
+
+        if TopicValidator::RMQ_SYS_SCHEDULE_TOPIC == topic {
+            self.inner
+                .broker_runtime_inner
+                .broker_stats_manager()
+                .inc_queue_put_nums(topic, queue_id, result.msg_num, 1);
+            self.inner
+                .broker_runtime_inner
+                .broker_stats_manager()
+                .inc_queue_put_size(topic, queue_id, result.wrote_bytes);
+        }
+
+        self.inner
+            .broker_runtime_inner
+            .broker_stats_manager()
+            .inc_topic_put_nums(topic, result.msg_num, 1);
+        self.inner
+            .broker_runtime_inner
+            .broker_stats_manager()
+            .inc_topic_put_size(topic, result.wrote_bytes);
+        self.inner
+            .broker_runtime_inner
+            .broker_stats_manager()
+            .inc_broker_put_nums(topic, result.msg_num);
+        self.inner
+            .broker_runtime_inner
+            .broker_stats_manager()
+            .inc_topic_put_latency(
+                topic,
+                queue_id,
+                begin_time_millis.elapsed().as_millis() as i32,
+            );
+    }
+
+    /// Set response header for successful message send
+    #[inline]
+    fn set_success_response_header(
+        &self,
+        response_header: &mut SendMessageResponseHeader,
+        put_message_result: &PutMessageResult,
+        queue_id: i32,
+        transaction_id: Option<CheetahString>,
+    ) {
+        // SAFETY: When send_ok is true, append_message_result must exist
+        let result = put_message_result
+            .append_message_result()
+            .expect("append_message_result must exist for successful send");
+
+        response_header.set_msg_id(
+            result
+                .get_message_id()
+                .expect("message_id must exist for successful send"),
+        );
+        response_header.set_queue_id(queue_id);
+        response_header.set_queue_offset(result.logics_offset);
+        response_header.set_transaction_id(transaction_id);
+    }
+
+    /// Update send message context for hooks
+    fn update_send_context_on_success(
+        &self,
+        send_message_context: &mut SendMessageContext,
+        response_header: &SendMessageResponseHeader,
+        put_message_result: &PutMessageResult,
+        owner: Option<CheetahString>,
+        auth_type: Option<CheetahString>,
+        owner_parent: Option<CheetahString>,
+        owner_self: Option<CheetahString>,
+    ) {
+        // SAFETY: When send_ok is true, append_message_result must exist
+        let result = put_message_result
+            .append_message_result()
+            .expect("append_message_result must exist for successful send");
+
+        let commercial_size_per_msg = self
+            .inner
+            .broker_runtime_inner
+            .broker_config()
+            .commercial_size_per_msg;
+        let commercial_base_count = self
+            .inner
+            .broker_runtime_inner
+            .broker_config()
+            .commercial_base_count;
+
+        send_message_context.msg_id = response_header.msg_id().clone();
+        send_message_context.queue_id = Some(response_header.queue_id());
+        send_message_context.queue_offset = Some(response_header.queue_offset());
+
+        let commercial_msg_num =
+            (result.wrote_bytes as f64 / commercial_size_per_msg as f64).ceil() as i32;
+        let inc_value = commercial_msg_num * commercial_base_count;
+
+        send_message_context.commercial_send_stats = StatsType::SendSuccess;
+        send_message_context.commercial_send_times = inc_value;
+        send_message_context.commercial_send_size = result.wrote_bytes;
+        send_message_context.commercial_owner = owner.unwrap_or_default();
+
+        send_message_context.send_stat = StatsType::SendSuccess;
+        send_message_context.commercial_send_msg_num = commercial_msg_num;
+        send_message_context.account_auth_type = auth_type.unwrap_or_default();
+        send_message_context.account_owner_parent = owner_parent.unwrap_or_default();
+        send_message_context.account_owner_self = owner_self.unwrap_or_default();
+        send_message_context.send_msg_size = result.wrote_bytes;
+        send_message_context.send_msg_num = result.msg_num;
+    }
+
+    /// Update send message context for failure case
+    fn update_send_context_on_failure(
+        &self,
+        send_message_context: &mut SendMessageContext,
+        put_message_result: &PutMessageResult,
+        request_body_len: i32,
+        owner: Option<CheetahString>,
+        auth_type: Option<CheetahString>,
+        owner_parent: Option<CheetahString>,
+        owner_self: Option<CheetahString>,
+    ) {
+        let commercial_size_per_msg = self
+            .inner
+            .broker_runtime_inner
+            .broker_config()
+            .commercial_size_per_msg;
+
+        let msg_num = put_message_result
+            .append_message_result()
+            .map_or(1, |inner| inner.msg_num)
+            .max(1);
+        let commercial_msg_num =
+            (request_body_len as f64 / commercial_size_per_msg as f64).ceil() as i32;
+
+        send_message_context.commercial_send_stats = StatsType::SendFailure;
+        send_message_context.commercial_send_times = commercial_msg_num;
+        send_message_context.commercial_send_size = request_body_len;
+        send_message_context.commercial_owner = owner.unwrap_or_default();
+
+        send_message_context.send_stat = StatsType::SendFailure;
+        send_message_context.commercial_send_msg_num = commercial_msg_num;
+        send_message_context.account_auth_type = auth_type.unwrap_or_default();
+        send_message_context.account_owner_parent = owner_parent.unwrap_or_default();
+        send_message_context.account_owner_self = owner_self.unwrap_or_default();
+        send_message_context.send_msg_size = request_body_len;
+        send_message_context.send_msg_num = msg_num;
+    }
+
     async fn handle_put_message_result(
         &self,
         put_message_result: PutMessageResult,
@@ -748,60 +1003,8 @@ where
         mapping_context: &mut TopicQueueMappingContext,
         _message_type: MessageType,
     ) -> (Option<RemotingCommand>, bool) {
-        let mut send_ok = false;
-        match put_message_result.put_message_status() {
-                        rocketmq_store::base::message_status_enum::PutMessageStatus::PutOk => {
-                            send_ok = true;
-                            response.set_code_ref(RemotingSysResponseCode::Success);
-                        },
-                        rocketmq_store::base::message_status_enum::PutMessageStatus::FlushDiskTimeout => {
-                            send_ok = true;
-                            response.set_code_ref(ResponseCode::FlushDiskTimeout);
-                        },
-                        rocketmq_store::base::message_status_enum::PutMessageStatus::FlushSlaveTimeout => {
-                            send_ok = true;
-                            response.set_code_ref(ResponseCode::FlushSlaveTimeout);
-                        },
-                        rocketmq_store::base::message_status_enum::PutMessageStatus::SlaveNotAvailable =>{
-                            send_ok = true;
-                            response.set_code_ref(ResponseCode::SlaveNotAvailable);
-                        },
-                        rocketmq_store::base::message_status_enum::PutMessageStatus::ServiceNotAvailable => {
-                            response.set_code_mut(ResponseCode::ServiceNotAvailable).set_remark_mut("service not available now. It may be caused by one of the following reasons: \
-                            the broker's disk is full %s, messages are put to the slave, message store has been shut down, etc.");
-                        },
-                        rocketmq_store::base::message_status_enum::PutMessageStatus::CreateMappedFileFailed => {
-                           response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut("create mapped file failed, remoting_server is busy or broken.");
-                        },
-                        rocketmq_store::base::message_status_enum::PutMessageStatus::MessageIllegal |
-                        rocketmq_store::base::message_status_enum::PutMessageStatus::PropertiesSizeExceeded => {
-                           response.set_code_mut(ResponseCode::MessageIllegal).set_remark_mut("the message is illegal, maybe msg body or properties length not matched. msg body length limit B, msg properties length limit 32KB.");
-                        },
-                        rocketmq_store::base::message_status_enum::PutMessageStatus::OsPageCacheBusy =>{
-                            response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut("[PC_SYNCHRONIZED]broker busy, start flow control for a while");
-                        },
-                        rocketmq_store::base::message_status_enum::PutMessageStatus::UnknownError => {
-                           response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut("UNKNOWN_ERROR");
-                        },
-                        rocketmq_store::base::message_status_enum::PutMessageStatus::InSyncReplicasNotEnough => {
-                            response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut("in-sync replicas not enough");
-                        },
-                        rocketmq_store::base::message_status_enum::PutMessageStatus::LmqConsumeQueueNumExceeded => {
-                            response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut("[LMQ_CONSUME_QUEUE_NUM_EXCEEDED]broker config enableLmq and enableMultiDispatch, lmq consumeQueue num exceed maxLmqConsumeQueueNum config num, default limit 2w.");
-                        },
-                        rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerFlowControl => {
-                            response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut("timer message is under flow control, max num limit is %d or the current value is greater than %d and less than %d, trigger random flow control");
-                        },
-                        rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerMsgIllegal => {
-                            response.set_code_mut(ResponseCode::MessageIllegal).set_remark_mut("timer message illegal, the delay time should not be bigger than the max delay %dms; or if set del msg, the delay time should be bigger than the current time");
-                        },
-                        rocketmq_store::base::message_status_enum::PutMessageStatus::WheelTimerNotEnable => {
-                            response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut("accurate timer message is not enabled, timerWheelEnable is %s");
-                        },
-                        _ => {
-                            response.set_code_mut(RemotingSysResponseCode::SystemError).set_remark_mut("UNKNOWN_ERROR DEFAULT");
-                        }
-                    }
+        let send_ok =
+            self.map_put_status_to_response_code(put_message_result.put_message_status(), response);
 
         let binding = HashMap::new();
         let ext_fields = request.ext_fields().unwrap_or(&binding);
@@ -817,151 +1020,68 @@ where
         let owner_self = ext_fields
             .get(BrokerStatsManager::ACCOUNT_OWNER_SELF)
             .cloned();
-        let commercial_size_per_msg = self
-            .inner
-            .broker_runtime_inner
-            .broker_config()
-            .commercial_size_per_msg;
-        let response_header = response
-            .read_custom_header_mut::<SendMessageResponseHeader>()
-            .unwrap();
+
         if send_ok {
-            if TopicValidator::RMQ_SYS_SCHEDULE_TOPIC == topic {
-                self.inner
-                    .broker_runtime_inner
-                    .broker_stats_manager()
-                    .inc_queue_put_nums(
-                        topic,
-                        queue_id_int,
-                        put_message_result.append_message_result().unwrap().msg_num,
-                        1,
-                    );
-                self.inner
-                    .broker_runtime_inner
-                    .broker_stats_manager()
-                    .inc_queue_put_size(
-                        topic,
-                        queue_id_int,
-                        put_message_result
-                            .append_message_result()
-                            .unwrap()
-                            .wrote_bytes,
-                    );
-            }
-            self.inner
-                .broker_runtime_inner
-                .broker_stats_manager()
-                .inc_topic_put_nums(
-                    topic,
-                    put_message_result.append_message_result().unwrap().msg_num,
-                    1,
-                );
-            self.inner
-                .broker_runtime_inner
-                .broker_stats_manager()
-                .inc_topic_put_size(
-                    topic,
-                    put_message_result
-                        .append_message_result()
-                        .unwrap()
-                        .wrote_bytes,
-                );
-            self.inner
-                .broker_runtime_inner
-                .broker_stats_manager()
-                .inc_broker_put_nums(
-                    topic,
-                    put_message_result.append_message_result().unwrap().msg_num,
-                );
-            self.inner
-                .broker_runtime_inner
-                .broker_stats_manager()
-                .inc_topic_put_latency(
-                    topic,
+            self.update_broker_stats_on_success(
+                topic,
+                queue_id_int,
+                &put_message_result,
+                begin_time_millis,
+            );
+
+            {
+                let response_header = response
+                    .read_custom_header_mut::<SendMessageResponseHeader>()
+                    .expect("SendMessageResponseHeader must exist");
+
+                self.set_success_response_header(
+                    response_header,
+                    &put_message_result,
                     queue_id_int,
-                    begin_time_millis.elapsed().as_millis() as i32,
+                    transaction_id.clone(),
                 );
 
-            response_header.set_msg_id(
-                put_message_result
-                    .append_message_result()
-                    .unwrap()
-                    .get_message_id()
-                    .unwrap(),
-            );
-            response_header.set_queue_id(queue_id_int);
-            response_header.set_queue_offset(
-                put_message_result
-                    .append_message_result()
-                    .unwrap()
-                    .logics_offset,
-            );
-            response_header.set_transaction_id(transaction_id);
-
-            let rewrite_result =
-                rewrite_response_for_static_topic(response_header, mapping_context);
-            if rewrite_result.is_some() {
-                return (rewrite_result, false);
+                let rewrite_result =
+                    rewrite_response_for_static_topic(response_header, mapping_context);
+                if rewrite_result.is_some() {
+                    return (rewrite_result, false);
+                }
             }
-            let msg_id = response_header.msg_id().to_string();
-            let queue_id = Some(response_header.queue_id());
-            let queue_offset = Some(response_header.queue_offset());
+
             response.set_opaque_mut(request.opaque());
             ctx.write_response_ref(response).await;
 
             if self.has_send_message_hook() {
-                send_message_context.msg_id = CheetahString::from_string(msg_id);
-                send_message_context.queue_id = queue_id;
-                send_message_context.queue_offset = queue_offset;
-                let commercial_base_count = self
-                    .inner
-                    .broker_runtime_inner
-                    .broker_config()
-                    .commercial_base_count;
-                let wrote_size = put_message_result
-                    .append_message_result()
-                    .unwrap()
-                    .wrote_bytes;
-                let msg_num = put_message_result.append_message_result().unwrap().msg_num;
-                let commercial_msg_num =
-                    (wrote_size as f64 / commercial_size_per_msg as f64).ceil() as i32;
-                let inc_value = commercial_msg_num * commercial_base_count;
-                send_message_context.commercial_send_stats = StatsType::SendSuccess;
-                send_message_context.commercial_send_times = inc_value;
-                send_message_context.commercial_send_size = wrote_size;
-                send_message_context.commercial_owner = owner.unwrap_or_default();
+                let response_header = response
+                    .read_custom_header_mut::<SendMessageResponseHeader>()
+                    .expect("SendMessageResponseHeader must exist");
 
-                send_message_context.send_stat = StatsType::SendSuccess;
-                send_message_context.commercial_send_msg_num = commercial_msg_num;
-                send_message_context.account_auth_type = auth_type.unwrap_or_default();
-                send_message_context.account_owner_parent = owner_parent.unwrap_or_default();
-                send_message_context.account_owner_self = owner_self.unwrap_or_default();
-                send_message_context.send_msg_size = wrote_size;
-                send_message_context.send_msg_num = msg_num;
+                self.update_send_context_on_success(
+                    send_message_context,
+                    response_header,
+                    &put_message_result,
+                    owner,
+                    auth_type,
+                    owner_parent,
+                    owner_self,
+                );
             }
             (None, true)
         } else {
             if self.has_send_message_hook() {
-                let append_message_result = put_message_result.append_message_result();
-                let wrote_size = request.body().as_ref().unwrap().len() as i32;
-                let msg_num = append_message_result
-                    .map_or(1, |inner| inner.msg_num)
-                    .max(1);
-                let commercial_msg_num =
-                    (wrote_size as f64 / commercial_size_per_msg as f64).ceil() as i32;
-
-                send_message_context.commercial_send_stats = StatsType::SendFailure;
-                send_message_context.commercial_send_times = commercial_msg_num;
-                send_message_context.commercial_send_size = wrote_size;
-                send_message_context.commercial_owner = owner.unwrap_or_default();
-
-                send_message_context.send_stat = StatsType::SendFailure;
-                send_message_context.commercial_send_msg_num = commercial_msg_num;
-                send_message_context.account_auth_type = auth_type.unwrap_or_default();
-                send_message_context.account_owner_parent = owner_parent.unwrap_or_default();
-                send_message_context.account_owner_self = owner_self.unwrap_or_default();
-                send_message_context.send_msg_size = wrote_size;
-                send_message_context.send_msg_num = msg_num;
+                let request_body_len = request
+                    .body()
+                    .as_ref()
+                    .map_or(0, |body| body.len() as i32);
+                self.update_send_context_on_failure(
+                    send_message_context,
+                    &put_message_result,
+                    request_body_len,
+                    owner,
+                    auth_type,
+                    owner_parent,
+                    owner_self,
+                );
             }
             (None, false)
         }
@@ -1047,13 +1167,14 @@ where
                     ));
                 return false;
             }
+            // SAFETY: subscription_group_config existence checked above
             let subscription_group_config = subscription_group_config.unwrap();
 
             let mut max_reconsume_times = subscription_group_config.retry_max_times();
-            if request.rocketmq_version() >= RocketMqVersion::V3_4_9
-                && request_header.max_reconsume_times.is_some()
-            {
-                max_reconsume_times = request_header.max_reconsume_times.unwrap();
+            if request.rocketmq_version() >= RocketMqVersion::V3_4_9 {
+                if let Some(times) = request_header.max_reconsume_times {
+                    max_reconsume_times = times;
+                }
             }
             let reconsume_times = request_header.reconsume_times.unwrap_or(0);
             let mut send_retry_message_to_dead_letter_queue_directly = false;
@@ -1080,14 +1201,14 @@ where
                 let topic_ =
                     CheetahString::from_string(mix_all::get_dlq_topic(group_name.as_str()));
                 new_topic = &topic_;
-                let queue_id_int = self.inner.random_queue_id(DLQ_NUMS_PER_GROUP) as i32;
+                let queue_id_int = self.inner.random_queue_id(retry_config::DLQ_NUMS_PER_GROUP) as i32;
                 let new_topic_config = self
                     .inner
                     .broker_runtime_inner
                     .topic_config_manager_mut()
                     .create_topic_in_send_message_back_method(
                         new_topic,
-                        DLQ_NUMS_PER_GROUP as i32,
+                        retry_config::DLQ_NUMS_PER_GROUP as i32,
                         PermName::PERM_WRITE | PermName::PERM_READ,
                         false,
                         0,
@@ -1102,6 +1223,7 @@ where
                         .with_remark(format!("topic {new_topic} not exist, apply DLQ failed"));
                     return false;
                 }
+                // SAFETY: new_topic_config existence checked above
                 *topic_config = new_topic_config.unwrap();
             }
         }
@@ -1114,8 +1236,6 @@ where
         true
     }
 }
-
-const DLQ_NUMS_PER_GROUP: u32 = 1;
 
 pub(crate) struct Inner<MS, TS>
 where
@@ -1235,7 +1355,10 @@ where
             ));
         }
 
+        // SAFETY: subscription_group_config existence checked above
         let subscription_group_config = subscription_group_config.unwrap();
+        
+        // Early return: no retry queues configured
         if subscription_group_config.retry_queue_nums() <= 0 {
             return Ok(Some(RemotingCommand::create_remoting_command(
                 ResponseCode::Success,
@@ -1268,7 +1391,10 @@ where
                 ),
             ));
         }
+        // SAFETY: topic_config existence checked above
         let topic_config = topic_config.unwrap();
+        
+        // Early return: topic not writable
         if !PermName::is_writeable(topic_config.perm) {
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code_remark(
@@ -1277,13 +1403,15 @@ where
                 ),
             ));
         }
-        let msg_ext = self
+        // Early return: message not found
+        let message_store = self
             .broker_runtime_inner
             .message_store()
             .as_ref()
-            .unwrap()
-            .look_message_by_offset(request_header.offset);
-        if msg_ext.is_none() {
+            .ok_or_else(|| RocketMQError::Internal("Message store not initialized".to_string()))?;
+        
+        let msg_ext: Option<MessageExt> = message_store.look_message_by_offset(request_header.offset);
+        let Some(mut msg_ext) = msg_ext else {
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::SystemError,
@@ -1293,9 +1421,7 @@ where
                     ),
                 ),
             ));
-        }
-
-        let mut msg_ext = msg_ext.unwrap();
+        };
         let retry_topic = msg_ext.get_property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_RETRY_TOPIC,
         ));
@@ -1324,7 +1450,7 @@ where
                 .topic_config_manager_mut()
                 .create_topic_in_send_message_back_method(
                     &new_topic,
-                    DLQ_NUMS_PER_GROUP as i32,
+                    retry_config::DLQ_NUMS_PER_GROUP as i32,
                     PermName::PERM_WRITE | PermName::PERM_READ,
                     false,
                     0,
@@ -1341,7 +1467,7 @@ where
             true
         } else {
             if 0 == delay_level {
-                delay_level = 3 + msg_ext.reconsume_times();
+                delay_level = retry_config::DEFAULT_RETRY_DELAY_LEVEL + msg_ext.reconsume_times();
             }
             msg_ext.set_delay_time_level(delay_level);
             false
@@ -1373,13 +1499,12 @@ where
         msg_inner.properties_string = message_properties_to_string(msg_ext.get_properties());
 
         let inner_topic = msg_inner.get_topic().clone();
-        let put_message_result = self
+        let message_store = self
             .broker_runtime_inner
             .message_store_mut()
             .as_mut()
-            .unwrap()
-            .put_message(msg_inner)
-            .await;
+            .ok_or_else(|| RocketMQError::Internal("Message store not initialized".to_string()))?;
+        let put_message_result = message_store.put_message(msg_inner).await;
         let commercial_owner = request
             .get_ext_fields()
             .and_then(|value| value.get(BrokerStatsManager::COMMERCIAL_OWNER).cloned());
@@ -1459,6 +1584,8 @@ where
         request: &RemotingCommand,
     ) -> SendMessageContext {
         let namespace = NamespaceUtil::get_namespace_from_resource(request_header.topic.as_str());
+        let broker_config = self.broker_runtime_inner.broker_config();
+        let region_id = broker_config.region_id().to_string();
 
         let mut send_message_context = SendMessageContext {
             namespace: CheetahString::from_string(namespace),
@@ -1477,15 +1604,10 @@ where
             channel.remote_address().to_string(),
         ));
         send_message_context.broker_addr(CheetahString::from_string(
-            self.broker_runtime_inner.broker_config().get_broker_addr(),
+            broker_config.get_broker_addr(),
         ));
         send_message_context.queue_id(Some(request_header.queue_id));
-        send_message_context.broker_region_id(CheetahString::from_string(
-            self.broker_runtime_inner
-                .broker_config()
-                .region_id()
-                .to_string(),
-        ));
+        send_message_context.broker_region_id(CheetahString::from_string(region_id.clone()));
         send_message_context.born_time_stamp(request_header.born_timestamp);
         send_message_context.request_time_stamp(TimeUtils::get_current_millis() as i64);
 
@@ -1498,12 +1620,7 @@ where
             MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
         properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_MSG_REGION),
-            CheetahString::from_string(
-                self.broker_runtime_inner
-                    .broker_config()
-                    .region_id()
-                    .to_string(),
-            ),
+            CheetahString::from_string(region_id),
         );
         properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_TRACE_SWITCH),
@@ -1628,6 +1745,7 @@ where
         }
 
         let queue_id_int = request_header.queue_id;
+        // SAFETY: topic_config existence checked above
         let topic_config_inner = topic_config.as_ref().unwrap();
         let id_valid = topic_config_inner
             .write_queue_nums
@@ -1643,8 +1761,9 @@ where
         }
     }
 
+    #[inline]
     pub(crate) fn random_queue_id(&self, write_queue_nums: u32) -> u32 {
-        rand::rng().random_range(0..=99999999) % write_queue_nums
+        rand::rng().random_range(0..=queue_config::RANDOM_QUEUE_RANGE) % write_queue_nums
     }
 }
 
@@ -1652,11 +1771,11 @@ fn rewrite_response_for_static_topic(
     response_header: &mut SendMessageResponseHeader,
     mapping_context: &TopicQueueMappingContext,
 ) -> Option<RemotingCommand> {
-    mapping_context.mapping_detail.as_ref()?;
-
-    let mapping_detail = mapping_context.mapping_detail.as_ref().unwrap();
-    let mapping_item = mapping_context.leader_item.as_ref();
-    if mapping_item.is_none() {
+    // Early return: no mapping detail
+    let mapping_detail = mapping_context.mapping_detail.as_ref()?;
+    
+    // Early return: no leader item
+    let Some(mapping_item) = mapping_context.leader_item.as_ref() else {
         return Some(RemotingCommand::create_response_command_with_code_remark(
             ResponseCode::NotLeaderForQueue,
             format!(
@@ -1666,9 +1785,9 @@ fn rewrite_response_for_static_topic(
                 mapping_detail.topic_queue_mapping_info.bname.as_ref()
             ),
         ));
-    }
+    };
+    
     let static_logic_offset = mapping_item
-        .unwrap()
         .compute_static_queue_offset_loosely(response_header.queue_offset());
 
     response_header.set_queue_id(mapping_context.global_id.unwrap());
