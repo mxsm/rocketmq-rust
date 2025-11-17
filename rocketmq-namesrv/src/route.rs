@@ -19,6 +19,7 @@
 //!
 //! This module handles broker registration, topic routing, and cluster management.
 
+pub mod async_segmented_lock;
 pub mod batch_unregistration_service;
 pub mod error;
 pub mod route_info_manager;

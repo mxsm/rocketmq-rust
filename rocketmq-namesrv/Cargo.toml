@@ -41,7 +41,8 @@ cheetah-string = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-criterion = { version = "0.7", features = ["html_reports"] }
+criterion = { version = "0.7", features = ["html_reports", "async_futures"] }
+futures = "0.3"
 
 [[bin]]
 name = "rocketmq-namesrv-rust"
@@ -51,7 +52,10 @@ path = "src/bin/namesrv_bootstrap_server.rs"
 name = "route_manager_benchmark"
 harness = false
 
-
 [[bench]]
 name = "route_concurrency_bench"
+harness = false
+
+[[bench]]
+name = "async_segmented_lock_bench"
 harness = false
