@@ -156,9 +156,10 @@ async fn main() {
     println!("✓ Read-heavy workloads benefit most from segmentation\n");
 }
 
+#[allow(unused_variables)]
 async fn test_global_read(tasks: usize, duration: Duration) -> u64 {
     let lock = Arc::new(RwLock::new(0u64));
-    let start = Instant::now();
+    let _start = Instant::now();
     let mut handles = vec![];
 
     for _ in 0..tasks {
@@ -182,8 +183,9 @@ async fn test_global_read(tasks: usize, duration: Duration) -> u64 {
     total
 }
 
+#[allow(unused_variables)]
 async fn test_segmented_read(tasks: usize, duration: Duration) -> u64 {
-    let lock = Arc::new(AsyncSegmentedLock::new());
+    let lock = Arc::new(AsyncSegmentedLock::<()>::new());
     let start = Instant::now();
     let mut handles = vec![];
 
@@ -193,7 +195,7 @@ async fn test_segmented_read(tasks: usize, duration: Duration) -> u64 {
             let mut count = 0u64;
             let start_inner = Instant::now();
             while start_inner.elapsed() < duration {
-                let key = format!("key-{}", (i + count) % 100);
+                let key = format!("key-{}", (i as u64 + count) % 100);
                 let _guard = lock_clone.read_lock(&key).await;
                 count += 1;
             }
@@ -209,6 +211,7 @@ async fn test_segmented_read(tasks: usize, duration: Duration) -> u64 {
     total
 }
 
+#[allow(unused_variables)]
 async fn test_global_write(tasks: usize, duration: Duration) -> u64 {
     let lock = Arc::new(RwLock::new(0u64));
     let start = Instant::now();
@@ -235,8 +238,9 @@ async fn test_global_write(tasks: usize, duration: Duration) -> u64 {
     total
 }
 
+#[allow(unused_variables)]
 async fn test_segmented_write(tasks: usize, duration: Duration) -> u64 {
-    let lock = Arc::new(AsyncSegmentedLock::new());
+    let lock = Arc::new(AsyncSegmentedLock::<()>::new());
     let start = Instant::now();
     let mut handles = vec![];
 
@@ -246,7 +250,7 @@ async fn test_segmented_write(tasks: usize, duration: Duration) -> u64 {
             let mut count = 0u64;
             let start_inner = Instant::now();
             while start_inner.elapsed() < duration {
-                let key = format!("key-{}", (i + count) % 100);
+                let key = format!("key-{}", (i as u64 + count) % 100);
                 let _guard = lock_clone.write_lock(&key).await;
                 count += 1;
             }
@@ -262,6 +266,7 @@ async fn test_segmented_write(tasks: usize, duration: Duration) -> u64 {
     total
 }
 
+#[allow(unused_variables)]
 async fn test_global_mixed(tasks: usize, duration: Duration) -> u64 {
     let lock = Arc::new(RwLock::new(0u64));
     let start = Instant::now();
@@ -292,8 +297,9 @@ async fn test_global_mixed(tasks: usize, duration: Duration) -> u64 {
     total
 }
 
+#[allow(unused_variables)]
 async fn test_segmented_mixed(tasks: usize, duration: Duration) -> u64 {
-    let lock = Arc::new(AsyncSegmentedLock::new());
+    let lock = Arc::new(AsyncSegmentedLock::<()>::new());
     let start = Instant::now();
     let mut handles = vec![];
 
@@ -303,7 +309,7 @@ async fn test_segmented_mixed(tasks: usize, duration: Duration) -> u64 {
             let mut count = 0u64;
             let start_inner = Instant::now();
             while start_inner.elapsed() < duration {
-                let key = format!("key-{}", (i + count) % 100);
+                let key = format!("key-{}", (i as u64 + count) % 100);
                 if count % 10 == 0 {
                     let _guard = lock_clone.write_lock(&key).await;
                 } else {
