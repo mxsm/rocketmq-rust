@@ -34,8 +34,6 @@ use thiserror::Error;
 
 // Re-export legacy error types for backward compatibility (will be deprecated)
 #[allow(deprecated)]
-pub use crate::broker_error::*;
-#[allow(deprecated)]
 pub use crate::client_error::*;
 #[allow(deprecated)]
 pub use crate::common_error::*;
@@ -118,6 +116,63 @@ pub enum RocketMQError {
     /// Queue does not exist
     #[error("Queue does not exist: topic='{topic}', queue_id={queue_id}")]
     QueueNotExist { topic: String, queue_id: i32 },
+
+    /// Subscription group not found
+    #[error("Subscription group '{group}' not found")]
+    SubscriptionGroupNotExist { group: String },
+
+    /// Queue ID out of range
+    #[error("Queue {queue_id} out of range (0-{max}) for topic '{topic}'")]
+    QueueIdOutOfRange {
+        topic: String,
+        queue_id: i32,
+        max: i32,
+    },
+
+    /// Message body too large
+    #[error("Message body length {actual} bytes exceeds limit {limit} bytes")]
+    MessageTooLarge { actual: usize, limit: usize },
+
+    /// Message validation failed
+    #[error("Message validation failed: {reason}")]
+    MessageValidationFailed { reason: String },
+
+    /// Retry limit exceeded
+    #[error("Retry limit {current}/{max} exceeded for group '{group}'")]
+    RetryLimitExceeded {
+        group: String,
+        current: i32,
+        max: i32,
+    },
+
+    /// Transaction message rejected
+    #[error("Transaction message rejected by broker policy")]
+    TransactionRejected,
+
+    /// Broker permission denied
+    #[error("Broker permission denied: {operation}")]
+    BrokerPermissionDenied { operation: String },
+
+    /// Not master broker
+    #[error("Not master broker, master address: {master_address}")]
+    NotMasterBroker { master_address: String },
+
+    /// Message lookup failed
+    #[error("Message lookup failed at offset {offset}")]
+    MessageLookupFailed { offset: i64 },
+
+    /// Topic sending forbidden
+    #[error("Sending to topic '{topic}' is forbidden")]
+    TopicSendingForbidden { topic: String },
+
+    /// Async task failed
+    #[error("Async task '{task}' failed: {context}")]
+    BrokerAsyncTaskFailed {
+        task: &'static str,
+        context: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 
     // ============================================================================
     // NameServer/Route Errors

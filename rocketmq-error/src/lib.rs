@@ -64,8 +64,6 @@ pub use unified::ServiceError as UnifiedServiceError;
 
 // Legacy error modules (deprecated but kept for compatibility)
 #[deprecated(since = "0.7.0", note = "Use unified error system instead")]
-mod broker_error;
-#[deprecated(since = "0.7.0", note = "Use unified error system instead")]
 mod cli_error;
 #[deprecated(since = "0.7.0", note = "Use unified error system instead")]
 mod client_error;

@@ -24,6 +24,7 @@ pub use broker_bootstrap::BrokerBootstrap;
 pub use broker_bootstrap::Builder;
 
 pub mod command;
+pub mod send_message_constants;
 
 pub(crate) mod broker;
 pub(crate) mod broker_bootstrap;
