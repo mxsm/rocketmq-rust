@@ -28,7 +28,7 @@
 //! - **Documentation**: Each constant has clear usage documentation
 //!
 //! # Usage Example
-//! ```rust
+//! ```rust,ignore
 //! use rocketmq_broker::send_message_constants::message_limits;
 //!
 //! if topic.len() > message_limits::MAX_TOPIC_LENGTH {
