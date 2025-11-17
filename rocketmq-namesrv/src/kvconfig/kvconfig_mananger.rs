@@ -212,7 +212,7 @@ impl KVConfigManager {
 
         FileUtils::string_to_file(content.as_str(), config_path).map_err(|e| {
             error!("Failed to persist KV config to {}: {}", config_path, e);
-            RocketMQError::storage_read_failed(config_path, format!("Write failed: {}", e))
+            RocketMQError::storage_write_failed(config_path, format!("Write failed: {}", e))
         })?;
 
         // Reset counters after successful persistence
