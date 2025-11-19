@@ -111,6 +111,11 @@ impl CommandExecute for ClassificationTablePrint {
                 remark: "Update or create topic.",
             },
             Command {
+                category: "Topic",
+                command: "topicClusterList",
+                remark: "Get cluster info for topic.",
+            },
+            Command {
                 category: "NameServer",
                 command: "getNamesrvConfig",
                 remark: "Get configs of name server.",

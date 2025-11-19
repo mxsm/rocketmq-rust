@@ -48,6 +48,7 @@ use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::batch_ack_message_request_body::BatchAckMessageRequestBody;
+use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_remoting::protocol::body::check_client_request_body::CheckClientRequestBody;
 use rocketmq_remoting::protocol::body::get_consumer_listby_group_response_body::GetConsumerListByGroupResponseBody;
 use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
@@ -314,6 +315,29 @@ impl MQClientAPIImpl {
             let request_header = response
                 .decode_command_custom_header_fast::<WipeWritePermOfBrokerResponseHeader>()?;
             return Ok(request_header.get_wipe_topic_count());
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn get_broker_cluster_info(
+        &self,
+        timeout_millis: u64,
+    ) -> RocketMQResult<ClusterInfo> {
+        let request = RemotingCommand::create_request_command(
+            RequestCode::GetBrokerClusterInfo,
+            EmptyHeader {},
+        );
+        let response = self
+            .remoting_client
+            .invoke_request(None, request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return ClusterInfo::decode(body.as_ref());
+            }
         }
         Err(mq_client_err!(
             response.code(),
