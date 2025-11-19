@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-//! Phase 4.2: Integration Tests for RouteInfoManager V1/V2
+//! Integration Tests for RouteInfoManager V1/V2
 //!
 //! These tests verify that the V2 implementation is properly integrated
 //! and can be imported. Full functional testing requires NameServerRuntimeInner
