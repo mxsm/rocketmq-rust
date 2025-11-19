@@ -55,8 +55,8 @@ pub use factory::MappedFileFactory;
 pub use factory::MappedFileType;
 pub use flush_strategy::FlushStrategy;
 // Re-export io_uring implementation
-#[cfg(all(target_os = "linux", feature = "io_uring"))]
-pub use io_uring_impl::IoUringMappedFile;
+/*#[cfg(all(target_os = "linux", feature = "io_uring"))]
+pub use io_uring_impl::IoUringMappedFile;*/
 pub use mapped_buffer::MappedBuffer;
 pub use mapped_file_error::MappedFileError;
 pub use mapped_file_error::MappedFileResult;

@@ -31,7 +31,7 @@
 //! - Linux kernel 5.1+
 //! - Enable with: cargo build --features io_uring
 
-#[cfg(all(target_os = "linux", feature = "io_uring"))]
+/*#[cfg(all(target_os = "linux", feature = "io_uring"))]
 use std::fs::File;
 #[cfg(all(target_os = "linux", feature = "io_uring"))]
 use std::fs::OpenOptions;
@@ -96,8 +96,9 @@ use crate::log_file::mapped_file::flush_strategy::FlushStrategy;
 #[cfg(all(target_os = "linux", feature = "io_uring"))]
 use crate::log_file::mapped_file::metrics::MappedFileMetrics;
 #[cfg(all(target_os = "linux", feature = "io_uring"))]
-use crate::log_file::mapped_file::MappedFile;
+use crate::log_file::mapped_file::MappedFile;*/
 
+/*
 /// io_uring-based MappedFile Implementation
 ///
 /// This implementation uses io_uring for all I/O operations, providing:
@@ -729,3 +730,4 @@ impl IoUringMappedFile {
         ))
     }
 }
+*/

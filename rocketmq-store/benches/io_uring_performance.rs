@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+/*
 //! Performance benchmarks for IoUringMappedFile vs DefaultMappedFile
 //!
 //! Run with: cargo bench --bench io_uring_performance --features io_uring
@@ -356,7 +357,7 @@ criterion_group!(
 
 #[cfg(all(target_os = "linux", feature = "io_uring"))]
 criterion_main!(benches);
-
+*/
 #[cfg(not(all(target_os = "linux", feature = "io_uring")))]
 fn main() {
     // This benchmark requires Linux with io_uring feature enabled

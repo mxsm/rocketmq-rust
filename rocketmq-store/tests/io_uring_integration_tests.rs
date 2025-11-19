@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+/*
 //! Integration tests for IoUringMappedFile
 //!
 //! These tests verify the io_uring implementation works correctly
@@ -321,3 +321,4 @@ fn test_io_uring_availability() {
         }
     }
 }
+*/
