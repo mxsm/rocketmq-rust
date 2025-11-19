@@ -52,9 +52,9 @@ pub mod factory;
 
 // Re-export commonly used types
 pub use builder::MappedFileBuilder;
-pub use factory::MappedFileConfig;
+/*pub use factory::MappedFileConfig;
 pub use factory::MappedFileFactory;
-pub use factory::MappedFileType;
+pub use factory::MappedFileType;*/
 pub use flush_strategy::FlushStrategy;
 // Re-export io_uring implementation
 /*#[cfg(all(target_os = "linux", feature = "io_uring"))]
