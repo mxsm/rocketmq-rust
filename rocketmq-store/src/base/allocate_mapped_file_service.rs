@@ -94,8 +94,7 @@ impl AllocateMappedFileService {
         let result_tx = request.result_tx;
 
         match tokio::task::spawn_blocking(move || {
-            let mapped_file =
-                DefaultMappedFile::new(CheetahString::from_string(file_path), file_size as u64);
+            DefaultMappedFile::new(CheetahString::from_string(file_path), file_size as u64)
 
             /*//Warm up PageCache with madvise(WILLNEED)
             // This reduces page faults during actual writes by 15-20%
@@ -103,8 +102,6 @@ impl AllocateMappedFileService {
             {
                 Self::warm_pagecache(&mapped_file);
             }*/
-
-            mapped_file
         })
         .await
         {
