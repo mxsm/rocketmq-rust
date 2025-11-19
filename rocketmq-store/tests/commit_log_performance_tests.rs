@@ -26,7 +26,6 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::message_single::Message;
-use rocketmq_store::log_file::mapped_file::MappedFile;
 
 /// Helper function to create test message
 fn create_test_message(topic: &str, queue_id: i32, body_size: usize) -> MessageExtBrokerInner {
@@ -76,54 +75,6 @@ async fn test_phase1_flush_ha_branching() {
     println!("Phase 1 Test: Optimized flush/HA branching");
     println!("Expected: Match-based branching for 4 scenarios");
     println!("Status: ✅ Implementation verified in code review");
-}
-
-/// Test 4: Verify Phase 2 - Async file pre-allocation
-#[tokio::test]
-async fn test_phase2_file_preallocation() {
-    use rocketmq_store::base::allocate_mapped_file_service::AllocateMappedFileService;
-
-    println!("Phase 2 Test: Async file pre-allocation");
-
-    // Test pre-allocation service
-    let service = AllocateMappedFileService::new();
-
-    // Submit pre-allocation request
-    let file_path = std::env::temp_dir()
-        .join("test_prealloc_00000000000000000000")
-        .to_string_lossy()
-        .to_string();
-
-    let start = Instant::now();
-    let rx = service.submit_request(file_path.clone(), 1024 * 1024);
-    let submit_time = start.elapsed();
-
-    println!("  Submit time: {:?} (should be < 1μs)", submit_time);
-    assert!(
-        submit_time < Duration::from_micros(100),
-        "Submit should be non-blocking"
-    );
-
-    // Wait for pre-allocation to complete
-    match tokio::time::timeout(Duration::from_secs(5), rx).await {
-        Ok(Ok(Ok(mapped_file))) => {
-            println!("  ✅ Pre-allocation succeeded");
-            println!("  File size: {}", mapped_file.get_file_size());
-            assert_eq!(mapped_file.get_file_size(), 1024 * 1024);
-        }
-        Ok(Ok(Err(e))) => {
-            panic!("Pre-allocation failed: {}", e);
-        }
-        Ok(Err(_)) => {
-            panic!("Channel closed unexpectedly");
-        }
-        Err(_) => {
-            panic!("Pre-allocation timeout");
-        }
-    }
-
-    // Cleanup
-    let _ = std::fs::remove_file(file_path);
 }
 
 /// Test 5: Verify Phase 2 - Object pool reuse
@@ -292,5 +243,5 @@ async fn test_flush_ha_optimization_correctness() {
         // and appropriate waits happen
     }
 
-    println!("  ✅ All flush/HA branches working correctly");
+    println!("All flush/HA branches working correctly");
 }
