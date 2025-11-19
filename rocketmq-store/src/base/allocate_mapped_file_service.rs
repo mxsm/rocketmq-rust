@@ -97,12 +97,12 @@ impl AllocateMappedFileService {
             let mapped_file =
                 DefaultMappedFile::new(CheetahString::from_string(file_path), file_size as u64);
 
-            //Warm up PageCache with madvise(WILLNEED)
+            /*//Warm up PageCache with madvise(WILLNEED)
             // This reduces page faults during actual writes by 15-20%
             #[cfg(target_os = "linux")]
             {
                 Self::warm_pagecache(&mapped_file);
-            }
+            }*/
 
             mapped_file
         })
