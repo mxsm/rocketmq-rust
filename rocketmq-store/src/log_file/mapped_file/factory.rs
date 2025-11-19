@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+/*
 //! MappedFile Factory
 //!
 //! Provides factory methods to create the optimal MappedFile implementation
@@ -225,3 +226,4 @@ mod tests {
         }
     }
 }
+*/
