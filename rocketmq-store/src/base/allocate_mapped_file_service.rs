@@ -135,7 +135,7 @@ impl AllocateMappedFileService {
         }
     }
 
-    /// Pre-warm PageCache using madvise(WILLNEED)
+    /*/// Pre-warm PageCache using madvise(WILLNEED)
     ///
     /// This advises the kernel to pre-load file pages into memory
     /// # Platform Support
@@ -172,7 +172,7 @@ impl AllocateMappedFileService {
                 );
             }
         }
-    }
+    }*/
 
     #[cfg(not(target_os = "linux"))]
     fn warm_pagecache(_mapped_file: &DefaultMappedFile) {

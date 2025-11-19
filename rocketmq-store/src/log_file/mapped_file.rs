@@ -45,8 +45,10 @@ mod metrics;
 #[cfg(all(target_os = "linux", feature = "io_uring"))]
 pub mod io_uring_impl;
 
+/*
 // Factory for creating MappedFile instances
 pub mod factory;
+*/
 
 // Re-export commonly used types
 pub use builder::MappedFileBuilder;
