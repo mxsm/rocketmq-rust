@@ -342,13 +342,11 @@ impl CommitLog {
         let topic_queue_key = generate_key(&msg_batch.message_ext_broker_inner);
         put_message_context.set_topic_queue_table_key(topic_queue_key.clone());
         msg_batch.encoded_buff = encoded_buff;
-        
-        // CRITICAL FIX: Hold topic_queue_lock until after CommitLog write succeeds
-        // Same reasoning as single message - prevents offset holes on write failure
+
         let _topic_queue_guard = self.topic_queue_lock.lock(topic_queue_key.as_str()).await;
         self.assign_offset(&mut msg_batch.message_ext_broker_inner);
 
-        let lock = self.put_message_lock.lock().await;
+        let _put_message_lock = self.put_message_lock.lock().await;
         self.begin_time_in_lock.store(
             time_utils::get_current_millis(),
             std::sync::atomic::Ordering::Release,
@@ -367,7 +365,7 @@ impl CommitLog {
         }
 
         if mapped_file.is_none() {
-            drop(lock);
+            drop(_put_message_lock);
             drop(_topic_queue_guard); // Explicitly release topic_queue_lock on error
             error!(
                 "create mapped file error, topic: {}  clientAddr: {}",
@@ -397,8 +395,8 @@ impl CommitLog {
                     .mapped_file_queue
                     .get_last_mapped_file_mut_start_offset(0, true);
                 if mapped_file.is_none() {
-                    drop(lock);
-                    drop(_topic_queue_guard); // CRITICAL FIX: Release topic_queue_lock on error
+                    drop(_put_message_lock);
+                    drop(_topic_queue_guard);
                     self.begin_time_in_lock
                         .store(0, std::sync::atomic::Ordering::Release);
                     error!(
@@ -428,22 +426,28 @@ impl CommitLog {
             }
             AppendMessageStatus::MessageSizeExceeded
             | AppendMessageStatus::PropertiesSizeExceeded => {
-                drop(lock);
-                drop(_topic_queue_guard); // CRITICAL FIX: Release topic_queue_lock on error
+                drop(_put_message_lock);
+                drop(_topic_queue_guard);
                 self.begin_time_in_lock
                     .store(0, std::sync::atomic::Ordering::Release);
-                return PutMessageResult::new_append_result(PutMessageStatus::MessageIllegal, Some(result));
+                return PutMessageResult::new_append_result(
+                    PutMessageStatus::MessageIllegal,
+                    Some(result),
+                );
             }
             AppendMessageStatus::UnknownError => {
-                drop(lock);
-                drop(_topic_queue_guard); // CRITICAL FIX: Release topic_queue_lock on error
+                drop(_put_message_lock);
+                drop(_topic_queue_guard);
                 self.begin_time_in_lock
                     .store(0, std::sync::atomic::Ordering::Release);
-                return PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result));
+                return PutMessageResult::new_append_result(
+                    PutMessageStatus::UnknownError,
+                    Some(result),
+                );
             }
         };
         let elapsed_time_in_lock = start_time.elapsed().as_millis() as u64;
-        drop(lock);
+        drop(_put_message_lock);
         self.begin_time_in_lock
             .store(0, std::sync::atomic::Ordering::Release);
         if elapsed_time_in_lock > 500 {
@@ -482,8 +486,9 @@ impl CommitLog {
             // Write failed - topic_queue_lock will be released, but offset is already assigned
             drop(_topic_queue_guard);
             warn!(
-                "Failed to append batch messages to CommitLog, offset hole created for topic={} queue={}",
-                msg_batch.message_ext_broker_inner.topic(), 
+                "Failed to append batch messages to CommitLog, offset hole created for topic={} \
+                 queue={}",
+                msg_batch.message_ext_broker_inner.topic(),
                 msg_batch.message_ext_broker_inner.queue_id()
             );
             put_message_result
@@ -543,7 +548,6 @@ impl CommitLog {
             && self.message_store_config.broker_role != BrokerRole::Slave);
 
         // Encode message BEFORE acquiring any locks
-        // This reduces lock hold time significantly (from ~2-10ms to ~0.1-0.5ms)
         let (put_message_result, encoded_buff) =
             encode_message_ext(&msg, &self.message_store_config);
         if let Some(result) = put_message_result {
@@ -552,23 +556,6 @@ impl CommitLog {
         msg.encoded_buff = Some(encoded_buff);
         let put_message_context = PutMessageContext::new(topic_queue_key.clone());
 
-        // CRITICAL FIX: Topic-Queue lock MUST be held until after CommitLog write succeeds
-        // to prevent offset holes when write fails.
-        //
-        // Previous (INCORRECT):
-        // 1. Acquire topic_queue_lock
-        // 2. assign_offset (e.g., offset=100)
-        // 3. Release topic_queue_lock  ❌ TOO EARLY!
-        // 4. append_message (may fail)
-        //
-        // Problem: If append fails after lock release, another thread can assign offset=101
-        // and succeed, creating a permanent hole at offset=100 in ConsumeQueue!
-        //
-        // Correct (CURRENT):
-        // 1. Acquire topic_queue_lock
-        // 2. assign_offset
-        // 3. append_message (with lock still held)
-        // 4. Release lock only after write succeeds or failure is handled
         let _topic_queue_guard = if need_assign_offset {
             let guard = self.topic_queue_lock.lock(topic_queue_key.as_str()).await;
             self.assign_offset(&mut msg);
@@ -576,8 +563,8 @@ impl CommitLog {
         } else {
             None
         };
-        
-        let lock = self.put_message_lock.lock().await;
+
+        let _put_message_lock = self.put_message_lock.lock().await;
         let begin_lock_timestamp = time_utils::get_current_millis();
         self.begin_time_in_lock
             .store(begin_lock_timestamp, std::sync::atomic::Ordering::Release);
@@ -594,7 +581,7 @@ impl CommitLog {
         }
 
         if mapped_file.is_none() {
-            drop(lock);
+            drop(_put_message_lock);
             drop(_topic_queue_guard); // Explicitly release topic_queue_lock on error
             error!(
                 "create mapped file error, topic: {}  clientAddr: {}",
@@ -623,7 +610,7 @@ impl CommitLog {
                     .mapped_file_queue
                     .get_last_mapped_file_mut_start_offset(0, true);
                 if mapped_file.is_none() {
-                    drop(lock);
+                    drop(_put_message_lock);
                     drop(_topic_queue_guard); // CRITICAL FIX: Release topic_queue_lock on error
                     self.begin_time_in_lock
                         .store(0, std::sync::atomic::Ordering::Release);
@@ -653,22 +640,28 @@ impl CommitLog {
             }
             AppendMessageStatus::MessageSizeExceeded
             | AppendMessageStatus::PropertiesSizeExceeded => {
-                drop(lock);
-                drop(_topic_queue_guard); // CRITICAL FIX: Release topic_queue_lock on error
+                drop(_put_message_lock);
+                drop(_topic_queue_guard);
                 self.begin_time_in_lock
                     .store(0, std::sync::atomic::Ordering::Release);
-                return PutMessageResult::new_append_result(PutMessageStatus::MessageIllegal, Some(result));
+                return PutMessageResult::new_append_result(
+                    PutMessageStatus::MessageIllegal,
+                    Some(result),
+                );
             }
             AppendMessageStatus::UnknownError => {
-                drop(lock);
-                drop(_topic_queue_guard); // CRITICAL FIX: Release topic_queue_lock on error
+                drop(_put_message_lock);
+                drop(_topic_queue_guard);
                 self.begin_time_in_lock
                     .store(0, std::sync::atomic::Ordering::Release);
-                return PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result));
+                return PutMessageResult::new_append_result(
+                    PutMessageStatus::UnknownError,
+                    Some(result),
+                );
             }
         };
         let elapsed_time_in_lock = start_time.elapsed().as_millis() as u64;
-        drop(lock);
+        drop(_put_message_lock);
         self.begin_time_in_lock
             .store(0, std::sync::atomic::Ordering::Release);
         if elapsed_time_in_lock > 500 {
@@ -703,8 +696,10 @@ impl CommitLog {
             // This creates a hole in ConsumeQueue that will be filled by recovery process
             drop(_topic_queue_guard);
             warn!(
-                "Failed to append message to CommitLog, offset hole created for topic={} queue={}, will be recovered",
-                msg.topic(), msg.queue_id()
+                "Failed to append message to CommitLog, offset hole created for topic={} \
+                 queue={}, will be recovered",
+                msg.topic(),
+                msg.queue_id()
             );
             put_message_result
         }
@@ -731,12 +726,23 @@ impl CommitLog {
         }
     }
 
-    /// Optimized disk flush and HA handling
-    /// 
-    /// Performance improvements:
-    /// - Avoid unnecessary Future allocation when HA is not needed
-    /// - Early return for async flush without HA (most common case)
-    /// - Proper parallel execution only when both operations are truly needed
+    /// Handles disk flushing and high availability (HA) operations for a message.
+    ///
+    /// This function determines the appropriate actions to take based on the flush disk type
+    /// and whether HA handling is required. It performs disk flushing and HA replication
+    /// either synchronously or asynchronously, depending on the configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `put_message_result` - The result of the message put operation, which may be updated based
+    ///   on the outcomes of disk flushing and HA.
+    /// * `msg` - The message being processed.
+    /// * `need_ack_nums` - The number of acknowledgments required for HA.
+    /// * `need_handle_ha` - A boolean indicating whether HA handling is required.
+    ///
+    /// # Returns
+    ///
+    /// Returns the updated `PutMessageResult` after handling disk flushing and HA.
     async fn handle_disk_flush_and_ha(
         &self,
         mut put_message_result: PutMessageResult,
@@ -745,7 +751,7 @@ impl CommitLog {
         need_handle_ha: bool,
     ) -> PutMessageResult {
         let append_message_result = put_message_result.append_message_result().unwrap();
-        
+
         // Use efficient branching based on actual requirements
         match (self.message_store_config.flush_disk_type, need_handle_ha) {
             // Sync flush + HA: Must wait for both in parallel
@@ -785,7 +791,7 @@ impl CommitLog {
                 // No waiting needed - this is the hot path for high-throughput scenarios
             }
         }
-        
+
         put_message_result
     }
 

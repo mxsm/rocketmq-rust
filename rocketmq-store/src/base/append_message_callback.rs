@@ -18,7 +18,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::Buf;
-use tracing::error;
 use bytes::BufMut;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
@@ -32,6 +31,7 @@ use rocketmq_common::MessageDecoder::create_crc32;
 use rocketmq_common::MessageUtils::build_batch_message_id;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::SyncUnsafeCellWrapper;
+use tracing::error;
 
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_status_enum::AppendMessageStatus;
@@ -77,16 +77,11 @@ pub trait AppendMessageCallback {
         enabled_append_prop_crc: bool,
     ) -> AppendMessageResult;
 
-    /// **Phase 3 Zero-Copy Optimization**: Encode message directly to mmap buffer
+    /// Encode message directly to mmap buffer
     ///
     /// This method eliminates memory copying by encoding the message directly into the
     /// memory-mapped file region, bypassing the intermediate pre_encode_buffer.
     ///
-    /// # Performance Benefits
-    /// - Eliminates 1 memory copy operation (pre_encode_buffer → mmap)
-    /// - Reduces CPU usage by 20-30%
-    /// - Increases throughput by 15-25%
-    /// - Reduces heap pressure
     ///
     /// # Arguments
     ///
@@ -113,14 +108,20 @@ pub trait AppendMessageCallback {
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult {
         // Default: fall back to standard append
-        self.do_append(file_from_offset, mapped_file, max_blank, msg, put_message_context)
+        self.do_append(
+            file_from_offset,
+            mapped_file,
+            max_blank,
+            msg,
+            put_message_context,
+        )
     }
 }
 
 // File at the end of the minimum fixed length empty
 const END_FILE_MIN_BLANK_LENGTH: i32 = 4 + 4;
 
-pub(crate) struct DefaultAppendMessageCallback {
+pub struct DefaultAppendMessageCallback {
     msg_store_item_memory: SyncUnsafeCellWrapper<bytes::BytesMut>,
     crc32_reserved_length: i32,
     message_store_config: Arc<MessageStoreConfig>,
@@ -359,15 +360,10 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         }
     }
 
-    /// **Phase 3 Zero-Copy Implementation**
+    /// **Zero-Copy Implementation**
     ///
     /// Encodes message directly into memory-mapped file region, eliminating intermediate buffer.
     ///
-    /// # Performance Characteristics
-    /// - **Memory copies**: 0 (vs 1 in standard implementation)
-    /// - **CPU reduction**: 20-30%
-    /// - **Throughput increase**: 15-25%
-    /// - **Latency**: Same or slightly better due to fewer cache misses
     ///
     /// # Implementation Details
     /// 1. Get direct mutable buffer from MappedFile
@@ -386,25 +382,30 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         let pre_encode_buffer = msg_inner.encoded_buff.take().unwrap();
         let is_multi_dispatch_msg = self.message_store_config.enable_multi_dispatch
             && CommitLog::is_multi_dispatch_msg(msg_inner);
-        
+
         if is_multi_dispatch_msg {
             // Fall back to standard implementation for multi-dispatch
             msg_inner.encoded_buff = Some(pre_encode_buffer);
-            return self.do_append(file_from_offset, mapped_file, max_blank, msg_inner, put_message_context);
+            return self.do_append(
+                file_from_offset,
+                mapped_file,
+                max_blank,
+                msg_inner,
+                put_message_context,
+            );
         }
 
         let msg_len = i32::from_be_bytes(pre_encode_buffer[0..4].try_into().unwrap());
-        
+
         // Calculate physical offset
         let wrote_offset = file_from_offset + mapped_file.get_wrote_position() as i64;
         let addr = msg_inner.message_ext_inner.store_host;
-        let msg_id_supplier = move || -> String { 
-            message_utils::build_message_id(addr, wrote_offset) 
-        };
+        let msg_id_supplier =
+            move || -> String { message_utils::build_message_id(addr, wrote_offset) };
 
         let mut queue_offset = msg_inner.queue_offset();
         let message_num = get_message_num(&self.topic_config_table, msg_inner);
-        
+
         // Handle transaction messages
         if let MessageSysFlag::TRANSACTION_PREPARED_TYPE
         | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE =
@@ -440,17 +441,17 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         if let Some((buffer, _pos)) = mapped_file.get_direct_write_buffer(msg_len as usize) {
             // Copy pre-encoded buffer directly to mmap (single copy, no intermediate buffer)
             buffer[..msg_len as usize].copy_from_slice(&pre_encode_buffer[..msg_len as usize]);
-            
+
             // Update runtime fields that weren't known at pre-encode time
             let mut pos = 20; // Skip TOTALSIZE, MAGICCODE, BODYCRC, QUEUEID, FLAG
-            
+
             // 6 QUEUEOFFSET - update with actual queue offset
             buffer[pos..pos + 8].copy_from_slice(&queue_offset.to_be_bytes());
             pos += 8;
-            
+
             // 7 PHYSICALOFFSET - update with actual physical offset
             buffer[pos..pos + 8].copy_from_slice(&wrote_offset.to_be_bytes());
-            
+
             // Calculate IP length to skip to store timestamp
             let ip_len = if msg_inner.sys_flag() & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
                 4 + 4
@@ -458,7 +459,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
                 16 + 4
             };
             pos += 8 + 4 + 8 + ip_len; // Skip SYSFLAG, BORNTIMESTAMP, BORNHOST
-            
+
             // 11 STORETIMESTAMP - update with current timestamp
             buffer[pos..pos + 8].copy_from_slice(&msg_inner.store_timestamp().to_be_bytes());
 
@@ -466,10 +467,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             if self.message_store_config.enabled_append_prop_crc {
                 let check_size = msg_len - self.crc32_reserved_length;
                 let crc32 = crc32(&buffer[..check_size as usize]);
-                create_crc32(
-                    &mut buffer[check_size as usize..msg_len as usize],
-                    crc32,
-                );
+                create_crc32(&mut buffer[check_size as usize..msg_len as usize], crc32);
             }
 
             // Commit the write atomically
@@ -495,7 +493,13 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         } else {
             // Fall back to standard implementation if direct buffer unavailable
             msg_inner.encoded_buff = Some(pre_encode_buffer);
-            self.do_append(file_from_offset, mapped_file, max_blank, msg_inner, put_message_context)
+            self.do_append(
+                file_from_offset,
+                mapped_file,
+                max_blank,
+                msg_inner,
+                put_message_context,
+            )
         }
     }
 }

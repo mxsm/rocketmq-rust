@@ -439,13 +439,13 @@ impl MappedFile for DefaultMappedFile {
         false
     }
 
-    /// **Phase 3 Zero-Copy Implementation**
+    /// **Zero-Copy Implementation**
     ///
     /// Returns a direct mutable buffer for zero-copy message encoding.
-    /// Eliminates the intermediate pre_encode_buffer, reducing CPU usage by 20-30%.
+    /// Eliminates the intermediate pre_encode_buffer, reducing CPU usage.
     fn get_direct_write_buffer(&self, required_space: usize) -> Option<(&mut [u8], usize)> {
         let current_pos = self.wrote_position.load(Ordering::Acquire) as usize;
-        
+
         // Check if we have enough space
         if current_pos + required_space > self.file_size as usize {
             return None;
@@ -454,7 +454,7 @@ impl MappedFile for DefaultMappedFile {
         // Return a mutable slice directly into the mmap region
         // SAFETY: We've verified bounds above, and the slice lifetime is tied to self
         let buffer = &mut self.get_mapped_file_mut()[current_pos..current_pos + required_space];
-        
+
         Some((buffer, current_pos))
     }
 
@@ -467,7 +467,7 @@ impl MappedFile for DefaultMappedFile {
         }
 
         let current_pos = self.wrote_position.load(Ordering::Acquire) as usize;
-        
+
         // Verify the write doesn't exceed file size
         if current_pos + bytes_written > self.file_size as usize {
             error!(
@@ -478,8 +478,9 @@ impl MappedFile for DefaultMappedFile {
         }
 
         // Update write position atomically
-        self.wrote_position.fetch_add(bytes_written as i32, Ordering::AcqRel);
-        
+        self.wrote_position
+            .fetch_add(bytes_written as i32, Ordering::AcqRel);
+
         // Record metrics
         if let Some(metrics) = &self.metrics {
             metrics.record_write(bytes_written);

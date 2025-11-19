@@ -17,7 +17,7 @@ default = ["local_file_store"]
 local_file_store = []
 rocksdb_store = []
 data_store = ["local_file_store"]
-# Phase 3 Optimization: io_uring support for advanced async I/O (Linux 5.1+)
+# io_uring support for advanced async I/O (Linux 5.1+)
 io_uring = ["dep:tokio-uring"]
 
 

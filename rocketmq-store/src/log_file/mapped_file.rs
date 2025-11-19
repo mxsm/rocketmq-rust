@@ -41,7 +41,7 @@ mod mapped_buffer;
 mod mapped_file_error;
 mod metrics;
 
-// io_uring implementation (Phase 3 P2)
+// io_uring implementation
 #[cfg(all(target_os = "linux", feature = "io_uring"))]
 pub mod io_uring_impl;
 
@@ -50,16 +50,17 @@ pub mod factory;
 
 // Re-export commonly used types
 pub use builder::MappedFileBuilder;
-pub use factory::{MappedFileConfig, MappedFileFactory, MappedFileType};
+pub use factory::MappedFileConfig;
+pub use factory::MappedFileFactory;
+pub use factory::MappedFileType;
 pub use flush_strategy::FlushStrategy;
+// Re-export io_uring implementation
+#[cfg(all(target_os = "linux", feature = "io_uring"))]
+pub use io_uring_impl::IoUringMappedFile;
 pub use mapped_buffer::MappedBuffer;
 pub use mapped_file_error::MappedFileError;
 pub use mapped_file_error::MappedFileResult;
 pub use metrics::MappedFileMetrics;
-
-// Re-export io_uring implementation
-#[cfg(all(target_os = "linux", feature = "io_uring"))]
-pub use io_uring_impl::IoUringMappedFile;
 
 pub trait MappedFile {
     /// Returns the file name of the mapped file.

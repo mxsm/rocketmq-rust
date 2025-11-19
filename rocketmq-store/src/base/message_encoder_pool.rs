@@ -15,10 +15,10 @@
  * limitations under the License.
  */
 
-//! Phase 2 Optimization: Object Pool for MessageExtEncoder
+//! Object Pool for MessageExtEncoder
 //!
 //! Reduces heap allocations by ~50% by reusing encoder instances across messages.
-//! 
+//!
 //! Benefits:
 //! - Eliminates encoder allocation overhead (1-2μs per message)
 //! - Reduces GC pressure in high-throughput scenarios
@@ -38,11 +38,11 @@ use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBroker
 
 use crate::base::message_result::PutMessageResult;
 use crate::base::put_message_context::PutMessageContext;
-use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
 use crate::config::message_store_config::MessageStoreConfig;
+use crate::message_encoder::message_ext_encoder::MessageExtEncoder;
 
-/// Phase 2 Optimization: Thread-local pool for MessageExtEncoder instances
-/// 
+/// Thread-local pool for MessageExtEncoder instances
+///
 /// This eliminates the overhead of creating new encoders for every message,
 /// reducing heap allocations by approximately 50%.
 pub struct MessageEncoderPool {
@@ -57,7 +57,7 @@ impl MessageEncoderPool {
             key_buffer: RefCell::new(String::with_capacity(128)),
         }
     }
-    
+
     /// Get or create an encoder for the current thread
     fn get_or_create_encoder(
         &self,
@@ -67,10 +67,10 @@ impl MessageEncoderPool {
         if encoder_ref.is_none() {
             *encoder_ref = Some(MessageExtEncoder::new(Arc::clone(config)));
         }
-        
+
         std::cell::RefMut::map(encoder_ref, |opt| opt.as_mut().unwrap())
     }
-    
+
     /// Encode a single message using pooled encoder
     pub fn encode_message(
         &self,
@@ -82,7 +82,7 @@ impl MessageEncoderPool {
         let bytes = encoder.byte_buf();
         (result, bytes)
     }
-    
+
     /// Encode a batch of messages using pooled encoder
     pub fn encode_message_batch(
         &self,
@@ -93,10 +93,10 @@ impl MessageEncoderPool {
         let mut encoder = self.get_or_create_encoder(config);
         encoder.encode_batch(batch, context)
     }
-    
+
     /// Generate topic-queue key using pooled string buffer
-    /// 
-    /// Phase 2 Optimization: Reuse string buffer to avoid allocations
+    ///
+    /// Reuse string buffer to avoid allocations
     pub fn generate_topic_queue_key(&self, message: &MessageExtBrokerInner) -> String {
         let mut key = self.key_buffer.borrow_mut();
         key.clear();
@@ -108,14 +108,14 @@ impl MessageEncoderPool {
 }
 
 thread_local! {
-    /// Phase 2 Optimization: Thread-local encoder pool
-    /// 
+    /// Thread-local encoder pool
+    ///
     /// Each thread maintains its own encoder pool for zero-contention access.
     /// This eliminates synchronization overhead and improves cache locality.
     static ENCODER_POOL: MessageEncoderPool = MessageEncoderPool::new();
 }
 
-/// Phase 2 Optimization: Encode a single message using the thread-local encoder pool
+/// Encode a single message using the thread-local encoder pool
 #[inline]
 pub fn encode_message_with_pool(
     message: &MessageExtBrokerInner,
@@ -124,7 +124,7 @@ pub fn encode_message_with_pool(
     ENCODER_POOL.with(|pool| pool.encode_message(message, config))
 }
 
-/// Phase 2 Optimization: Encode a batch of messages using the thread-local encoder pool
+/// Encode a batch of messages using the thread-local encoder pool
 #[inline]
 pub fn encode_message_batch_with_pool(
     batch: &MessageExtBatch,
@@ -134,7 +134,7 @@ pub fn encode_message_batch_with_pool(
     ENCODER_POOL.with(|pool| pool.encode_message_batch(batch, context, config))
 }
 
-/// Phase 2 Optimization: Generate topic-queue key using pooled buffer
+/// Generate topic-queue key using pooled buffer
 #[inline]
 pub fn generate_key_with_pool(message: &MessageExtBrokerInner) -> String {
     ENCODER_POOL.with(|pool| pool.generate_topic_queue_key(message))
@@ -143,38 +143,35 @@ pub fn generate_key_with_pool(message: &MessageExtBrokerInner) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_encoder_pool_reuse() {
         // Verify that the same encoder instance is reused
         let config = Arc::new(MessageStoreConfig::default());
-        
+
         ENCODER_POOL.with(|pool| {
             let encoder1_ptr = {
                 let encoder = pool.get_or_create_encoder(&config);
                 &*encoder as *const MessageExtEncoder
             };
-            
+
             let encoder2_ptr = {
                 let encoder = pool.get_or_create_encoder(&config);
                 &*encoder as *const MessageExtEncoder
             };
-            
+
             assert_eq!(encoder1_ptr, encoder2_ptr, "Encoder should be reused");
         });
     }
-    
+
     #[test]
     fn test_key_buffer_reuse() {
-        use cheetah_string::CheetahString;
-        use rocketmq_common::common::message::message_single::Message;
-        
         let msg1 = MessageExtBrokerInner::default();
         let msg2 = MessageExtBrokerInner::default();
-        
+
         let key1 = generate_key_with_pool(&msg1);
         let key2 = generate_key_with_pool(&msg2);
-        
+
         // Keys should be generated without allocating new strings each time
         assert!(!key1.is_empty() || !key2.is_empty());
     }

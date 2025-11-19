@@ -31,40 +31,26 @@ use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::io_uring_impl::IoUringMappedFile;
 
 /// MappedFile implementation type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MappedFileType {
     /// Standard mmap-based implementation (default)
+    #[default]
     Default,
-    
+
     /// io_uring-based implementation (Linux 5.1+ only)
     /// Enable with: cargo build --features io_uring
     #[cfg(all(target_os = "linux", feature = "io_uring"))]
     IoUring,
 }
 
-impl Default for MappedFileType {
-    fn default() -> Self {
-        // Use io_uring if available and enabled
-        #[cfg(all(target_os = "linux", feature = "io_uring"))]
-        {
-            Self::IoUring
-        }
-        
-        #[cfg(not(all(target_os = "linux", feature = "io_uring")))]
-        {
-            Self::Default
-        }
-    }
-}
-
 /// Configuration for MappedFile creation
 pub struct MappedFileConfig {
     /// Implementation type to use
     pub file_type: MappedFileType,
-    
+
     /// Optional transient store pool
     pub transient_store_pool: Option<Arc<TransientStorePool>>,
-    
+
     /// Whether to enable metrics collection
     pub enable_metrics: bool,
 }
@@ -83,7 +69,7 @@ impl Default for MappedFileConfig {
 pub enum MappedFileImpl {
     /// Default mmap implementation
     Default(DefaultMappedFile),
-    
+
     /// io_uring implementation (Linux only)
     #[cfg(all(target_os = "linux", feature = "io_uring"))]
     IoUring(IoUringMappedFile),
@@ -112,7 +98,7 @@ impl MappedFileFactory {
     ///     file_type: MappedFileType::IoUring,
     ///     ..Default::default()
     /// };
-    /// 
+    ///
     /// let mapped_file = MappedFileFactory::create(
     ///     CheetahString::from("commitlog_0000000000000000000"),
     ///     1024 * 1024 * 1024, // 1GB
@@ -129,7 +115,7 @@ impl MappedFileFactory {
                 let mapped_file = DefaultMappedFile::new(file_name, file_size);
                 Ok(MappedFileImpl::Default(mapped_file))
             }
-            
+
             #[cfg(all(target_os = "linux", feature = "io_uring"))]
             MappedFileType::IoUring => {
                 let mapped_file = IoUringMappedFile::new(file_name, file_size).await?;
@@ -137,7 +123,7 @@ impl MappedFileFactory {
             }
         }
     }
-    
+
     /// Create a MappedFile with default configuration
     pub async fn create_default(
         file_name: CheetahString,
@@ -145,7 +131,7 @@ impl MappedFileFactory {
     ) -> io::Result<MappedFileImpl> {
         Self::create(file_name, file_size, MappedFileConfig::default()).await
     }
-    
+
     /// Create a MappedFile with transient store pool (currently ignored - future enhancement)
     pub async fn create_with_pool(
         file_name: CheetahString,
@@ -162,12 +148,12 @@ impl MappedFileFactory {
         )
         .await
     }
-    
+
     /// Get the recommended MappedFile type for the current platform
     pub fn recommended_type() -> MappedFileType {
         MappedFileType::default()
     }
-    
+
     /// Check if io_uring is available
     pub fn is_io_uring_available() -> bool {
         #[cfg(all(target_os = "linux", feature = "io_uring"))]
@@ -185,7 +171,7 @@ impl MappedFileFactory {
             }
             false
         }
-        
+
         #[cfg(not(all(target_os = "linux", feature = "io_uring")))]
         {
             false
@@ -196,38 +182,42 @@ impl MappedFileFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_factory_create_default() {
         let file_name = CheetahString::from("/tmp/test_mapped_file_factory");
         let file_size = 1024 * 1024; // 1MB
-        
+
         let result = MappedFileFactory::create_default(file_name, file_size).await;
-        assert!(result.is_ok(), "Factory creation failed: {:?}", result.err());
-        
+        assert!(
+            result.is_ok(),
+            "Factory creation failed: {:?}",
+            result.err()
+        );
+
         // Cleanup
         let _ = std::fs::remove_file("/tmp/test_mapped_file_factory");
     }
-    
+
     #[test]
     fn test_recommended_type() {
         let recommended = MappedFileFactory::recommended_type();
-        
+
         #[cfg(all(target_os = "linux", feature = "io_uring"))]
         {
             assert_eq!(recommended, MappedFileType::IoUring);
         }
-        
+
         #[cfg(not(all(target_os = "linux", feature = "io_uring")))]
         {
             assert_eq!(recommended, MappedFileType::Default);
         }
     }
-    
+
     #[test]
     fn test_io_uring_availability_check() {
         let is_available = MappedFileFactory::is_io_uring_available();
-        
+
         // Should always return false on Windows or without feature
         #[cfg(not(all(target_os = "linux", feature = "io_uring")))]
         {
