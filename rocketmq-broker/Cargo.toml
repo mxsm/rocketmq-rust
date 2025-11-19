@@ -46,7 +46,7 @@ rand = { workspace = true }
 
 #tools
 dirs.workspace = true
-dns-lookup = "2.0"
+dns-lookup = "3.0"
 
 cfg-if = { workspace = true }
 lazy_static.workspace = true
