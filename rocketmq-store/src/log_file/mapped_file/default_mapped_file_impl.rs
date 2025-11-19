@@ -439,6 +439,56 @@ impl MappedFile for DefaultMappedFile {
         false
     }
 
+    /// **Zero-Copy Implementation**
+    ///
+    /// Returns a direct mutable buffer for zero-copy message encoding.
+    /// Eliminates the intermediate pre_encode_buffer, reducing CPU usage.
+    fn get_direct_write_buffer(&self, required_space: usize) -> Option<(&mut [u8], usize)> {
+        let current_pos = self.wrote_position.load(Ordering::Acquire) as usize;
+
+        // Check if we have enough space
+        if current_pos + required_space > self.file_size as usize {
+            return None;
+        }
+
+        // Return a mutable slice directly into the mmap region
+        // SAFETY: We've verified bounds above, and the slice lifetime is tied to self
+        let buffer = &mut self.get_mapped_file_mut()[current_pos..current_pos + required_space];
+
+        Some((buffer, current_pos))
+    }
+
+    /// **Phase 3 Zero-Copy Implementation**
+    ///
+    /// Commits a direct write by updating the write position atomically.
+    fn commit_direct_write(&self, bytes_written: usize) -> bool {
+        if bytes_written == 0 {
+            return false;
+        }
+
+        let current_pos = self.wrote_position.load(Ordering::Acquire) as usize;
+
+        // Verify the write doesn't exceed file size
+        if current_pos + bytes_written > self.file_size as usize {
+            error!(
+                "commit_direct_write: write exceeds file size. pos={}, bytes={}, file_size={}",
+                current_pos, bytes_written, self.file_size
+            );
+            return false;
+        }
+
+        // Update write position atomically
+        self.wrote_position
+            .fetch_add(bytes_written as i32, Ordering::AcqRel);
+
+        // Record metrics
+        if let Some(metrics) = &self.metrics {
+            metrics.record_write(bytes_written);
+        }
+
+        true
+    }
+
     fn write_bytes_segment(&self, data: &[u8], start: usize, offset: usize, length: usize) -> bool {
         if start + length <= self.file_size as usize {
             let mut mapped_file = &mut self.get_mapped_file_mut()[start..start + length];

@@ -25,6 +25,7 @@ pub mod dispatch_request;
 pub mod flush_manager;
 pub mod get_message_result;
 pub mod message_arriving_listener;
+pub mod message_encoder_pool;
 pub mod message_result;
 pub mod message_status_enum;
 pub mod message_store;
