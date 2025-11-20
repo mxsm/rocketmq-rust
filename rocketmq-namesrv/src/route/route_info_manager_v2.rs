@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::mix_all;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_remoting::protocol::body::topic::topic_list::TopicList;
@@ -888,10 +889,7 @@ impl RouteInfoManagerV2 {
     ///
     /// This should be called periodically (e.g., every 5 seconds)
     pub fn scan_not_active_broker(&self) -> RouteResult<usize> {
-        let current_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let current_time = get_current_millis();
 
         // Get expired brokers
         let expired_brokers = self.broker_live_table.get_expired_brokers(current_time);
