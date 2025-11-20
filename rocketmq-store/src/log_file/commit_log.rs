@@ -279,6 +279,59 @@ impl CommitLog {
             .set_confirm_phy_offset(phy_offset as u64);
     }
 
+    /// Handle HA service validation and calculate need_ack_nums
+    /// Returns (need_ack_nums, should_continue) where should_continue indicates if processing can
+    /// continue
+    fn handle_ha_service(
+        &self,
+        curr_offset: u64,
+        need_handle_ha: bool,
+    ) -> Result<i32, PutMessageResult> {
+        let mut need_ack_nums = self.message_store_config.in_sync_replicas;
+
+        if !need_handle_ha {
+            return Ok(need_ack_nums);
+        }
+
+        let local_store = self.local_file_message_store.as_ref().ok_or_else(|| {
+            error!("LocalFileMessageStore is None");
+            PutMessageResult::new_default(PutMessageStatus::UnknownError)
+        })?;
+
+        let ha_service = local_store.get_ha_service().ok_or_else(|| {
+            error!("HA Service is None");
+            PutMessageResult::new_default(PutMessageStatus::UnknownError)
+        })?;
+
+        if self.broker_config.enable_controller_mode {
+            if ha_service.in_sync_replicas_nums(curr_offset as i64)
+                < self.message_store_config.min_in_sync_replicas as i32
+            {
+                return Err(PutMessageResult::new_default(
+                    PutMessageStatus::InSyncReplicasNotEnough,
+                ));
+            }
+            if self.message_store_config.all_ack_in_sync_state_set {
+                need_ack_nums = mix_all::ALL_ACK_IN_SYNC_STATE_SET;
+            }
+        } else if self.broker_config.enable_slave_acting_master {
+            let in_sync_replicas = local_store
+                .get_alive_replica_num_in_group()
+                .min(ha_service.in_sync_replicas_nums(curr_offset as i64));
+            need_ack_nums = self.calc_need_ack_nums(in_sync_replicas);
+            if need_ack_nums > in_sync_replicas {
+                return Err(PutMessageResult::new_default(
+                    PutMessageStatus::InSyncReplicasNotEnough,
+                ));
+            }
+            if self.message_store_config.all_ack_in_sync_state_set {
+                need_ack_nums = mix_all::ALL_ACK_IN_SYNC_STATE_SET;
+            }
+        }
+
+        Ok(need_ack_nums)
+    }
+
     pub async fn put_messages(&mut self, mut msg_batch: MessageExtBatch) -> PutMessageResult {
         msg_batch
             .message_ext_broker_inner
@@ -317,13 +370,11 @@ impl CommitLog {
         } else {
             0
         };
-        let need_ack_nums = self.message_store_config.in_sync_replicas;
         let need_handle_ha = self.need_handle_ha(&msg_batch.message_ext_broker_inner);
-        if need_handle_ha && self.broker_config.enable_controller_mode {
-            unimplemented!("controller mode not support HA")
-        } else if need_handle_ha && self.broker_config.enable_slave_acting_master {
-            unimplemented!("slave acting master not support HA")
-        }
+        let need_ack_nums = match self.handle_ha_service(curr_offset, need_handle_ha) {
+            Ok(ack_nums) => ack_nums,
+            Err(result) => return result,
+        };
         msg_batch.message_ext_broker_inner.version = MessageVersion::V1;
         let auto_message_version_on_topic_len =
             self.message_store_config.auto_message_version_on_topic_len;
@@ -536,13 +587,11 @@ impl CommitLog {
         } else {
             0
         };
-        let need_ack_nums = self.message_store_config.in_sync_replicas;
         let need_handle_ha = self.need_handle_ha(&msg);
-        if need_handle_ha && self.broker_config.enable_controller_mode {
-            unimplemented!("controller mode not support HA")
-        } else if need_handle_ha && self.broker_config.enable_slave_acting_master {
-            unimplemented!("slave acting master not support HA")
-        }
+        let need_ack_nums = match self.handle_ha_service(curr_offset, need_handle_ha) {
+            Ok(ack_nums) => ack_nums,
+            Err(result) => return result,
+        };
 
         let need_assign_offset = !(self.message_store_config.duplication_enable
             && self.message_store_config.broker_role != BrokerRole::Slave);
@@ -724,6 +773,17 @@ impl CommitLog {
         {
             self.consume_queue_store.assign_queue_offset(msg);
         }
+    }
+
+    #[inline]
+    fn calc_need_ack_nums(&self, in_sync_replicas: i32) -> i32 {
+        let mut need_ack_nums = self.message_store_config.in_sync_replicas;
+        if self.message_store_config.enable_auto_in_sync_replicas {
+            need_ack_nums = need_ack_nums.min(in_sync_replicas);
+            need_ack_nums =
+                need_ack_nums.max(self.message_store_config.min_in_sync_replicas as i32);
+        }
+        need_ack_nums
     }
 
     /// Handles disk flushing and high availability (HA) operations for a message.
