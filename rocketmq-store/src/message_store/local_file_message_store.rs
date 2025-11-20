@@ -235,9 +235,14 @@ impl LocalFileMessageStore {
             running_flags,
             reput_message_service: ReputMessageService {
                 shutdown: Arc::new(Notify::new()),
+                new_message_notify: Arc::new(Notify::new()),
+                pending_messages: Arc::new(AtomicI64::new(0)),
                 reput_from_offset: None,
                 message_store_config,
+                dispatch_tx: None,
                 inner: None,
+                reader_handle: None,
+                dispatcher_handle: None,
             },
             clean_commit_log_service: Arc::new(CleanCommitLogService {}),
             correct_logic_offset_service: Arc::new(CorrectLogicOffsetService {}),
@@ -812,6 +817,12 @@ impl MessageStore for LocalFileMessageStore {
                 .get_put_message_failed_times()
                 .fetch_add(1, Ordering::AcqRel);
         }
+
+        // Notify ReputMessageService that new message has arrived
+        if result.is_ok() {
+            self.reput_message_service.notify_new_message();
+        }
+
         result
     }
 
@@ -838,6 +849,12 @@ impl MessageStore for LocalFileMessageStore {
                 .get_put_message_failed_times()
                 .fetch_add(1, Ordering::Relaxed);
         }
+
+        // Notify ReputMessageService that new messages have arrived
+        if result.is_ok() {
+            self.reput_message_service.notify_new_message();
+        }
+
         result
     }
 
@@ -1973,13 +1990,24 @@ impl CommitLogDispatcher for CommitLogDispatcherDefault {
             dispatcher.dispatch(dispatch_request);
         }
     }
+
+    fn dispatch_batch(&self, dispatch_requests: &mut [DispatchRequest]) {
+        for dispatcher in self.dispatcher_vec.iter() {
+            dispatcher.dispatch_batch(dispatch_requests);
+        }
+    }
 }
 
 struct ReputMessageService {
     shutdown: Arc<Notify>,
+    new_message_notify: Arc<Notify>,
+    pending_messages: Arc<AtomicI64>,
     reput_from_offset: Option<Arc<AtomicI64>>,
     message_store_config: Arc<MessageStoreConfig>,
+    dispatch_tx: Option<tokio::sync::mpsc::Sender<Vec<DispatchRequest>>>,
     inner: Option<ReputMessageServiceInner>,
+    reader_handle: Option<tokio::task::JoinHandle<()>>,
+    dispatcher_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl ReputMessageService {
@@ -2042,6 +2070,13 @@ impl ReputMessageService {
         self.reput_from_offset = Some(Arc::new(AtomicI64::new(reput_from_offset)));
     }
 
+    /// Notify that new messages have arrived and need to be reput
+    pub fn notify_new_message(&self) {
+        // Increment pending counter to prevent notification loss
+        self.pending_messages.fetch_add(1, Ordering::Relaxed);
+        self.new_message_notify.notify_one();
+    }
+
     pub fn start(
         &mut self,
         commit_log: ArcMut<CommitLog>,
@@ -2050,28 +2085,125 @@ impl ReputMessageService {
         notify_message_arrive_in_batch: bool,
         message_store: ArcMut<LocalFileMessageStore>,
     ) {
+        // Create channel for decoupling read and dispatch
+        let (dispatch_tx, mut dispatch_rx) =
+            tokio::sync::mpsc::channel::<Vec<DispatchRequest>>(128);
+        self.dispatch_tx = Some(dispatch_tx.clone());
+
         let mut inner = ReputMessageServiceInner {
             reput_from_offset: self.reput_from_offset.clone().unwrap(),
             commit_log,
-            message_store_config,
-            dispatcher,
+            message_store_config: message_store_config.clone(),
+            dispatcher: dispatcher.clone(),
             notify_message_arrive_in_batch,
-            message_store,
+            message_store: message_store.clone(),
         };
         self.inner = Some(inner.clone());
+
         let shutdown = self.shutdown.clone();
-        let handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(1));
+        let new_message_notify = self.new_message_notify.clone();
+        let pending_messages = self.pending_messages.clone();
+
+        // Task 1: Read messages from CommitLog and send to channel
+        let shutdown_reader = shutdown.clone();
+        let reader_handle = tokio::spawn(async move {
             loop {
                 tokio::select! {
-                    _ = inner.do_reput() => {}
-                    _ = shutdown.notified() => {
+                    _ = new_message_notify.notified() => {
+                        // Process all available messages when notified
+                        loop {
+                            // Check if there are messages to process
+                            if !inner.is_commit_log_available() {
+                                break;
+                            }
+
+                            // Read and parse messages, send to dispatch channel
+                            match inner.read_and_parse_batch().await {
+                                Some(batch) => {
+                                    // Successfully read a batch, try to send
+                                    if dispatch_tx.send(batch).await.is_err() {
+                                        error!("Failed to send dispatch batch to channel, channel closed");
+                                        break;
+                                    }
+
+                                    // Decrement pending counter after successful send
+                                    // Use saturating_sub to prevent underflow
+                                    pending_messages.fetch_update(
+                                        Ordering::Relaxed,
+                                        Ordering::Relaxed,
+                                        |x| if x > 0 { Some(x - 1) } else { Some(0) }
+                                    ).ok();
+                                }
+                                None => {
+                                    // No more messages available at this offset
+                                    break;
+                                }
+                            }
+
+                            // Check if there are still pending messages
+                            // If no pending and no available, exit loop
+                            if pending_messages.load(Ordering::Relaxed) == 0
+                                && !inner.is_commit_log_available() {
+                                break;
+                            }
+                        }
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(1)) => {
+                        // Fallback: periodic check
+                        if pending_messages.load(Ordering::Relaxed) > 0 || inner.is_commit_log_available() {
+                            if let Some(batch) = inner.read_and_parse_batch().await {
+                                if dispatch_tx.send(batch).await.is_ok() {
+                                    pending_messages.fetch_update(
+                                        Ordering::Relaxed,
+                                        Ordering::Relaxed,
+                                        |x| if x > 0 { Some(x - 1) } else { Some(0) }
+                                    ).ok();
+                                }
+                            }
+                        }
+                    }
+                    _ = shutdown_reader.notified() => {
                         break;
                     }
                 }
-                interval.tick().await;
             }
         });
+
+        // Task 2: Receive from channel and dispatch
+        let shutdown_dispatcher = shutdown.clone();
+        let dispatcher_handle = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    Some(mut batch) = dispatch_rx.recv() => {
+                        // Dispatch the batch
+                        dispatcher.dispatch_batch(&mut batch);
+
+                        // Notify message arrival if needed
+                        if !notify_message_arrive_in_batch {
+                            for req in batch.iter_mut() {
+                                message_store.notify_message_arrive_if_necessary(req);
+                            }
+                        }
+                    }
+                    _ = shutdown_dispatcher.notified() => {
+                        // Process remaining messages in channel before shutdown
+                        while let Ok(mut batch) = dispatch_rx.try_recv() {
+                            dispatcher.dispatch_batch(&mut batch);
+                            if !notify_message_arrive_in_batch {
+                                for req in batch.iter_mut() {
+                                    message_store.notify_message_arrive_if_necessary(req);
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Store task handles for graceful shutdown
+        self.reader_handle = Some(reader_handle);
+        self.dispatcher_handle = Some(dispatcher_handle);
     }
 
     pub fn shutdown(&mut self) {
@@ -2174,6 +2306,8 @@ impl ReputMessageServiceInner {
                 .store(self.commit_log.get_min_offset(), Ordering::Release);
         }
         let mut do_next = true;
+        let mut dispatch_batch: Vec<DispatchRequest> = Vec::with_capacity(64);
+
         while do_next && self.is_commit_log_available() {
             let result = self
                 .commit_log
@@ -2189,7 +2323,7 @@ impl ReputMessageServiceInner {
                 && self.reput_from_offset.load(Ordering::Acquire) < self.get_reput_end_offset()
                 && do_next
             {
-                let mut dispatch_request = commit_log::check_message_and_return_size(
+                let dispatch_request = commit_log::check_message_and_return_size(
                     result.bytes.as_mut().unwrap(),
                     false,
                     false,
@@ -2212,14 +2346,7 @@ impl ReputMessageServiceInner {
                 if dispatch_request.success {
                     match dispatch_request.msg_size.cmp(&0) {
                         std::cmp::Ordering::Greater => {
-                            self.dispatcher.dispatch(&mut dispatch_request);
-                            if !self.notify_message_arrive_in_batch {
-                                self.message_store
-                                    .notify_message_arrive_if_necessary(&mut dispatch_request);
-                            }
-                            self.reput_from_offset
-                                .fetch_add(size as i64, Ordering::AcqRel);
-                            read_size += size;
+                            // Update stats before moving dispatch_request
                             if !self.message_store_config.duplication_enable
                                 && self.message_store_config.broker_role == BrokerRole::Slave
                             {
@@ -2236,6 +2363,24 @@ impl ReputMessageServiceInner {
                                         dispatch_request.msg_size as usize,
                                     );
                             }
+
+                            // Batch dispatch: accumulate requests (no clone needed)
+                            dispatch_batch.push(dispatch_request);
+
+                            // Dispatch batch when reaching threshold or at end
+                            if dispatch_batch.len() >= 32 {
+                                self.dispatcher.dispatch_batch(&mut dispatch_batch);
+                                if !self.notify_message_arrive_in_batch {
+                                    for req in dispatch_batch.iter_mut() {
+                                        self.message_store.notify_message_arrive_if_necessary(req);
+                                    }
+                                }
+                                dispatch_batch.clear();
+                            }
+
+                            self.reput_from_offset
+                                .fetch_add(size as i64, Ordering::AcqRel);
+                            read_size += size;
                         }
                         std::cmp::Ordering::Equal => {
                             self.reput_from_offset.store(
@@ -2263,6 +2408,16 @@ impl ReputMessageServiceInner {
             }
             result.release();
         }
+
+        // Dispatch remaining messages in batch
+        if !dispatch_batch.is_empty() {
+            self.dispatcher.dispatch_batch(&mut dispatch_batch);
+            if !self.notify_message_arrive_in_batch {
+                for req in dispatch_batch.iter_mut() {
+                    self.message_store.notify_message_arrive_if_necessary(req);
+                }
+            }
+        }
     }
 
     fn is_commit_log_available(&self) -> bool {
@@ -2283,6 +2438,120 @@ impl ReputMessageServiceInner {
     pub fn set_reput_from_offset(&mut self, reput_from_offset: i64) {
         self.reput_from_offset
             .store(reput_from_offset, Ordering::SeqCst);
+    }
+
+    /// Read and parse a batch of messages from CommitLog (for channel-based dispatch)
+    pub async fn read_and_parse_batch(&mut self) -> Option<Vec<DispatchRequest>> {
+        let reput_from_offset = self.reput_from_offset.load(Ordering::Relaxed);
+        if reput_from_offset < self.commit_log.get_min_offset() {
+            warn!(
+                "The reputFromOffset={} is smaller than minPyOffset={}, this usually indicate \
+                 that the dispatch behind too much and the commitlog has expired.",
+                reput_from_offset,
+                self.commit_log.get_min_offset()
+            );
+            self.reput_from_offset
+                .store(self.commit_log.get_min_offset(), Ordering::Release);
+        }
+
+        if !self.is_commit_log_available() {
+            return None;
+        }
+
+        let mut dispatch_batch: Vec<DispatchRequest> = Vec::with_capacity(64);
+
+        let result = self
+            .commit_log
+            .get_data(self.reput_from_offset.load(Ordering::Acquire));
+        result.as_ref()?;
+        let mut result = result.unwrap();
+        self.reput_from_offset
+            .store(result.start_offset as i64, Ordering::Release);
+        let mut read_size = 0i32;
+
+        while read_size < result.size
+            && self.reput_from_offset.load(Ordering::Acquire) < self.get_reput_end_offset()
+            && dispatch_batch.len() < 64
+        {
+            let dispatch_request = commit_log::check_message_and_return_size(
+                result.bytes.as_mut().unwrap(),
+                false,
+                false,
+                false,
+                &self.message_store_config,
+                self.message_store.max_delay_level,
+                self.message_store.delay_level_table.as_ref(),
+            );
+            let size = if dispatch_request.buffer_size == -1 {
+                dispatch_request.msg_size
+            } else {
+                dispatch_request.buffer_size
+            };
+
+            if self.reput_from_offset.load(Ordering::Acquire) + size as i64
+                > self.get_reput_end_offset()
+            {
+                break;
+            }
+
+            if dispatch_request.success {
+                match dispatch_request.msg_size.cmp(&0) {
+                    std::cmp::Ordering::Greater => {
+                        // Update stats before moving dispatch_request
+                        if !self.message_store_config.duplication_enable
+                            && self.message_store_config.broker_role == BrokerRole::Slave
+                        {
+                            self.message_store
+                                .store_stats_service
+                                .add_single_put_message_topic_times_total(
+                                    dispatch_request.topic.as_str(),
+                                    dispatch_request.batch_size as usize,
+                                );
+                            self.message_store
+                                .store_stats_service
+                                .add_single_put_message_topic_size_total(
+                                    dispatch_request.topic.as_str(),
+                                    dispatch_request.msg_size as usize,
+                                );
+                        }
+
+                        // Move dispatch_request into batch (no clone needed)
+                        dispatch_batch.push(dispatch_request);
+                        self.reput_from_offset
+                            .fetch_add(size as i64, Ordering::AcqRel);
+                        read_size += size;
+                    }
+                    std::cmp::Ordering::Equal => {
+                        self.reput_from_offset.store(
+                            self.commit_log
+                                .roll_next_file(self.reput_from_offset.load(Ordering::Relaxed)),
+                            Ordering::SeqCst,
+                        );
+                        read_size = result.size;
+                    }
+                    std::cmp::Ordering::Less => {}
+                }
+            } else if size > 0 {
+                error!(
+                    "[BUG]read total count not equals msg total size. reputFromOffset={}",
+                    self.reput_from_offset.load(Ordering::Relaxed)
+                );
+                self.reput_from_offset
+                    .fetch_add(size as i64, Ordering::SeqCst);
+            } else {
+                if self.message_store_config.enable_dledger_commit_log {
+                    unimplemented!()
+                }
+                break;
+            }
+        }
+        result.release();
+
+        if dispatch_batch.is_empty() {
+            None
+        } else {
+            Some(dispatch_batch)
+        }
     }
 }
 
