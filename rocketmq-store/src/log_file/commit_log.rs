@@ -168,7 +168,7 @@ pub struct CommitLog {
     topic_queue_lock: Arc<TopicQueueLock>,
     topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
     consume_queue_store: ConsumeQueueStore,
-    flush_manager: Arc<tokio::sync::Mutex<DefaultFlushManager>>,
+    flush_manager: ArcMut<DefaultFlushManager>,
     begin_time_in_lock: Arc<AtomicU64>,
     cold_data_check_service: Arc<ColdDataCheckService>,
 }
@@ -209,11 +209,11 @@ impl CommitLog {
             )),
             topic_config_table,
             consume_queue_store,
-            flush_manager: Arc::new(tokio::sync::Mutex::new(DefaultFlushManager::new(
+            flush_manager: ArcMut::new(DefaultFlushManager::new(
                 message_store_config,
                 mapped_file_queue,
                 store_checkpoint,
-            ))),
+            )),
             begin_time_in_lock: Arc::new(AtomicU64::new(0)),
             cold_data_check_service: Arc::new(Default::default()),
         }
@@ -234,14 +234,17 @@ impl CommitLog {
     }
 
     pub fn start(&mut self) {
-        let flush_manager = self.flush_manager.clone();
+        let mut flush_manager = self.flush_manager.clone();
+        let flush_manager_weak = ArcMut::downgrade(&flush_manager);
+
         tokio::spawn(async move {
-            let flush_manager_weak = Arc::downgrade(&flush_manager);
-            let mut guard = flush_manager.lock().await;
-            if let Some(service) = guard.commit_real_time_service_mut() {
-                service.set_flush_manager(Some(flush_manager_weak))
+            // Acquire lock only for initialization
+            {
+                if let Some(service) = flush_manager.commit_real_time_service_mut() {
+                    service.set_flush_manager(flush_manager_weak);
+                }
+                flush_manager.start();
             }
-            guard.start();
         });
     }
 
@@ -894,9 +897,10 @@ impl CommitLog {
         put_message_result: &AppendMessageResult,
         msg: &MessageExtBrokerInner,
     ) -> PutMessageStatus {
+        // Acquire lock and immediately call handle_disk_flush which internally
+        // only triggers async operations without holding the lock
         self.flush_manager
-            .lock()
-            .await
+            .mut_from_ref()
             .handle_disk_flush(put_message_result, msg)
             .await
     }
