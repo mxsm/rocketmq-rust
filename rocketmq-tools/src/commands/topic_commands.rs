@@ -45,6 +45,13 @@ more memory space, you can use this command to allocate it."#
     UpdateTopic(update_topic_sub_command::UpdateTopicSubCommand),
 
     #[command(
+        name = "deleteTopic",
+        about = "Delete topic",
+        long_about = r#"Delete topic from broker and NameServer."#
+    )]
+    DeleteTopic(delete_topic_sub_command::DeleteTopicSubCommand),
+
+    #[command(
         name = "topicClusterList",
         about = "Get cluster info for topic",
         long_about = r#"Get cluster info for a given topic. This command queries which clusters contain the specified topic."#
@@ -57,6 +64,7 @@ impl CommandExecute for TopicCommands {
         match self {
             TopicCommands::AllocateMQ(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::UpdateTopic(cmd) => cmd.execute(rpc_hook).await,
+            TopicCommands::DeleteTopic(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::TopicClusterList(cmd) => cmd.execute(rpc_hook).await,
         }
     }
