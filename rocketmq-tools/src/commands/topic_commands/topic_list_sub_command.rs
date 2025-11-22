@@ -40,7 +40,7 @@ impl TopicListSubCommand {
             .await?
             .unwrap();
 
-        let broker_data = topic_route_data.broker_datas.get(0).unwrap();
+        let broker_data = topic_route_data.broker_datas.first().unwrap();
 
         let broker_name = broker_data.broker_name();
 
