@@ -1,34 +1,41 @@
-name: CI
+name: Rocketmq Rust CI
+
 permissions:
   contents: read
+
 on:
   push:
     branches: [ "main" ]
   pull_request:
-    branches: [ "main"]
+    branches: [ "main" ]
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: full
   CI: true
 
 jobs:
-  build:
+  # Format and lint checks
+  check:
+    name: Check (fmt + clippy)
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        rust: [stable,nightly]
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install dependencies (ubuntu-latest)
+        run: |
+          sudo apt-get install protobuf-compiler
+
+      - name: Set up Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
         with:
-          override: true
-          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-ci
 
       - name: Install dependencies
         run: |
@@ -36,13 +43,101 @@ jobs:
           rustup component add clippy
 
       - name: Format check
-        run: cargo fmt -- --check
+        run: cargo fmt --all -- --check
 
-      - name: Clippy check
-        run: cargo clippy -- -D warnings
+      - name: Clippy check (other packages)
+        run: cargo clippy --all-targets --workspace --exclude rocketmq-controller --all-features -- -D warnings
 
-      - name: Build
-        run: cargo build --verbose --all-features
+      - name: Clippy check (controller without rocksdb)
+        run: cargo clippy --all-targets -p rocketmq-controller --no-default-features --features storage-file,metrics,debug -- -D warnings
 
-      - name: Test
-        run: cargo test --verbose
+  # Build and test on multiple platforms
+  build-test:
+    name: Build & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: check
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - if: matrix.os == 'ubuntu-latest'
+        name: Install dependencies (ubuntu-latest)
+        run: |
+          sudo apt-get install protobuf-compiler
+      - if: matrix.os == 'macos-latest'
+        name: Install dependencies (macos-latest)
+        run: |
+          FILENAME="protoc-3.20.3-osx-x86_64.zip"
+          URL=https://github.com/protocolbuffers/protobuf/releases/download/v3.20.3/protoc-3.20.3-osx-x86_64.zip
+          echo "Detected arch: $ARCH, downloading $FILENAME"
+          curl -LO "$URL"
+          
+          sudo unzip -o "$FILENAME" -d /usr/local
+          protoc --version
+
+      - if: matrix.os == 'windows-latest'
+        name: Install dependencies (windows-latest)
+        run: |
+          choco install protoc
+
+      - name: Set up Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-ci
+
+      - name: Build (other packages)
+        run: cargo build --verbose --workspace --exclude rocketmq-controller --all-features
+
+      - name: Build (controller without rocksdb)
+        run: cargo build --verbose -p rocketmq-controller --no-default-features --features storage-file,metrics,debug
+
+      - name: Run tests (other packages)
+        run: cargo test --verbose --workspace --exclude rocketmq-controller --all-features
+
+      - name: Run tests (controller without rocksdb)
+        run: cargo test --verbose -p rocketmq-controller --no-default-features --features storage-file,metrics,debug
+
+  # Code coverage (only on Ubuntu)
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (ubuntu-latest)
+        run: sudo apt-get install protobuf-compiler
+
+      - name: Set up Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-ci
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate code coverage (other packages)
+        run: |
+          cargo llvm-cov --workspace --exclude rocketmq-controller --all-features --lcov --output-path lcov-other.info
+          cargo llvm-cov -p rocketmq-controller --no-default-features --features storage-file,metrics,debug --lcov --output-path lcov-controller.info
+          cat lcov-other.info lcov-controller.info > lcov.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          fail_ci_if_error: false
+          verbose: true

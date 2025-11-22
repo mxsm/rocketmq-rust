@@ -36,12 +36,13 @@ config.workspace = true
 parking_lot.workspace = true
 dashmap = { version = "6.1.0", features = ["serde"] }
 
-clap = { version = "4.5.51", features = ["derive"] }
+clap = { version = "4.5.53", features = ["derive"] }
 cheetah-string = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-criterion = { version = "0.7", features = ["html_reports"] }
+criterion = { version = "0.7", features = ["html_reports", "async_futures"] }
+futures = "0.3"
 
 [[bin]]
 name = "rocketmq-namesrv-rust"
@@ -49,4 +50,12 @@ path = "src/bin/namesrv_bootstrap_server.rs"
 
 [[bench]]
 name = "route_manager_benchmark"
+harness = false
+
+[[bench]]
+name = "route_concurrency_bench"
+harness = false
+
+[[bench]]
+name = "async_segmented_lock_bench"
 harness = false

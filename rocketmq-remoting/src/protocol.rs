@@ -427,14 +427,14 @@ pub trait RemotingSerializable {
     /// # Returns
     /// A `Result` containing a JSON string representing the object,
     /// or an error if serialization fails.
-    fn to_json(&self) -> rocketmq_error::RocketMQResult<String>;
+    fn serialize_json(&self) -> rocketmq_error::RocketMQResult<String>;
 
     /// Serializes the object into a pretty-printed JSON string.
     ///
     /// # Returns
     /// A `Result` containing a pretty-printed JSON string representing the object,
     /// or an error if serialization fails.
-    fn to_json_pretty(&self) -> rocketmq_error::RocketMQResult<String>;
+    fn serialize_json_pretty(&self) -> rocketmq_error::RocketMQResult<String>;
 }
 
 /// Trait for deserializing objects in a remoting context.
@@ -469,22 +469,22 @@ pub trait JsonSerializable: Serialize + RemotingSerializable {}
 
 impl<T: Serialize> RemotingSerializable for T {
     fn encode(&self) -> rocketmq_error::RocketMQResult<Vec<u8>> {
-        SerdeJsonUtils::to_json_vec(self)
+        SerdeJsonUtils::serialize_json_vec(self)
     }
 
-    fn to_json(&self) -> rocketmq_error::RocketMQResult<String> {
-        SerdeJsonUtils::to_json(self)
+    fn serialize_json(&self) -> rocketmq_error::RocketMQResult<String> {
+        SerdeJsonUtils::serialize_json(self)
     }
 
-    fn to_json_pretty(&self) -> rocketmq_error::RocketMQResult<String> {
-        SerdeJsonUtils::to_json_pretty(self)
+    fn serialize_json_pretty(&self) -> rocketmq_error::RocketMQResult<String> {
+        SerdeJsonUtils::serialize_json_pretty(self)
     }
 }
 
 impl<T: serde::de::DeserializeOwned> RemotingDeserializable for T {
     type Output = T;
     fn decode(bytes: &[u8]) -> rocketmq_error::RocketMQResult<Self::Output> {
-        SerdeJsonUtils::decode(bytes)
+        SerdeJsonUtils::from_json_bytes(bytes)
     }
 }
 

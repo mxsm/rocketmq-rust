@@ -32,11 +32,11 @@ pub trait RocketMQFlushManager {
 
     /// Wakes up the flush manager to flush messages to disk. This should be called when new
     /// messages are available to be flushed.
-    fn wake_up_flush(&mut self);
+    fn wake_up_flush(&self);
 
     /// Wakes up the flush manager to commit messages to disk. This should be called when messages
     /// have been successfully flushed and are ready to be committed.
-    fn wake_up_commit(&mut self);
+    fn wake_up_commit(&self);
 
     /// Handles the asynchronous disk flushing of messages.
     /// This method is responsible for writing the messages to disk and updating the message store's

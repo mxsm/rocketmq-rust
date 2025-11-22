@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn test_error_conversion() {
-        let io_err = io::Error::new(io::ErrorKind::Other, "test");
+        let io_err = io::Error::other("test");
         let controller_err: ControllerError = io_err.into();
         assert!(matches!(controller_err, ControllerError::Io(_)));
     }

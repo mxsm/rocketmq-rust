@@ -41,12 +41,12 @@ serde_json.workspace = true
 bytes = { workspace = true }
 parking_lot.workspace = true
 
-clap = { version = "4.5.51", features = ["derive"] }
+clap = { version = "4.5.53", features = ["derive"] }
 rand = { workspace = true }
 
 #tools
 dirs.workspace = true
-dns-lookup = "2.0"
+dns-lookup = "3.0"
 
 cfg-if = { workspace = true }
 lazy_static.workspace = true

@@ -17,6 +17,8 @@
 mod allocate_mq_sub_command;
 mod delete_topic_sub_command;
 mod topic_cluster_sub_command;
+mod delete_topic_sub_command;
+mod topic_cluster_sub_command;
 mod update_topic_sub_command;
 use std::sync::Arc;
 
@@ -43,18 +45,20 @@ more memory space, you can use this command to allocate it."#
         long_about = r#"Update or create topic with specified configuration."#
     )]
     UpdateTopic(update_topic_sub_command::UpdateTopicSubCommand),
+
     #[command(
         name = "deleteTopic",
-        about = "delete topic",
-        long_about = r#"delete topic with specified configuration."#
+        about = "Delete topic",
+        long_about = r#"Delete topic from broker and NameServer."#
     )]
     DeleteTopic(delete_topic_sub_command::DeleteTopicSubCommand),
+
     #[command(
-        name = "topicCluster",
-        about = "topic cluster",
-        long_about = r#"topic cluster with specified configuration."#
+        name = "topicClusterList",
+        about = "Get cluster info for topic",
+        long_about = r#"Get cluster info for a given topic. This command queries which clusters contain the specified topic."#
     )]
-    TopicCluster(topic_cluster_sub_command::TopicClusterSubCommand),
+    TopicClusterList(topic_cluster_sub_command::TopicClusterSubCommand),
 }
 
 impl CommandExecute for TopicCommands {
@@ -63,7 +67,7 @@ impl CommandExecute for TopicCommands {
             TopicCommands::AllocateMQ(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::UpdateTopic(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::DeleteTopic(cmd) => cmd.execute(rpc_hook).await,
-            TopicCommands::TopicCluster(cmd) => cmd.execute(rpc_hook).await,
+            TopicCommands::TopicClusterList(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }

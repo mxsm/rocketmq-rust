@@ -643,7 +643,10 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         topic: String,
     ) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>> {
-        todo!()
+        return self
+            .default_mqadmin_ext_impl
+            .get_topic_cluster_list(topic)
+            .await;
     }
 
     async fn get_all_topic_config(

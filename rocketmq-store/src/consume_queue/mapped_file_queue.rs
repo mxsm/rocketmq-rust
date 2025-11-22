@@ -29,9 +29,9 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
-use crate::services::allocate_mapped_file_service::AllocateMappedFileService;
 
 #[derive(Default)]
 pub struct MappedFileQueue {
@@ -193,6 +193,17 @@ impl MappedFileQueue {
         let mut create_offset = -1i64;
         let file_size = self.mapped_file_size as i64;
         let mapped_file_last = self.get_last_mapped_file();
+
+        if let Some(ref current_file) = mapped_file_last {
+            let usage_ratio =
+                current_file.get_wrote_position() as f64 / self.mapped_file_size as f64;
+            if usage_ratio >= 0.8 && !current_file.is_full() {
+                // Pre-allocate next file in background
+                let next_offset = current_file.get_file_from_offset() + self.mapped_file_size;
+                self.trigger_pre_allocation(next_offset);
+            }
+        }
+
         match mapped_file_last {
             None => {
                 create_offset = start_offset as i64 - (start_offset as i64 % file_size);
@@ -210,6 +221,21 @@ impl MappedFileQueue {
     }
 
     #[inline]
+    fn trigger_pre_allocation(&self, next_offset: u64) {
+        if let Some(ref service) = self.allocate_mapped_file_service {
+            let next_file_path =
+                PathBuf::from(self.store_path.clone()).join(offset_to_file_name(next_offset));
+
+            // Submit async request (non-blocking)
+            let _drop = service.submit_request(
+                next_file_path.to_string_lossy().to_string(),
+                self.mapped_file_size,
+            );
+            std::mem::drop(_drop);
+        }
+    }
+
+    #[inline]
     pub fn try_create_mapped_file(&mut self, create_offset: u64) -> Option<Arc<DefaultMappedFile>> {
         let next_file_path =
             PathBuf::from(self.store_path.clone()).join(offset_to_file_name(create_offset));
@@ -222,18 +248,71 @@ impl MappedFileQueue {
     fn do_create_mapped_file(
         &mut self,
         next_file_path: PathBuf,
-        _next_next_file_path: PathBuf,
+        next_next_file_path: PathBuf,
     ) -> Option<Arc<DefaultMappedFile>> {
-        let mut mapped_file = match self.allocate_mapped_file_service {
-            None => DefaultMappedFile::new(
-                CheetahString::from_string(next_file_path.to_string_lossy().to_string()),
-                self.mapped_file_size,
-            ),
-            Some(ref _value) => {
-                unimplemented!()
+        let mapped_file = match self.allocate_mapped_file_service {
+            None => {
+                // Synchronous creation (legacy path)
+                DefaultMappedFile::new(
+                    CheetahString::from_string(next_file_path.to_string_lossy().to_string()),
+                    self.mapped_file_size,
+                )
+            }
+            Some(ref service) => {
+                let file_path_str = next_file_path.to_string_lossy().to_string();
+
+                // Use tokio runtime to wait for pre-allocated file
+                let rt = tokio::runtime::Handle::try_current();
+                match rt {
+                    Ok(handle) => {
+                        match handle.block_on(async {
+                            service
+                                .allocate_mapped_file(file_path_str.clone(), self.mapped_file_size)
+                                .await
+                        }) {
+                            Ok(pre_allocated) => {
+                                // Pre-allocated file is ready!
+                                // Trigger pre-allocation of N+2 file
+                                let _drop = service.submit_request(
+                                    next_next_file_path.to_string_lossy().to_string(),
+                                    self.mapped_file_size,
+                                );
+                                std::mem::drop(_drop);
+                                // Set first_create flag if this is the first file
+                                // Note: Cannot modify Arc directly, flag should be set during
+                                // creation
+                                if self.mapped_files.read().is_empty() {
+                                    // The flag is set in DefaultMappedFile constructor if needed
+                                }
+                                self.mapped_files.write().push(pre_allocated.clone());
+                                return Some(pre_allocated);
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Pre-allocation failed for {}: {}, falling back to sync \
+                                     creation",
+                                    file_path_str, e
+                                );
+                                // Fallback to synchronous creation
+                                DefaultMappedFile::new(
+                                    CheetahString::from_string(file_path_str),
+                                    self.mapped_file_size,
+                                )
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        // No tokio runtime, use synchronous creation
+                        DefaultMappedFile::new(
+                            CheetahString::from_string(file_path_str),
+                            self.mapped_file_size,
+                        )
+                    }
+                }
             }
         };
 
+        let mut mapped_file = mapped_file;
         if self.mapped_files.read().is_empty() {
             mapped_file.set_first_create_in_queue(true);
         }

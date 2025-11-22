@@ -21,7 +21,7 @@ use std::fmt::Formatter;
 
 use cheetah_string::CheetahString;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DispatchRequest {
     pub topic: CheetahString,
     pub queue_id: i32,

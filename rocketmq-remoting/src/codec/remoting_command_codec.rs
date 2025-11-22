@@ -190,7 +190,7 @@ mod tests {
         let mut decoder = RemotingCommandCodec::new();
         // total_size = 1, which is less than minimum required (4 bytes for serialize_type)
         let mut src = BytesMut::from(&[0, 0, 0, 1, 0, 0, 0, 0][..]);
-        assert!(matches!(decoder.decode(&mut src), Err(_)));
+        assert!(decoder.decode(&mut src).is_err());
     }
 
     #[tokio::test]

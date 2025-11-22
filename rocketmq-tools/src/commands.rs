@@ -107,13 +107,48 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Topic",
+                command: "deleteTopic",
+                remark: "Delete topic.",
+            },
+            Command {
+                category: "Topic",
+                command: "topicClusterList",
+                remark: "Get cluster info for topic.",
+            },
+            Command {
+                category: "Topic",
                 command: "updateTopic",
                 remark: "Update or create topic.",
             },
             Command {
                 category: "NameServer",
+                command: "addWritePerm",
+                remark: "Add write perm of broker in all name server.",
+            },
+            Command {
+                category: "NameServer",
+                command: "deleteKvConfig",
+                remark: "Delete KV config.",
+            },
+            Command {
+                category: "NameServer",
                 command: "getNamesrvConfig",
                 remark: "Get configs of name server.",
+            },
+            Command {
+                category: "NameServer",
+                command: "updateKvConfig",
+                remark: "Create or update KV config.",
+            },
+            Command {
+                category: "NameServer",
+                command: "updateNamesrvConfig",
+                remark: "Update configs of name server.",
+            },
+            Command {
+                category: "NameServer",
+                command: "wipeWritePerm",
+                remark: "Wipe write perm of broker in all name server.",
             },
         ];
         let mut table = Table::new(commands);

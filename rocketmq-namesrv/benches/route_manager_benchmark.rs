@@ -28,11 +28,11 @@
 //! - CheetahString provides zero-copy cloning
 //! - Concurrent operations scale linearly with thread count
 
+use std::hint::black_box;
 use std::sync::Arc;
 use std::thread;
 
 use cheetah_string::CheetahString;
-use criterion::black_box;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::BenchmarkId;

@@ -667,10 +667,10 @@ impl<MS: MessageStore> ConfigManager for TopicConfigManager<MS> {
         let version = self.data_version().as_ref().clone();
         match pretty_format {
             true => TopicConfigSerializeWrapper::new(Some(topic_config_table), Some(version))
-                .to_json_pretty()
+                .serialize_json_pretty()
                 .expect("Encode TopicConfigSerializeWrapper to json failed"),
             false => TopicConfigSerializeWrapper::new(Some(topic_config_table), Some(version))
-                .to_json()
+                .serialize_json()
                 .expect("Encode TopicConfigSerializeWrapper to json failed"),
         }
     }

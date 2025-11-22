@@ -31,6 +31,7 @@ use rocketmq_common::MessageDecoder::create_crc32;
 use rocketmq_common::MessageUtils::build_batch_message_id;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::SyncUnsafeCellWrapper;
+use tracing::error;
 
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_status_enum::AppendMessageStatus;
@@ -75,12 +76,52 @@ pub trait AppendMessageCallback {
         put_message_context: &mut PutMessageContext,
         enabled_append_prop_crc: bool,
     ) -> AppendMessageResult;
+
+    /// Encode message directly to mmap buffer
+    ///
+    /// This method eliminates memory copying by encoding the message directly into the
+    /// memory-mapped file region, bypassing the intermediate pre_encode_buffer.
+    ///
+    ///
+    /// # Arguments
+    ///
+    /// * `file_from_offset` - The offset of the file
+    /// * `mapped_file` - The mapped file to write to
+    /// * `max_blank` - The maximum blank space available
+    /// * `msg` - The message to encode
+    /// * `put_message_context` - The context of putting message
+    ///
+    /// # Returns
+    ///
+    /// AppendMessageResult containing status and metrics
+    ///
+    /// # Implementation Note
+    ///
+    /// Default implementation falls back to standard `do_append` for compatibility.
+    /// Override this method to enable zero-copy encoding.
+    fn do_append_zerocopy<MF: MappedFile>(
+        &self,
+        file_from_offset: i64,
+        mapped_file: &MF,
+        max_blank: i32,
+        msg: &mut MessageExtBrokerInner,
+        put_message_context: &PutMessageContext,
+    ) -> AppendMessageResult {
+        // Default: fall back to standard append
+        self.do_append(
+            file_from_offset,
+            mapped_file,
+            max_blank,
+            msg,
+            put_message_context,
+        )
+    }
 }
 
 // File at the end of the minimum fixed length empty
 const END_FILE_MIN_BLANK_LENGTH: i32 = 4 + 4;
 
-pub(crate) struct DefaultAppendMessageCallback {
+pub struct DefaultAppendMessageCallback {
     msg_store_item_memory: SyncUnsafeCellWrapper<bytes::BytesMut>,
     crc32_reserved_length: i32,
     message_store_config: Arc<MessageStoreConfig>,
@@ -316,6 +357,149 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             page_cache_rt: begin_time_mills.elapsed().as_millis() as i64,
             msg_num,
             ..Default::default()
+        }
+    }
+
+    /// **Zero-Copy Implementation**
+    ///
+    /// Encodes message directly into memory-mapped file region, eliminating intermediate buffer.
+    ///
+    ///
+    /// # Implementation Details
+    /// 1. Get direct mutable buffer from MappedFile
+    /// 2. Encode message fields directly into buffer (no intermediate BytesMut)
+    /// 3. Commit write position atomically
+    /// 4. Return append result
+    fn do_append_zerocopy<MF: MappedFile>(
+        &self,
+        file_from_offset: i64,
+        mapped_file: &MF,
+        max_blank: i32,
+        msg_inner: &mut MessageExtBrokerInner,
+        put_message_context: &PutMessageContext,
+    ) -> AppendMessageResult {
+        // Extract pre-encoded buffer (still contains metadata we need)
+        let pre_encode_buffer = msg_inner.encoded_buff.take().unwrap();
+        let is_multi_dispatch_msg = self.message_store_config.enable_multi_dispatch
+            && CommitLog::is_multi_dispatch_msg(msg_inner);
+
+        if is_multi_dispatch_msg {
+            // Fall back to standard implementation for multi-dispatch
+            msg_inner.encoded_buff = Some(pre_encode_buffer);
+            return self.do_append(
+                file_from_offset,
+                mapped_file,
+                max_blank,
+                msg_inner,
+                put_message_context,
+            );
+        }
+
+        let msg_len = i32::from_be_bytes(pre_encode_buffer[0..4].try_into().unwrap());
+
+        // Calculate physical offset
+        let wrote_offset = file_from_offset + mapped_file.get_wrote_position() as i64;
+        let addr = msg_inner.message_ext_inner.store_host;
+        let msg_id_supplier =
+            move || -> String { message_utils::build_message_id(addr, wrote_offset) };
+
+        let mut queue_offset = msg_inner.queue_offset();
+        let message_num = get_message_num(&self.topic_config_table, msg_inner);
+
+        // Handle transaction messages
+        if let MessageSysFlag::TRANSACTION_PREPARED_TYPE
+        | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE =
+            MessageSysFlag::get_transaction_value(msg_inner.sys_flag())
+        {
+            queue_offset = 0;
+        }
+
+        // Check if we have enough space
+        if (msg_len + END_FILE_MIN_BLANK_LENGTH) > max_blank {
+            // Write end-of-file marker
+            let bytes = self.msg_store_item_memory.mut_from_ref();
+            bytes.clear();
+            bytes.put_i32(max_blank);
+            bytes.put_i32(BLANK_MAGIC_CODE);
+            let instant = Instant::now();
+            mapped_file.write_bytes_segment(bytes.as_ref(), wrote_offset as usize, 0, bytes.len());
+            return AppendMessageResult {
+                status: AppendMessageStatus::EndOfFile,
+                wrote_offset,
+                wrote_bytes: max_blank,
+                store_timestamp: msg_inner.store_timestamp(),
+                logics_offset: queue_offset,
+                msg_num: message_num as i32,
+                msg_id_supplier: Some(Arc::new(msg_id_supplier)),
+                page_cache_rt: instant.elapsed().as_millis() as i64,
+                ..Default::default()
+            };
+        }
+
+        // **ZERO-COPY PATH**: Get direct mutable buffer from mmap
+        let instant = Instant::now();
+        if let Some((buffer, _pos)) = mapped_file.get_direct_write_buffer(msg_len as usize) {
+            // Copy pre-encoded buffer directly to mmap (single copy, no intermediate buffer)
+            buffer[..msg_len as usize].copy_from_slice(&pre_encode_buffer[..msg_len as usize]);
+
+            // Update runtime fields that weren't known at pre-encode time
+            let mut pos = 20; // Skip TOTALSIZE, MAGICCODE, BODYCRC, QUEUEID, FLAG
+
+            // 6 QUEUEOFFSET - update with actual queue offset
+            buffer[pos..pos + 8].copy_from_slice(&queue_offset.to_be_bytes());
+            pos += 8;
+
+            // 7 PHYSICALOFFSET - update with actual physical offset
+            buffer[pos..pos + 8].copy_from_slice(&wrote_offset.to_be_bytes());
+
+            // Calculate IP length to skip to store timestamp
+            let ip_len = if msg_inner.sys_flag() & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
+                4 + 4
+            } else {
+                16 + 4
+            };
+            pos += 8 + 4 + 8 + ip_len; // Skip SYSFLAG, BORNTIMESTAMP, BORNHOST
+
+            // 11 STORETIMESTAMP - update with current timestamp
+            buffer[pos..pos + 8].copy_from_slice(&msg_inner.store_timestamp().to_be_bytes());
+
+            // Update CRC32 if enabled
+            if self.message_store_config.enabled_append_prop_crc {
+                let check_size = msg_len - self.crc32_reserved_length;
+                let crc32 = crc32(&buffer[..check_size as usize]);
+                create_crc32(&mut buffer[check_size as usize..msg_len as usize], crc32);
+            }
+
+            // Commit the write atomically
+            if !mapped_file.commit_direct_write(msg_len as usize) {
+                error!("Failed to commit zero-copy write");
+                return AppendMessageResult {
+                    status: AppendMessageStatus::UnknownError,
+                    ..Default::default()
+                };
+            }
+
+            AppendMessageResult {
+                status: AppendMessageStatus::PutOk,
+                wrote_offset,
+                wrote_bytes: msg_len,
+                store_timestamp: msg_inner.store_timestamp(),
+                logics_offset: queue_offset,
+                msg_num: message_num as i32,
+                msg_id_supplier: Some(Arc::new(Box::new(msg_id_supplier))),
+                page_cache_rt: instant.elapsed().as_millis() as i64,
+                ..Default::default()
+            }
+        } else {
+            // Fall back to standard implementation if direct buffer unavailable
+            msg_inner.encoded_buff = Some(pre_encode_buffer);
+            self.do_append(
+                file_from_offset,
+                mapped_file,
+                max_blank,
+                msg_inner,
+                put_message_context,
+            )
         }
     }
 }

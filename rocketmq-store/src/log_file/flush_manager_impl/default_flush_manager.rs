@@ -15,12 +15,11 @@
  * limitations under the License.
  */
 use std::sync::Arc;
-use std::sync::Weak;
 
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_rust::ArcMut;
-use tokio::sync::Mutex;
+use rocketmq_rust::WeakArcMut;
 use tokio::sync::Notify;
 use tokio::time;
 
@@ -126,17 +125,17 @@ impl FlushManager for DefaultFlushManager {
         }
     }
 
-    fn wake_up_flush(&mut self) {
-        if let Some(ref mut group_commit_service) = self.group_commit_service {
+    fn wake_up_flush(&self) {
+        if let Some(ref group_commit_service) = self.group_commit_service {
             group_commit_service.wakeup();
         }
-        if let Some(ref mut flush_real_time_service) = self.flush_real_time_service {
+        if let Some(ref flush_real_time_service) = self.flush_real_time_service {
             flush_real_time_service.wakeup();
         }
     }
 
-    fn wake_up_commit(&mut self) {
-        if let Some(ref mut commit_real_time_service) = self.commit_real_time_service {
+    fn wake_up_commit(&self) {
+        if let Some(ref commit_real_time_service) = self.commit_real_time_service {
             commit_real_time_service.wakeup();
         }
     }
@@ -170,15 +169,15 @@ impl FlushManager for DefaultFlushManager {
                         })
                     })
                 } else {
-                    self.group_commit_service.as_mut().unwrap().wakeup();
+                    self.group_commit_service.as_ref().unwrap().wakeup();
                     PutMessageStatus::PutOk
                 }
             }
             FlushDiskType::AsyncFlush => {
                 if self.message_store_config.transient_store_pool_enable {
-                    self.commit_real_time_service.as_mut().unwrap().wakeup();
+                    self.commit_real_time_service.as_ref().unwrap().wakeup();
                 } else {
-                    self.flush_real_time_service.as_mut().unwrap().wakeup();
+                    self.flush_real_time_service.as_ref().unwrap().wakeup();
                 }
                 PutMessageStatus::PutOk
             }
@@ -238,7 +237,7 @@ impl GroupCommitService {
         });
     }
 
-    pub fn wakeup(&mut self) {}
+    pub fn wakeup(&self) {}
 
     pub fn shutdown(&mut self) {}
 }
@@ -290,10 +289,12 @@ impl FlushRealTimeService {
         });
     }
 
-    pub fn wakeup(&mut self) {
+    pub fn wakeup(&self) {
         if !self.message_store_config.flush_commit_log_timed {
             let notified = self.notified.clone();
-            tokio::spawn(async move { notified.notified().await });
+            tokio::spawn(async move {
+                notified.notify_one();
+            });
         }
     }
 
@@ -304,13 +305,15 @@ pub(crate) struct CommitRealTimeService {
     message_store_config: Arc<MessageStoreConfig>,
     store_checkpoint: Arc<StoreCheckpoint>,
     notified: Arc<Notify>,
-    flush_manager: Option<Weak<Mutex<DefaultFlushManager>>>,
+    flush_manager: Option<WeakArcMut<DefaultFlushManager>>,
 }
 
 impl CommitRealTimeService {
-    pub fn wakeup(&mut self) {
+    pub fn wakeup(&self) {
         let notified = self.notified.clone();
-        tokio::spawn(async move { notified.notified().await });
+        tokio::spawn(async move {
+            notified.notify_one();
+        });
     }
 
     fn start(&mut self, mapped_file_queue: ArcMut<MappedFileQueue>) {
@@ -338,7 +341,7 @@ impl CommitRealTimeService {
                 if !result {
                     last_commit_timestamp = get_current_millis();
                     if let Some(flush_manager) = flush_manager.as_ref().unwrap().upgrade() {
-                        flush_manager.lock().await.wake_up_flush();
+                        flush_manager.wake_up_flush();
                     }
                 }
 
@@ -352,7 +355,7 @@ impl CommitRealTimeService {
 
     pub fn shutdown(&mut self) {}
 
-    pub fn set_flush_manager(&mut self, flush_manager: Option<Weak<Mutex<DefaultFlushManager>>>) {
-        self.flush_manager = flush_manager;
+    pub fn set_flush_manager(&mut self, flush_manager: WeakArcMut<DefaultFlushManager>) {
+        self.flush_manager = Some(flush_manager);
     }
 }

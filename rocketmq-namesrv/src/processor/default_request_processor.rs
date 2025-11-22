@@ -150,7 +150,7 @@ impl DefaultRequestProcessor {
                 request_header.namespace,
                 request_header.key,
                 request_header.value,
-            );
+            )?;
         Ok(RemotingCommand::create_response_command())
     }
 
@@ -185,7 +185,8 @@ impl DefaultRequestProcessor {
         let request_header =
             request.decode_command_custom_header::<DeleteKVConfigRequestHeader>()?;
 
-        self.name_server_runtime_inner
+        let _ = self
+            .name_server_runtime_inner
             .kvconfig_manager_mut()
             .delete_kv_config(&request_header.namespace, &request_header.key);
         Ok(RemotingCommand::create_response_command())
@@ -685,7 +686,7 @@ fn extract_register_topic_config_from_request(
         if body_inner.is_empty() {
             return TopicConfigAndMappingSerializeWrapper::default();
         }
-        return SerdeJsonUtils::decode::<TopicConfigAndMappingSerializeWrapper>(
+        return SerdeJsonUtils::from_json_bytes::<TopicConfigAndMappingSerializeWrapper>(
             body_inner.as_ref(),
         )
         .expect("decode TopicConfigAndMappingSerializeWrapper failed");

@@ -340,7 +340,12 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
     }
 
     async fn examine_broker_cluster_info(&self) -> rocketmq_error::RocketMQResult<ClusterInfo> {
-        todo!()
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .get_broker_cluster_info(self.timeout_millis.as_millis() as u64)
+            .await
     }
 
     async fn examine_topic_route_info(
@@ -649,7 +654,23 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         &self,
         topic: String,
     ) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>> {
-        todo!()
+        let cluster_info = self.examine_broker_cluster_info().await?;
+        let topic_route_data = self.examine_topic_route_info(topic.into()).await?.unwrap();
+        let broker_data = topic_route_data
+            .broker_datas
+            .first()
+            .ok_or_else(|| mq_client_err!("Broker datas is empty"))?;
+        let mut cluster_set = HashSet::new();
+        let broker_name = broker_data.broker_name();
+        if let Some(cluster_addr_table) = cluster_info.cluster_addr_table.as_ref() {
+            cluster_set.extend(
+                cluster_addr_table
+                    .iter()
+                    .filter(|(cluster_name, broker_names)| broker_names.contains(broker_name))
+                    .map(|(cluster_name, broker_names)| cluster_name.clone()),
+            );
+        }
+        Ok(cluster_set)
     }
 
     async fn get_all_topic_config(

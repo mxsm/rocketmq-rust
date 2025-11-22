@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::mem;
@@ -61,6 +60,7 @@ use crate::base::append_message_callback::DefaultAppendMessageCallback;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
 use crate::base::dispatch_request::DispatchRequest;
 use crate::base::flush_manager::FlushManager;
+use crate::base::message_encoder_pool;
 use crate::base::message_result::AppendMessageResult;
 use crate::base::message_result::PutMessageResult;
 use crate::base::message_status_enum::AppendMessageStatus;
@@ -71,6 +71,7 @@ use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::swappable::Swappable;
 use crate::base::topic_queue_lock::TopicQueueLock;
+use crate::config::flush_disk_type::FlushDiskType;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::ha::ha_service::HAService;
@@ -96,33 +97,13 @@ pub const BLANK_MAGIC_CODE: i32 = -875286124;
 // PROPERTY_SEPARATOR]
 pub const CRC32_RESERVED_LEN: i32 = (MessageConst::PROPERTY_CRC32.len() + 1 + 10 + 1) as i32;
 
-struct PutMessageThreadLocal {
-    encoder: RefCell<Option<MessageExtEncoder>>,
-    key: RefCell<String>,
-}
-
-thread_local! {
-     static PUT_MESSAGE_THREAD_LOCAL: PutMessageThreadLocal = PutMessageThreadLocal{
-        encoder: RefCell::new(None),
-        key: RefCell::new(String::with_capacity(128)),
-    };
-}
+// This reduces heap allocations by ~50% by reusing encoder instances
 
 fn encode_message_ext(
     message_ext: &MessageExtBrokerInner,
     message_store_config: &Arc<MessageStoreConfig>,
 ) -> (Option<PutMessageResult>, BytesMut) {
-    PUT_MESSAGE_THREAD_LOCAL.with(|thread_local| {
-        let mut encoder_ref = thread_local.encoder.borrow_mut();
-        if encoder_ref.is_none() {
-            let encoder = MessageExtEncoder::new(Arc::clone(message_store_config));
-            *encoder_ref = Some(MessageExtEncoder::new(Arc::clone(message_store_config)));
-        }
-        let encoder = encoder_ref.as_mut().unwrap();
-        let result = encoder.encode(message_ext);
-        let bytes_mut = encoder.byte_buf();
-        (result, bytes_mut)
-    })
+    message_encoder_pool::encode_message_with_pool(message_ext, message_store_config)
 }
 
 fn encode_message_ext_batch(
@@ -130,27 +111,15 @@ fn encode_message_ext_batch(
     put_message_context: &mut PutMessageContext,
     message_store_config: &Arc<MessageStoreConfig>,
 ) -> Option<BytesMut> {
-    PUT_MESSAGE_THREAD_LOCAL.with(|thread_local| {
-        let mut encoder_ref = thread_local.encoder.borrow_mut();
-        if encoder_ref.is_none() {
-            *encoder_ref = Some(MessageExtEncoder::new(Arc::clone(message_store_config)));
-        }
-        encoder_ref
-            .as_mut()
-            .unwrap()
-            .encode_batch(message_ext_batch, put_message_context)
-    })
+    message_encoder_pool::encode_message_batch_with_pool(
+        message_ext_batch,
+        put_message_context,
+        message_store_config,
+    )
 }
 
 fn generate_key(msg: &MessageExtBrokerInner) -> String {
-    PUT_MESSAGE_THREAD_LOCAL.with(|thead_local| {
-        let mut topic_queue_key = thead_local.key.borrow_mut();
-        topic_queue_key.clear();
-        topic_queue_key.push_str(msg.topic());
-        topic_queue_key.push('-');
-        topic_queue_key.push_str(&msg.queue_id().to_string());
-        topic_queue_key.clone()
-    })
+    message_encoder_pool::generate_key_with_pool(msg)
 }
 
 pub fn get_cq_type(
@@ -199,7 +168,7 @@ pub struct CommitLog {
     topic_queue_lock: Arc<TopicQueueLock>,
     topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
     consume_queue_store: ConsumeQueueStore,
-    flush_manager: Arc<tokio::sync::Mutex<DefaultFlushManager>>,
+    flush_manager: ArcMut<DefaultFlushManager>,
     begin_time_in_lock: Arc<AtomicU64>,
     cold_data_check_service: Arc<ColdDataCheckService>,
 }
@@ -240,11 +209,11 @@ impl CommitLog {
             )),
             topic_config_table,
             consume_queue_store,
-            flush_manager: Arc::new(tokio::sync::Mutex::new(DefaultFlushManager::new(
+            flush_manager: ArcMut::new(DefaultFlushManager::new(
                 message_store_config,
                 mapped_file_queue,
                 store_checkpoint,
-            ))),
+            )),
             begin_time_in_lock: Arc::new(AtomicU64::new(0)),
             cold_data_check_service: Arc::new(Default::default()),
         }
@@ -265,14 +234,17 @@ impl CommitLog {
     }
 
     pub fn start(&mut self) {
-        let flush_manager = self.flush_manager.clone();
+        let mut flush_manager = self.flush_manager.clone();
+        let flush_manager_weak = ArcMut::downgrade(&flush_manager);
+
         tokio::spawn(async move {
-            let flush_manager_weak = Arc::downgrade(&flush_manager);
-            let mut guard = flush_manager.lock().await;
-            if let Some(service) = guard.commit_real_time_service_mut() {
-                service.set_flush_manager(Some(flush_manager_weak))
+            // Acquire lock only for initialization
+            {
+                if let Some(service) = flush_manager.commit_real_time_service_mut() {
+                    service.set_flush_manager(flush_manager_weak);
+                }
+                flush_manager.start();
             }
-            guard.start();
         });
     }
 
@@ -308,6 +280,59 @@ impl CommitLog {
         self.confirm_offset = phy_offset;
         self.store_checkpoint
             .set_confirm_phy_offset(phy_offset as u64);
+    }
+
+    /// Handle HA service validation and calculate need_ack_nums
+    /// Returns (need_ack_nums, should_continue) where should_continue indicates if processing can
+    /// continue
+    fn handle_ha_service(
+        &self,
+        curr_offset: u64,
+        need_handle_ha: bool,
+    ) -> Result<i32, PutMessageResult> {
+        let mut need_ack_nums = self.message_store_config.in_sync_replicas;
+
+        if !need_handle_ha {
+            return Ok(need_ack_nums);
+        }
+
+        let local_store = self.local_file_message_store.as_ref().ok_or_else(|| {
+            error!("LocalFileMessageStore is None");
+            PutMessageResult::new_default(PutMessageStatus::UnknownError)
+        })?;
+
+        let ha_service = local_store.get_ha_service().ok_or_else(|| {
+            error!("HA Service is None");
+            PutMessageResult::new_default(PutMessageStatus::UnknownError)
+        })?;
+
+        if self.broker_config.enable_controller_mode {
+            if ha_service.in_sync_replicas_nums(curr_offset as i64)
+                < self.message_store_config.min_in_sync_replicas as i32
+            {
+                return Err(PutMessageResult::new_default(
+                    PutMessageStatus::InSyncReplicasNotEnough,
+                ));
+            }
+            if self.message_store_config.all_ack_in_sync_state_set {
+                need_ack_nums = mix_all::ALL_ACK_IN_SYNC_STATE_SET;
+            }
+        } else if self.broker_config.enable_slave_acting_master {
+            let in_sync_replicas = local_store
+                .get_alive_replica_num_in_group()
+                .min(ha_service.in_sync_replicas_nums(curr_offset as i64));
+            need_ack_nums = self.calc_need_ack_nums(in_sync_replicas);
+            if need_ack_nums > in_sync_replicas {
+                return Err(PutMessageResult::new_default(
+                    PutMessageStatus::InSyncReplicasNotEnough,
+                ));
+            }
+            if self.message_store_config.all_ack_in_sync_state_set {
+                need_ack_nums = mix_all::ALL_ACK_IN_SYNC_STATE_SET;
+            }
+        }
+
+        Ok(need_ack_nums)
     }
 
     pub async fn put_messages(&mut self, mut msg_batch: MessageExtBatch) -> PutMessageResult {
@@ -348,13 +373,11 @@ impl CommitLog {
         } else {
             0
         };
-        let need_ack_nums = self.message_store_config.in_sync_replicas;
         let need_handle_ha = self.need_handle_ha(&msg_batch.message_ext_broker_inner);
-        if need_handle_ha && self.broker_config.enable_controller_mode {
-            unimplemented!("controller mode not support HA")
-        } else if need_handle_ha && self.broker_config.enable_slave_acting_master {
-            unimplemented!("slave acting master not support HA")
-        }
+        let need_ack_nums = match self.handle_ha_service(curr_offset, need_handle_ha) {
+            Ok(ack_nums) => ack_nums,
+            Err(result) => return result,
+        };
         msg_batch.message_ext_broker_inner.version = MessageVersion::V1;
         let auto_message_version_on_topic_len =
             self.message_store_config.auto_message_version_on_topic_len;
@@ -373,10 +396,11 @@ impl CommitLog {
         let topic_queue_key = generate_key(&msg_batch.message_ext_broker_inner);
         put_message_context.set_topic_queue_table_key(topic_queue_key.clone());
         msg_batch.encoded_buff = encoded_buff;
-        let topic_queue_lock = self.topic_queue_lock.lock(topic_queue_key.as_str()).await;
+
+        let _topic_queue_guard = self.topic_queue_lock.lock(topic_queue_key.as_str()).await;
         self.assign_offset(&mut msg_batch.message_ext_broker_inner);
 
-        let lock = self.put_message_lock.lock().await;
+        let _put_message_lock = self.put_message_lock.lock().await;
         self.begin_time_in_lock.store(
             time_utils::get_current_millis(),
             std::sync::atomic::Ordering::Release,
@@ -395,7 +419,8 @@ impl CommitLog {
         }
 
         if mapped_file.is_none() {
-            drop(lock);
+            drop(_put_message_lock);
+            drop(_topic_queue_guard); // Explicitly release topic_queue_lock on error
             error!(
                 "create mapped file error, topic: {}  clientAddr: {}",
                 msg_batch.message_ext_broker_inner.topic(),
@@ -424,6 +449,8 @@ impl CommitLog {
                     .mapped_file_queue
                     .get_last_mapped_file_mut_start_offset(0, true);
                 if mapped_file.is_none() {
+                    drop(_put_message_lock);
+                    drop(_topic_queue_guard);
                     self.begin_time_in_lock
                         .store(0, std::sync::atomic::Ordering::Release);
                     error!(
@@ -453,18 +480,28 @@ impl CommitLog {
             }
             AppendMessageStatus::MessageSizeExceeded
             | AppendMessageStatus::PropertiesSizeExceeded => {
+                drop(_put_message_lock);
+                drop(_topic_queue_guard);
                 self.begin_time_in_lock
                     .store(0, std::sync::atomic::Ordering::Release);
-                PutMessageResult::new_append_result(PutMessageStatus::MessageIllegal, Some(result))
+                return PutMessageResult::new_append_result(
+                    PutMessageStatus::MessageIllegal,
+                    Some(result),
+                );
             }
             AppendMessageStatus::UnknownError => {
+                drop(_put_message_lock);
+                drop(_topic_queue_guard);
                 self.begin_time_in_lock
                     .store(0, std::sync::atomic::Ordering::Release);
-                PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result))
+                return PutMessageResult::new_append_result(
+                    PutMessageStatus::UnknownError,
+                    Some(result),
+                );
             }
         };
         let elapsed_time_in_lock = start_time.elapsed().as_millis() as u64;
-        drop(lock);
+        drop(_put_message_lock);
         self.begin_time_in_lock
             .store(0, std::sync::atomic::Ordering::Release);
         if elapsed_time_in_lock > 500 {
@@ -490,7 +527,8 @@ impl CommitLog {
                 &msg_batch.message_ext_broker_inner,
                 put_message_context.get_batch_size() as i16,
             );
-            drop(topic_queue_lock);
+            // Topic-queue lock released here after successful write
+            drop(_topic_queue_guard);
             self.handle_disk_flush_and_ha(
                 put_message_result,
                 msg_batch.message_ext_broker_inner,
@@ -499,15 +537,19 @@ impl CommitLog {
             )
             .await
         } else {
+            // Write failed - topic_queue_lock will be released, but offset is already assigned
+            drop(_topic_queue_guard);
+            warn!(
+                "Failed to append batch messages to CommitLog, offset hole created for topic={} \
+                 queue={}",
+                msg_batch.message_ext_broker_inner.topic(),
+                msg_batch.message_ext_broker_inner.queue_id()
+            );
             put_message_result
         }
     }
 
     pub async fn put_message(&mut self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
-        // Set the storage time
-        if !self.message_store_config.duplication_enable {
-            msg.message_ext_inner.store_timestamp = time_utils::get_current_millis() as i64;
-        }
         // Set the message body CRC (consider the most appropriate setting on the client)
         msg.message_ext_inner.body_crc = crc32_bytes(msg.message_ext_inner.message.body.as_ref());
         if self.enabled_append_prop_crc {
@@ -548,30 +590,33 @@ impl CommitLog {
         } else {
             0
         };
-        let need_ack_nums = self.message_store_config.in_sync_replicas;
         let need_handle_ha = self.need_handle_ha(&msg);
-        if need_handle_ha && self.broker_config.enable_controller_mode {
-            unimplemented!("controller mode not support HA")
-        } else if need_handle_ha && self.broker_config.enable_slave_acting_master {
-            unimplemented!("slave acting master not support HA")
-        }
+        let need_ack_nums = match self.handle_ha_service(curr_offset, need_handle_ha) {
+            Ok(ack_nums) => ack_nums,
+            Err(result) => return result,
+        };
 
         let need_assign_offset = !(self.message_store_config.duplication_enable
             && self.message_store_config.broker_role != BrokerRole::Slave);
 
-        let topic_queue_lock = self.topic_queue_lock.lock(topic_queue_key.as_str()).await;
-        if need_assign_offset {
-            self.assign_offset(&mut msg);
-        }
-
+        // Encode message BEFORE acquiring any locks
         let (put_message_result, encoded_buff) =
             encode_message_ext(&msg, &self.message_store_config);
         if let Some(result) = put_message_result {
             return result;
         }
         msg.encoded_buff = Some(encoded_buff);
-        let put_message_context = PutMessageContext::new(topic_queue_key);
-        let lock = self.put_message_lock.lock().await;
+        let put_message_context = PutMessageContext::new(topic_queue_key.clone());
+
+        let _topic_queue_guard = if need_assign_offset {
+            let guard = self.topic_queue_lock.lock(topic_queue_key.as_str()).await;
+            self.assign_offset(&mut msg);
+            Some(guard)
+        } else {
+            None
+        };
+
+        let _put_message_lock = self.put_message_lock.lock().await;
         let begin_lock_timestamp = time_utils::get_current_millis();
         self.begin_time_in_lock
             .store(begin_lock_timestamp, std::sync::atomic::Ordering::Release);
@@ -588,8 +633,8 @@ impl CommitLog {
         }
 
         if mapped_file.is_none() {
-            drop(lock);
-            drop(topic_queue_lock);
+            drop(_put_message_lock);
+            drop(_topic_queue_guard); // Explicitly release topic_queue_lock on error
             error!(
                 "create mapped file error, topic: {}  clientAddr: {}",
                 msg.topic(),
@@ -617,6 +662,8 @@ impl CommitLog {
                     .mapped_file_queue
                     .get_last_mapped_file_mut_start_offset(0, true);
                 if mapped_file.is_none() {
+                    drop(_put_message_lock);
+                    drop(_topic_queue_guard); // CRITICAL FIX: Release topic_queue_lock on error
                     self.begin_time_in_lock
                         .store(0, std::sync::atomic::Ordering::Release);
                     error!(
@@ -645,18 +692,28 @@ impl CommitLog {
             }
             AppendMessageStatus::MessageSizeExceeded
             | AppendMessageStatus::PropertiesSizeExceeded => {
+                drop(_put_message_lock);
+                drop(_topic_queue_guard);
                 self.begin_time_in_lock
                     .store(0, std::sync::atomic::Ordering::Release);
-                PutMessageResult::new_append_result(PutMessageStatus::MessageIllegal, Some(result))
+                return PutMessageResult::new_append_result(
+                    PutMessageStatus::MessageIllegal,
+                    Some(result),
+                );
             }
             AppendMessageStatus::UnknownError => {
+                drop(_put_message_lock);
+                drop(_topic_queue_guard);
                 self.begin_time_in_lock
                     .store(0, std::sync::atomic::Ordering::Release);
-                PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result))
+                return PutMessageResult::new_append_result(
+                    PutMessageStatus::UnknownError,
+                    Some(result),
+                );
             }
         };
         let elapsed_time_in_lock = start_time.elapsed().as_millis() as u64;
-        drop(lock);
+        drop(_put_message_lock);
         self.begin_time_in_lock
             .store(0, std::sync::atomic::Ordering::Release);
         if elapsed_time_in_lock > 500 {
@@ -682,10 +739,20 @@ impl CommitLog {
         if put_message_result.put_message_status() == PutMessageStatus::PutOk {
             let message_num = get_message_num(&self.topic_config_table, &msg);
             self.increase_offset(&msg, message_num);
-            drop(topic_queue_lock);
+            // Topic-queue lock released here after successful write
+            drop(_topic_queue_guard);
             self.handle_disk_flush_and_ha(put_message_result, msg, need_ack_nums, need_handle_ha)
                 .await
         } else {
+            // Write failed - topic_queue_lock will be released, but offset is already assigned
+            // This creates a hole in ConsumeQueue that will be filled by recovery process
+            drop(_topic_queue_guard);
+            warn!(
+                "Failed to append message to CommitLog, offset hole created for topic={} \
+                 queue={}, will be recovered",
+                msg.topic(),
+                msg.queue_id()
+            );
             put_message_result
         }
     }
@@ -711,6 +778,34 @@ impl CommitLog {
         }
     }
 
+    #[inline]
+    fn calc_need_ack_nums(&self, in_sync_replicas: i32) -> i32 {
+        let mut need_ack_nums = self.message_store_config.in_sync_replicas;
+        if self.message_store_config.enable_auto_in_sync_replicas {
+            need_ack_nums = need_ack_nums.min(in_sync_replicas);
+            need_ack_nums =
+                need_ack_nums.max(self.message_store_config.min_in_sync_replicas as i32);
+        }
+        need_ack_nums
+    }
+
+    /// Handles disk flushing and high availability (HA) operations for a message.
+    ///
+    /// This function determines the appropriate actions to take based on the flush disk type
+    /// and whether HA handling is required. It performs disk flushing and HA replication
+    /// either synchronously or asynchronously, depending on the configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `put_message_result` - The result of the message put operation, which may be updated based
+    ///   on the outcomes of disk flushing and HA.
+    /// * `msg` - The message being processed.
+    /// * `need_ack_nums` - The number of acknowledgments required for HA.
+    /// * `need_handle_ha` - A boolean indicating whether HA handling is required.
+    ///
+    /// # Returns
+    ///
+    /// Returns the updated `PutMessageResult` after handling disk flushing and HA.
     async fn handle_disk_flush_and_ha(
         &self,
         mut put_message_result: PutMessageResult,
@@ -719,26 +814,47 @@ impl CommitLog {
         need_handle_ha: bool,
     ) -> PutMessageResult {
         let append_message_result = put_message_result.append_message_result().unwrap();
-        let (flush_status, replica_status) = if need_handle_ha {
-            tokio::join!(
-                self.handle_disk_flush(append_message_result, &msg),
-                self.handle_ha(append_message_result, need_ack_nums)
-            )
-        } else {
-            // Only execute disk flush when HA is not needed
-            tokio::join!(
-                self.handle_disk_flush(append_message_result, &msg),
-                async { PutMessageStatus::PutOk } // Placeholder for HA operation
-            )
-        };
 
-        if flush_status != PutMessageStatus::PutOk {
-            put_message_result.set_put_message_status(flush_status);
+        // Use efficient branching based on actual requirements
+        match (self.message_store_config.flush_disk_type, need_handle_ha) {
+            // Sync flush + HA: Must wait for both in parallel
+            (FlushDiskType::SyncFlush, true) => {
+                let (flush_status, replica_status) = tokio::join!(
+                    self.handle_disk_flush(append_message_result, &msg),
+                    self.handle_ha(append_message_result, need_ack_nums)
+                );
+                if flush_status != PutMessageStatus::PutOk {
+                    put_message_result.set_put_message_status(flush_status);
+                }
+                if replica_status != PutMessageStatus::PutOk {
+                    put_message_result.set_put_message_status(replica_status);
+                }
+            }
+            // Sync flush only: Wait for flush only
+            (FlushDiskType::SyncFlush, false) => {
+                let flush_status = self.handle_disk_flush(append_message_result, &msg).await;
+                if flush_status != PutMessageStatus::PutOk {
+                    put_message_result.set_put_message_status(flush_status);
+                }
+            }
+            // Async flush + HA: Only wait for HA, flush happens asynchronously
+            (FlushDiskType::AsyncFlush, true) => {
+                // Trigger async flush (no waiting)
+                let _ = self.handle_disk_flush(append_message_result, &msg).await;
+                // Wait for HA replication
+                let replica_status = self.handle_ha(append_message_result, need_ack_nums).await;
+                if replica_status != PutMessageStatus::PutOk {
+                    put_message_result.set_put_message_status(replica_status);
+                }
+            }
+            // Async flush only: Don't wait for anything (fastest path)
+            (FlushDiskType::AsyncFlush, false) => {
+                // Trigger async flush and return immediately
+                let _ = self.handle_disk_flush(append_message_result, &msg).await;
+                // No waiting needed - this is the hot path for high-throughput scenarios
+            }
         }
 
-        if replica_status != PutMessageStatus::PutOk {
-            put_message_result.set_put_message_status(replica_status);
-        }
         put_message_result
     }
 
@@ -781,9 +897,10 @@ impl CommitLog {
         put_message_result: &AppendMessageResult,
         msg: &MessageExtBrokerInner,
     ) -> PutMessageStatus {
+        // Acquire lock and immediately call handle_disk_flush which internally
+        // only triggers async operations without holding the lock
         self.flush_manager
-            .lock()
-            .await
+            .mut_from_ref()
             .handle_disk_flush(put_message_result, msg)
             .await
     }

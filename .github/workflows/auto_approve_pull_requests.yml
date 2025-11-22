@@ -28,7 +28,7 @@ jobs:
           github-token: ${{ secrets.BOT_TOKEN }}
           script: |
 
-            const retryInterval1 = 270 * 1000; // 270 seconds
+            const retryInterval1 = 330 * 1000; // 270 seconds
             await new Promise(resolve => setTimeout(resolve, retryInterval1));
             const { owner, repo } = context.repo;
             const pr = context.payload.pull_request || context.payload.check_suite.pull_requests[0];
@@ -100,4 +100,4 @@ jobs:
         with:
           github-token: ${{ secrets.BOT_TOKEN }}
           pull-request-number: ${{ github.event.pull_request.number }}
-          review-message: "LGTM"
+          review-message: "LGTM - All CI checks passed ✅"

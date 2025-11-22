@@ -46,10 +46,9 @@
 //! 4. **Connection Pool**: Reuse vs new connection overhead
 //! 5. **Backpressure**: Behavior under server capacity limits
 
-use std::sync::Arc;
+use std::hint::black_box;
 use std::time::Duration;
 
-use criterion::black_box;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::BenchmarkId;

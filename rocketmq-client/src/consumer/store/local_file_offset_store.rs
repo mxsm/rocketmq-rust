@@ -199,7 +199,7 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
         }
 
         let content = OffsetSerialize::from(offset_serialize_wrapper)
-            .to_json_pretty()
+            .serialize_json_pretty()
             .expect("persistAll failed");
         if !content.is_empty() {
             if let Err(e) = file_utils::string_to_file(&content, &self.store_path) {
@@ -225,7 +225,7 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
                 .offset_table
                 .insert(mq.clone(), AtomicI64::new(offset.get_offset()));
             let content = OffsetSerialize::from(offset_serialize_wrapper)
-                .to_json_pretty()
+                .serialize_json_pretty()
                 .expect("persist failed");
             if !content.is_empty() {
                 if let Err(e) = file_utils::string_to_file(&content, &self.store_path) {

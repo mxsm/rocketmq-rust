@@ -19,4 +19,12 @@ use crate::base::dispatch_request::DispatchRequest;
 
 pub trait CommitLogDispatcher: Send + Sync + 'static {
     fn dispatch(&self, dispatch_request: &mut DispatchRequest);
+
+    /// Dispatch a batch of requests. Default implementation calls dispatch for each request.
+    /// Implementers can override this for batch optimizations.
+    fn dispatch_batch(&self, dispatch_requests: &mut [DispatchRequest]) {
+        for request in dispatch_requests.iter_mut() {
+            self.dispatch(request);
+        }
+    }
 }
