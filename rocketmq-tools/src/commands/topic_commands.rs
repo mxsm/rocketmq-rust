@@ -17,6 +17,7 @@
 mod allocate_mq_sub_command;
 mod delete_topic_sub_command;
 mod topic_cluster_sub_command;
+mod topic_list_sub_command;
 mod update_topic_sub_command;
 use std::sync::Arc;
 
@@ -57,6 +58,12 @@ more memory space, you can use this command to allocate it."#
         long_about = r#"Get cluster info for a given topic. This command queries which clusters contain the specified topic."#
     )]
     TopicClusterList(topic_cluster_sub_command::TopicClusterSubCommand),
+    #[command(
+        name = "topicList",
+        about = "Get topicList",
+        long_about = r#"Get topicList for a given topic. This command queries which clusters contain the specified topic."#
+    )]
+    TopicList(topic_list_sub_command::TopicListSubCommand),
 }
 
 impl CommandExecute for TopicCommands {
@@ -66,6 +73,7 @@ impl CommandExecute for TopicCommands {
             TopicCommands::UpdateTopic(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::DeleteTopic(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::TopicClusterList(cmd) => cmd.execute(rpc_hook).await,
+            TopicCommands::TopicList(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }
