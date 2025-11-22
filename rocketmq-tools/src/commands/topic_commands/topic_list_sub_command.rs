@@ -66,7 +66,9 @@ impl CommandExecute for TopicListSubCommand {
         default_mq_admin_ext
             .client_config_mut()
             .set_instance_name(get_current_millis().to_string().into());
-
+        if let Some(addr) = &self.common_args.namesrv_addr {
+            default_mq_admin_ext.set_namesrv_addr(addr.trim());
+        }
         default_mq_admin_ext.start().await?;
         if self.cluster_name.is_some() {
             let cluster_info = default_mq_admin_ext.examine_broker_cluster_info().await?;
@@ -85,7 +87,7 @@ impl CommandExecute for TopicListSubCommand {
 
                 cluster_name = self
                     .find_topic_belong_to_which_cluster(
-                        &topic,
+                        topic,
                         &cluster_info,
                         &default_mq_admin_ext,
                     )
