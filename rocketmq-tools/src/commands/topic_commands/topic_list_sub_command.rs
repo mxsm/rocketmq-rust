@@ -73,7 +73,7 @@ impl CommandExecute for TopicListSubCommand {
         if self.cluster_name.is_some() {
             let cluster_info = default_mq_admin_ext.examine_broker_cluster_info().await?;
 
-            println!("{}  {}  {}", "#Cluster Name", "#Topic", "#Consumer Group");
+            println!("#Cluster Name #Topic #Consumer Group");
 
             let topic_list = default_mq_admin_ext.fetch_all_topic_list().await?;
             for topic in &topic_list.topic_list {
@@ -86,11 +86,7 @@ impl CommandExecute for TopicListSubCommand {
                 let mut group_list = GroupList::default();
 
                 cluster_name = self
-                    .find_topic_belong_to_which_cluster(
-                        topic,
-                        &cluster_info,
-                        &default_mq_admin_ext,
-                    )
+                    .find_topic_belong_to_which_cluster(topic, &cluster_info, &default_mq_admin_ext)
                     .await?;
                 group_list = default_mq_admin_ext
                     .query_topic_consume_by_who(topic.clone())
