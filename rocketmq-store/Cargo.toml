@@ -13,12 +13,16 @@ rust-version.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [features]
-default = ["local_file_store"]
+default = ["local_file_store", "fast-load"]
 local_file_store = []
 rocksdb_store = []
 data_store = ["local_file_store"]
 # io_uring support for advanced async I/O (Linux 5.1+)
 io_uring = ["dep:tokio-uring"]
+# Optimized parallel CommitLog loading (default enabled, disable with --no-default-features)
+fast-load = []
+# Safe sequential loading fallback (disables fast-load)
+safe-load = []
 
 
 [dependencies]
@@ -64,6 +68,7 @@ page_size = "0.6.0"
 dashmap = { workspace = true }
 hashbrown = "0.16"
 sys-info = "0.9"
+rayon = "1.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Phase 3 Optimization: io_uring for Linux only (optional)
@@ -98,6 +103,10 @@ harness = false
 
 [[bench]]
 name = "zerocopy_performance"
+harness = false
+
+[[bench]]
+name = "commitlog_load_bench"
 harness = false
 
 [[bench]]
