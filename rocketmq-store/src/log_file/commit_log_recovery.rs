@@ -115,8 +115,7 @@ impl<'a> BatchMessageIterator<'a> {
         loop {
             // Ensure we have enough data in buffer for message header
             if self.buffer.remaining() < MIN_MESSAGE_SIZE && !self.refill_buffer() {
-                    return None;
-
+                return None;
             }
 
             let offset_in_buffer = self.current_offset - self.buffer_start_offset;
@@ -351,10 +350,10 @@ mod tests {
 
     #[test]
     fn test_recovery_statistics() {
-        let stats = RecoveryStatistics{
-            messages_recovered:1000,
-            bytes_processed:1024 * 1024,
-            files_processed:5,
+        let stats = RecoveryStatistics {
+            messages_recovered: 1000,
+            bytes_processed: 1024 * 1024,
+            files_processed: 5,
             ..Default::default()
         };
         assert_eq!(stats.messages_recovered, 1000);
