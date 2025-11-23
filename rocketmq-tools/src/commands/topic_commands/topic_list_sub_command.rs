@@ -7,7 +7,6 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
-use rocketmq_remoting::protocol::body::group_list::GroupList;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::commands::CommandExecute;
@@ -82,13 +81,11 @@ impl CommandExecute for TopicListSubCommand {
                 {
                     continue;
                 }
-                let mut cluster_name = String::new();
-                let mut group_list = GroupList::default();
 
-                cluster_name = self
+                let _ = self
                     .find_topic_belong_to_which_cluster(topic, &cluster_info, &default_mq_admin_ext)
                     .await?;
-                group_list = default_mq_admin_ext
+                let mut group_list = default_mq_admin_ext
                     .query_topic_consume_by_who(topic.clone())
                     .await?;
 
