@@ -393,21 +393,51 @@ impl LocalFileMessageStore {
     }
 
     pub async fn recover_normally(&mut self, max_phy_offset_of_consume_queue: i64) {
-        self.commit_log
-            .recover_normally(
-                max_phy_offset_of_consume_queue,
-                self.message_store_arc.clone().unwrap(),
-            )
-            .await;
+        // Check if optimized recovery is enabled (default: true)
+        let use_optimized = std::env::var("ROCKETMQ_USE_OPTIMIZED_RECOVERY")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse::<bool>()
+            .unwrap_or(true);
+
+        if use_optimized {
+            self.commit_log
+                .recover_normally_optimized(
+                    max_phy_offset_of_consume_queue,
+                    self.message_store_arc.clone().unwrap(),
+                )
+                .await;
+        } else {
+            self.commit_log
+                .recover_normally(
+                    max_phy_offset_of_consume_queue,
+                    self.message_store_arc.clone().unwrap(),
+                )
+                .await;
+        }
     }
 
     pub async fn recover_abnormally(&mut self, max_phy_offset_of_consume_queue: i64) {
-        self.commit_log
-            .recover_abnormally(
-                max_phy_offset_of_consume_queue,
-                self.message_store_arc.clone().unwrap(),
-            )
-            .await;
+        // Check if optimized recovery is enabled (default: true)
+        let use_optimized = std::env::var("ROCKETMQ_USE_OPTIMIZED_RECOVERY")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse::<bool>()
+            .unwrap_or(true);
+
+        if use_optimized {
+            self.commit_log
+                .recover_abnormally_optimized(
+                    max_phy_offset_of_consume_queue,
+                    self.message_store_arc.clone().unwrap(),
+                )
+                .await;
+        } else {
+            self.commit_log
+                .recover_abnormally(
+                    max_phy_offset_of_consume_queue,
+                    self.message_store_arc.clone().unwrap(),
+                )
+                .await;
+        }
     }
 
     fn is_recover_concurrently(&self) -> bool {
