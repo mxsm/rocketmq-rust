@@ -1072,32 +1072,12 @@ impl DefaultMappedFile {
 }
 
 impl ReferenceResource for DefaultMappedFile {
-    fn hold(&self) -> bool {
-        self.reference_resource.hold()
-    }
-
-    fn is_available(&self) -> bool {
-        self.reference_resource.is_available()
-    }
-
-    fn shutdown(&self, interval_forcibly: u64) {
-        self.reference_resource.shutdown(interval_forcibly)
-    }
-
-    fn release(&self) {
-        self.reference_resource.release()
-    }
-
-    fn get_ref_count(&self) -> i64 {
-        self.reference_resource.get_ref_count()
+    fn base(&self) -> &crate::log_file::mapped_file::reference_resource_counter::ReferenceResourceBase {
+        self.reference_resource.base()
     }
 
     fn cleanup(&self, current_ref: i64) -> bool {
         self.cleanup(current_ref)
-    }
-
-    fn is_cleanup_over(&self) -> bool {
-        self.reference_resource.is_cleanup_over()
     }
 }
 
