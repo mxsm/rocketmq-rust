@@ -762,7 +762,7 @@ impl MessageStore for LocalFileMessageStore {
             self.store_stats_service.shutdown();
             self.commit_log.shutdown();
 
-            self.reput_message_service.shutdown();
+            self.reput_message_service.shutdown().await;
             self.consume_queue_store.shutdown();
 
             // dispatch-related services must be shut down after reputMessageService
@@ -780,7 +780,7 @@ impl MessageStore for LocalFileMessageStore {
             if let Some(store_checkpoint) = self.store_checkpoint.as_ref() {
                 let _ = store_checkpoint.shutdown();
             }
-            if self.running_flags.is_writeable() {
+            if self.running_flags.is_writeable() && self.dispatch_behind_bytes() == 0 {
                 //delete abort file
                 self.delete_file(get_abort_file(
                     self.message_store_config.store_path_root_dir.as_str(),
@@ -2236,29 +2236,48 @@ impl ReputMessageService {
         self.dispatcher_handle = Some(dispatcher_handle);
     }
 
-    pub fn shutdown(&mut self) {
-        let handle = Handle::current();
-        let inner = self.inner.as_ref().unwrap().clone();
-        let _ = thread::spawn(move || {
-            handle.block_on(async move {
-                let mut index = 0;
-                while index < 50 && inner.is_commit_log_available() {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    if inner.is_commit_log_available() {
-                        warn!(
-                            "shutdown ReputMessageService, but CommitLog have not finish to be \
-                             dispatched, CommitLog max offset={}, reputFromOffset={}",
-                            inner.commit_log.get_max_offset(),
-                            inner.reput_from_offset.load(Ordering::Relaxed)
-                        );
-                    }
-                    index += 1;
+    pub async fn shutdown(&mut self) {
+        // Step 1: Wait for pending messages to be dispatched (max 5 seconds, 50 * 100ms)
+        if let Some(inner) = self.inner.as_ref() {
+            for i in 0..50 {
+                if !inner.is_commit_log_available() {
+                    break;
                 }
-                info!("ReputMessageService shutdown now......");
-            });
-        })
-        .join();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+
+            // Warn if there are still undispatched messages
+            if inner.is_commit_log_available() {
+                warn!(
+                    "shutdown ReputMessageService, but CommitLog have not finish to be \
+                     dispatched, CommitLog max offset={}, reputFromOffset={}",
+                    inner.commit_log.get_max_offset(),
+                    inner.reput_from_offset.load(Ordering::Relaxed)
+                );
+            }
+        }
+
+        // Step 2: Notify tasks to shutdown
         self.shutdown.notify_waiters();
+
+        // Step 3: Wait for tasks to complete with timeout (3 seconds)
+        if let Some(handle) = self.reader_handle.take() {
+            match tokio::time::timeout(Duration::from_secs(3), handle).await {
+                Ok(Ok(())) => info!("Reader task shut down successfully"),
+                Ok(Err(e)) => warn!("Reader task panicked during shutdown: {:?}", e),
+                Err(_) => warn!("Reader task shutdown timeout after 3s"),
+            }
+        }
+
+        if let Some(handle) = self.dispatcher_handle.take() {
+            match tokio::time::timeout(Duration::from_secs(3), handle).await {
+                Ok(Ok(())) => info!("Dispatcher task shut down successfully"),
+                Ok(Err(e)) => warn!("Dispatcher task panicked during shutdown: {:?}", e),
+                Err(_) => warn!("Dispatcher task shutdown timeout after 3s"),
+            }
+        }
+
+        info!("ReputMessageService shutdown complete");
     }
 }
 
