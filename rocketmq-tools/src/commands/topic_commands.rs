@@ -18,8 +18,8 @@ mod allocate_mq_sub_command;
 mod delete_topic_sub_command;
 mod topic_cluster_sub_command;
 mod topic_list_sub_command;
-mod update_topic_sub_command;
 mod topic_route_sub_command;
+mod update_topic_sub_command;
 use std::sync::Arc;
 
 use clap::Subcommand;
@@ -81,7 +81,7 @@ impl CommandExecute for TopicCommands {
             TopicCommands::DeleteTopic(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::TopicClusterList(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::TopicList(cmd) => cmd.execute(rpc_hook).await,
-            TopicCommands::TopicRoute(cmd)=>   cmd.execute(rpc_hook).await,
+            TopicCommands::TopicRoute(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }
