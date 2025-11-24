@@ -87,13 +87,11 @@ impl TopicRouteSubCommand {
             print!("-");
         }
         println!(
-            "{} {} {:?} {} {} {}",
+            "{} {} {} {}",
             "Total:",
             map.len(),
-            "",
             total_read_queue,
             total_write_queue,
-            ""
         );
         Ok(())
     }
