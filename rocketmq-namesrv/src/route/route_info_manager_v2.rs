@@ -477,10 +477,7 @@ impl RouteInfoManagerV2 {
         let broker_addr_info = Arc::new(BrokerAddrInfo::new(cluster_name, broker_addr));
 
         let timeout = timeout_millis.unwrap_or(DEFAULT_BROKER_CHANNEL_EXPIRED_TIME);
-        let current_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let current_time = get_current_millis();
 
         let live_info = BrokerLiveInfo::new(current_time, data_version)
             .with_timeout(timeout)

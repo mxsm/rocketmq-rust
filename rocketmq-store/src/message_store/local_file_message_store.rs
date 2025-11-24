@@ -92,6 +92,7 @@ use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::store_stats_service::StoreStatsService;
 use crate::base::transient_store_pool::TransientStorePool;
+use crate::config::flush_disk_type::FlushDiskType;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::config::store_path_config_helper::get_store_path_batch_consume_queue;
 use crate::config::store_path_config_helper::get_store_path_consume_queue_ext;
@@ -393,21 +394,51 @@ impl LocalFileMessageStore {
     }
 
     pub async fn recover_normally(&mut self, max_phy_offset_of_consume_queue: i64) {
-        self.commit_log
-            .recover_normally(
-                max_phy_offset_of_consume_queue,
-                self.message_store_arc.clone().unwrap(),
-            )
-            .await;
+        // Check if optimized recovery is enabled (default: true)
+        let use_optimized = std::env::var("ROCKETMQ_USE_OPTIMIZED_RECOVERY")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse::<bool>()
+            .unwrap_or(true);
+
+        if use_optimized {
+            self.commit_log
+                .recover_normally_optimized(
+                    max_phy_offset_of_consume_queue,
+                    self.message_store_arc.clone().unwrap(),
+                )
+                .await;
+        } else {
+            self.commit_log
+                .recover_normally(
+                    max_phy_offset_of_consume_queue,
+                    self.message_store_arc.clone().unwrap(),
+                )
+                .await;
+        }
     }
 
     pub async fn recover_abnormally(&mut self, max_phy_offset_of_consume_queue: i64) {
-        self.commit_log
-            .recover_abnormally(
-                max_phy_offset_of_consume_queue,
-                self.message_store_arc.clone().unwrap(),
-            )
-            .await;
+        // Check if optimized recovery is enabled (default: true)
+        let use_optimized = std::env::var("ROCKETMQ_USE_OPTIMIZED_RECOVERY")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse::<bool>()
+            .unwrap_or(true);
+
+        if use_optimized {
+            self.commit_log
+                .recover_abnormally_optimized(
+                    max_phy_offset_of_consume_queue,
+                    self.message_store_arc.clone().unwrap(),
+                )
+                .await;
+        } else {
+            self.commit_log
+                .recover_abnormally(
+                    max_phy_offset_of_consume_queue,
+                    self.message_store_arc.clone().unwrap(),
+                )
+                .await;
+        }
     }
 
     fn is_recover_concurrently(&self) -> bool {
@@ -732,7 +763,7 @@ impl MessageStore for LocalFileMessageStore {
             self.store_stats_service.shutdown();
             self.commit_log.shutdown();
 
-            self.reput_message_service.shutdown();
+            self.reput_message_service.shutdown().await;
             self.consume_queue_store.shutdown();
 
             // dispatch-related services must be shut down after reputMessageService
@@ -750,7 +781,7 @@ impl MessageStore for LocalFileMessageStore {
             if let Some(store_checkpoint) = self.store_checkpoint.as_ref() {
                 let _ = store_checkpoint.shutdown();
             }
-            if self.running_flags.is_writeable() {
+            if self.running_flags.is_writeable() && self.dispatch_behind_bytes() == 0 {
                 //delete abort file
                 self.delete_file(get_abort_file(
                     self.message_store_config.store_path_root_dir.as_str(),
@@ -1627,9 +1658,9 @@ impl MessageStore for LocalFileMessageStore {
         todo!()
     }
 
+    #[inline]
     fn dispatch_behind_bytes(&self) -> i64 {
-        error!("DefaultMessageStore#dispatchBehindBytes: not implemented");
-        0
+        self.reput_message_service.behind()
     }
 
     fn flush(&self) -> i64 {
@@ -1645,7 +1676,7 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn get_confirm_offset(&self) -> i64 {
-        todo!()
+        self.commit_log.get_confirm_offset()
     }
 
     fn set_confirm_offset(&mut self, phy_offset: i64) {
@@ -1790,7 +1821,7 @@ impl MessageStore for LocalFileMessageStore {
     }*/
 
     fn is_sync_disk_flush(&self) -> bool {
-        todo!()
+        self.message_store_config.flush_disk_type == FlushDiskType::SyncFlush
     }
 
     fn is_sync_master(&self) -> bool {
@@ -2206,29 +2237,54 @@ impl ReputMessageService {
         self.dispatcher_handle = Some(dispatcher_handle);
     }
 
-    pub fn shutdown(&mut self) {
-        let handle = Handle::current();
-        let inner = self.inner.as_ref().unwrap().clone();
-        let _ = thread::spawn(move || {
-            handle.block_on(async move {
-                let mut index = 0;
-                while index < 50 && inner.is_commit_log_available() {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    if inner.is_commit_log_available() {
-                        warn!(
-                            "shutdown ReputMessageService, but CommitLog have not finish to be \
-                             dispatched, CommitLog max offset={}, reputFromOffset={}",
-                            inner.commit_log.get_max_offset(),
-                            inner.reput_from_offset.load(Ordering::Relaxed)
-                        );
-                    }
-                    index += 1;
+    pub async fn shutdown(&mut self) {
+        // Step 1: Wait for pending messages to be dispatched (max 5 seconds, 50 * 100ms)
+        if let Some(inner) = self.inner.as_ref() {
+            for i in 0..50 {
+                if !inner.is_commit_log_available() {
+                    break;
                 }
-                info!("ReputMessageService shutdown now......");
-            });
-        })
-        .join();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+
+            // Warn if there are still undispatched messages
+            if inner.is_commit_log_available() {
+                warn!(
+                    "shutdown ReputMessageService, but CommitLog have not finish to be \
+                     dispatched, CommitLog max offset={}, reputFromOffset={}",
+                    inner.commit_log.get_max_offset(),
+                    inner.reput_from_offset.load(Ordering::Relaxed)
+                );
+            }
+        }
+
+        // Step 2: Notify tasks to shutdown
         self.shutdown.notify_waiters();
+
+        // Step 3: Wait for tasks to complete with timeout (3 seconds)
+        if let Some(handle) = self.reader_handle.take() {
+            match tokio::time::timeout(Duration::from_secs(3), handle).await {
+                Ok(Ok(())) => info!("Reader task shut down successfully"),
+                Ok(Err(e)) => warn!("Reader task panicked during shutdown: {:?}", e),
+                Err(_) => warn!("Reader task shutdown timeout after 3s"),
+            }
+        }
+
+        if let Some(handle) = self.dispatcher_handle.take() {
+            match tokio::time::timeout(Duration::from_secs(3), handle).await {
+                Ok(Ok(())) => info!("Dispatcher task shut down successfully"),
+                Ok(Err(e)) => warn!("Dispatcher task panicked during shutdown: {:?}", e),
+                Err(_) => warn!("Dispatcher task shutdown timeout after 3s"),
+            }
+        }
+
+        info!("ReputMessageService shutdown complete");
+    }
+
+    #[inline]
+    pub fn behind(&self) -> i64 {
+        let inner = self.inner.as_ref().unwrap();
+        inner.message_store.get_confirm_offset() - inner.reput_from_offset.load(Ordering::Relaxed)
     }
 }
 
