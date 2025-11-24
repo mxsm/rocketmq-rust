@@ -62,7 +62,7 @@ crossbeam-skiplist = "0.1"
 futures = "0.3.31"
 
 [dev-dependencies]
-mockall = "0.13.1"
+mockall = "0.14.0"
 static_assertions = { version = "1" }
 criterion = { version = "0.7", features = ["html_reports"] }
 
