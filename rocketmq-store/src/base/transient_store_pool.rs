@@ -25,6 +25,7 @@ use tracing::warn;
 use crate::utils::ffi::mlock;
 use crate::utils::ffi::munlock;
 
+#[derive(Clone)]
 pub struct TransientStorePool {
     pool_size: usize,
     file_size: usize,
