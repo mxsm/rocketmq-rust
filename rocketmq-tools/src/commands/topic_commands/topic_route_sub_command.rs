@@ -87,8 +87,7 @@ impl TopicRouteSubCommand {
             print!("-");
         }
         println!(
-            "{} {} {} {}",
-            "Total:",
+            "Total: {} {} {}",
             map.len(),
             total_read_queue,
             total_write_queue,
