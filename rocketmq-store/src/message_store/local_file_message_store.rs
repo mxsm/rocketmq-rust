@@ -777,7 +777,7 @@ impl MessageStore for LocalFileMessageStore {
                 // this.rocksDBMessageStore.consumeQueueStore.shutdown();
             }
             self.flush_consume_queue_service.shutdown();
-            self.allocate_mapped_file_service.shutdown();
+            self.allocate_mapped_file_service.shutdown().await;
             if let Some(store_checkpoint) = self.store_checkpoint.as_ref() {
                 let _ = store_checkpoint.shutdown();
             }
