@@ -36,9 +36,8 @@ impl TopicRouteSubCommand {
             return std::cmp::Ordering::Greater;
         } else if a < b {
             return std::cmp::Ordering::Less;
-        } else {
-            return std::cmp::Ordering::Equal;
         }
+        std::cmp::Ordering::Equal
     }
     fn print_data(
         &self,
