@@ -1330,7 +1330,12 @@ impl CommitLog {
         } else if self.broker_config.duplication_enable {
             return self.confirm_offset;
         }
-        self.get_max_offset()
+        let ms = self.local_file_message_store.as_ref().unwrap();
+        if ms.is_sync_disk_flush() {
+            self.get_flushed_where()
+        } else {
+            self.get_max_offset()
+        }
     }
 
     /// Optimized abnormal recovery with batched I/O
@@ -1661,8 +1666,14 @@ impl CommitLog {
         }
     }
 
+    #[inline]
     pub fn get_max_offset(&self) -> i64 {
         self.mapped_file_queue.get_max_offset()
+    }
+
+    #[inline]
+    pub fn get_flushed_where(&self) -> i64 {
+        self.mapped_file_queue.get_flushed_where()
     }
 
     pub fn get_min_offset(&self) -> i64 {

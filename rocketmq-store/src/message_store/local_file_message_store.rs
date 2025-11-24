@@ -92,6 +92,7 @@ use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::store_stats_service::StoreStatsService;
 use crate::base::transient_store_pool::TransientStorePool;
+use crate::config::flush_disk_type::FlushDiskType;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::config::store_path_config_helper::get_store_path_batch_consume_queue;
 use crate::config::store_path_config_helper::get_store_path_consume_queue_ext;
@@ -1657,9 +1658,9 @@ impl MessageStore for LocalFileMessageStore {
         todo!()
     }
 
+    #[inline]
     fn dispatch_behind_bytes(&self) -> i64 {
-        error!("DefaultMessageStore#dispatchBehindBytes: not implemented");
-        0
+        self.reput_message_service.behind()
     }
 
     fn flush(&self) -> i64 {
@@ -1675,7 +1676,7 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn get_confirm_offset(&self) -> i64 {
-        todo!()
+        self.commit_log.get_confirm_offset()
     }
 
     fn set_confirm_offset(&mut self, phy_offset: i64) {
@@ -1820,7 +1821,7 @@ impl MessageStore for LocalFileMessageStore {
     }*/
 
     fn is_sync_disk_flush(&self) -> bool {
-        todo!()
+        self.message_store_config.flush_disk_type == FlushDiskType::SyncFlush
     }
 
     fn is_sync_master(&self) -> bool {
@@ -2278,6 +2279,12 @@ impl ReputMessageService {
         }
 
         info!("ReputMessageService shutdown complete");
+    }
+
+    #[inline]
+    pub fn behind(&self) -> i64 {
+        let inner = self.inner.as_ref().unwrap();
+        inner.message_store.get_confirm_offset() - inner.reput_from_offset.load(Ordering::Relaxed)
     }
 }
 
