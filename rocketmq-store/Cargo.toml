@@ -68,7 +68,7 @@ page_size = "0.6.0"
 dashmap = { workspace = true }
 hashbrown = "0.16"
 sys-info = "0.9"
-rayon = "1.10"
+rayon = "1.11"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Phase 3 Optimization: io_uring for Linux only (optional)

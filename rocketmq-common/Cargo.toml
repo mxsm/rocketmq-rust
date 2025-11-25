@@ -71,7 +71,7 @@ uuid = { workspace = true }
 cheetah-string = { workspace = true }
 
 [dev-dependencies]
-mockall = "0.13.1"
+mockall = "0.14.0"
 criterion = { version = "0.7", features = ["html_reports"] }
 
 [[bench]]
