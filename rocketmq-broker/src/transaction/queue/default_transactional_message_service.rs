@@ -131,9 +131,9 @@ where
         let mut send_map = HashMap::<i32, Message>::new();
         let delete_context_mutex_guard = self.delete_context.lock().await;
         for (queue_id, mq_context) in delete_context_mutex_guard.iter() {
-            if mq_context.get_total_size() <= 0
-                || mq_context.context_queue().is_empty().await
-                || (mq_context.get_total_size() < max_size as i32
+            if mq_context.get_total_size().await == 0
+                || mq_context.is_empty().await
+                || (mq_context.get_total_size().await < max_size as u32
                     && (start_time as i64 - mq_context.get_last_write_timestamp().await as i64)
                         < interval as i64)
             {
@@ -145,7 +145,7 @@ where
             }
             send_map.insert(*queue_id, op_message.unwrap());
             first_timestamp = first_timestamp.min(mq_context.get_last_write_timestamp().await);
-            if mq_context.get_total_size() >= max_size as i32 {
+            if mq_context.get_total_size().await >= max_size as u32 {
                 over_size = true;
             }
         }
@@ -172,8 +172,8 @@ where
         more_data: Option<String>,
     ) -> Option<Message> {
         let topic = TransactionalMessageUtil::build_op_topic();
-        let delete_context = self.delete_context.lock().await;
-        let mq_context = delete_context.get(&queue_id)?;
+        let mut delete_context = self.delete_context.lock().await;
+        let mq_context = delete_context.get_mut(&queue_id)?;
 
         let more_data_length = if let Some(ref data) = more_data {
             data.len()
@@ -187,7 +187,7 @@ where
             .broker_config()
             .transaction_op_msg_max_size as usize;
         if length < max_size {
-            let sz = mq_context.get_total_size() as usize;
+            let sz = mq_context.get_total_size().await as usize;
             if sz > max_size || length + sz > max_size {
                 length = max_size + 100;
             } else {
@@ -201,12 +201,12 @@ where
             sb.push_str(&data);
         }
 
-        while !mq_context.context_queue().is_empty().await {
+        while !mq_context.is_empty().await {
             if sb.len() >= max_size {
                 break;
             }
             {
-                if let Some(data) = mq_context.context_queue().try_poll().await {
+                if let Ok(data) = mq_context.pull().await {
                     sb.push_str(&data);
                 }
             }
@@ -1069,17 +1069,16 @@ where
         );
         let len = data.len();
         let res = mq_context
-            .context_queue()
             .offer(data.clone(), Duration::from_millis(100))
             .await;
-        if res {
-            let total_size = mq_context.total_size_add_and_get(len as i32);
+        if res.is_ok() {
+            let total_size = mq_context.total_size_add_and_get(len as u32).await;
             if total_size
                 > self
                     .transactional_message_bridge
                     .broker_runtime_inner
                     .broker_config()
-                    .transaction_op_msg_max_size
+                    .transaction_op_msg_max_size as u32
             {
                 if let Some(batch_service) = &self.transactional_op_batch_service {
                     batch_service.wakeup();

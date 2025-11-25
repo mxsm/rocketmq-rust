@@ -1,59 +1,69 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-use std::sync::atomic::AtomicI32;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use rocketmq_rust::RocketMQBlockingQueue;
-use tokio::sync::Mutex;
+use anyhow::Error;
+use rocketmq_error::Result;
+use tokio::sync::mpsc;
+use tokio::time;
 
 pub struct MessageQueueOpContext {
-    total_size: AtomicI32,
-    last_write_timestamp: Arc<Mutex<u64>>,
-    context_queue: RocketMQBlockingQueue<String>,
+    total_size: AtomicU32,
+    last_write_timestamp: AtomicU64,
+    context_queue: Arc<mpsc::UnboundedSender<String>>,
+    context_receiver: mpsc::UnboundedReceiver<String>,
+    queue_capacity: usize,
 }
 
 impl MessageQueueOpContext {
     pub fn new(timestamp: u64, queue_length: usize) -> Self {
+        let unbounded_channel = mpsc::unbounded_channel::<String>();
         MessageQueueOpContext {
-            total_size: AtomicI32::new(0),
-            last_write_timestamp: Arc::new(Mutex::new(timestamp)),
-            context_queue: RocketMQBlockingQueue::new(queue_length),
+            total_size: AtomicU32::new(0),
+            last_write_timestamp: AtomicU64::new(timestamp),
+            context_queue: Arc::new(unbounded_channel.0),
+            context_receiver: unbounded_channel.1,
+            queue_capacity: queue_length,
         }
     }
 
-    pub fn get_total_size(&self) -> i32 {
+    pub async fn get_total_size(&self) -> u32 {
         self.total_size.load(Ordering::Relaxed)
     }
 
-    pub fn total_size_add_and_get(&self, delta: i32) -> i32 {
+    pub async fn total_size_add_and_get(&self, delta: u32) -> u32 {
         self.total_size.fetch_add(delta, Ordering::AcqRel) + delta
     }
 
     pub async fn get_last_write_timestamp(&self) -> u64 {
-        *self.last_write_timestamp.lock().await
+        self.last_write_timestamp.load(Ordering::Relaxed)
     }
 
     pub async fn set_last_write_timestamp(&self, timestamp: u64) {
-        let mut last_timestamp = self.last_write_timestamp.lock().await;
-        *last_timestamp = timestamp;
+        self.last_write_timestamp
+            .store(timestamp, Ordering::Release);
     }
 
-    pub fn context_queue(&self) -> &RocketMQBlockingQueue<String> {
-        &self.context_queue
+    pub async fn push(&self, msg: String) -> Result<()> {
+        if self.context_receiver.len() > self.queue_capacity {
+            return Err(anyhow::Error::msg("queue is full".to_string()));
+        }
+        self.context_queue.send(msg).map_err(anyhow::Error::new)
+    }
+    pub async fn offer(&self, item: String, timeout: std::time::Duration) -> Result<()> {
+        if let Ok(res) = time::timeout(timeout, self.push(item)).await {
+            return res;
+        }
+        Err(Error::msg("offer time out"))
+    }
+    pub async fn pull(&mut self) -> Result<String> {
+        if let Some(item) = self.context_receiver.recv().await {
+            return Ok(item);
+        }
+        Err(Error::msg("pull failed, channel closed".to_string()))
+    }
+    pub async fn is_empty(&self) -> bool {
+        self.context_receiver.len() == 0
     }
 }
