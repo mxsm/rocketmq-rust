@@ -15,7 +15,9 @@
  * limitations under the License.
  */
 
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicI64;
+use std::sync::atomic::AtomicU64;
 
 use parking_lot::Mutex;
 
@@ -176,10 +178,10 @@ impl ReferenceResource for ReferenceResourceCounter {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Barrier,
-    };
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::sync::Barrier;
     use std::thread;
     use std::time::Duration;
 
@@ -217,7 +219,10 @@ mod tests {
     fn test_hold_fails_after_shutdown() {
         let resource = ReferenceResourceCounter::new();
         resource.shutdown(0);
-        assert!(!resource.is_available(), "Should not be available after shutdown");
+        assert!(
+            !resource.is_available(),
+            "Should not be available after shutdown"
+        );
         assert!(!resource.hold(), "Hold should fail after shutdown");
     }
 
@@ -228,7 +233,10 @@ mod tests {
         resource.base.ref_count.store(-5, Ordering::Release);
         resource.base.available.store(true, Ordering::Release);
 
-        assert!(!resource.hold(), "Hold should fail when refCount is negative");
+        assert!(
+            !resource.hold(),
+            "Hold should fail when refCount is negative"
+        );
         assert_eq!(resource.get_ref_count(), -5, "Should rollback increment");
     }
 
@@ -322,7 +330,11 @@ mod tests {
         thread::sleep(Duration::from_millis(10));
         resource.shutdown(1000); // Should NOT force yet
 
-        assert_eq!(resource.get_ref_count(), 1, "Should not force before timeout");
+        assert_eq!(
+            resource.get_ref_count(),
+            1,
+            "Should not force before timeout"
+        );
     }
 
     #[test]
@@ -330,12 +342,18 @@ mod tests {
         let resource = ReferenceResourceCounter::new();
         let timestamp_after_first = {
             resource.shutdown(1000);
-            resource.base.first_shutdown_timestamp.load(Ordering::Acquire)
+            resource
+                .base
+                .first_shutdown_timestamp
+                .load(Ordering::Acquire)
         };
 
         thread::sleep(Duration::from_millis(10));
         resource.shutdown(1000);
-        let timestamp_after_second = resource.base.first_shutdown_timestamp.load(Ordering::Acquire);
+        let timestamp_after_second = resource
+            .base
+            .first_shutdown_timestamp
+            .load(Ordering::Acquire);
 
         assert_eq!(
             timestamp_after_first, timestamp_after_second,
@@ -375,15 +393,15 @@ mod tests {
         resource.release(); // refCount = 1
         resource.release(); // refCount = 0, triggers cleanup
 
-        assert_eq!(cleanup_count.load(Ordering::SeqCst), 1, "Cleanup called once");
-
-        // Additional releases should not trigger cleanup again
-        resource.release(); // refCount = -1
         assert_eq!(
             cleanup_count.load(Ordering::SeqCst),
             1,
-            "Still only once"
+            "Cleanup called once"
         );
+
+        // Additional releases should not trigger cleanup again
+        resource.release(); // refCount = -1
+        assert_eq!(cleanup_count.load(Ordering::SeqCst), 1, "Still only once");
     }
 
     // ========================================================================

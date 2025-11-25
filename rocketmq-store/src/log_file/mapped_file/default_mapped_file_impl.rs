@@ -1072,7 +1072,9 @@ impl DefaultMappedFile {
 }
 
 impl ReferenceResource for DefaultMappedFile {
-    fn base(&self) -> &crate::log_file::mapped_file::reference_resource_counter::ReferenceResourceBase {
+    fn base(
+        &self,
+    ) -> &crate::log_file::mapped_file::reference_resource_counter::ReferenceResourceBase {
         self.reference_resource.base()
     }
 

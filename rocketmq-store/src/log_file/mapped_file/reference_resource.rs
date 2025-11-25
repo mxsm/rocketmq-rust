@@ -24,29 +24,6 @@ use super::reference_resource_counter::ReferenceResourceBase;
 /// This trait provides default implementations for all lifecycle management methods,
 /// mirroring Java's `ReferenceResource` abstract class design where only `cleanup()`
 /// needs to be implemented.
-///
-/// # Design Pattern
-///
-/// - **Default methods** (like Java's concrete methods): All lifecycle methods have
-///   default implementations that work with the base structure
-/// - **Abstract method** (like Java's abstract method): Only `cleanup()` must be
-///   implemented by concrete types
-///
-/// # Java Alignment
-///
-/// ```java
-/// public abstract class ReferenceResource {
-///     // Concrete methods (Rust: default trait methods)
-///     public synchronized boolean hold() { ... }
-///     public void shutdown(final long intervalForcibly) { ... }
-///     // ... other concrete methods
-///     
-///     // Abstract method (Rust: required trait method)
-///     public abstract boolean cleanup(final long currentRef);
-/// }
-/// ```
-///
-/// Implementors of this trait must be thread-safe (`Send` and `Sync`).
 pub trait ReferenceResource: Send + Sync {
     /// Returns a reference to the base structure containing all reference counting state.
     ///
@@ -55,21 +32,6 @@ pub trait ReferenceResource: Send + Sync {
     fn base(&self) -> &ReferenceResourceBase;
 
     /// Attempts to acquire a reference to this resource.
-    ///
-    /// # Java Equivalent
-    ///
-    /// ```java
-    /// public synchronized boolean hold() {
-    ///     if (this.isAvailable()) {
-    ///         if (this.refCount.getAndIncrement() > 0) {
-    ///             return true;
-    ///         } else {
-    ///             this.refCount.getAndDecrement();
-    ///         }
-    ///     }
-    ///     return false;
-    /// }
-    /// ```
     ///
     /// # Returns
     /// * `true` if the reference count was successfully increased.
@@ -98,14 +60,6 @@ pub trait ReferenceResource: Send + Sync {
 
     /// Checks if the resource is available.
     ///
-    /// # Java Equivalent
-    ///
-    /// ```java
-    /// public boolean isAvailable() {
-    ///     return this.available;
-    /// }
-    /// ```
-    ///
     /// # Returns
     /// * `true` if the resource is available.
     /// * `false` otherwise.
@@ -118,31 +72,16 @@ pub trait ReferenceResource: Send + Sync {
 
     /// Shuts down the resource.
     ///
-    /// # Java Equivalent
-    ///
-    /// ```java
-    /// public void shutdown(final long intervalForcibly) {
-    ///     if (this.available) {
-    ///         this.available = false;
-    ///         this.firstShutdownTimestamp = System.currentTimeMillis();
-    ///         this.release();
-    ///     } else if (this.getRefCount() > 0) {
-    ///         if ((System.currentTimeMillis() - this.firstShutdownTimestamp) >= intervalForcibly) {
-    ///             this.refCount.set(-1000 - this.getRefCount());
-    ///             this.release();
-    ///         }
-    ///     }
-    /// }
-    /// ```
     ///
     /// # Parameters
     /// * `interval_forcibly` - The interval in milliseconds to forcibly shut down the resource.
     fn shutdown(&self, interval_forcibly: u64) {
         use rocketmq_common::TimeUtils::get_current_millis;
-        
+
         if self.base().available.load(Ordering::Acquire) {
             self.base().available.store(false, Ordering::Release);
-            self.base().first_shutdown_timestamp
+            self.base()
+                .first_shutdown_timestamp
                 .store(get_current_millis(), Ordering::Release);
             self.release();
         } else if self.get_ref_count() > 0 {
@@ -151,7 +90,8 @@ pub trait ReferenceResource: Send + Sync {
 
             if elapsed >= interval_forcibly {
                 let current_count = self.get_ref_count();
-                self.base().ref_count
+                self.base()
+                    .ref_count
                     .store(-1000 - current_count, Ordering::Release);
                 self.release();
             }
@@ -159,20 +99,6 @@ pub trait ReferenceResource: Send + Sync {
     }
 
     /// Releases the resource, decreasing the reference count.
-    ///
-    /// # Java Equivalent
-    ///
-    /// ```java
-    /// public void release() {
-    ///     long value = this.refCount.decrementAndGet();
-    ///     if (value > 0)
-    ///         return;
-    ///
-    ///     synchronized (this) {
-    ///         this.cleanupOver = this.cleanup(value);
-    ///     }
-    /// }
-    /// }```
     #[inline]
     fn release(&self) {
         // Release ordering ensures all previous operations are visible before decrement
@@ -186,26 +112,18 @@ pub trait ReferenceResource: Send + Sync {
         // Acquire fence to synchronize with the Release above
         std::sync::atomic::fence(Ordering::Acquire);
 
-        // parking_lot::Mutex never panics, no need for unwrap()
         let _guard = self.base().release_lock.lock();
-        
+
         // Relaxed is fine here as we're protected by the lock
         if !self.base().cleanup_over.load(Ordering::Relaxed) {
             let cleanup_result = self.cleanup(value);
-            self.base().cleanup_over.store(cleanup_result, Ordering::Release);
+            self.base()
+                .cleanup_over
+                .store(cleanup_result, Ordering::Release);
         }
     }
 
     /// Gets the current reference count of the resource.
-    ///
-    /// # Java Equivalent
-    ///
-    /// ```java
-    /// public long getRefCount() {
-    ///     return this.refCount.get();
-    /// }
-    /// ```
-    ///
     /// # Returns
     /// The current reference count.
     #[inline]
@@ -217,12 +135,6 @@ pub trait ReferenceResource: Send + Sync {
 
     /// Cleans up the resource. **This is the only abstract method that must be implemented.**
     ///
-    /// # Java Equivalent
-    ///
-    /// ```java
-    /// public abstract boolean cleanup(final long currentRef);
-    /// ```
-    ///
     /// # Parameters
     /// * `current_ref` - The reference count when cleanup was triggered.
     ///
@@ -233,21 +145,12 @@ pub trait ReferenceResource: Send + Sync {
 
     /// Checks if the cleanup process is over.
     ///
-    /// # Java Equivalent
-    ///
-    /// ```java
-    /// public boolean isCleanupOver() {
-    ///     return this.refCount.get() <= 0 && this.cleanupOver;
-    /// }
-    /// ```
     ///
     /// # Returns
     /// * `true` if the cleanup is over.
     /// * `false` otherwise.
     #[inline]
     fn is_cleanup_over(&self) -> bool {
-        // Optimize: check cleanup_over first (more likely to be false early on)
-        // Use Relaxed for cleanup_over as it's synchronized by release_lock
         self.base().cleanup_over.load(Ordering::Relaxed)
             && self.base().ref_count.load(Ordering::Relaxed) <= 0
     }
