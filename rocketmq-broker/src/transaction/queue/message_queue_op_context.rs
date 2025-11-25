@@ -52,7 +52,10 @@ impl MessageQueueOpContext {
         self.context_queue.send(msg).map_err(anyhow::Error::new)
     }
     pub async fn offer(&self, item: String, timeout: std::time::Duration) -> Result<()> {
-        time::timeout(timeout, self.push(item)).await.unwrap()
+        if let Ok(res) = time::timeout(timeout, self.push(item)).await {
+            return res;
+        }
+        Err(Error::msg("offer time out"))
     }
     pub async fn pull(&mut self) -> Result<String> {
         if let Some(item) = self.context_receiver.recv().await {
