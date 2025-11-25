@@ -131,7 +131,7 @@ where
         let mut send_map = HashMap::<i32, Message>::new();
         let delete_context_mutex_guard = self.delete_context.lock().await;
         for (queue_id, mq_context) in delete_context_mutex_guard.iter() {
-            if mq_context.get_total_size().await <= 0
+            if mq_context.get_total_size().await == 0
                 || mq_context.is_empty().await
                 || (mq_context.get_total_size().await < max_size as u32
                     && (start_time as i64 - mq_context.get_last_write_timestamp().await as i64)

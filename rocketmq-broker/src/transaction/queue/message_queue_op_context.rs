@@ -49,9 +49,7 @@ impl MessageQueueOpContext {
         if self.context_receiver.len() > self.queue_capacity {
             return Err(anyhow::Error::msg("queue is full".to_string()));
         }
-        self.context_queue
-            .send(msg)
-            .map_err(|e| anyhow::Error::new(e))
+        self.context_queue.send(msg).map_err(anyhow::Error::new)
     }
     pub async fn offer(&self, item: String, timeout: std::time::Duration) -> Result<()> {
         time::timeout(timeout, self.push(item)).await.unwrap()
