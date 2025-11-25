@@ -61,7 +61,7 @@ impl MessageQueueOpContext {
         if let Some(item) = self.context_receiver.recv().await {
             return Ok(item);
         }
-        Err(Error::msg("pull failed, queue is empty".to_string()))
+        Err(Error::msg("pull failed, channel closed".to_string()))
     }
     pub async fn is_empty(&self) -> bool {
         self.context_receiver.len() == 0
