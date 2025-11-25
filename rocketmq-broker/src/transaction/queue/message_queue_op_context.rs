@@ -64,9 +64,6 @@ impl MessageQueueOpContext {
         Err(Error::msg("pull failed, queue is empty".to_string()))
     }
     pub async fn is_empty(&self) -> bool {
-        if self.context_receiver.len() == 0 {
-            return true;
-        }
-        false
+        self.context_receiver.len() == 0
     }
 }
