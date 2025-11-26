@@ -2817,6 +2817,7 @@ dependencies = [
  "criterion",
  "dashmap",
  "futures",
+ "hashbrown 0.16.1",
  "parking_lot",
  "rocketmq-common",
  "rocketmq-error",
