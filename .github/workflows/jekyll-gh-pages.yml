@@ -61,8 +61,8 @@ jobs:
           crawler-api-key: ${{ secrets.CRAWLER_API_KEY }}
           algolia-app-id: ${{ secrets.ALGOLIA_APP_ID }}
           algolia-api-key: ${{ secrets.ALGOLIA_API_KEY }}
-          crawler-name: 'rocketmq-rust.ljbmxsm.com_A7P4XEL1X0'
-          site-url: 'https://rocketmq-rust.ljbmxsm.com/'
+          crawler-name: 'rocketmqrust'
+          site-url: 'https://rocketmqrust.com/'
           override-config: true
 
 

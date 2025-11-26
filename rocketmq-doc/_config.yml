@@ -16,7 +16,7 @@ title_separator: "-"
 subtitle: "Document for RocketMQ Rust"
 name: &name "mxsm" # &name is a YAML anchor which can be *referenced later
 description: "Document for Rocketmq rust."
-url: https://rocketmq-rust.ljbmxsm.com # the base hostname & protocol for your site e.g. "https://mmistakes.github.io"
+url: https://rocketmqrust.com # the base hostname & protocol for your site e.g. "https://mmistakes.github.io"
 baseurl: "" # the subpath of your site, e.g. "/blog"
 repository: "mxsm/rocketmq-rust"
 teaser: # path of fallback teaser image, e.g. "/assets/images/500x300.png"
@@ -58,7 +58,7 @@ search_full_content: true # true, false (default)
 search_provider: algolia # lunr (default), algolia
 algolia:
   application_id: A7P4XEL1X0  # YOUR_APPLICATION_ID
-  index_name: crawler_rocketmq-rust.ljbmxsm.com_A7P4XEL1X0_index #minimal_mistakes # YOUR_INDEX_NAME
+  index_name: rocketmqrust_index #minimal_mistakes # YOUR_INDEX_NAME
   search_only_api_key: db1ad68e86dd7d47a5988ab78dcc8347 # YOUR_SEARCH_ONLY_API_KEY
   powered_by: true # true (default), false
   files_to_exclude:
