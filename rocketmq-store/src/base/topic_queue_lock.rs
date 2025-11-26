@@ -68,21 +68,7 @@ impl TopicQueueLock {
     }
 }
 
-//copy from Java HashMap
-#[inline]
-fn table_size_for(cap: usize) -> usize {
-    let n = cap.saturating_sub(1);
-    let n = n | (n >> 1);
-    let n = n | (n >> 2);
-    let n = n | (n >> 4);
-    let n = n | (n >> 8);
-    let n = n | (n >> 16);
-    if n >= MAXIMUM_CAPACITY {
-        MAXIMUM_CAPACITY
-    } else {
-        n + 1
-    }
-}
+
 
 #[cfg(test)]
 mod tests {
