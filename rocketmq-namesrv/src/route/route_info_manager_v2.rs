@@ -956,10 +956,7 @@ impl RouteInfoManagerV2 {
         _cluster_name: CheetahString,
         broker_addr: CheetahString,
     ) {
-        let current_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let current_time = get_current_millis();
         self.broker_live_table
             .update_last_update_timestamp(&broker_addr, current_time);
     }
