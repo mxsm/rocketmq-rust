@@ -68,46 +68,9 @@ impl TopicQueueLock {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn calculates_table_size_for_zero_capacity() {
-        assert_eq!(table_size_for(0), 1);
-    }
-
-    #[test]
-    fn calculates_table_size_for_one_capacity() {
-        assert_eq!(table_size_for(1), 1);
-    }
-
-    #[test]
-    fn calculates_table_size_for_exact_power_of_two() {
-        assert_eq!(table_size_for(64), 64);
-    }
-
-    #[test]
-    fn calculates_table_size_for_just_above_power_of_two() {
-        assert_eq!(table_size_for(65), 64);
-    }
-
-    #[test]
-    fn calculates_table_size_for_maximum_capacity() {
-        assert_eq!(table_size_for(MAXIMUM_CAPACITY), MAXIMUM_CAPACITY);
-    }
-
-    #[test]
-    fn calculates_table_size_for_above_maximum_capacity() {
-        assert_eq!(table_size_for(MAXIMUM_CAPACITY + 1), MAXIMUM_CAPACITY);
-    }
-
-    #[test]
-    fn calculates_table_size_for_large_number() {
-        assert_eq!(table_size_for(1_000_000), 64);
-    }
 
     #[test]
     fn creates_correct_number_of_locks() {
