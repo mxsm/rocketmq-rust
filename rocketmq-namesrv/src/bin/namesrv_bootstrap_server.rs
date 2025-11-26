@@ -43,7 +43,7 @@ const LOGO: &str = r#"
 #[rocketmq::main]
 async fn main() -> Result<()> {
     // Initialize the logger
-    rocketmq_common::log::init_logger_with_level(rocketmq_common::log::Level::INFO);
+    rocketmq_common::log::init_logger_with_level(rocketmq_common::log::Level::INFO)?;
     info!("            {}", LOGO);
     EnvUtils::put_property(
         remoting_command::REMOTING_VERSION_KEY,
