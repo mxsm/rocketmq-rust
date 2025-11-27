@@ -339,7 +339,7 @@ mod tests {
         // Test Clone and Copy
         let code1 = RequestCode::HeartBeat;
         let code2 = code1;
-        let code3 = code1.clone();
+        let code3 = code1;
         assert_eq!(code1, code2);
         assert_eq!(code1, code3);
 
