@@ -406,20 +406,3 @@ mod tests {
         assert_eq!(size_of::<RequestCode>(), size_of::<i32>());
     }
 }
-
-/*#[derive(Debug, PartialEq, Clone, Copy)]
-pub enum ControllerRequestCode {
-    ControllerAlterSyncStateSet = 1001,
-    ControllerElectMaster = 1002,
-    ControllerRegisterBroker = 1003,
-    ControllerGetReplicaInfo = 1004,
-    ControllerGetMetadataInfo = 1005,
-    ControllerGetSyncStateData = 1006,
-    GetBrokerEpochCache = 1007,
-    NotifyBrokerRoleChanged = 1008,
-    UpdateControllerConfig = 1009,
-    GetControllerConfig = 1010,
-    CleanBrokerData = 1011,
-    ControllerGetNextBrokerId = 1012,
-    ControllerApplyBrokerId = 1013,
-}*/
