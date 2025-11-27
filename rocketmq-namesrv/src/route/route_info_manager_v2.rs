@@ -1065,7 +1065,7 @@ impl RouteInfoManagerV2 {
             .topic_queue_table
             .get_all_topics()
             .into_iter()
-            .filter(|topic| system_topic_set.contains(topic.as_str()))
+            .filter(|topic| system_topic_set.iter().any(|s| s == topic.as_str()))
             .collect();
 
         Ok(TopicList {

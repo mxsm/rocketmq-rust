@@ -422,7 +422,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         let mut response = RemotingCommand::create_response_command();
         let topics = TopicValidator::get_system_topic_set();
         let topic_list = TopicList {
-            topic_list: topics.into_iter().map(|s| s.into()).collect(),
+            topic_list: topics,
             broker_addr: None,
         };
         response.set_body_mut_ref(topic_list.encode().expect("encode TopicList failed"));
