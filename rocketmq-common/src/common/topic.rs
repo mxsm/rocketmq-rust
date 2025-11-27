@@ -15,57 +15,100 @@
  * limitations under the License.
  */
 
-use std::collections::HashSet;
-use std::ops::Deref;
-use std::sync::Mutex;
+use std::sync::LazyLock;
 
 use cheetah_string::CheetahString;
-use lazy_static::lazy_static;
+use dashmap::DashSet;
 
 pub const TOPIC_MAX_LENGTH: usize = 127;
-lazy_static! {
-    static ref VALID_CHAR_BIT_MAP: [bool; 128] = {
-        let mut map = [false; 128];
-        map['%' as usize] = true;
-        map['-' as usize] = true;
-        map['_' as usize] = true;
-        map['|' as usize] = true;
-        for i in b'0'..=b'9' {
-            map[i as usize] = true;
-        }
-        for i in b'A'..=b'Z' {
-            map[i as usize] = true;
-        }
-        for i in b'a'..=b'z' {
-            map[i as usize] = true;
-        }
-        map
-    };
-    static ref SYSTEM_TOPIC_SET: parking_lot::RwLock<HashSet<String>> = {
-        let mut set = HashSet::new();
-        set.insert(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC.to_string());
-        set.insert(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC.to_string());
-        set.insert(TopicValidator::RMQ_SYS_BENCHMARK_TOPIC.to_string());
-        set.insert(TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC.to_string());
-        set.insert(TopicValidator::RMQ_SYS_TRACE_TOPIC.to_string());
-        set.insert(TopicValidator::RMQ_SYS_TRANS_OP_HALF_TOPIC.to_string());
-        set.insert(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC.to_string());
-        set.insert(TopicValidator::RMQ_SYS_SELF_TEST_TOPIC.to_string());
-        set.insert(TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT.to_string());
-        set.insert(TopicValidator::RMQ_SYS_ROCKSDB_OFFSET_TOPIC.to_string());
-        parking_lot::RwLock::new(set)
-    };
-    static ref NOT_ALLOWED_SEND_TOPIC_SET: HashSet<String> = {
-        let mut set = HashSet::new();
-        set.insert(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC.to_string());
-        set.insert(TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC.to_string());
-        set.insert(TopicValidator::RMQ_SYS_TRANS_OP_HALF_TOPIC.to_string());
-        set.insert(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC.to_string());
-        set.insert(TopicValidator::RMQ_SYS_SELF_TEST_TOPIC.to_string());
-        set.insert(TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT.to_string());
-        set
-    };
-}
+
+/// Pre-computed valid character bitmap for topic/group name validation
+/// Allows: 0-9, a-z, A-Z, %, -, _, |
+const VALID_CHAR_BIT_MAP: [bool; 128] = {
+    let mut map = [false; 128];
+    map['%' as usize] = true;
+    map['-' as usize] = true;
+    map['_' as usize] = true;
+    map['|' as usize] = true;
+
+    let mut i = b'0';
+    while i <= b'9' {
+        map[i as usize] = true;
+        i += 1;
+    }
+
+    let mut i = b'A';
+    while i <= b'Z' {
+        map[i as usize] = true;
+        i += 1;
+    }
+
+    let mut i = b'a';
+    while i <= b'z' {
+        map[i as usize] = true;
+        i += 1;
+    }
+    map
+};
+
+static SYSTEM_TOPIC_SET: LazyLock<DashSet<CheetahString>> = LazyLock::new(|| {
+    let set = DashSet::new();
+    set.insert(CheetahString::from_static_str(
+        TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
+    ));
+    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_SCHEDULE_TOPIC,
+    ));
+    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_BENCHMARK_TOPIC,
+    ));
+    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC,
+    ));
+    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_TRACE_TOPIC,
+    ));
+    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_TRANS_OP_HALF_TOPIC,
+    ));
+    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC,
+    ));
+    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_SELF_TEST_TOPIC,
+    ));
+    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT,
+    ));
+    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_ROCKSDB_OFFSET_TOPIC,
+    ));
+    set
+});
+
+static NOT_ALLOWED_SEND_TOPIC_SET: LazyLock<DashSet<CheetahString>> = LazyLock::new(|| {
+    let set = DashSet::new();
+    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_SCHEDULE_TOPIC,
+    ));
+    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC,
+    ));
+    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_TRANS_OP_HALF_TOPIC,
+    ));
+    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC,
+    ));
+    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_SELF_TEST_TOPIC,
+    ));
+    set.insert(CheetahString::from_static_str(
+        TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT,
+    ));
+    set
+});
+
 pub struct TopicValidator;
 
 impl TopicValidator {
@@ -85,22 +128,38 @@ impl TopicValidator {
 }
 
 impl TopicValidator {
+    /// Check if topic or group name contains illegal characters
+    ///
+    /// # Performance
+    /// Uses pre-computed bitmap for O(1) character validation
+    #[inline]
     pub fn is_topic_or_group_illegal(name: &str) -> bool {
-        let len = VALID_CHAR_BIT_MAP.len();
-        for ch in name.chars() {
-            if (ch as usize) >= len || !VALID_CHAR_BIT_MAP[ch as usize] {
-                return true;
-            }
-        }
-        false
+        name.bytes()
+            .any(|b| (b as usize) >= VALID_CHAR_BIT_MAP.len() || !VALID_CHAR_BIT_MAP[b as usize])
     }
 
+    /// Validate topic name according to RocketMQ rules
+    ///
+    /// # Rules
+    /// - Cannot be blank
+    /// - Must contain only: 0-9, a-z, A-Z, %, -, _, |
+    /// - Length must not exceed TOPIC_MAX_LENGTH (127)
+    #[inline]
     pub fn validate_topic(topic: &str) -> ValidateTopicResult {
-        if topic.trim().is_empty() {
-            const REMARK: &str = "The specified topic is blank.";
+        // Fast path: check length first (cheaper than trim)
+        if topic.is_empty() || topic.len() > TOPIC_MAX_LENGTH {
+            if topic.is_empty() || topic.trim().is_empty() {
+                const REMARK: &str = "The specified topic is blank.";
+                return ValidateTopicResult {
+                    valid: false,
+                    remark: CheetahString::from_static_str(REMARK),
+                };
+            }
             return ValidateTopicResult {
                 valid: false,
-                remark: CheetahString::from_static_str(REMARK),
+                remark: CheetahString::from(format!(
+                    "The specified topic is longer than topic max length {TOPIC_MAX_LENGTH}."
+                )),
             };
         }
 
@@ -113,41 +172,43 @@ impl TopicValidator {
             };
         }
 
-        if topic.len() > TOPIC_MAX_LENGTH {
-            return ValidateTopicResult {
-                valid: false,
-                remark: CheetahString::from(format!(
-                    "The specified topic is longer than topic max length {TOPIC_MAX_LENGTH}."
-                )),
-            };
-        }
-
         ValidateTopicResult {
             valid: true,
             remark: CheetahString::empty(),
         }
     }
 
+    #[inline]
     pub fn is_system_topic(topic: &str) -> bool {
-        let system_topics = SYSTEM_TOPIC_SET.read();
-        system_topics.contains(topic) || topic.starts_with(TopicValidator::SYSTEM_TOPIC_PREFIX)
+        // Fast path: check prefix first (no lock needed)
+        if topic.starts_with(TopicValidator::SYSTEM_TOPIC_PREFIX) {
+            return true;
+        }
+        // DashSet::contains is lock-free for reads
+        SYSTEM_TOPIC_SET.iter().any(|entry| entry.as_str() == topic)
     }
 
+    #[inline]
     pub fn is_not_allowed_send_topic(topic: &str) -> bool {
-        NOT_ALLOWED_SEND_TOPIC_SET.contains(topic)
+        // DashSet iteration is lock-free
+        NOT_ALLOWED_SEND_TOPIC_SET
+            .iter()
+            .any(|entry| entry.as_str() == topic)
     }
 
-    pub fn add_system_topic(system_topic: impl Into<String>) {
-        let mut system_topics = SYSTEM_TOPIC_SET.write();
-        system_topics.insert(system_topic.into());
+    pub fn add_system_topic(system_topic: impl Into<CheetahString>) {
+        SYSTEM_TOPIC_SET.insert(system_topic.into());
     }
 
-    pub fn get_system_topic_set() -> HashSet<String> {
-        SYSTEM_TOPIC_SET.read().clone()
+    pub fn get_system_topic_set() -> Vec<CheetahString> {
+        SYSTEM_TOPIC_SET.iter().map(|entry| entry.clone()).collect()
     }
 
-    pub fn get_not_allowed_send_topic_set() -> &'static HashSet<String> {
-        NOT_ALLOWED_SEND_TOPIC_SET.deref()
+    pub fn get_not_allowed_send_topic_set() -> Vec<CheetahString> {
+        NOT_ALLOWED_SEND_TOPIC_SET
+            .iter()
+            .map(|entry| entry.clone())
+            .collect()
     }
 }
 
@@ -257,12 +318,16 @@ mod tests {
     #[test]
     fn get_system_topic_set_returns_all_system_topics() {
         let system_topics = TopicValidator::get_system_topic_set();
-        assert!(system_topics.contains(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC));
+        assert!(system_topics
+            .iter()
+            .any(|s| s.as_str() == TopicValidator::RMQ_SYS_SCHEDULE_TOPIC));
     }
 
     #[test]
     fn get_not_allowed_send_topic_set_returns_all_not_allowed_topics() {
         let not_allowed_topics = TopicValidator::get_not_allowed_send_topic_set();
-        assert!(not_allowed_topics.contains(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC));
+        assert!(not_allowed_topics
+            .iter()
+            .any(|s| s.as_str() == TopicValidator::RMQ_SYS_SCHEDULE_TOPIC));
     }
 }
