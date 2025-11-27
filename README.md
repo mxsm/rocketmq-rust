@@ -28,8 +28,6 @@ a reimplementation of the Apache RocketMQ message middleware in the Rust languag
 developers with a high-performance and reliable message queue service, making full use of the features of the Rust
 language.
 
-![](resources/Rocketmq-rust.png)
-
 ### RocketMQ-Rust Features
 
 - **Rust Language Advantages:** Leveraging the benefits of Rust, such as memory safety, zero-cost abstractions, and high
