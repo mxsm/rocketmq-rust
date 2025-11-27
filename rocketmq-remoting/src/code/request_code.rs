@@ -406,4 +406,3 @@ mod tests {
         assert_eq!(size_of::<RequestCode>(), size_of::<i32>());
     }
 }
-
