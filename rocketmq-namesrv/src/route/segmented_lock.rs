@@ -60,11 +60,10 @@
 //!     // Write operations protected by this segment lock
 //! }
 //! ```
-
-use std::collections::hash_map::DefaultHasher;
+use std::hash::BuildHasher;
 use std::hash::Hash;
-use std::hash::Hasher;
 
+use hashbrown::DefaultHashBuilder;
 use parking_lot::RwLock;
 use parking_lot::RwLockReadGuard;
 use parking_lot::RwLockWriteGuard;
@@ -88,6 +87,8 @@ pub struct SegmentedLock<T = ()> {
     segment_count: usize,
     /// Bit mask for fast modulo operation (segment_count - 1)
     segment_mask: usize,
+    /// Hasher builder for consistent and fast hashing (reused across cells)
+    hash_builder: DefaultHashBuilder,
 }
 
 impl<T: Default> SegmentedLock<T> {
@@ -128,6 +129,7 @@ impl<T: Default> SegmentedLock<T> {
             segments,
             segment_count,
             segment_mask,
+            hash_builder: DefaultHashBuilder::default(),
         }
     }
 
@@ -144,9 +146,7 @@ impl<T: Default> SegmentedLock<T> {
     /// The segment index (0 to segment_count-1)
     #[inline]
     fn segment_index<K: ?Sized + Hash>(&self, key: &K) -> usize {
-        let mut hasher = DefaultHasher::new();
-        key.hash(&mut hasher);
-        let hash = hasher.finish() as usize;
+        let hash = self.hash_builder.hash_one(key) as usize;
         // Fast modulo using bit mask (only works for power of 2)
         hash & self.segment_mask
     }
