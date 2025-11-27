@@ -23,7 +23,6 @@ pub mod async_segmented_lock;
 pub mod batch_unregistration_service;
 pub mod error;
 pub mod route_info_manager;
-pub mod route_info_manager_trait;
 pub mod route_info_manager_v2;
 pub mod route_info_manager_wrapper;
 pub mod segmented_lock;
