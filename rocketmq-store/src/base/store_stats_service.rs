@@ -21,6 +21,7 @@ use std::fmt;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Instant;
 
 use parking_lot::Mutex;
@@ -48,19 +49,17 @@ const PUT_MESSAGE_ENTIRE_TIME_MAX_DESC: [&str; 13] = [
     "[10s~]",
 ];
 
-lazy_static::lazy_static! {
-    static ref PUT_MESSAGE_ENTIRE_TIME_BUCKETS: BTreeMap<i32, i32> = {
-        let mut m = BTreeMap::new();
-        m.insert(1, 20);
-        m.insert(2, 15);
-        m.insert(5, 10);
-        m.insert(10, 10);
-        m.insert(50, 6);
-        m.insert(100, 5);
-        m.insert(1000, 9);
-        m
-    };
-}
+static PUT_MESSAGE_ENTIRE_TIME_BUCKETS: LazyLock<BTreeMap<i32, i32>> = LazyLock::new(|| {
+    let mut m = BTreeMap::new();
+    m.insert(1, 20);
+    m.insert(2, 15);
+    m.insert(5, 10);
+    m.insert(10, 10);
+    m.insert(50, 6);
+    m.insert(100, 5);
+    m.insert(1000, 9);
+    m
+});
 
 type AtomicUsizeArray = Arc<Vec<AtomicUsize>>;
 
