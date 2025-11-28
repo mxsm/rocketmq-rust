@@ -49,7 +49,7 @@ use crate::route::route_info_manager_v2::RouteInfoManagerV2;
 /// Both variants are boxed to avoid large enum variant size issues:
 /// - V1: ~72 bytes → Box<V1> = 8 bytes
 /// - V2: ~352 bytes → Box<V2> = 8 bytes
-/// https://rust-lang.github.io/rust-clippy/master/index.html#large_enum_variant
+///
 /// This reduces stack allocation from 352 bytes to 16 bytes (8 byte pointer + 8 byte discriminant)
 pub enum RouteInfoManagerWrapper {
     /// Legacy implementation using RwLock-based tables
