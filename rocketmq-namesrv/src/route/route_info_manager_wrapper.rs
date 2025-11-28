@@ -261,11 +261,9 @@ impl RouteInfoManagerWrapper {
     }
 
     /// Pickup topic route data
-    pub fn pickup_topic_route_data(&self, topic: &str) -> Option<TopicRouteData> {
+    pub fn pickup_topic_route_data(&self, topic: &CheetahString) -> Option<TopicRouteData> {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => {
-                manager.pickup_topic_route_data(&CheetahString::from_string(topic.to_string()))
-            }
+            RouteInfoManagerWrapper::V1(manager) => manager.pickup_topic_route_data(topic),
             RouteInfoManagerWrapper::V2(manager) => manager.pickup_topic_route_data(topic).ok(),
         }
     }
