@@ -50,6 +50,8 @@ use crate::route::tables::BrokerAddrTable;
 use crate::route::tables::BrokerLiveInfo;
 use crate::route::tables::BrokerLiveTable;
 use crate::route::tables::ClusterAddrTable;
+use crate::route::tables::FilterServerTable;
+use crate::route::tables::TopicQueueMappingInfoTable;
 use crate::route::tables::TopicQueueTable;
 use crate::route::types::BrokerName;
 use crate::route::types::TopicName;
@@ -101,6 +103,8 @@ pub struct RouteInfoManagerV2 {
     broker_addr_table: BrokerAddrTable,
     cluster_addr_table: ClusterAddrTable,
     broker_live_table: BrokerLiveTable,
+    filter_server_table: FilterServerTable,
+    topic_queue_mapping_info_table: TopicQueueMappingInfoTable,
 
     // Segmented locks for atomic cross-table operations
     // - broker_locks: Locks for broker-related operations (keyed by broker name)
@@ -126,6 +130,8 @@ impl RouteInfoManagerV2 {
             broker_addr_table: BrokerAddrTable::with_capacity(128),
             cluster_addr_table: ClusterAddrTable::with_capacity(32),
             broker_live_table: BrokerLiveTable::with_capacity(256),
+            filter_server_table: FilterServerTable::with_capacity(128),
+            topic_queue_mapping_info_table: TopicQueueMappingInfoTable::with_capacity(256),
 
             // Initialize segmented locks (16 segments each for optimal performance)
             broker_locks: SegmentedLock::new(),
@@ -776,6 +782,9 @@ impl RouteInfoManagerV2 {
     /// concurrent writes (broker registration/unregistration) from causing
     /// inconsistent state.
     pub fn pickup_topic_route_data(&self, topic: &str) -> RouteResult<TopicRouteData> {
+        use rocketmq_common::common::constant::PermName;
+        use rocketmq_common::common::topic::TopicValidator;
+
         // ===================================================================
         // SEGMENTED LOCK ACQUISITION
         // ===================================================================
@@ -792,6 +801,9 @@ impl RouteInfoManagerV2 {
         // Multiple readers can hold the lock simultaneously.
         let _topic_lock = self.topic_locks.read_lock(&topic);
 
+        let mut found_queue_data = false;
+        let mut found_broker_data = false;
+
         // Get queue data for the topic
         // Protected by topic read lock - consistent with broker table
         let queue_data_list = self.topic_queue_table.get_topic_queues(topic);
@@ -800,11 +812,20 @@ impl RouteInfoManagerV2 {
             return Err(RocketMQError::route_not_found(topic));
         }
 
+        // Convert queue data to Vec<QueueData>
+        let queue_data_vec: Vec<QueueData> = queue_data_list
+            .into_iter()
+            .map(|(_, queue_data)| {
+                found_queue_data = true;
+                (*queue_data).clone()
+            })
+            .collect();
+
         // Collect broker names from queue data (already CheetahString)
         // Protected by topic read lock - brokers are stable during this read
-        let broker_names: Vec<BrokerName> = queue_data_list
+        let broker_names: Vec<BrokerName> = queue_data_vec
             .iter()
-            .map(|(broker_name, _)| broker_name.clone())
+            .map(|qd| qd.broker_name.clone())
             .collect();
 
         // Get broker data for each broker
@@ -814,21 +835,124 @@ impl RouteInfoManagerV2 {
             if let Some(broker_data) = self.broker_addr_table.get(broker_name.as_str()) {
                 // Clone BrokerData for the route response
                 broker_data_list.push((*broker_data).clone());
+                found_broker_data = true;
             }
         }
 
-        // Convert queue data to Vec<QueueData>
-        let queue_data_vec: Vec<QueueData> = queue_data_list
-            .into_iter()
-            .map(|(_, queue_data)| (*queue_data).clone())
-            .collect();
+        debug!(
+            "pickup_topic_route_data topic={}, found_queue_data={}, found_broker_data={}",
+            topic, found_queue_data, found_broker_data
+        );
+
+        if !found_broker_data || !found_queue_data {
+            return Err(RocketMQError::route_not_found(topic));
+        }
 
         // Construct TopicRouteData
-        let topic_route_data = TopicRouteData {
-            queue_datas: queue_data_vec,
-            broker_datas: broker_data_list,
+        let mut topic_route_data = TopicRouteData {
+            queue_datas: queue_data_vec.clone(),
+            broker_datas: broker_data_list.clone(),
             ..Default::default()
         };
+
+        // Populate filter server table from filter_server_table
+        if !self.filter_server_table.is_empty() {
+            for broker_data in &broker_data_list {
+                for broker_addr in broker_data.broker_addrs().values() {
+                    let broker_addr_info = Arc::new(BrokerAddrInfo {
+                        cluster_name: broker_data.cluster().into(),
+                        broker_addr: broker_addr.clone(),
+                    });
+
+                    // Get filter server list (may be None)
+                    let filter_servers = self.filter_server_table.get(&broker_addr_info);
+
+                    // Insert into map even if None
+                    if let Some(servers) = filter_servers {
+                        topic_route_data
+                            .filter_server_table
+                            .insert(broker_addr.clone(), servers.clone());
+                    }
+                }
+            }
+        }
+
+        // Set topic queue mapping info for static topic support
+        if let Some(mapping_info) = self
+            .topic_queue_mapping_info_table
+            .get_topic_mappings(topic)
+        {
+            topic_route_data.topic_queue_mapping_by_broker = Some(mapping_info);
+        }
+
+        // Check if acting master support is enabled
+        if !self
+            .name_server_runtime_inner
+            .name_server_config()
+            .support_acting_master
+        {
+            return Ok(topic_route_data);
+        }
+
+        // Skip acting master logic for sync broker member group topics
+        if topic.starts_with(TopicValidator::SYNC_BROKER_MEMBER_GROUP_PREFIX) {
+            return Ok(topic_route_data);
+        }
+
+        // Check if broker and queue data are available
+        if topic_route_data.broker_datas.is_empty() || topic_route_data.queue_datas.is_empty() {
+            return Ok(topic_route_data);
+        }
+
+        // Check if any broker needs acting master (no master broker ID present)
+        let need_acting_master = topic_route_data.broker_datas.iter().any(|broker_data| {
+            !broker_data.broker_addrs().is_empty()
+                && !broker_data.broker_addrs().contains_key(&mix_all::MASTER_ID)
+        });
+
+        if !need_acting_master {
+            return Ok(topic_route_data);
+        }
+
+        // Process acting master for brokers without master
+        for broker_data in &mut topic_route_data.broker_datas {
+            // Check conditions before getting mutable reference
+            let enable_acting_master = broker_data.enable_acting_master();
+            let broker_name = broker_data.broker_name().to_string();
+            let broker_addrs = broker_data.broker_addrs_mut();
+
+            // Skip if:
+            // 1. No broker addresses
+            // 2. Master already exists
+            // 3. Acting master not enabled for this broker
+            if broker_addrs.is_empty()
+                || broker_addrs.contains_key(&mix_all::MASTER_ID)
+                || !enable_acting_master
+            {
+                continue;
+            }
+
+            // No master - check if we should promote a slave to acting master
+            for queue_data in &topic_route_data.queue_datas {
+                if queue_data.broker_name() == broker_name.as_str() {
+                    // Only promote if queue is not writable (read-only)
+                    if !PermName::is_writeable(queue_data.perm()) {
+                        // Find the minimum broker ID (closest slave)
+                        if let Some(&min_broker_id) = broker_addrs.keys().min() {
+                            // Remove the slave with minimum ID and promote it to master
+                            if let Some(acting_master_addr) = broker_addrs.remove(&min_broker_id) {
+                                broker_addrs.insert(mix_all::MASTER_ID, acting_master_addr);
+                                debug!(
+                                    "Promoted acting master: broker={}, slave_id={} -> master",
+                                    broker_name, min_broker_id
+                                );
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
 
         debug!(
             "Topic route data retrieved: topic={}, brokers={}, queues={}",

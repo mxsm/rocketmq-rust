@@ -22,13 +22,17 @@
 
 mod broker_table;
 mod cluster_table;
+mod filter_server_table;
 mod live_table;
+mod topic_queue_mapping_table;
 mod topic_table;
 
 pub use broker_table::BrokerAddrTable;
 pub use cluster_table::ClusterAddrTable;
+pub use filter_server_table::FilterServerTable;
 pub use live_table::BrokerLiveInfo;
 pub use live_table::BrokerLiveTable;
+pub use topic_queue_mapping_table::TopicQueueMappingInfoTable;
 pub use topic_table::TopicQueueTable;
 
 // Re-export BrokerAddrInfo for public API usage
