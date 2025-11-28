@@ -36,20 +36,6 @@ use crate::route_info::broker_addr_info::BrokerAddrInfo;
 /// - Write operations: O(1) average, per-entry lock
 /// - Concurrent access: Lock-free reads, per-entry lock for writes
 ///
-/// # Example
-/// ```no_run
-/// use cheetah_string::CheetahString;
-/// use rocketmq_namesrv::route::tables::FilterServerTable;
-/// use rocketmq_namesrv::route_info::broker_addr_info::BrokerAddrInfo;
-///
-/// let table = FilterServerTable::new();
-/// let broker_info = BrokerAddrInfo::new("DefaultCluster", "192.168.1.100:10911");
-/// let servers = vec![
-///     CheetahString::from_static_str("192.168.1.100:30000"),
-///     CheetahString::from_static_str("192.168.1.101:30000"),
-/// ];
-/// table.register(broker_info.into(), servers);
-/// ```
 #[derive(Clone)]
 pub struct FilterServerTable {
     inner: DashMap<Arc<BrokerAddrInfo>, Vec<CheetahString>>,
