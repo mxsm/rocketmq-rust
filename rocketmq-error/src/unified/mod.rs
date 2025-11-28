@@ -175,6 +175,27 @@ pub enum RocketMQError {
     },
 
     // ============================================================================
+    // Request/Response Errors
+    // ============================================================================
+    /// Request body missing or invalid
+    #[error("Request body {operation} failed: {reason}")]
+    RequestBodyInvalid {
+        operation: &'static str,
+        reason: String,
+    },
+
+    /// Request header missing or invalid
+    #[error("Request header error: {0}")]
+    RequestHeaderError(String),
+
+    /// Response encoding/decoding failed
+    #[error("Response {operation} failed: {reason}")]
+    ResponseProcessFailed {
+        operation: &'static str,
+        reason: String,
+    },
+
+    // ============================================================================
     // NameServer/Route Errors
     // ============================================================================
     /// Route information not found
@@ -401,6 +422,30 @@ impl RocketMQError {
     pub fn cluster_not_found(cluster: impl Into<String>) -> Self {
         Self::ClusterNotFound {
             cluster: cluster.into(),
+        }
+    }
+
+    /// Create a request body invalid error
+    #[inline]
+    pub fn request_body_invalid(operation: &'static str, reason: impl Into<String>) -> Self {
+        Self::RequestBodyInvalid {
+            operation,
+            reason: reason.into(),
+        }
+    }
+
+    /// Create a request header error
+    #[inline]
+    pub fn request_header_error(message: impl Into<String>) -> Self {
+        Self::RequestHeaderError(message.into())
+    }
+
+    /// Create a response process failed error
+    #[inline]
+    pub fn response_process_failed(operation: &'static str, reason: impl Into<String>) -> Self {
+        Self::ResponseProcessFailed {
+            operation,
+            reason: reason.into(),
         }
     }
 
