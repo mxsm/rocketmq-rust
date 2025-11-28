@@ -685,10 +685,10 @@ impl Builder {
         // Now initialize components with proper references
         let route_info_manager = if use_v2 {
             info!("Using RouteInfoManager V2 (DashMap-based, 5-50x faster)");
-            RouteInfoManagerWrapper::V2(RouteInfoManagerV2::new(inner.clone()))
+            RouteInfoManagerWrapper::V2(Box::new(RouteInfoManagerV2::new(inner.clone())))
         } else {
             warn!("Using RouteInfoManager V1 (legacy). Consider V2 for better performance.");
-            RouteInfoManagerWrapper::V1(RouteInfoManager::new(inner.clone()))
+            RouteInfoManagerWrapper::V1(Box::new(RouteInfoManager::new(inner.clone())))
         };
 
         let kvconfig_manager = KVConfigManager::new(inner.clone());

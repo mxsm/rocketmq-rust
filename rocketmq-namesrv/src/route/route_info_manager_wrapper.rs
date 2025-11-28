@@ -47,9 +47,9 @@ use crate::route::route_info_manager_v2::RouteInfoManagerV2;
 /// All public methods from both implementations are available through forwarding.
 pub enum RouteInfoManagerWrapper {
     /// Legacy implementation using RwLock-based tables
-    V1(RouteInfoManager),
+    V1(Box<RouteInfoManager>),
     /// New implementation using DashMap-based concurrent tables
-    V2(RouteInfoManagerV2),
+    V2(Box<RouteInfoManagerV2>),
 }
 
 impl RouteInfoManagerWrapper {
