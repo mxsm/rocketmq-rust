@@ -426,12 +426,9 @@ impl RouteInfoManagerWrapper {
     }
 
     /// Get topics by cluster
-    pub fn get_topics_by_cluster(&self, cluster: &str) -> TopicList {
-        use cheetah_string::CheetahString;
+    pub fn get_topics_by_cluster(&self, cluster: &CheetahString) -> TopicList {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => {
-                manager.get_topics_by_cluster(&CheetahString::from_string(cluster.to_string()))
-            }
+            RouteInfoManagerWrapper::V1(manager) => manager.get_topics_by_cluster(cluster),
             RouteInfoManagerWrapper::V2(manager) => {
                 let topics = manager
                     .get_topics_by_cluster(cluster)

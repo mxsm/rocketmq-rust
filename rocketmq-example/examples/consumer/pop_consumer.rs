@@ -39,7 +39,7 @@ pub const TAG: &str = "*";
 #[rocketmq::main]
 pub async fn main() -> RocketMQResult<()> {
     //init logger
-    rocketmq_common::log::init_logger();
+    rocketmq_common::log::init_logger()?;
 
     switch_pop_consumer().await?;
 

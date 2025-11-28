@@ -22,9 +22,6 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 
-#[cfg(test)]
-pub mod route_info_manager_v2_tests;
-
 #[test]
 fn test_cheetah_string_as_dashmap_key() {
     // Test 1: CheetahString as DashMap key

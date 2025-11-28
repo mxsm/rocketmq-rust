@@ -34,7 +34,7 @@ use tracing::info;
 #[rocketmq::main]
 async fn main() -> Result<()> {
     // init logger
-    rocketmq_common::log::init_logger_with_level(rocketmq_common::log::Level::INFO);
+    rocketmq_common::log::init_logger_with_level(rocketmq_common::log::Level::INFO)?;
     const LOGO: &str = r#"
       _____            _        _   __  __  ____         _____           _     ____            _
      |  __ \          | |      | | |  \/  |/ __ \       |  __ \         | |   |  _ \          | |

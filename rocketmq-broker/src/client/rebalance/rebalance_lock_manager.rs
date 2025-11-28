@@ -18,22 +18,20 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
-use lazy_static::lazy_static;
 use parking_lot::RwLock;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::TimeUtils::get_current_millis;
 use tracing::info;
 use tracing::warn;
 
-lazy_static! {
-    pub static ref REBALANCE_LOCK_MAX_LIVE_TIME: i64 = {
-        std::env::var("rocketmq.broker.rebalance.lockMaxLiveTime")
-            .unwrap_or("60000".to_string())
-            .parse::<i64>()
-            .unwrap_or(60000)
-    };
-}
+pub static REBALANCE_LOCK_MAX_LIVE_TIME: LazyLock<i64> = LazyLock::new(|| {
+    std::env::var("rocketmq.broker.rebalance.lockMaxLiveTime")
+        .unwrap_or("60000".to_string())
+        .parse::<i64>()
+        .unwrap_or(60000)
+});
 
 type MessageQueueLockTable = HashMap<String, HashMap<MessageQueue, LockEntry>>;
 

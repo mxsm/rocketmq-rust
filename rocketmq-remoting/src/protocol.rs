@@ -20,7 +20,6 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
-use std::time::SystemTime;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
@@ -336,10 +335,7 @@ impl Default for DataVersion {
 
 impl DataVersion {
     pub fn new() -> Self {
-        let timestamp = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_millis() as i64;
+        let timestamp = time_utils::get_current_millis() as i64;
 
         DataVersion {
             state_version: 0,

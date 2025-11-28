@@ -34,7 +34,7 @@ pub const TAG: &str = "TagA";
 #[rocketmq::main]
 pub async fn main() -> Result<()> {
     //init logger
-    rocketmq_common::log::init_logger();
+    rocketmq_common::log::init_logger()?;
 
     // create a producer builder with default configuration
     let builder = DefaultMQProducer::builder();
@@ -74,7 +74,7 @@ pub const TAG: &str = "TagA";
 #[rocketmq::main]
 pub async fn main() -> rocketmq_client_rust::Result<()> {
     //init logger
-    rocketmq_common::log::init_logger();
+    rocketmq_common::log::init_logger()?;
 
     // create a producer builder with default configuration
     let builder = DefaultMQProducer::builder();
@@ -128,7 +128,7 @@ pub const TAG: &str = "TagA";
 #[rocketmq::main]
 pub async fn main() -> Result<()> {
     //init logger
-    rocketmq_common::log::init_logger();
+    rocketmq_common::log::init_logger()?;
 
     // create a producer builder with default configuration
     let builder = DefaultMQProducer::builder();

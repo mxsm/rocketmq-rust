@@ -956,10 +956,7 @@ impl RouteInfoManagerV2 {
         _cluster_name: CheetahString,
         broker_addr: CheetahString,
     ) {
-        let current_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let current_time = get_current_millis();
         self.broker_live_table
             .update_last_update_timestamp(&broker_addr, current_time);
     }
@@ -1068,7 +1065,7 @@ impl RouteInfoManagerV2 {
             .topic_queue_table
             .get_all_topics()
             .into_iter()
-            .filter(|topic| system_topic_set.contains(topic.as_str()))
+            .filter(|topic| system_topic_set.iter().any(|s| s == topic.as_str()))
             .collect();
 
         Ok(TopicList {
