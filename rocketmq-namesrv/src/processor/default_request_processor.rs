@@ -198,8 +198,19 @@ impl DefaultRequestProcessor {
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let request_header =
             request.decode_command_custom_header::<QueryDataVersionRequestHeader>()?;
-        let data_version = DataVersion::decode(request.get_body().expect("body is empty"))
-            .expect("decode DataVersion failed");
+
+        let body = request.get_body().ok_or_else(|| {
+            rocketmq_error::RocketMQError::request_body_invalid("decode", "request body is empty")
+        })?;
+
+        let data_version = DataVersion::decode(body).map_err(|e| {
+            rocketmq_error::RocketMQError::request_body_invalid(
+                "decode",
+                format!("DataVersion decode failed: {}", e),
+            )
+        })?;
+
+        // Check if broker topic config has changed
         let changed = self
             .name_server_runtime_inner
             .route_info_manager()
@@ -209,24 +220,33 @@ impl DefaultRequestProcessor {
                 &data_version,
             );
 
+        // Update broker timestamp
         self.name_server_runtime_inner
             .route_info_manager_mut()
             .update_broker_info_update_timestamp(
                 request_header.cluster_name.clone(),
                 request_header.broker_addr.clone(),
             );
+
+        // Build response with changed flag
         let mut command = RemotingCommand::create_response_command()
             .set_command_custom_header(QueryDataVersionResponseHeader::new(changed));
-        if let Some(value) = self
+
+        // Query and attach broker topic config if available
+        if let Some(topic_config) = self
             .name_server_runtime_inner
             .route_info_manager()
-            .query_broker_topic_config(
-                request_header.cluster_name.clone(),
-                request_header.broker_addr.clone(),
-            )
+            .query_broker_topic_config(request_header.cluster_name, request_header.broker_addr)
         {
-            command = command.set_body(value.encode().expect("encode DataVersion failed"));
+            let body = topic_config.encode().map_err(|e| {
+                rocketmq_error::RocketMQError::response_process_failed(
+                    "encode",
+                    format!("DataVersion encode failed: {}", e),
+                )
+            })?;
+            command = command.set_body(body);
         }
+
         Ok(command)
     }
 }
