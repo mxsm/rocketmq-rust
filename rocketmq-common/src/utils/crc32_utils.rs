@@ -16,13 +16,14 @@
  */
 
 use bytes::Bytes;
-use crc::{Crc, CRC_32_ISO_HDLC};
+use crc::Crc;
+use crc::CRC_32_ISO_HDLC;
 
 /// CRC32 instance using ISO HDLC standard
 const CRC32_ALGO: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 
 /// Calculate CRC32 checksum for the entire byte array.
-/// 
+///
 /// Equivalent to Java's `crc32(byte[] array)`
 ///
 /// # Arguments
@@ -37,11 +38,11 @@ const CRC32_ALGO: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 ///
 /// ```
 /// use rocketmq_common::utils::crc32_utils::crc32;
-/// 
+///
 /// let data = b"Hello, World!";
 /// let checksum = crc32(data);
 /// assert!(checksum > 0);
-/// 
+///
 /// // Empty array returns 0
 /// assert_eq!(crc32(&[]), 0);
 /// ```
@@ -54,7 +55,7 @@ pub fn crc32(array: &[u8]) -> u32 {
 }
 
 /// Calculate CRC32 checksum for a range of bytes in the array.
-/// 
+///
 /// Equivalent to Java's `crc32(byte[] array, int offset, int length)`
 ///
 /// # Arguments
@@ -75,7 +76,7 @@ pub fn crc32(array: &[u8]) -> u32 {
 ///
 /// ```
 /// use rocketmq_common::utils::crc32_utils::crc32_range;
-/// 
+///
 /// let data = b"Hello, World!";
 /// let checksum = crc32_range(data, 0, 5); // Only "Hello"
 /// assert!(checksum > 0);
@@ -85,14 +86,14 @@ pub fn crc32_range(array: &[u8], offset: usize, length: usize) -> u32 {
     if array.is_empty() || offset >= array.len() || offset + length > array.len() {
         return 0;
     }
-    
+
     let mut digest = CRC32_ALGO.digest();
     digest.update(&array[offset..offset + length]);
     digest.finalize() & 0x7FFFFFFF
 }
 
 /// Calculate CRC32 checksum for Bytes.
-/// 
+///
 /// # Arguments
 ///
 /// * `buf` - Optional reference to Bytes
@@ -106,7 +107,7 @@ pub fn crc32_range(array: &[u8], offset: usize, length: usize) -> u32 {
 /// ```
 /// use bytes::Bytes;
 /// use rocketmq_common::utils::crc32_utils::crc32_bytes;
-/// 
+///
 /// let data = Bytes::from("test");
 /// let checksum = crc32_bytes(Some(&data));
 /// assert!(checksum > 0);
@@ -124,7 +125,7 @@ pub fn crc32_bytes(buf: Option<&Bytes>) -> u32 {
 }
 
 /// Calculate CRC32 checksum for a range of bytes.
-/// 
+///
 /// # Arguments
 ///
 /// * `array` - The byte array
@@ -140,7 +141,7 @@ pub fn crc32_bytes_offset(array: &[u8], offset: usize, length: usize) -> u32 {
 }
 
 /// Calculate CRC32 checksum for a byte buffer (Vec<u8>).
-/// 
+///
 /// Equivalent to Java's `crc32(ByteBuffer byteBuffer)`
 ///
 /// # Arguments
@@ -155,7 +156,7 @@ pub fn crc32_bytes_offset(array: &[u8], offset: usize, length: usize) -> u32 {
 ///
 /// ```
 /// use rocketmq_common::utils::crc32_utils::crc32_bytebuffer;
-/// 
+///
 /// let buffer = vec![1, 2, 3, 4, 5];
 /// let checksum = crc32_bytebuffer(&buffer);
 /// assert!(checksum > 0);
@@ -165,14 +166,14 @@ pub fn crc32_bytebuffer(byte_buffer: &[u8]) -> u32 {
     if byte_buffer.is_empty() {
         return 0;
     }
-    
+
     let mut digest = CRC32_ALGO.digest();
     digest.update(byte_buffer);
     digest.finalize() & 0x7FFFFFFF
 }
 
 /// Calculate CRC32 checksum for multiple byte buffers.
-/// 
+///
 /// # Arguments
 ///
 /// * `byte_buffers` - Slice of Vec<u8> buffers
@@ -185,7 +186,7 @@ pub fn crc32_bytebuffer(byte_buffer: &[u8]) -> u32 {
 ///
 /// ```
 /// use rocketmq_common::utils::crc32_utils::crc32_bytebuffers;
-/// 
+///
 /// let buffers = vec![vec![1, 2, 3], vec![4, 5]];
 /// let checksum = crc32_bytebuffers(&buffers);
 /// assert!(checksum > 0);
@@ -195,7 +196,7 @@ pub fn crc32_bytebuffers(byte_buffers: &[Vec<u8>]) -> u32 {
     if byte_buffers.is_empty() {
         return 0;
     }
-    
+
     let mut digest = CRC32_ALGO.digest();
     for buffer in byte_buffers {
         digest.update(buffer.as_slice());
@@ -208,7 +209,7 @@ mod tests {
     use super::*;
 
     // ========== crc32() tests ==========
-    
+
     #[test]
     fn test_crc32_with_data() {
         let buf = [1, 2, 3, 4, 5];
@@ -248,11 +249,15 @@ mod tests {
             &[0xFF, 0xFF, 0xFF, 0xFF],
             &[0x00, 0x01, 0x02, 0x03],
         ];
-        
+
         for data in test_data {
             if !data.is_empty() {
                 let checksum = crc32(data);
-                assert!(checksum <= 0x7FFFFFFF, "Checksum should be positive: {}", checksum);
+                assert!(
+                    checksum <= 0x7FFFFFFF,
+                    "Checksum should be positive: {}",
+                    checksum
+                );
             }
         }
     }
@@ -419,10 +424,10 @@ mod tests {
     fn test_crc32_bytebuffers_matches_concatenated() {
         let buffers = vec![vec![1, 2, 3], vec![4, 5]];
         let concatenated = vec![1, 2, 3, 4, 5];
-        
+
         let checksum1 = crc32_bytebuffers(&buffers);
         let checksum2 = crc32(&concatenated);
-        
+
         assert_eq!(checksum1, checksum2);
     }
 
@@ -441,15 +446,9 @@ mod tests {
 
     #[test]
     fn test_crc32_bytebuffers_many_small_buffers() {
-        let buffers = vec![
-            vec![1],
-            vec![2],
-            vec![3],
-            vec![4],
-            vec![5],
-        ];
+        let buffers = vec![vec![1], vec![2], vec![3], vec![4], vec![5]];
         let concatenated = vec![1, 2, 3, 4, 5];
-        
+
         assert_eq!(crc32_bytebuffers(&buffers), crc32(&concatenated));
     }
 
@@ -461,14 +460,14 @@ mod tests {
         let bytes = Bytes::from(&data[..]);
         let buffer = data.to_vec();
         let buffers = vec![data.to_vec()];
-        
+
         let c1 = crc32(data);
         let c2 = crc32_range(data, 0, data.len());
         let c3 = crc32_bytes(Some(&bytes));
         let c4 = crc32_bytes_offset(data, 0, data.len());
         let c5 = crc32_bytebuffer(&buffer);
         let c6 = crc32_bytebuffers(&buffers);
-        
+
         assert_eq!(c1, c2);
         assert_eq!(c1, c3);
         assert_eq!(c1, c4);
