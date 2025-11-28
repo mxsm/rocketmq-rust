@@ -1061,15 +1061,28 @@ impl RouteInfoManagerV2 {
     // The following methods provide compatibility with v1's API surface
 
     /// Check if broker topic config has changed
+    ///
+    /// Compares the provided data version with the broker's current data version
+    /// to determine if the topic configuration has changed.
+    ///
+    /// # Arguments
+    /// * `cluster_name` - Name of the cluster
+    /// * `broker_addr` - Broker network address
+    /// * `data_version` - Data version to compare against
+    ///
+    /// # Returns
+    /// `true` if configuration has changed or broker not found, `false` otherwise
     pub fn is_broker_topic_config_changed(
         &self,
-        _cluster_name: &str,
-        broker_addr: &str,
+        cluster_name: &CheetahString,
+        broker_addr: &CheetahString,
         data_version: &DataVersion,
     ) -> bool {
         // Find broker using addr info
-        if let Some(broker_live_info) = self.broker_live_table.get_broker_by_addr(broker_addr) {
-            return &broker_live_info.data_version != data_version;
+        let find_data_version =
+            self.query_broker_topic_config(cluster_name.clone(), broker_addr.clone());
+        if let Some(existing_version) = find_data_version {
+            return &existing_version != data_version; // Compare values, not references
         }
         true // If broker not found, assume changed
     }
@@ -1086,13 +1099,24 @@ impl RouteInfoManagerV2 {
     }
 
     /// Query broker topic config data version
+    ///
+    /// This method retrieves the data version for a broker's topic configuration
+    /// by looking up the broker in the live table using cluster name and broker address.
+    ///
+    /// # Arguments
+    /// * `cluster_name` - Name of the cluster the broker belongs to
+    /// * `broker_addr` - Network address of the broker
+    ///
+    /// # Returns
+    /// `Some(DataVersion)` if broker is found and alive, `None` otherwise
     pub fn query_broker_topic_config(
         &self,
-        _cluster_name: CheetahString,
+        cluster_name: CheetahString,
         broker_addr: CheetahString,
     ) -> Option<DataVersion> {
+        let broker_addr_info = BrokerAddrInfo::new(cluster_name, broker_addr);
         self.broker_live_table
-            .get_broker_by_addr(&broker_addr)
+            .get(&broker_addr_info)
             .map(|info| info.data_version.clone())
     }
 
