@@ -19,6 +19,7 @@ mod delete_topic_sub_command;
 mod topic_cluster_sub_command;
 mod topic_list_sub_command;
 mod topic_route_sub_command;
+mod topic_status_sub_command;
 mod update_topic_sub_command;
 use std::sync::Arc;
 
@@ -71,6 +72,12 @@ more memory space, you can use this command to allocate it."#
         long_about = r#"topicRoute"#
     )]
     TopicRoute(topic_route_sub_command::TopicRouteSubCommand),
+    #[command(
+        name = "topicStatus",
+        about = "topicStatus",
+        long_about = r#"check topicStatus"#
+    )]
+    TopicStatus(topic_status_sub_command::TopicStatusSubCommand),
 }
 
 impl CommandExecute for TopicCommands {
@@ -82,6 +89,7 @@ impl CommandExecute for TopicCommands {
             TopicCommands::TopicClusterList(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::TopicList(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::TopicRoute(cmd) => cmd.execute(rpc_hook).await,
+            TopicCommands::TopicStatus(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }
