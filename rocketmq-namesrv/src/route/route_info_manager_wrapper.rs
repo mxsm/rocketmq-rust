@@ -45,6 +45,12 @@ use crate::route::route_info_manager_v2::RouteInfoManagerV2;
 ///
 /// This enum allows the nameserver to use either implementation transparently.
 /// All public methods from both implementations are available through forwarding.
+///
+/// Both variants are boxed to avoid large enum variant size issues:
+/// - V1: ~72 bytes → Box<V1> = 8 bytes
+/// - V2: ~352 bytes → Box<V2> = 8 bytes
+///
+/// This reduces stack allocation from 352 bytes to 16 bytes (8 byte pointer + 8 byte discriminant)
 pub enum RouteInfoManagerWrapper {
     /// Legacy implementation using RwLock-based tables
     V1(Box<RouteInfoManager>),
