@@ -289,22 +289,18 @@ impl DefaultRequestProcessor {
             .name_server_runtime_inner
             .route_info_manager()
             .register_broker(
-                request_header.cluster_name.to_string(),
-                request_header.broker_addr.to_string(),
-                request_header.broker_name.to_string(),
+                request_header.cluster_name,
+                request_header.broker_addr,
+                request_header.broker_name,
                 request_header.broker_id,
-                request_header.ha_server_addr.to_string(),
+                request_header.ha_server_addr,
                 request
                     .ext_fields()
-                    .and_then(|map| map.get(mix_all::ZONE_NAME).cloned())
-                    .map(|s| s.to_string()),
+                    .and_then(|map| map.get(mix_all::ZONE_NAME).cloned()),
                 request_header.heartbeat_timeout_millis,
                 request_header.enable_acting_master,
                 topic_config_wrapper,
-                filter_server_list
-                    .into_iter()
-                    .map(|s| s.to_string())
-                    .collect(),
+                filter_server_list,
                 channel,
             );
         if result.is_none() {
