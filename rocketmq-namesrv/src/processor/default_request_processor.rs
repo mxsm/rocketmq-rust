@@ -198,8 +198,19 @@ impl DefaultRequestProcessor {
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let request_header =
             request.decode_command_custom_header::<QueryDataVersionRequestHeader>()?;
-        let data_version = DataVersion::decode(request.get_body().expect("body is empty"))
-            .expect("decode DataVersion failed");
+
+        let body = request.get_body().ok_or_else(|| {
+            rocketmq_error::RocketMQError::request_body_invalid("decode", "request body is empty")
+        })?;
+
+        let data_version = DataVersion::decode(body).map_err(|e| {
+            rocketmq_error::RocketMQError::request_body_invalid(
+                "decode",
+                format!("DataVersion decode failed: {}", e),
+            )
+        })?;
+
+        // Check if broker topic config has changed
         let changed = self
             .name_server_runtime_inner
             .route_info_manager()
@@ -209,24 +220,33 @@ impl DefaultRequestProcessor {
                 &data_version,
             );
 
+        // Update broker timestamp
         self.name_server_runtime_inner
             .route_info_manager_mut()
             .update_broker_info_update_timestamp(
                 request_header.cluster_name.clone(),
                 request_header.broker_addr.clone(),
             );
+
+        // Build response with changed flag
         let mut command = RemotingCommand::create_response_command()
             .set_command_custom_header(QueryDataVersionResponseHeader::new(changed));
-        if let Some(value) = self
+
+        // Query and attach broker topic config if available
+        if let Some(topic_config) = self
             .name_server_runtime_inner
             .route_info_manager()
-            .query_broker_topic_config(
-                request_header.cluster_name.clone(),
-                request_header.broker_addr.clone(),
-            )
+            .query_broker_topic_config(request_header.cluster_name, request_header.broker_addr)
         {
-            command = command.set_body(value.encode().expect("encode DataVersion failed"));
+            let body = topic_config.encode().map_err(|e| {
+                rocketmq_error::RocketMQError::response_process_failed(
+                    "encode",
+                    format!("DataVersion encode failed: {}", e),
+                )
+            })?;
+            command = command.set_body(body);
         }
+
         Ok(command)
     }
 }
@@ -255,13 +275,12 @@ impl DefaultRequestProcessor {
         }
 
         let mut response_command = RemotingCommand::create_response_command();
-        let broker_version =
-            RocketMqVersion::try_from(request.version() as u32).expect("invalid version");
+        let broker_version = RocketMqVersion::try_from(request.version() as u32)?;
         let topic_config_wrapper;
         let mut filter_server_list = Vec::new();
         if broker_version >= RocketMqVersion::V3_0_11 {
             let register_broker_body =
-                extract_register_broker_body_from_request(request, &request_header);
+                extract_register_broker_body_from_request(request, &request_header)?;
             topic_config_wrapper = register_broker_body.topic_config_serialize_wrapper;
             filter_server_list = register_broker_body.filter_server_list;
         } else {
@@ -697,26 +716,39 @@ fn extract_register_topic_config_from_request(
 fn extract_register_broker_body_from_request(
     request: &RemotingCommand,
     request_header: &RegisterBrokerRequestHeader,
-) -> RegisterBrokerBody {
+) -> rocketmq_error::RocketMQResult<RegisterBrokerBody> {
     if let Some(body_inner) = request.body() {
-        if body_inner.is_empty() {
-            return RegisterBrokerBody::default();
+        if !body_inner.is_empty() {
+            let version = request.rocketmq_version();
+            return RegisterBrokerBody::decode(body_inner, request_header.compressed, version)
+                .inspect_err(|e| {
+                    warn!("Failed to decode RegisterBrokerBody: {:?}", e);
+                });
         }
-        let version = request.rocketmq_version();
-        return RegisterBrokerBody::decode(body_inner, request_header.compressed, version);
     }
-    RegisterBrokerBody::default()
+    let mut register_broker_body = RegisterBrokerBody::default();
+    register_broker_body
+        .topic_config_serialize_wrapper
+        .mapping_data_version
+        .set_counter(0);
+    register_broker_body
+        .topic_config_serialize_wrapper
+        .mapping_data_version
+        .set_timestamp(0);
+    register_broker_body
+        .topic_config_serialize_wrapper
+        .mapping_data_version
+        .set_state_version(0);
+
+    Ok(register_broker_body)
 }
 
 fn check_sum_crc32(
     request: &RemotingCommand,
     request_header: &RegisterBrokerRequestHeader,
 ) -> bool {
-    if request_header.body_crc32 == 0 {
-        return true;
-    }
-    if let Some(bytes) = request.get_body() {
-        let crc_32 = CRC32Utils::crc32(bytes.as_ref());
+    if request_header.body_crc32 != 0 {
+        let crc_32 = CRC32Utils::crc32_bytes(request.get_body());
         if crc_32 != request_header.body_crc32 {
             warn!(
                 "receive registerBroker request,crc32 not match,origin:{}, cal:{}",
@@ -766,14 +798,59 @@ mod tests {
         let body: Vec<u8> = vec![/* some valid encoded data */];
         let request = RemotingCommand::new_request(0, body);
         let request_header = RegisterBrokerRequestHeader::default();
+        // Should return Ok with default body since body is invalid
         let _result = extract_register_broker_body_from_request(&request, &request_header);
+        assert!(_result.is_ok());
+    }
+
+    #[test]
+    fn extract_register_broker_body_from_request_with_empty_body() {
+        // Test with empty body (should initialize DataVersion to zeros)
+        let request = RemotingCommand::new_request(0, vec![]);
+        let request_header = RegisterBrokerRequestHeader::default();
+        let result = extract_register_broker_body_from_request(&request, &request_header)
+            .expect("should succeed");
+
+        // Verify DataVersion fields are explicitly set to 0 (Java behavior)
+        let data_version = &result.topic_config_serialize_wrapper.mapping_data_version;
+        assert_eq!(data_version.get_counter(), 0, "counter should be 0");
+        assert_eq!(data_version.get_timestamp(), 0, "timestamp should be 0");
+        assert_eq!(
+            data_version.get_state_version(),
+            0,
+            "stateVersion should be 0"
+        );
     }
 
     #[test]
     fn extract_register_broker_body_from_request_without_body() {
         let request = RemotingCommand::new_request(0, vec![]);
         let request_header = RegisterBrokerRequestHeader::default();
-        let _result = extract_register_broker_body_from_request(&request, &request_header);
+        let result = extract_register_broker_body_from_request(&request, &request_header)
+            .expect("should succeed");
+
+        // Verify DataVersion is explicitly initialized with zeros (align with Java logic)
+        assert_eq!(
+            result
+                .topic_config_serialize_wrapper
+                .mapping_data_version
+                .get_counter(),
+            0
+        );
+        assert_eq!(
+            result
+                .topic_config_serialize_wrapper
+                .mapping_data_version
+                .get_timestamp(),
+            0
+        );
+        assert_eq!(
+            result
+                .topic_config_serialize_wrapper
+                .mapping_data_version
+                .get_state_version(),
+            0
+        );
     }
 
     #[test]

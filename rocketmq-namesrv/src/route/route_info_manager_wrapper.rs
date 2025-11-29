@@ -45,11 +45,17 @@ use crate::route::route_info_manager_v2::RouteInfoManagerV2;
 ///
 /// This enum allows the nameserver to use either implementation transparently.
 /// All public methods from both implementations are available through forwarding.
+///
+/// Both variants are boxed to avoid large enum variant size issues:
+/// - V1: ~72 bytes → Box<V1> = 8 bytes
+/// - V2: ~352 bytes → Box<V2> = 8 bytes
+///
+/// This reduces stack allocation from 352 bytes to 16 bytes (8 byte pointer + 8 byte discriminant)
 pub enum RouteInfoManagerWrapper {
     /// Legacy implementation using RwLock-based tables
-    V1(RouteInfoManager),
+    V1(Box<RouteInfoManager>),
     /// New implementation using DashMap-based concurrent tables
-    V2(RouteInfoManagerV2),
+    V2(Box<RouteInfoManagerV2>),
 }
 
 impl RouteInfoManagerWrapper {
@@ -255,11 +261,9 @@ impl RouteInfoManagerWrapper {
     }
 
     /// Pickup topic route data
-    pub fn pickup_topic_route_data(&self, topic: &str) -> Option<TopicRouteData> {
+    pub fn pickup_topic_route_data(&self, topic: &CheetahString) -> Option<TopicRouteData> {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => {
-                manager.pickup_topic_route_data(&CheetahString::from_string(topic.to_string()))
-            }
+            RouteInfoManagerWrapper::V1(manager) => manager.pickup_topic_route_data(topic),
             RouteInfoManagerWrapper::V2(manager) => manager.pickup_topic_route_data(topic).ok(),
         }
     }

@@ -362,8 +362,16 @@ impl DataVersion {
         self.timestamp
     }
 
+    pub fn set_timestamp(&mut self, timestamp: i64) {
+        self.timestamp = timestamp;
+    }
+
     pub fn get_counter(&self) -> i64 {
         self.counter.load(Ordering::Relaxed)
+    }
+
+    pub fn set_counter(&mut self, counter: i64) {
+        self.counter.store(counter, Ordering::Relaxed);
     }
 
     pub fn increment_counter(&self) -> i64 {

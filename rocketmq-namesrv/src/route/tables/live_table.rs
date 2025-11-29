@@ -289,6 +289,23 @@ impl BrokerLiveTable {
         None
     }
 
+    /// Get broker address info by broker address string
+    ///
+    /// # Arguments
+    /// * `broker_addr` - Broker address string
+    ///
+    /// # Returns
+    /// BrokerAddrInfo if found
+    pub fn get_broker_info_by_addr(&self, broker_addr: &str) -> Option<Arc<BrokerAddrInfo>> {
+        for entry in self.inner.iter() {
+            let key_addr: &str = entry.key().broker_addr.as_ref();
+            if key_addr == broker_addr {
+                return Some(Arc::clone(entry.key()));
+            }
+        }
+        None
+    }
+
     /// Update last update timestamp for a broker (v1 compatibility)
     ///
     /// # Arguments

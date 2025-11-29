@@ -17,9 +17,9 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use cheetah_string::CheetahString;
-use lazy_static::lazy_static;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use serde::Deserialize;
 
@@ -27,9 +27,7 @@ use crate::base::store_enum::StoreType;
 use crate::config::flush_disk_type::FlushDiskType;
 use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
 
-lazy_static! {
-    static ref USER_HOME: PathBuf = dirs::home_dir().unwrap();
-}
+static USER_HOME: LazyLock<PathBuf> = LazyLock::new(|| dirs::home_dir().unwrap());
 
 /// Default value functions for Serde deserialization
 mod defaults {
