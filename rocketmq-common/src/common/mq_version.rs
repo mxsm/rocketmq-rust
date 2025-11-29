@@ -1273,10 +1273,15 @@ impl RocketMqVersion {
 }
 
 impl TryFrom<u32> for RocketMqVersion {
-    type Error = ();
+    type Error = rocketmq_error::RocketMQError;
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
-        Ok(RocketMqVersion::from_ordinal(value))
+        let max = RocketMqVersion::HIGHER_VERSION as u32;
+        if value > max {
+            Err(rocketmq_error::RocketMQError::InvalidVersionOrdinal(value))
+        } else {
+            Ok(RocketMqVersion::from_ordinal(value))
+        }
     }
 }
 
@@ -1306,14 +1311,49 @@ pub fn value2version(value: u32) -> RocketMqVersion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn test_current_version() {
         assert_eq!(CURRENT_VERSION, RocketMqVersion::V5_3_1_SNAPSHOT);
     }
+
     #[test]
     fn test_overflow_clamp() {
         let big = 99999;
         assert_eq!(value2version(big), RocketMqVersion::HIGHER_VERSION);
         assert_eq!(value2version(big).name(), "HIGHER_VERSION");
+    }
+
+    #[test]
+    fn test_try_from_valid() {
+        let result = RocketMqVersion::try_from(0);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), RocketMqVersion::V3_0_0_SNAPSHOT);
+    }
+
+    #[test]
+    fn test_try_from_invalid() {
+        let result = RocketMqVersion::try_from(99999);
+        assert!(result.is_err());
+        if let Err(rocketmq_error::RocketMQError::InvalidVersionOrdinal(val)) = result {
+            assert_eq!(val, 99999);
+        } else {
+            panic!("Expected InvalidVersionOrdinal error");
+        }
+    }
+
+    #[test]
+    fn test_try_from_max_valid() {
+        let max = RocketMqVersion::HIGHER_VERSION as u32;
+        let result = RocketMqVersion::try_from(max);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), RocketMqVersion::HIGHER_VERSION);
+    }
+
+    #[test]
+    fn test_try_from_just_over_max() {
+        let max = RocketMqVersion::HIGHER_VERSION as u32;
+        let result = RocketMqVersion::try_from(max + 1);
+        assert!(result.is_err());
     }
 }
