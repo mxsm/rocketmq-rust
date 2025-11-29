@@ -433,7 +433,8 @@ impl RouteInfoManagerV2 {
                 let ha_server_addr = self
                     .broker_live_table
                     .get(broker_addr_info.as_ref())
-                    .map_or_default(|item| item.ha_server_addr.clone());
+                    .map(|item| item.ha_server_addr.clone())
+                    .unwrap_or_default();
                 self.notify_min_broker_id_changed(broker_data.broker_addrs(), None, ha_server_addr);
             }
         }
