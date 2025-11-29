@@ -558,10 +558,9 @@ impl RouteInfoManagerV2 {
             // Check if this is first registration
             // Follow Java logic: registerFirst = registerFirst || (StringUtils.isEmpty(oldAddr))
             let old_addr = broker_addrs_map.insert(broker_id, broker_addr.clone());
-            register_first =
-                register_first
-                    || old_addr.is_none()
-                    || old_addr.as_ref().map(|s| s.is_empty()).unwrap_or(false);
+            register_first = register_first
+                || old_addr.is_none()
+                || old_addr.as_ref().map(|s| s.is_empty()).unwrap_or(false);
 
             // Update in table
             self.broker_addr_table
