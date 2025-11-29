@@ -21,6 +21,7 @@ mod topic_list_sub_command;
 mod topic_route_sub_command;
 mod topic_status_sub_command;
 mod update_order_conf_command;
+mod update_topic_perm_sub_command;
 mod update_topic_sub_command;
 use std::sync::Arc;
 
@@ -79,6 +80,13 @@ more memory space, you can use this command to allocate it."#
         long_about = r#"check topicStatus"#
     )]
     TopicStatus(topic_status_sub_command::TopicStatusSubCommand),
+
+    #[command(
+        name = "updateTopicPerm",
+        about = "Update topic perm.",
+        long_about = r#"Update topic perm."#
+    )]
+    UpdateTopicPerm(update_topic_perm_sub_command::UpdateTopicPermSubCommand),
     #[command(
         name = "updateOrderConf",
         about = "updateOrderConf",
@@ -97,6 +105,7 @@ impl CommandExecute for TopicCommands {
             TopicCommands::TopicList(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::TopicRoute(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::TopicStatus(cmd) => cmd.execute(rpc_hook).await,
+            TopicCommands::UpdateTopicPerm(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::UpdateOrderConf(cmd) => cmd.execute(rpc_hook).await,
         }
     }
