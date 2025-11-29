@@ -29,6 +29,9 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 use std::sync::Weak;
 
+pub use rocketmq_error::RocketMQError;
+pub use rocketmq_error::RocketMQResult;
+
 pub use crate::common::attribute::topic_attributes as TopicAttributes;
 pub use crate::common::message::message_accessor as MessageAccessor;
 pub use crate::common::message::message_decoder as MessageDecoder;

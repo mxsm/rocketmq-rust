@@ -339,6 +339,13 @@ pub enum RocketMQError {
     Service(#[from] ServiceError),
 
     // ============================================================================
+    // Version Errors
+    // ============================================================================
+    /// Invalid RocketMQ version ordinal value
+    #[error("Invalid RocketMQ version ordinal: {0}")]
+    InvalidVersionOrdinal(u32),
+
+    // ============================================================================
     // Legacy Errors (Deprecated - for backward compatibility)
     // ============================================================================
     /// Legacy error - use specific error types instead
