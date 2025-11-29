@@ -21,6 +21,7 @@
 
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_remoting::protocol::DataVersion;
 
@@ -38,7 +39,7 @@ pub struct BrokerLiveInfo {
     /// Data version for change detection
     pub data_version: DataVersion,
     /// HA server address (optional)
-    pub ha_server_addr: Option<String>,
+    pub ha_server_addr: Option<CheetahString>,
 }
 
 impl BrokerLiveInfo {
@@ -57,8 +58,8 @@ impl BrokerLiveInfo {
     }
 
     /// Create with HA server address
-    pub fn with_ha_server(mut self, ha_server_addr: String) -> Self {
-        self.ha_server_addr = Some(ha_server_addr);
+    pub fn with_ha_server(mut self, ha_server_addr: impl Into<CheetahString>) -> Self {
+        self.ha_server_addr = Some(ha_server_addr.into());
         self
     }
 
@@ -432,12 +433,12 @@ mod tests {
 
     #[test]
     fn test_with_ha_server() {
-        let live_info = BrokerLiveInfo::new(1000, DataVersion::default())
-            .with_ha_server("ha-server:10912".to_string());
+        let live_info =
+            BrokerLiveInfo::new(1000, DataVersion::default()).with_ha_server("ha-server:10912");
 
         assert_eq!(
             live_info.ha_server_addr,
-            Some("ha-server:10912".to_string())
+            Some(CheetahString::from_static_str("ha-server:10912"))
         );
     }
 

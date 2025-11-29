@@ -163,57 +163,47 @@ impl RouteInfoManagerWrapper {
         }
     }
 
-    // ==================== Forwarding Methods ====================
-    // The following methods forward calls to the underlying implementation
-
     /// Register a broker with the nameserver
     pub fn register_broker(
         &self,
-        cluster_name: String,
-        broker_addr: String,
-        broker_name: String,
+        cluster_name: CheetahString,
+        broker_addr: CheetahString,
+        broker_name: CheetahString,
         broker_id: u64,
-        ha_server_addr: String,
-        zone_name: Option<String>,
+        ha_server_addr: CheetahString,
+        zone_name: Option<CheetahString>,
         timeout_millis: Option<i64>,
         enable_acting_master: Option<bool>,
         topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
-        filter_server_list: Vec<String>,
+        filter_server_list: Vec<CheetahString>,
         channel: Channel,
     ) -> Option<RegisterBrokerResult> {
-        use cheetah_string::CheetahString;
         match self {
             RouteInfoManagerWrapper::V1(manager) => manager.register_broker(
-                CheetahString::from_string(cluster_name),
-                CheetahString::from_string(broker_addr),
-                CheetahString::from_string(broker_name),
+                cluster_name,
+                broker_addr,
+                broker_name,
                 broker_id,
-                CheetahString::from_string(ha_server_addr),
-                zone_name.map(CheetahString::from_string),
+                ha_server_addr,
+                zone_name,
                 timeout_millis,
                 enable_acting_master,
                 topic_config_wrapper,
-                filter_server_list
-                    .into_iter()
-                    .map(CheetahString::from_string)
-                    .collect(),
+                filter_server_list,
                 channel,
             ),
             RouteInfoManagerWrapper::V2(manager) => manager
                 .register_broker(
-                    CheetahString::from_string(cluster_name),
-                    CheetahString::from_string(broker_addr),
-                    CheetahString::from_string(broker_name),
+                    cluster_name,
+                    broker_addr,
+                    broker_name,
                     broker_id,
-                    CheetahString::from_string(ha_server_addr),
-                    zone_name.map(CheetahString::from_string),
+                    ha_server_addr,
+                    zone_name,
                     timeout_millis.map(|t| t as u64),
                     enable_acting_master,
                     topic_config_wrapper,
-                    filter_server_list
-                        .into_iter()
-                        .map(CheetahString::from_string)
-                        .collect(),
+                    filter_server_list,
                     channel,
                 )
                 .ok(),
