@@ -177,6 +177,9 @@ impl CommandExecute for UpdateTopicPermSubCommand {
                         old_perm, perm, broker_addr
                     );
                     println!("{:?}.", topic_config);
+                } else {
+                    println!("updateTopicPerm error broker not exit or broker is not master!.");
+                    return Ok(());
                 }
             } else if let Some(cluster_name) = &self.cluster_name {
                 let cluster_name = cluster_name.trim();
@@ -201,7 +204,7 @@ impl CommandExecute for UpdateTopicPermSubCommand {
                             )
                         })?;
                     println!(
-                        "update topic perm from {}s to {}s in {:?}s success.",
+                        "update topic perm from {} to {} in {:?} success.",
                         queue_datas[0].perm(),
                         perm,
                         addr
