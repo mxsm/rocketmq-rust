@@ -64,7 +64,7 @@ pub struct UpdateTopicPermSubCommand {
     #[arg(
         short = 'p',
         long = "perm",
-        required = false,
+        required = true,
         help = "set topic's permission(2|4|6), intro[2:W; 4:R; 6:RW]"
     )]
     perm: String,
