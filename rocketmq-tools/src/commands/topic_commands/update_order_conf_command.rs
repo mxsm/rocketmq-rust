@@ -67,7 +67,7 @@ impl CommandExecute for UpdateOrderConfCommand {
                     "update orderConf success. topic={}, orderConf={}",
                     topic, order_conf
                 );
-            } else if let None = &self.order_conf {
+            } else if self.order_conf.is_none() {
                 default_mq_admin_ext.shutdown().await;
                 return Err(RocketMQError::Internal(
                     "please set orderConf with option -v.".to_string(),
