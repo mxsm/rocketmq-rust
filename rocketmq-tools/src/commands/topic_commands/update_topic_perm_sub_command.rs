@@ -125,6 +125,12 @@ impl CommandExecute for UpdateTopicPermSubCommand {
                     self.perm, e
                 ))
             })?;
+            if perm != 2 && perm != 4 && perm != 6 {
+                return Err(RocketMQError::IllegalArgument(format!(
+                    "UpdateTopicPermSubCommand: Invalid perm value '{}': perm must be 2, 4, or 6",
+                    perm
+                )));
+            }
             let topic_config = TopicConfig {
                 topic_name: Some(self.topic.clone().into()),
                 read_queue_nums: queue_datas[0].read_queue_nums(),
