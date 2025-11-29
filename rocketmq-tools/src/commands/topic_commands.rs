@@ -21,6 +21,7 @@ mod topic_list_sub_command;
 mod topic_route_sub_command;
 mod topic_status_sub_command;
 mod update_topic_perm_sub_command;
+mod update_order_conf_command;
 mod update_topic_sub_command;
 use std::sync::Arc;
 
@@ -29,7 +30,7 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::CommandExecute;
-
+const NAMESPACE_ORDER_TOPIC_CONFIG: &str = "ORDER_TOPIC_CONFIG";
 #[derive(Subcommand)]
 pub enum TopicCommands {
     #[command(
@@ -86,6 +87,12 @@ more memory space, you can use this command to allocate it."#
         long_about = r#"Update topic perm."#
     )]
     UpdateTopicPerm(update_topic_perm_sub_command::UpdateTopicPermSubCommand),
+    #[command(
+        name = "updateOrderConf",
+        about = "updateOrderConf",
+        long_about = r#"updateOrderConf"#
+    )]
+    UpdateOrderConf(update_order_conf_command::UpdateOrderConfCommand),
 }
 
 impl CommandExecute for TopicCommands {
@@ -99,6 +106,7 @@ impl CommandExecute for TopicCommands {
             TopicCommands::TopicRoute(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::TopicStatus(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::UpdateTopicPerm(cmd) => cmd.execute(rpc_hook).await,
+            TopicCommands::UpdateOrderConf(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }
