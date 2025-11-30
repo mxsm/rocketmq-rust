@@ -86,12 +86,12 @@ impl AppendMessageResult {
     }
 
     pub fn get_message_id(&self) -> Option<String> {
-        if self.msg_id.is_none() && self.msg_id_supplier.is_some() {
-            let msg_id_supplier = self.msg_id_supplier.as_ref().unwrap();
-            let msg_id = msg_id_supplier();
-            Some(msg_id)
-        } else {
-            self.msg_id.clone()
+        match self.msg_id_supplier {
+            None => self.msg_id.clone(),
+            Some(ref msg_id_supplier) => {
+                let msg_id = msg_id_supplier();
+                Some(msg_id)
+            }
         }
     }
 }

@@ -93,10 +93,10 @@ impl<MS: MessageStore> ConfigManager for ConsumerOrderInfoManager<MS> {
                 .lock()
                 .table
                 .clone_from(&wrapper.table);
-            if self.consumer_order_info_lock_manager.is_some() {
-                self.consumer_order_info_lock_manager
-                    .as_ref()
-                    .unwrap()
+            if let Some(consumer_order_info_lock_manager) =
+                self.consumer_order_info_lock_manager.as_ref()
+            {
+                consumer_order_info_lock_manager
                     .recover(self.consumer_order_info_wrapper.lock().deref());
             }
         }

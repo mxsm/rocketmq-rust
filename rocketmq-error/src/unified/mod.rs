@@ -24,6 +24,7 @@
 mod network;
 mod protocol;
 mod serialization;
+mod tools;
 
 use std::io;
 
@@ -31,6 +32,7 @@ pub use network::NetworkError;
 pub use protocol::ProtocolError;
 pub use serialization::SerializationError;
 use thiserror::Error;
+pub use tools::ToolsError;
 
 // Re-export legacy error types for backward compatibility (will be deprecated)
 #[allow(deprecated)]
@@ -247,6 +249,13 @@ pub enum RocketMQError {
     /// Consumer not available
     #[error("Consumer is not available")]
     ConsumerNotAvailable,
+
+    // ============================================================================
+    // Tools/Admin Errors
+    // ============================================================================
+    /// Tools and admin operation errors
+    #[error(transparent)]
+    Tools(#[from] ToolsError),
 
     // ============================================================================
     // Storage Errors
@@ -472,6 +481,36 @@ impl RocketMQError {
             },
             other => other,
         }
+    }
+
+    /// Create a validation error
+    #[inline]
+    pub fn validation_error(field: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self::Tools(ToolsError::validation_error(field, reason))
+    }
+
+    /// Create a topic not found error (alias for TopicNotExist)
+    #[inline]
+    pub fn topic_not_found(topic: impl Into<String>) -> Self {
+        Self::Tools(ToolsError::topic_not_found(topic))
+    }
+
+    /// Create a topic already exists error
+    #[inline]
+    pub fn topic_already_exists(topic: impl Into<String>) -> Self {
+        Self::Tools(ToolsError::topic_already_exists(topic))
+    }
+
+    /// Create a nameserver unreachable error
+    #[inline]
+    pub fn nameserver_unreachable(addr: impl Into<String>) -> Self {
+        Self::Tools(ToolsError::nameserver_unreachable(addr))
+    }
+
+    /// Create a nameserver config invalid error
+    #[inline]
+    pub fn nameserver_config_invalid(reason: impl Into<String>) -> Self {
+        Self::Tools(ToolsError::nameserver_config_invalid(reason))
     }
 }
 
