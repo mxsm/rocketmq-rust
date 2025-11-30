@@ -31,6 +31,7 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
+use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_remoting::protocol::body::topic::topic_list::TopicList;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
@@ -1773,6 +1774,31 @@ impl RouteInfoManagerV2 {
         self.broker_live_table
             .get(&broker_addr_info)
             .map(|info| info.data_version.clone())
+    }
+
+    /// Get broker member group
+    ///
+    /// Returns a BrokerMemberGroup containing all broker addresses for the given broker name.
+    ///
+    /// # Arguments
+    /// * `cluster_name` - Name of the cluster
+    /// * `broker_name` - Name of the broker
+    ///
+    /// # Returns
+    /// `Some(BrokerMemberGroup)` containing cluster name, broker name, and broker addresses
+    pub fn get_broker_member_group(
+        &self,
+        cluster_name: CheetahString,
+        broker_name: CheetahString,
+    ) -> Option<BrokerMemberGroup> {
+        let mut group_member = BrokerMemberGroup::new(cluster_name, broker_name.clone());
+
+        // Get broker addresses from broker_addr_table
+        if let Some(broker_data) = self.broker_addr_table.get(&broker_name) {
+            group_member.broker_addrs = broker_data.broker_addrs().clone();
+        }
+
+        Some(group_member)
     }
 
     /// Get all cluster info (v1 compatibility)

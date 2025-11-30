@@ -722,12 +722,12 @@ impl RouteInfoManager {
 
     pub(crate) fn get_broker_member_group(
         &mut self,
-        cluster_name: &CheetahString,
-        broker_name: &CheetahString,
+        cluster_name: CheetahString,
+        broker_name: CheetahString,
     ) -> Option<BrokerMemberGroup> {
-        let mut group_member = BrokerMemberGroup::new(cluster_name.clone(), broker_name.clone());
+        let mut group_member = BrokerMemberGroup::new(cluster_name, broker_name.clone());
         let lock_ = self.lock.read();
-        if let Some(broker_data) = self.broker_addr_table.get(broker_name) {
+        if let Some(broker_data) = self.broker_addr_table.get(&broker_name) {
             group_member.broker_addrs = broker_data.broker_addrs().clone();
         }
         drop(lock_);
