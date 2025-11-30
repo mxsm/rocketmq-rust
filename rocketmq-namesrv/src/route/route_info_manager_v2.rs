@@ -1785,7 +1785,9 @@ impl RouteInfoManagerV2 {
     /// * `broker_name` - Name of the broker
     ///
     /// # Returns
-    /// Always returns `Some(BrokerMemberGroup)`. If the broker exists in `broker_addr_table`, the group will contain its addresses; otherwise, it returns an empty `BrokerMemberGroup` with the provided cluster name and broker name but no addresses.
+    /// Always returns `Some(BrokerMemberGroup)`. If the broker exists in `broker_addr_table`, the
+    /// group will contain its addresses; otherwise, it returns an empty `BrokerMemberGroup` with
+    /// the provided cluster name and broker name but no addresses.
     pub fn get_broker_member_group(
         &self,
         cluster_name: CheetahString,
