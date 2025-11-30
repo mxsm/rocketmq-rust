@@ -1804,24 +1804,34 @@ impl RouteInfoManagerV2 {
     }
 
     /// Get all cluster info (v1 compatibility)
+    ///
+    /// Note: Unlike Java which directly returns references to internal tables,
+    /// Rust requires creating copies due to ownership rules and DashMap usage.
     pub fn get_all_cluster_info(&self) -> RouteResult<ClusterInfo> {
         use std::collections::HashMap;
         use std::collections::HashSet;
 
         use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
 
-        let mut cluster_addr_table: HashMap<CheetahString, HashSet<CheetahString>> = HashMap::new();
-        let mut broker_addr_table: HashMap<CheetahString, BrokerData> = HashMap::new();
+        // Get all cluster data first for capacity pre-allocation
+        let cluster_data = self.cluster_addr_table.get_all_cluster_brokers();
+        let broker_data_list = self.broker_addr_table.get_all_brokers();
 
-        // Populate cluster_addr_table (broker_names is already Vec<CheetahString>)
-        for (cluster_name, broker_names) in self.cluster_addr_table.get_all_cluster_brokers() {
+        // Pre-allocate with known capacity for better performance
+        let mut cluster_addr_table: HashMap<CheetahString, HashSet<CheetahString>> =
+            HashMap::with_capacity(cluster_data.len());
+        let mut broker_addr_table: HashMap<CheetahString, BrokerData> =
+            HashMap::with_capacity(broker_data_list.len());
+
+        // Populate cluster_addr_table
+        for (cluster_name, broker_names) in cluster_data {
             cluster_addr_table.insert(cluster_name, broker_names.into_iter().collect());
         }
 
-        // Populate broker_addr_table (broker_name is already CheetahString)
-        for (broker_name, broker_data) in self.broker_addr_table.get_all_brokers() {
+        // Populate broker_addr_table
+        for (broker_name, broker_data) in broker_data_list {
             let data = BrokerData::new(
-                CheetahString::from_string(broker_data.cluster().to_string()),
+                CheetahString::from_slice(broker_data.cluster()),
                 broker_name.clone(),
                 broker_data
                     .broker_addrs()
