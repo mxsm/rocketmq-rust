@@ -536,6 +536,7 @@ impl BrokerRuntime {
         flag
     }
 
+    #[allow(clippy::unnecessary_unwrap)]
     async fn recover_initialize_service(&mut self) -> bool {
         let mut result: bool = true;
 
