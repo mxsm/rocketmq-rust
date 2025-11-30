@@ -350,14 +350,14 @@ impl RouteInfoManagerWrapper {
         broker_name: &str,
     ) -> Option<BrokerMemberGroup> {
         use cheetah_string::CheetahString;
+        let cluster_name = CheetahString::from_string(cluster_name.to_string());
+        let broker_name = CheetahString::from_string(broker_name.to_string());
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.get_broker_member_group(
-                &CheetahString::from_string(cluster_name.to_string()),
-                &CheetahString::from_string(broker_name.to_string()),
-            ),
-            RouteInfoManagerWrapper::V2(_manager) => {
-                // V2 doesn't have this method yet, return None
-                None
+            RouteInfoManagerWrapper::V1(manager) => {
+                manager.get_broker_member_group(cluster_name, broker_name)
+            }
+            RouteInfoManagerWrapper::V2(manager) => {
+                manager.get_broker_member_group(cluster_name, broker_name)
             }
         }
     }
