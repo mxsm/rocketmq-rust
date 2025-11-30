@@ -1252,6 +1252,7 @@ impl MQClientInstance {
     }
 }
 
+#[allow(clippy::unnecessary_unwrap)]
 pub fn topic_route_data2topic_publish_info(
     topic: &str,
     route: &mut TopicRouteData,
