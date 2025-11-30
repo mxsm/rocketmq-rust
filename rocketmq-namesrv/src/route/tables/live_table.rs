@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::DataVersion;
 
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
@@ -322,6 +323,23 @@ impl BrokerLiveTable {
                 *entry.value_mut() = Arc::new(new_info);
                 return;
             }
+        }
+    }
+
+    /// Update last update timestamp for a broker by BrokerAddrInfo
+    ///
+    /// Uses `BrokerAddrInfo(clusterName, brokerAddr)` as the lookup key.
+    ///
+    /// # Arguments
+    /// * `broker_addr_info` - BrokerAddrInfo containing cluster name and broker address
+    pub fn update_last_update_timestamp_by_addr_info(&self, broker_addr_info: &BrokerAddrInfo) {
+        if let Some(mut entry) = self.inner.get_mut(broker_addr_info) {
+            let current_time = get_current_millis();
+            let old_info = entry.value();
+            let new_info = BrokerLiveInfo::new(current_time, old_info.data_version.clone())
+                .with_timeout(old_info.heartbeat_timeout_millis)
+                .with_ha_server(old_info.ha_server_addr.clone().unwrap_or_default());
+            *entry.value_mut() = Arc::new(new_info);
         }
     }
 }

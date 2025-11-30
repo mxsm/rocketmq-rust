@@ -1737,14 +1737,20 @@ impl RouteInfoManagerV2 {
     }
 
     /// Update broker info update timestamp
+    ///
+    /// This method updates the last update timestamp for a broker in the live table.
+    ///
+    /// # Arguments
+    /// * `cluster_name` - Name of the cluster the broker belongs to
+    /// * `broker_addr` - Network address of the broker
     pub fn update_broker_info_update_timestamp(
         &self,
-        _cluster_name: CheetahString,
+        cluster_name: CheetahString,
         broker_addr: CheetahString,
     ) {
-        let current_time = get_current_millis();
+        let broker_addr_info = BrokerAddrInfo::new(cluster_name, broker_addr);
         self.broker_live_table
-            .update_last_update_timestamp(&broker_addr, current_time);
+            .update_last_update_timestamp_by_addr_info(&broker_addr_info);
     }
 
     /// Query broker topic config data version
