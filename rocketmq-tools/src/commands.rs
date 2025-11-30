@@ -22,11 +22,12 @@ use std::sync::Arc;
 
 use clap::Parser;
 use clap::Subcommand;
-use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 use tabled::settings::Style;
 use tabled::Table;
 use tabled::Tabled;
+
+use crate::core::RocketMQResult;
 
 /// A trait that defines the execution behavior for commands.
 ///
