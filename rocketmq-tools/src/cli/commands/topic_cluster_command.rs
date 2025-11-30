@@ -28,7 +28,8 @@ use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
 use crate::core::admin::AdminBuilder;
 use crate::core::topic::TopicService;
-use crate::core::{RocketMQError, RocketMQResult};
+use crate::core::RocketMQError;
+use crate::core::RocketMQResult;
 
 #[derive(Debug, Clone, Parser)]
 pub struct TopicClusterSubCommand {
@@ -54,18 +55,21 @@ impl CommandExecute for TopicClusterSubCommand {
 
         // 2. Build admin client with RAII guard (auto cleanup)
         let mut builder = AdminBuilder::new();
-        
+
         if let Some(addr) = &self.common_args.namesrv_addr {
             builder = builder.namesrv_addr(addr.trim());
         }
-        
+
         let mut admin = builder.build_with_guard().await?;
 
         // 3. Call core business logic (admin auto-shuts down on drop)
         let cluster_list = TopicService::get_topic_cluster_list(&mut admin, &self.topic)
             .await
             .map_err(|e| {
-                eprintln!("❌ Failed to get cluster list for topic '{}': {e}", self.topic);
+                eprintln!(
+                    "❌ Failed to get cluster list for topic '{}': {e}",
+                    self.topic
+                );
                 e
             })?;
 
@@ -78,10 +82,12 @@ impl CommandExecute for TopicClusterSubCommand {
                 println!("{json}");
             }
             OutputFormat::Yaml => {
-                let yaml = serde_yaml::to_string(&cluster_list.clusters)
-                    .map_err(|e| RocketMQError::Serialization(
-                        rocketmq_error::SerializationError::encode_failed("YAML", e.to_string())
-                    ))?;
+                let yaml = serde_yaml::to_string(&cluster_list.clusters).map_err(|e| {
+                    RocketMQError::Serialization(rocketmq_error::SerializationError::encode_failed(
+                        "YAML",
+                        e.to_string(),
+                    ))
+                })?;
                 println!("{yaml}");
             }
             OutputFormat::Table => {

@@ -124,7 +124,11 @@ async fn example_early_return(topic: &str) -> RocketMQResult<()> {
         return Ok(());
     }
 
-    println!("Topic '{}' has {} queues", topic, route_data.queue_datas.len());
+    println!(
+        "Topic '{}' has {} queues",
+        topic,
+        route_data.queue_datas.len()
+    );
 
     // Process queues...
     for queue in &route_data.queue_datas {

@@ -97,7 +97,9 @@ pub mod core {
     pub mod topic;
 
     // Re-export error types from rocketmq-error
-    pub use rocketmq_error::{RocketMQError, RocketMQResult, ToolsError};
+    pub use rocketmq_error::RocketMQError;
+    pub use rocketmq_error::RocketMQResult;
+    pub use rocketmq_error::ToolsError;
 
     // Future modules (uncomment when implemented):
     // pub mod broker;

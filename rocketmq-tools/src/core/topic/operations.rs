@@ -27,7 +27,9 @@ use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 
 use super::types::TopicClusterList;
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
-use crate::core::{RocketMQError, RocketMQResult, ToolsError};
+use crate::core::RocketMQError;
+use crate::core::RocketMQResult;
+use crate::core::ToolsError;
 
 /// Topic operations service
 pub struct TopicService;
@@ -94,7 +96,11 @@ impl TopicService {
         admin
             .delete_topic(topic.clone(), cluster.clone())
             .await
-            .map_err(|e| RocketMQError::Tools(ToolsError::internal(format!("Failed to delete topic '{topic}' from cluster '{cluster}': {e}"))))
+            .map_err(|e| {
+                RocketMQError::Tools(ToolsError::internal(format!(
+                    "Failed to delete topic '{topic}' from cluster '{cluster}': {e}"
+                )))
+            })
     }
 
     /// Batch get cluster lists for multiple topics

@@ -24,10 +24,9 @@ mod table_formatter;
 mod yaml_formatter;
 
 pub use json_formatter::JsonFormatter;
+use serde::Serialize;
 pub use table_formatter::TableFormatter;
 pub use yaml_formatter::YamlFormatter;
-
-use serde::Serialize;
 
 /// Output format enum
 #[derive(Debug, Clone, Copy, Default)]

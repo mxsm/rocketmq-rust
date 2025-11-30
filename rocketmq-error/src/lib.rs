@@ -59,9 +59,9 @@ pub use unified::NetworkError;
 pub use unified::ProtocolError;
 pub use unified::RocketMQError;
 pub use unified::SerializationError;
-pub use unified::ToolsError;
 // Re-export result types (but don't conflict with legacy ones below)
 pub use unified::ServiceError as UnifiedServiceError;
+pub use unified::ToolsError;
 
 // Legacy error modules (deprecated but kept for compatibility)
 #[deprecated(since = "0.7.0", note = "Use unified error system instead")]

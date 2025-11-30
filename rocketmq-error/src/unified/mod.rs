@@ -31,8 +31,8 @@ use std::io;
 pub use network::NetworkError;
 pub use protocol::ProtocolError;
 pub use serialization::SerializationError;
-pub use tools::ToolsError;
 use thiserror::Error;
+pub use tools::ToolsError;
 
 // Re-export legacy error types for backward compatibility (will be deprecated)
 #[allow(deprecated)]

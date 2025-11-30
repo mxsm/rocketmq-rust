@@ -330,8 +330,8 @@ mod tests {
 
     #[test]
     fn test_builder_multiple_namesrv() {
-        let builder = AdminBuilder::new()
-            .namesrv_addr("127.0.0.1:9876;127.0.0.1:9877;127.0.0.1:9878");
+        let builder =
+            AdminBuilder::new().namesrv_addr("127.0.0.1:9876;127.0.0.1:9877;127.0.0.1:9878");
 
         assert_eq!(
             builder.namesrv_addr,

@@ -19,7 +19,9 @@
 //!
 //! Provides validation for command-line arguments
 
-use crate::core::{RocketMQError, RocketMQResult, ToolsError};
+use crate::core::RocketMQError;
+use crate::core::RocketMQResult;
+use crate::core::ToolsError;
 
 /// Validate NameServer address format
 ///
@@ -38,7 +40,7 @@ pub fn validate_namesrv_addr(addr: &str) -> RocketMQResult<()> {
     for single_addr in addr.split(';').map(str::trim).filter(|s| !s.is_empty()) {
         // Check format: host:port
         let parts: Vec<&str> = single_addr.split(':').collect();
-        
+
         if parts.len() != 2 {
             return Err(RocketMQError::Tools(ToolsError::ValidationError {
                 field: "namesrv_addr".to_string(),
@@ -77,7 +79,7 @@ pub fn validate_topic_name(topic: &str) -> RocketMQResult<()> {
 
     // Check for invalid characters
     const INVALID_CHARS: &[char] = &['/', '\\', '|', '<', '>', '?', '*', '"', ':'];
-    
+
     if let Some(ch) = topic.chars().find(|c| INVALID_CHARS.contains(c)) {
         return Err(RocketMQError::Tools(ToolsError::ValidationError {
             field: "topic".to_string(),
@@ -110,7 +112,9 @@ pub fn validate_perm(perm: i32) -> RocketMQResult<()> {
         2 | 4 | 6 => Ok(()),
         _ => Err(RocketMQError::Tools(ToolsError::ValidationError {
             field: "perm".to_string(),
-            reason: format!("Invalid value {perm}, valid values are: 2 (read), 4 (write), 6 (read+write)"),
+            reason: format!(
+                "Invalid value {perm}, valid values are: 2 (read), 4 (write), 6 (read+write)"
+            ),
         })),
     }
 }

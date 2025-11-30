@@ -23,7 +23,9 @@ use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
-use crate::core::{RocketMQError, RocketMQResult, ToolsError};
+use crate::core::RocketMQError;
+use crate::core::RocketMQResult;
+use crate::core::ToolsError;
 
 /// NameServer operations service
 pub struct NameServerService;
@@ -90,7 +92,11 @@ impl NameServerService {
         admin
             .create_and_update_kv_config(namespace.clone(), key.clone(), value)
             .await
-            .map_err(|e| RocketMQError::Tools(ToolsError::nameserver_config_invalid(format!("Failed to create/update KV config [{namespace}:{key}]: {e}"))))
+            .map_err(|e| {
+                RocketMQError::Tools(ToolsError::nameserver_config_invalid(format!(
+                    "Failed to create/update KV config [{namespace}:{key}]: {e}"
+                )))
+            })
     }
 
     /// Delete KV config from NameServer
@@ -113,7 +119,11 @@ impl NameServerService {
         admin
             .delete_kv_config(namespace.clone(), key.clone())
             .await
-            .map_err(|e| RocketMQError::Tools(ToolsError::nameserver_config_invalid(format!("Failed to delete KV config [{namespace}:{key}]: {e}"))))
+            .map_err(|e| {
+                RocketMQError::Tools(ToolsError::nameserver_config_invalid(format!(
+                    "Failed to delete KV config [{namespace}:{key}]: {e}"
+                )))
+            })
     }
 
     /// Add write permission for a broker
@@ -136,7 +146,12 @@ impl NameServerService {
         admin
             .add_write_perm_of_broker(namesrv.clone(), broker.clone())
             .await
-            .map_err(|e| RocketMQError::Tools(ToolsError::broker_not_found(format!("Failed to add write permission for broker '{broker}' on NameServer '{namesrv}': {e}"))))
+            .map_err(|e| {
+                RocketMQError::Tools(ToolsError::broker_not_found(format!(
+                    "Failed to add write permission for broker '{broker}' on NameServer \
+                     '{namesrv}': {e}"
+                )))
+            })
     }
 
     /// Wipe write permission for a broker
@@ -159,7 +174,12 @@ impl NameServerService {
         admin
             .wipe_write_perm_of_broker(namesrv.clone(), broker.clone())
             .await
-            .map_err(|e| RocketMQError::Tools(ToolsError::broker_not_found(format!("Failed to wipe write permission for broker '{broker}' on NameServer '{namesrv}': {e}"))))
+            .map_err(|e| {
+                RocketMQError::Tools(ToolsError::broker_not_found(format!(
+                    "Failed to wipe write permission for broker '{broker}' on NameServer \
+                     '{namesrv}': {e}"
+                )))
+            })
     }
 }
 

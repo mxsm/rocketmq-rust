@@ -113,10 +113,7 @@ pub enum ToolsError {
     // ============================================================================
     /// Operation timeout
     #[error("Operation '{operation}' timed out after {duration_ms}ms")]
-    OperationTimeout {
-        operation: String,
-        duration_ms: u64,
-    },
+    OperationTimeout { operation: String, duration_ms: u64 },
 
     /// Generic internal error
     #[error("Internal error: {message}")]

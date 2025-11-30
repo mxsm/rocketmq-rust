@@ -32,7 +32,6 @@ mod operations;
 mod types;
 
 // Re-export all public items
-pub use self::{
-    operations::NameServerService,
-    types::{BrokerPermission, ConfigItem},
-};
+pub use self::operations::NameServerService;
+pub use self::types::BrokerPermission;
+pub use self::types::ConfigItem;

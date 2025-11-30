@@ -32,7 +32,10 @@ mod operations;
 mod types;
 
 // Re-export all public items from submodules
-pub use self::{
-    operations::TopicService,
-    types::{BrokerData, QueueData, TopicClusterList, TopicConfig, TopicRouteInfo, TopicStatus},
-};
+pub use self::operations::TopicService;
+pub use self::types::BrokerData;
+pub use self::types::QueueData;
+pub use self::types::TopicClusterList;
+pub use self::types::TopicConfig;
+pub use self::types::TopicRouteInfo;
+pub use self::types::TopicStatus;
