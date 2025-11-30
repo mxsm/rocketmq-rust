@@ -15,29 +15,22 @@
  * limitations under the License.
  */
 
-//! Topic management core logic
+//! Table style utilities for consistent formatting
 //!
-//! This module provides reusable business logic for topic operations,
-//! independent of CLI presentation layer.
-//!
-//! # Examples
-//!
-//! ```rust,ignore
-//! use rocketmq_tools::core::topic::{TopicService, TopicClusterList};
-//!
-//! let clusters = TopicService::get_topic_cluster_list(&mut admin, "MyTopic").await?;
-//! ```
+//! Provides constants and helper functions for table styling.
 
-pub mod operations;
-pub mod types;
+/// Cyan color constant for headers
+pub const HEADER_COLOR: &str = "\x1b[36m";
+/// Reset color constant
+pub const RESET_COLOR: &str = "\x1b[0m";
 
-// Re-export all public items from submodules
-pub use self::operations::TopicOperations;
-pub use self::operations::TopicService;
-pub use self::types::BrokerData;
-pub use self::types::QueueData;
-pub use self::types::TopicClusterList;
-pub use self::types::TopicConfig;
-pub use self::types::TopicRouteInfo;
-pub use self::types::TopicStatus;
-pub use self::types::TopicTarget;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_colors() {
+        assert_eq!(HEADER_COLOR, "\x1b[36m");
+        assert_eq!(RESET_COLOR, "\x1b[0m");
+    }
+}

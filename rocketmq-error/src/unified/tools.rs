@@ -101,12 +101,20 @@ pub enum ToolsError {
     #[error("Validation failed for '{field}': {reason}")]
     ValidationError { field: String, reason: String },
 
+    /// Generic validation error
+    #[error("Validation error: {message}")]
+    ValidationFailed { message: String },
+
     // ============================================================================
     // Permission Errors
     // ============================================================================
     /// Permission denied for operation
     #[error("Permission denied for operation: {operation}")]
     PermissionDenied { operation: String },
+
+    /// Invalid permission value
+    #[error("Invalid permission value: {value}, allowed values: {}", .allowed.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", "))]
+    InvalidPermission { value: i32, allowed: Vec<i32> },
 
     // ============================================================================
     // Operation Errors

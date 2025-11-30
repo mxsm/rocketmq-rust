@@ -28,7 +28,7 @@
 //! let config = NameServerService::get_namesrv_config(&mut admin, addrs).await?;
 //! ```
 
-mod operations;
+pub mod operations;
 mod types;
 
 // Re-export all public items

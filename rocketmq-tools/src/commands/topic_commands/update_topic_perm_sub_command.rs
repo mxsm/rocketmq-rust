@@ -273,7 +273,10 @@ mod tests {
     #[tokio::test]
     async fn test_execute_fails_without_broker_or_cluster() {
         let command = UpdateTopicPermSubCommand {
-            common_args: CommonArgs { namesrv_addr: None },
+            common_args: CommonArgs {
+                namesrv_addr: None,
+                skip_confirm: false,
+            },
             broker_addr: None,
             cluster_name: None,
             topic: "TestTopic".to_string(),
@@ -291,7 +294,10 @@ mod tests {
     #[tokio::test]
     async fn test_execute_fails_with_invalid_topic() {
         let command = UpdateTopicPermSubCommand {
-            common_args: CommonArgs { namesrv_addr: None },
+            common_args: CommonArgs {
+                namesrv_addr: None,
+                skip_confirm: false,
+            },
             broker_addr: Some("127.0.0.1:10911".to_string()),
             cluster_name: None,
             topic: "".to_string(), // Invalid topic name
@@ -312,6 +318,7 @@ mod tests {
         let command = UpdateTopicPermSubCommand {
             common_args: CommonArgs {
                 namesrv_addr: Some("127.0.0.1:9876".to_string()),
+                skip_confirm: false,
             },
             broker_addr: Some("127.0.0.1:10911".to_string()),
             cluster_name: None,

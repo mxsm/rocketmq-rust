@@ -15,29 +15,9 @@
  * limitations under the License.
  */
 
-//! Topic management core logic
-//!
-//! This module provides reusable business logic for topic operations,
-//! independent of CLI presentation layer.
-//!
-//! # Examples
-//!
-//! ```rust,ignore
-//! use rocketmq_tools::core::topic::{TopicService, TopicClusterList};
-//!
-//! let clusters = TopicService::get_topic_cluster_list(&mut admin, "MyTopic").await?;
-//! ```
+//! UI utilities for enhanced CLI experience
 
-pub mod operations;
-pub mod types;
-
-// Re-export all public items from submodules
-pub use self::operations::TopicOperations;
-pub use self::operations::TopicService;
-pub use self::types::BrokerData;
-pub use self::types::QueueData;
-pub use self::types::TopicClusterList;
-pub use self::types::TopicConfig;
-pub use self::types::TopicRouteInfo;
-pub use self::types::TopicStatus;
-pub use self::types::TopicTarget;
+pub mod output;
+pub mod progress;
+pub mod prompt;
+pub mod styles;

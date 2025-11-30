@@ -66,10 +66,7 @@ impl CommandExecute for TopicClusterSubCommand {
         let cluster_list = TopicService::get_topic_cluster_list(&mut admin, &self.topic)
             .await
             .map_err(|e| {
-                eprintln!(
-                    "❌ Failed to get cluster list for topic '{}': {e}",
-                    self.topic
-                );
+                eprintln!("Failed to get cluster list for topic '{}': {e}", self.topic);
                 e
             })?;
 
