@@ -58,17 +58,37 @@ impl BatchUnregistrationService {
         let mut name_server_runtime_inner = self.name_server_runtime_inner.clone();
         let mut rx = self.rx.take().expect("rx is None");
         let shutdown_notify = self.shutdown_notify.clone();
-        let limit = 10;
         tokio::spawn(async move {
-            info!(">>>>>>>>BatchUnregistrationService started<<<<<<<<<<<<<<<<<<<");
+            info!("BatchUnregistrationService started");
             loop {
-                let mut unregistration_requests = Vec::with_capacity(limit);
                 tokio::select! {
-                    _ = rx.recv_many(&mut unregistration_requests,limit) => {
-                        name_server_runtime_inner.route_info_manager_mut().un_register_broker(unregistration_requests);
-                    }
+                    biased;
                     _ = shutdown_notify.notified() => {
+                        info!("BatchUnregistrationService shutdown");
                         break;
+                    }
+                    // Wait for at least one request
+                    first_request = rx.recv() => {
+                        match first_request {
+                            Some(request) => {
+                                let mut unregistration_requests = Vec::new();
+                                unregistration_requests.push(request);
+
+                                // Drain all available requests from the channel
+                                while let Ok(req) = rx.try_recv() {
+                                    unregistration_requests.push(req);
+                                }
+
+                                name_server_runtime_inner
+                                    .route_info_manager_mut()
+                                    .un_register_broker(unregistration_requests);
+                            }
+                            None => {
+                                // Channel closed, exit the loop
+                                info!("BatchUnregistrationService channel closed");
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -77,5 +97,12 @@ impl BatchUnregistrationService {
 
     pub fn shutdown(&self) {
         self.shutdown_notify.notify_one();
+    }
+
+    /// Returns the number of pending unregister requests in the queue.
+    /// For test only.
+    #[allow(dead_code)]
+    pub fn queue_length(&self) -> usize {
+        self.tx.max_capacity() - self.tx.capacity()
     }
 }
