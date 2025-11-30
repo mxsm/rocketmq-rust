@@ -67,7 +67,7 @@ impl CommandExecute for TopicClusterSubCommand {
             .await
             .map_err(|e| {
                 eprintln!(
-                    "❌ Failed to get cluster list for topic '{}': {e}",
+                    "Failed to get cluster list for topic '{}': {e}",
                     self.topic
                 );
                 e

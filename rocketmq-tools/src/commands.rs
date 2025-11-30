@@ -55,6 +55,14 @@ pub struct CommonArgs {
         help = "Name server address list, eg: '192.168.0.1:9876;192.168.0.2:9876'"
     )]
     pub namesrv_addr: Option<String>,
+
+    /// Skip confirmation prompts (automatically answer 'yes')
+    #[arg(
+        short = 'y',
+        long = "yes",
+        help = "Skip confirmation prompts for dangerous operations"
+    )]
+    pub skip_confirm: bool,
 }
 
 #[derive(Subcommand)]

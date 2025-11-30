@@ -72,3 +72,12 @@ pub struct TopicStatus {
     pub consumer_offset: i64,
     pub last_update_timestamp: i64,
 }
+
+/// Target for topic creation/update operations
+#[derive(Debug, Clone)]
+pub enum TopicTarget {
+    /// Create/update on specific broker
+    Broker(CheetahString),
+    /// Create/update on all master brokers in cluster
+    Cluster(CheetahString),
+}

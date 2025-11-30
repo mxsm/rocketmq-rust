@@ -93,6 +93,8 @@ pub mod core {
     //! - [`namesrv`] - NameServer management operations
 
     pub mod admin;
+    pub mod cache;
+    pub mod concurrent;
     pub mod namesrv;
     pub mod topic;
 
@@ -134,6 +136,9 @@ pub mod cli {
     pub mod formatters;
     pub mod validators;
 }
+
+// UI utilities for enhanced CLI experience
+pub mod ui;
 
 // Admin API layer
 pub mod admin;
