@@ -481,15 +481,7 @@ impl RouteInfoManagerWrapper {
                 manager.un_register_broker(requests);
             }
             RouteInfoManagerWrapper::V2(manager) => {
-                // V2 doesn't have batch unregister yet
-                for req in requests {
-                    let _ = manager.unregister_broker(
-                        req.cluster_name,
-                        req.broker_addr,
-                        req.broker_name,
-                        req.broker_id,
-                    );
-                }
+                manager.un_register_broker(requests);
             }
         }
     }

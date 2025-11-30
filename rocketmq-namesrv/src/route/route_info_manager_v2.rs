@@ -21,9 +21,11 @@
 //! replacing the global RwLock approach from v1.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::clients::RemotingClient;
@@ -557,7 +559,6 @@ impl RouteInfoManagerV2 {
             }
 
             // Check if this is first registration
-            // Follow Java logic: registerFirst = registerFirst || (StringUtils.isEmpty(oldAddr))
             let old_addr = broker_addrs_map.insert(broker_id, broker_addr.clone());
             register_first = register_first
                 || old_addr.is_none()
@@ -1173,6 +1174,238 @@ impl RouteInfoManagerV2 {
         }
 
         Ok(())
+    }
+
+    /// Batch unregister brokers from the name server
+    ///
+    /// `RouteInfoManager.unRegisterBroker(Set<UnRegisterBrokerRequestHeader>)` and provides
+    /// batch processing of broker unregistration requests for better performance.
+    ///
+    /// ## Key Features
+    /// 1. Batch processing: Process multiple unregistration requests in one call
+    /// 2. Track removed vs reduced brokers for proper cleanup
+    /// 3. Clean topics by unregister requests (remove queue data or wipe write perm)
+    /// 4. Notify min broker ID changes for acting master support
+    ///
+    /// ## Arguments
+    /// * `un_register_requests` - Vector of unregistration requests to process
+    pub fn un_register_broker(&self, un_register_requests: Vec<UnRegisterBrokerRequestHeader>) {
+        if un_register_requests.is_empty() {
+            return;
+        }
+
+        // Track brokers that are completely removed vs reduced (still have addresses)
+        let mut removed_broker: HashSet<CheetahString> = HashSet::new();
+        let mut reduced_broker: HashSet<CheetahString> = HashSet::new();
+
+        // Track brokers that need notification for min broker ID change
+        // Key: broker_name, Value: (broker_addrs, offline_broker_addr)
+        let mut need_notify_broker_map: HashMap<
+            CheetahString,
+            (HashMap<u64, CheetahString>, CheetahString),
+        > = HashMap::new();
+
+        // Process each unregistration request
+        for un_register_request in &un_register_requests {
+            let broker_name = &un_register_request.broker_name;
+            let cluster_name = &un_register_request.cluster_name;
+            let broker_addr = &un_register_request.broker_addr;
+            let broker_id = un_register_request.broker_id;
+
+            // Acquire write lock for this broker segment
+            let _broker_lock = self.broker_locks.write_lock(broker_name.as_str());
+
+            // Step 1: Remove from broker live table
+            let broker_addr_info = BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone());
+            let prev_live_info = self.broker_live_table.remove(&broker_addr_info);
+            info!(
+                "unregisterBroker, remove from brokerLiveTable {}, {}",
+                if prev_live_info.is_some() {
+                    "OK"
+                } else {
+                    "Failed"
+                },
+                broker_addr_info
+            );
+
+            // Step 2: Remove from filter server table
+            self.filter_server_table
+                .remove(&Arc::new(broker_addr_info.clone()));
+
+            // Step 3: Process broker address table
+            let mut remove_broker_name = false;
+            let mut is_min_broker_id_changed = false;
+
+            if let Some(broker_data) = self.broker_addr_table.get(broker_name) {
+                let mut broker_data_clone = (*broker_data).clone();
+                let broker_addrs = broker_data_clone.broker_addrs_mut();
+
+                // Check if min broker ID will change
+                if !broker_addrs.is_empty() {
+                    if let Some(&min_id) = broker_addrs.keys().min() {
+                        if broker_id == min_id {
+                            is_min_broker_id_changed = true;
+                        }
+                    }
+                }
+
+                // Remove the broker address
+                broker_addrs.retain(|_id, addr| addr.as_str() != broker_addr.as_str());
+
+                info!(
+                    "unregisterBroker, remove addr from brokerAddrTable, broker={}, addr={}",
+                    broker_name, broker_addr
+                );
+
+                if broker_addrs.is_empty() {
+                    // Broker completely removed
+                    self.broker_addr_table.remove(broker_name);
+                    info!(
+                        "unregisterBroker, remove name from brokerAddrTable OK, {}",
+                        broker_name
+                    );
+                    remove_broker_name = true;
+                } else {
+                    // Broker still has addresses, update it
+                    if is_min_broker_id_changed {
+                        need_notify_broker_map.insert(
+                            broker_name.clone(),
+                            (broker_addrs.clone(), broker_addr.clone()),
+                        );
+                    }
+                    self.broker_addr_table
+                        .insert(broker_name.clone(), broker_data_clone);
+                }
+            }
+
+            // Step 4: Update cluster table if broker completely removed
+            if remove_broker_name {
+                self.cluster_addr_table
+                    .remove_broker(cluster_name.as_str(), broker_name.as_str());
+
+                // Check if cluster is now empty
+                if self
+                    .cluster_addr_table
+                    .get_brokers(cluster_name.as_str())
+                    .is_empty()
+                {
+                    self.cluster_addr_table
+                        .remove_cluster(cluster_name.as_str());
+                    info!(
+                        "unregisterBroker, remove cluster from clusterAddrTable {}",
+                        cluster_name
+                    );
+                }
+
+                removed_broker.insert(broker_name.clone());
+            } else {
+                reduced_broker.insert(broker_name.clone());
+            }
+        }
+
+        // Step 5: Clean topics by unregister requests
+        self.clean_topic_by_un_register_requests(&removed_broker, &reduced_broker);
+
+        // Step 6: Notify min broker ID changed if needed
+        if !need_notify_broker_map.is_empty()
+            && self
+                .name_server_runtime_inner
+                .name_server_config()
+                .notify_min_broker_id_changed
+        {
+            for (broker_name, (broker_addrs, offline_broker_addr)) in need_notify_broker_map {
+                // Check if broker exists and has acting master enabled
+                if let Some(broker_data) = self.broker_addr_table.get(&broker_name) {
+                    if broker_data.enable_acting_master() {
+                        self.notify_min_broker_id_changed(
+                            &broker_addrs,
+                            Some(offline_broker_addr),
+                            None,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Clean topic queue data by unregister requests
+    ///
+    /// 1. For removed brokers: Remove queue data from all topics
+    /// 2. For reduced brokers (acting master mode): Wipe write permission if no master exists
+    fn clean_topic_by_un_register_requests(
+        &self,
+        removed_broker: &HashSet<CheetahString>,
+        reduced_broker: &HashSet<CheetahString>,
+    ) {
+        let all_topics = self.topic_queue_table.get_all_topics();
+        let mut topics_to_remove = Vec::new();
+
+        for topic in &all_topics {
+            // Remove queue data for completely removed brokers
+            for broker_name in removed_broker {
+                if let Some(removed_qd) = self
+                    .topic_queue_table
+                    .remove_broker(topic.as_str(), broker_name.as_str())
+                {
+                    debug!(
+                        "removeTopicByBrokerName, remove one broker's topic {} {:?}",
+                        topic, removed_qd
+                    );
+                }
+            }
+
+            // Check if topic is now empty
+            if self
+                .topic_queue_table
+                .get_topic_queues_map(topic.as_str())
+                .is_none_or(|map| map.is_empty())
+            {
+                topics_to_remove.push(topic.clone());
+                debug!(
+                    "removeTopicByBrokerName, remove the topic all queue {}",
+                    topic
+                );
+                continue;
+            }
+
+            // For reduced brokers with acting master enabled: wipe write permission if no master
+            for broker_name in reduced_broker {
+                if let Some(broker_data) = self.broker_addr_table.get(broker_name) {
+                    if broker_data.enable_acting_master() {
+                        // Check if no master exists (min broker ID > 0)
+                        let no_master_exists = broker_data.broker_addrs().is_empty()
+                            || broker_data
+                                .broker_addrs()
+                                .keys()
+                                .min()
+                                .copied()
+                                .unwrap_or(0)
+                                > 0;
+
+                        if no_master_exists {
+                            // Wipe write permission for this broker's queue data
+                            if let Some(queue_data) = self
+                                .topic_queue_table
+                                .get(topic.as_str(), broker_name.as_str())
+                            {
+                                let mut new_queue_data = (*queue_data).clone();
+                                new_queue_data.perm &= !PermName::PERM_WRITE;
+                                self.topic_queue_table.insert(
+                                    topic.clone(),
+                                    broker_name.clone(),
+                                    new_queue_data,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Remove empty topics
+        for topic in topics_to_remove {
+            self.topic_queue_table.remove_topic(topic.as_str());
+        }
     }
 }
 
