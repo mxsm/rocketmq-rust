@@ -117,7 +117,7 @@ mod tests {
     async fn test_concurrent_query() {
         let queries = (0..5).map(|i| async move { Ok(i) });
         let results = concurrent_query(queries).await;
-        
+
         assert_eq!(results.len(), 5);
         assert!(results.iter().all(|r| r.is_ok()));
     }
@@ -126,7 +126,7 @@ mod tests {
     async fn test_concurrent_query_limited() {
         let queries = (0..10).map(|i| async move { Ok(i) });
         let results = concurrent_query_limited(queries, 3).await;
-        
+
         assert_eq!(results.len(), 10);
         assert!(results.iter().all(|r| r.is_ok()));
     }
@@ -135,7 +135,7 @@ mod tests {
     async fn test_batch_query() {
         let items: Vec<i32> = (0..10).collect();
         let results = batch_query(items, 3, |i| async move { Ok(i * 2) }).await;
-        
+
         assert_eq!(results.len(), 10);
         assert!(results.iter().all(|r| r.is_ok()));
     }

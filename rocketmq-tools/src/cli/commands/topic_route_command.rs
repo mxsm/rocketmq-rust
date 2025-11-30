@@ -23,7 +23,8 @@ use clap::Parser;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::RPCHook;
 use tabled::settings::Style;
-use tabled::{Table, Tabled};
+use tabled::Table;
+use tabled::Tabled;
 
 use crate::cli::formatters::OutputFormat;
 use crate::cli::validators;
@@ -31,7 +32,8 @@ use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
 use crate::core::admin::AdminBuilder;
 use crate::core::topic::TopicService;
-use crate::core::{RocketMQError, RocketMQResult};
+use crate::core::RocketMQError;
+use crate::core::RocketMQResult;
 
 #[derive(Debug, Clone, Parser)]
 pub struct TopicRouteCommand {
@@ -102,9 +104,10 @@ impl CommandExecute for TopicRouteCommand {
             }
             OutputFormat::Yaml => {
                 let yaml = serde_yaml::to_string(&route_data).map_err(|e| {
-                    RocketMQError::Serialization(
-                        rocketmq_error::SerializationError::encode_failed("YAML", e.to_string()),
-                    )
+                    RocketMQError::Serialization(rocketmq_error::SerializationError::encode_failed(
+                        "YAML",
+                        e.to_string(),
+                    ))
                 })?;
                 println!("{yaml}");
             }

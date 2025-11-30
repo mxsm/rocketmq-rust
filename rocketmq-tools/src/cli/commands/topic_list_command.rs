@@ -19,8 +19,8 @@ use cheetah_string::CheetahString;
 use clap::Parser;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_remoting::runtime::RPCHook;
-use tabled::settings::Style;
 use tabled::settings::themes::Colorization;
+use tabled::settings::Style;
 use tabled::Table;
 use tabled::Tabled;
 
@@ -48,7 +48,7 @@ impl CommandExecute for TopicListCommand {
         // Build admin client with RAII guard
         output::print_operation_start("Fetching topic list");
         let spinner = progress::create_spinner("Connecting to NameServer...");
-        
+
         let mut builder = AdminBuilder::new();
         if let Some(addr) = &self.common_args.namesrv_addr {
             builder = builder.namesrv_addr(addr.trim());
@@ -93,10 +93,7 @@ impl CommandExecute for TopicListCommand {
             let mut topics_with_clusters = Vec::new();
             for topic in user_topics {
                 // Get topic route to determine cluster
-                if let Ok(Some(route)) = admin
-                    .examine_topic_route_info(topic.clone())
-                    .await
-                {
+                if let Ok(Some(route)) = admin.examine_topic_route_info(topic.clone()).await {
                     let brokers: Vec<_> = route
                         .broker_datas
                         .iter()
@@ -109,9 +106,11 @@ impl CommandExecute for TopicListCommand {
                             .cluster_addr_table
                             .as_ref()
                             .and_then(|table| table.get(filter_cluster.as_str()))
-                            .map(|cluster_brokers: &std::collections::HashSet<CheetahString>| {
-                                brokers.iter().any(|b| cluster_brokers.contains(b))
-                            })
+                            .map(
+                                |cluster_brokers: &std::collections::HashSet<CheetahString>| {
+                                    brokers.iter().any(|b| cluster_brokers.contains(b))
+                                },
+                            )
                             .unwrap_or(false);
 
                         if in_cluster {
@@ -133,9 +132,16 @@ impl CommandExecute for TopicListCommand {
             output::print_header("Topics");
             let mut table = Table::new(topics_with_clusters);
             table.with(Style::modern());
-            table.with(Colorization::exact([tabled::settings::Color::FG_CYAN], tabled::settings::object::Rows::first()));
+            table.with(Colorization::exact(
+                [tabled::settings::Color::FG_CYAN],
+                tabled::settings::object::Rows::first(),
+            ));
             println!("{table}");
-            output::print_info(&format!("Found {} in cluster '{}'", output::format_count(count, "topic", "topics"), filter_cluster));
+            output::print_info(&format!(
+                "Found {} in cluster '{}'",
+                output::format_count(count, "topic", "topics"),
+                filter_cluster
+            ));
         } else {
             // Simple list without cluster filtering
             let topics: Vec<_> = user_topics
@@ -150,9 +156,15 @@ impl CommandExecute for TopicListCommand {
             output::print_header("Topics");
             let mut table = Table::new(topics);
             table.with(Style::modern());
-            table.with(Colorization::exact([tabled::settings::Color::FG_CYAN], tabled::settings::object::Rows::first()));
+            table.with(Colorization::exact(
+                [tabled::settings::Color::FG_CYAN],
+                tabled::settings::object::Rows::first(),
+            ));
             println!("{table}");
-            output::print_info(&format!("Found {}", output::format_count(count, "topic", "topics")));
+            output::print_info(&format!(
+                "Found {}",
+                output::format_count(count, "topic", "topics")
+            ));
         }
 
         Ok(())
@@ -173,11 +185,7 @@ mod tests {
 
     #[test]
     fn test_command_parsing() {
-        let cmd = TopicListCommand::try_parse_from([
-            "topicList",
-            "-n",
-            "127.0.0.1:9876",
-        ]);
+        let cmd = TopicListCommand::try_parse_from(["topicList", "-n", "127.0.0.1:9876"]);
         assert!(cmd.is_ok());
         let cmd = cmd.unwrap();
         assert!(cmd.cluster.is_none());

@@ -47,7 +47,10 @@ impl CommandExecute for DeleteKvConfigCommand {
     async fn execute(&self, _rpc_hook: Option<std::sync::Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         // 1. Confirm dangerous operation (unless --yes flag is set)
         if !self.common.skip_confirm {
-            let target = format!("KV config (namespace='{}', key='{}')", self.namespace, self.key);
+            let target = format!(
+                "KV config (namespace='{}', key='{}')",
+                self.namespace, self.key
+            );
             if !prompt::confirm_dangerous_operation("delete", &target) {
                 output::print_warning("Operation cancelled by user");
                 return Ok(());
@@ -55,9 +58,12 @@ impl CommandExecute for DeleteKvConfigCommand {
         }
 
         // 2. Build admin client
-        output::print_operation_start(&format!("Deleting KV config: {}={}", self.namespace, self.key));
+        output::print_operation_start(&format!(
+            "Deleting KV config: {}={}",
+            self.namespace, self.key
+        ));
         let spinner = progress::create_spinner("Connecting to NameServer...");
-        
+
         let mut builder = AdminBuilder::new();
         if let Some(addr) = &self.common.namesrv_addr {
             builder = builder.namesrv_addr(addr.trim());
@@ -72,7 +78,8 @@ impl CommandExecute for DeleteKvConfigCommand {
             CheetahString::from(self.namespace.clone()),
             CheetahString::from(self.key.clone()),
         )
-        .await {
+        .await
+        {
             Ok(_) => {
                 progress::finish_progress_success(&spinner, "Configuration deleted");
                 output::print_success("KV configuration deleted successfully");
@@ -133,21 +140,13 @@ mod tests {
 
     #[test]
     fn test_command_requires_namespace() {
-        let cmd = DeleteKvConfigCommand::try_parse_from([
-            "delete_kv_config",
-            "-k",
-            "TestTopic",
-        ]);
+        let cmd = DeleteKvConfigCommand::try_parse_from(["delete_kv_config", "-k", "TestTopic"]);
         assert!(cmd.is_err());
     }
 
     #[test]
     fn test_command_requires_key() {
-        let cmd = DeleteKvConfigCommand::try_parse_from([
-            "delete_kv_config",
-            "-s",
-            "ORDER_TOPIC",
-        ]);
+        let cmd = DeleteKvConfigCommand::try_parse_from(["delete_kv_config", "-s", "ORDER_TOPIC"]);
         assert!(cmd.is_err());
     }
 
@@ -171,7 +170,7 @@ mod tests {
     #[test]
     fn test_command_with_various_namespaces() {
         let namespaces = vec!["ORDER_TOPIC", "RETRY_TOPIC", "DLQ_TOPIC"];
-        
+
         for ns in namespaces {
             let cmd = DeleteKvConfigCommand::try_parse_from([
                 "delete_kv_config",
@@ -181,7 +180,7 @@ mod tests {
                 "test_key",
             ])
             .unwrap();
-            
+
             assert_eq!(cmd.namespace, ns);
         }
     }

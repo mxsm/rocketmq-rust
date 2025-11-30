@@ -61,7 +61,10 @@ impl CommandExecute for DeleteTopicCommand {
 
         // 2. Confirm dangerous operation (unless --yes flag is set)
         if !self.common_args.skip_confirm {
-            let target = format!("topic '{}' from cluster '{}'", self.topic, self.cluster_name);
+            let target = format!(
+                "topic '{}' from cluster '{}'",
+                self.topic, self.cluster_name
+            );
             if !prompt::confirm_dangerous_operation("delete", &target) {
                 output::print_warning("Operation cancelled by user");
                 return Ok(());
@@ -71,13 +74,13 @@ impl CommandExecute for DeleteTopicCommand {
         // 3. Build admin client with RAII guard (auto cleanup)
         output::print_operation_start(&format!("Deleting topic '{}'", self.topic));
         let spinner = progress::create_spinner("Connecting to NameServer...");
-        
+
         let mut builder = AdminBuilder::new();
         if let Some(addr) = &self.common_args.namesrv_addr {
             builder = builder.namesrv_addr(addr.trim());
         }
         let mut admin = builder.build_with_guard().await?;
-        
+
         spinner.finish_and_clear();
 
         // 4. Call core business logic (admin auto-shuts down on drop)
@@ -127,21 +130,13 @@ mod tests {
 
     #[test]
     fn test_command_requires_topic() {
-        let cmd = DeleteTopicCommand::try_parse_from([
-            "deleteTopic",
-            "-c",
-            "DefaultCluster",
-        ]);
+        let cmd = DeleteTopicCommand::try_parse_from(["deleteTopic", "-c", "DefaultCluster"]);
         assert!(cmd.is_err());
     }
 
     #[test]
     fn test_command_requires_cluster() {
-        let cmd = DeleteTopicCommand::try_parse_from([
-            "deleteTopic",
-            "-t",
-            "TestTopic",
-        ]);
+        let cmd = DeleteTopicCommand::try_parse_from(["deleteTopic", "-t", "TestTopic"]);
         assert!(cmd.is_err());
     }
 
@@ -190,7 +185,10 @@ mod tests {
         let cmd = cmd.unwrap();
         assert_eq!(cmd.topic, "MyTestTopic");
         assert_eq!(cmd.cluster_name, "MyCluster");
-        assert_eq!(cmd.common_args.namesrv_addr, Some("192.168.1.1:9876".to_string()));
+        assert_eq!(
+            cmd.common_args.namesrv_addr,
+            Some("192.168.1.1:9876".to_string())
+        );
         assert!(!cmd.common_args.skip_confirm);
     }
 }

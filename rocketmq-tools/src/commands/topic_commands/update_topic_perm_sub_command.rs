@@ -273,7 +273,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_fails_without_broker_or_cluster() {
         let command = UpdateTopicPermSubCommand {
-            common_args: CommonArgs { 
+            common_args: CommonArgs {
                 namesrv_addr: None,
                 skip_confirm: false,
             },
@@ -294,7 +294,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_fails_with_invalid_topic() {
         let command = UpdateTopicPermSubCommand {
-            common_args: CommonArgs { 
+            common_args: CommonArgs {
                 namesrv_addr: None,
                 skip_confirm: false,
             },

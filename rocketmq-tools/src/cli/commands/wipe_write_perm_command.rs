@@ -51,9 +51,12 @@ impl CommandExecute for WipeWritePermCommand {
         }
 
         // 2. Build admin client
-        output::print_operation_start(&format!("Wiping write permission for broker '{}'", self.broker_name));
+        output::print_operation_start(&format!(
+            "Wiping write permission for broker '{}'",
+            self.broker_name
+        ));
         let spinner = progress::create_spinner("Connecting to NameServer...");
-        
+
         let mut builder = AdminBuilder::new();
         if let Some(addr) = &self.common.namesrv_addr {
             builder = builder.namesrv_addr(addr.trim());
@@ -64,13 +67,14 @@ impl CommandExecute for WipeWritePermCommand {
         // 3. Wipe write permission
         let spinner = progress::create_spinner("Wiping write permission...");
         let namesrv_addr = self.common.namesrv_addr.clone().unwrap_or_default();
-        
+
         match NameServerService::wipe_write_perm_of_broker(
             &mut admin,
             CheetahString::from(namesrv_addr),
             CheetahString::from(self.broker_name.clone()),
         )
-        .await {
+        .await
+        {
             Ok(affected_count) => {
                 progress::finish_progress_success(&spinner, "Permission wiped");
                 output::print_success(&format!(
@@ -129,18 +133,14 @@ mod tests {
 
     #[test]
     fn test_command_requires_broker_name() {
-        let cmd = WipeWritePermCommand::try_parse_from([
-            "wipe_write_perm",
-            "-n",
-            "127.0.0.1:9876",
-        ]);
+        let cmd = WipeWritePermCommand::try_parse_from(["wipe_write_perm", "-n", "127.0.0.1:9876"]);
         assert!(cmd.is_err());
     }
 
     #[test]
     fn test_command_with_different_broker_names() {
         let test_cases = vec!["broker-a", "broker-master", "my-broker-01"];
-        
+
         for broker_name in test_cases {
             let cmd = WipeWritePermCommand::try_parse_from([
                 "wipe_write_perm",
@@ -150,7 +150,7 @@ mod tests {
                 "127.0.0.1:9876",
             ])
             .unwrap();
-            
+
             assert_eq!(cmd.broker_name, broker_name);
         }
     }

@@ -146,12 +146,9 @@ impl TopicService {
                 }),
             super::types::TopicTarget::Cluster(cluster_name) => {
                 // Get all master brokers in cluster
-                let cluster_info = admin
-                    .examine_broker_cluster_info()
-                    .await
-                    .map_err(|e| {
-                        ToolsError::internal(format!("Failed to get cluster info: {e}"))
-                    })?;
+                let cluster_info = admin.examine_broker_cluster_info().await.map_err(|e| {
+                    ToolsError::internal(format!("Failed to get cluster info: {e}"))
+                })?;
 
                 // Find master brokers in the cluster
                 let master_addrs =
@@ -227,9 +224,10 @@ impl TopicService {
     pub async fn list_all_topics(
         admin: &mut DefaultMQAdminExt,
     ) -> RocketMQResult<HashSet<CheetahString>> {
-        let topic_list = admin.fetch_all_topic_list().await.map_err(|e| {
-            ToolsError::internal(format!("Failed to fetch topic list: {e}"))
-        })?;
+        let topic_list = admin
+            .fetch_all_topic_list()
+            .await
+            .map_err(|e| ToolsError::internal(format!("Failed to fetch topic list: {e}")))?;
 
         Ok(topic_list.topic_list.into_iter().collect())
     }
@@ -247,7 +245,8 @@ impl TopicService {
         admin: &mut DefaultMQAdminExt,
         topic: impl Into<CheetahString>,
         broker_addr: Option<CheetahString>,
-    ) -> RocketMQResult<rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable> {
+    ) -> RocketMQResult<rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable>
+    {
         admin
             .examine_topic_stats(topic.into(), broker_addr)
             .await
@@ -307,10 +306,9 @@ impl TopicService {
             }
             super::types::TopicTarget::Cluster(cluster_name) => {
                 // Get cluster info
-                let cluster_info = admin
-                    .examine_broker_cluster_info()
-                    .await
-                    .map_err(|e| ToolsError::internal(format!("Failed to get cluster info: {e}")))?;
+                let cluster_info = admin.examine_broker_cluster_info().await.map_err(|e| {
+                    ToolsError::internal(format!("Failed to get cluster info: {e}"))
+                })?;
 
                 // Find master brokers
                 let master_addrs =
@@ -421,9 +419,7 @@ impl TopicService {
                 order_conf.into(),
             )
             .await
-            .map_err(|e| {
-                ToolsError::internal(format!("Failed to update order config: {e}")).into()
-            })
+            .map_err(|e| ToolsError::internal(format!("Failed to update order config: {e}")).into())
     }
 
     /// Get order configuration
@@ -440,10 +436,7 @@ impl TopicService {
     ) -> RocketMQResult<CheetahString> {
         const NAMESPACE: &str = "ORDER_TOPIC_CONFIG";
         admin
-            .get_kv_config(
-                CheetahString::from_static_str(NAMESPACE),
-                topic.into(),
-            )
+            .get_kv_config(CheetahString::from_static_str(NAMESPACE), topic.into())
             .await
             .map_err(|e| ToolsError::internal(format!("Failed to get order config: {e}")).into())
     }
@@ -462,10 +455,7 @@ impl TopicService {
     ) -> RocketMQResult<()> {
         const NAMESPACE: &str = "ORDER_TOPIC_CONFIG";
         admin
-            .delete_kv_config(
-                CheetahString::from_static_str(NAMESPACE),
-                topic.into(),
-            )
+            .delete_kv_config(CheetahString::from_static_str(NAMESPACE), topic.into())
             .await
             .map_err(|e| ToolsError::internal(format!("Failed to delete order config: {e}")).into())
     }

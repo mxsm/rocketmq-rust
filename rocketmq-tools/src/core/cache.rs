@@ -76,7 +76,7 @@ impl RocketMQCache {
 
     /// Get cached cluster info
     pub async fn get_cluster_info(&self) -> Option<ClusterInfo> {
-        let cache: tokio::sync::RwLockReadGuard<'_, Option<CacheEntry<ClusterInfo>>> = 
+        let cache: tokio::sync::RwLockReadGuard<'_, Option<CacheEntry<ClusterInfo>>> =
             self.cluster_info.read().await;
         cache.as_ref().and_then(|entry: &CacheEntry<ClusterInfo>| {
             if entry.is_expired() {
@@ -115,7 +115,7 @@ impl RocketMQCache {
     pub async fn clear(&self) {
         let mut cluster_cache = self.cluster_info.write().await;
         *cluster_cache = None;
-        
+
         let mut route_cache = self.topic_routes.write().await;
         route_cache.clear();
     }
@@ -124,13 +124,15 @@ impl RocketMQCache {
     pub async fn cleanup_expired(&self) {
         // Check cluster info
         {
-            let cache: tokio::sync::RwLockReadGuard<'_, Option<CacheEntry<ClusterInfo>>> = 
+            let cache: tokio::sync::RwLockReadGuard<'_, Option<CacheEntry<ClusterInfo>>> =
                 self.cluster_info.read().await;
             if let Some(entry) = cache.as_ref() {
                 if entry.is_expired() {
                     drop(cache);
-                    let mut write_cache: tokio::sync::RwLockWriteGuard<'_, Option<CacheEntry<ClusterInfo>>> = 
-                        self.cluster_info.write().await;
+                    let mut write_cache: tokio::sync::RwLockWriteGuard<
+                        '_,
+                        Option<CacheEntry<ClusterInfo>>,
+                    > = self.cluster_info.write().await;
                     *write_cache = None;
                 }
             }
@@ -144,7 +146,7 @@ impl RocketMQCache {
                 .filter(|(_, entry)| entry.is_expired())
                 .map(|(key, _)| key.clone())
                 .collect();
-            
+
             if !expired_keys.is_empty() {
                 drop(cache);
                 let mut write_cache = self.topic_routes.write().await;
@@ -158,12 +160,12 @@ impl RocketMQCache {
     /// Get cache statistics
     pub async fn stats(&self) -> CacheStats {
         let cluster_cached: bool = {
-            let guard: tokio::sync::RwLockReadGuard<'_, Option<CacheEntry<ClusterInfo>>> = 
+            let guard: tokio::sync::RwLockReadGuard<'_, Option<CacheEntry<ClusterInfo>>> =
                 self.cluster_info.read().await;
             guard.is_some()
         };
         let routes_count = self.topic_routes.read().await.len();
-        
+
         CacheStats {
             cluster_info_cached: cluster_cached,
             topic_routes_count: routes_count,
@@ -185,16 +187,16 @@ mod tests {
     #[tokio::test]
     async fn test_cache_expiration() {
         let cache = RocketMQCache::new(Duration::from_millis(100), Duration::from_millis(100));
-        
+
         let cluster_info = ClusterInfo::default();
         cache.set_cluster_info(cluster_info.clone()).await;
-        
+
         // Should be cached immediately
         assert!(cache.get_cluster_info().await.is_some());
-        
+
         // Wait for expiration
         tokio::time::sleep(Duration::from_millis(150)).await;
-        
+
         // Should be expired
         assert!(cache.get_cluster_info().await.is_none());
     }
@@ -202,14 +204,14 @@ mod tests {
     #[tokio::test]
     async fn test_cache_clear() {
         let cache = RocketMQCache::default();
-        
+
         let cluster_info = ClusterInfo::default();
         cache.set_cluster_info(cluster_info).await;
-        
+
         assert!(cache.get_cluster_info().await.is_some());
-        
+
         cache.clear().await;
-        
+
         assert!(cache.get_cluster_info().await.is_none());
     }
 }

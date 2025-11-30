@@ -29,7 +29,11 @@ use crate::commands::Commands;
 #[command(about = "Rocketmq Rust admin commands", long_about = None, author="mxsm")]
 pub struct RocketMQCli {
     /// Generate shell completion script
-    #[arg(long = "generate-completion", value_name = "SHELL", help = "Generate shell completion script (bash, zsh, fish)")]
+    #[arg(
+        long = "generate-completion",
+        value_name = "SHELL",
+        help = "Generate shell completion script (bash, zsh, fish)"
+    )]
     completion: Option<String>,
 
     #[command(subcommand)]
@@ -42,7 +46,7 @@ impl RocketMQCli {
         if let Some(shell) = &self.completion {
             let mut cmd = RocketMQCli::command();
             let bin_name = "rocketmq-admin-cli-rust";
-            
+
             match shell.to_lowercase().as_str() {
                 "bash" => {
                     generate(Bash, &mut cmd, bin_name, &mut std::io::stdout());

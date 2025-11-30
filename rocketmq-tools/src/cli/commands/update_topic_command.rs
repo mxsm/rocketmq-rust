@@ -21,6 +21,7 @@
 //! a specific broker or all master brokers in a cluster.
 
 use clap::Args;
+
 use crate::cli::validators;
 use crate::core::admin::AdminBuilder;
 use crate::core::topic::TopicConfig;
@@ -106,13 +107,11 @@ impl UpdateTopicCommand {
 
         // Ensure either broker or cluster is specified
         if self.broker_addr.is_none() && self.cluster.is_none() {
-            return Err(
-                crate::core::ToolsError::validation_error(
-                    "broker_addr or cluster",
-                    "Either broker address (-b) or cluster name (-c) must be specified",
-                )
-                .into(),
-            );
+            return Err(crate::core::ToolsError::validation_error(
+                "broker_addr or cluster",
+                "Either broker address (-b) or cluster name (-c) must be specified",
+            )
+            .into());
         }
 
         // Validate queue numbers
@@ -181,13 +180,11 @@ impl UpdateTopicCommand {
         } else if let Some(ref cluster) = self.cluster {
             Ok(TopicTarget::Cluster(CheetahString::from(cluster.clone())))
         } else {
-            Err(
-                crate::core::ToolsError::validation_error(
-                    "target",
-                    "Either broker_addr or cluster must be specified",
-                )
-                .into(),
+            Err(crate::core::ToolsError::validation_error(
+                "target",
+                "Either broker_addr or cluster must be specified",
             )
+            .into())
         }
     }
 
@@ -207,11 +204,7 @@ impl UpdateTopicCommand {
         println!("\nConfiguration:");
         println!("  Read Queues:  {}", self.read_queue_nums);
         println!("  Write Queues: {}", self.write_queue_nums);
-        println!(
-            "  Permission:   {} ({})",
-            self.perm,
-            self.perm_string()
-        );
+        println!("  Permission:   {} ({})", self.perm, self.perm_string());
         println!("  Order Topic:  {}", if self.order { "Yes" } else { "No" });
 
         if self.unit || self.has_unit_sub {

@@ -78,7 +78,7 @@ mod tests {
         let spinner1 = create_spinner("Connecting...");
         let spinner2 = create_spinner("Fetching data...");
         let spinner3 = create_spinner("Processing...");
-        
+
         spinner1.finish();
         spinner2.finish();
         spinner3.finish();
@@ -89,7 +89,7 @@ mod tests {
         let pb1 = create_progress_bar(10, "Small task");
         let pb2 = create_progress_bar(1000, "Large task");
         let pb3 = create_progress_bar(0, "Empty task");
-        
+
         pb1.finish();
         pb2.finish();
         pb3.finish();

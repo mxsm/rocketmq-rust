@@ -118,12 +118,22 @@ mod tests {
     #[test]
     fn test_message_formatting() {
         // Test that different inputs produce expected message formats
-        let message1 = format!("[WARNING] This will {} {}. This action cannot be undone. Continue?", 
-            "delete", "topic 'Test'");
-        assert_eq!(message1, "[WARNING] This will delete topic 'Test'. This action cannot be undone. Continue?");
+        let message1 = format!(
+            "[WARNING] This will {} {}. This action cannot be undone. Continue?",
+            "delete", "topic 'Test'"
+        );
+        assert_eq!(
+            message1,
+            "[WARNING] This will delete topic 'Test'. This action cannot be undone. Continue?"
+        );
 
-        let message2 = format!("[WARNING] This will {} {}. This action cannot be undone. Continue?", 
-            "update", "broker settings");
-        assert_eq!(message2, "[WARNING] This will update broker settings. This action cannot be undone. Continue?");
+        let message2 = format!(
+            "[WARNING] This will {} {}. This action cannot be undone. Continue?",
+            "update", "broker settings"
+        );
+        assert_eq!(
+            message2,
+            "[WARNING] This will update broker settings. This action cannot be undone. Continue?"
+        );
     }
 }

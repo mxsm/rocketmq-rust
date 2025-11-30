@@ -54,7 +54,9 @@ impl CommandExecute for TopicStatusCommand {
         let stats = TopicOperations::get_topic_stats(
             &mut admin,
             CheetahString::from(self.topic.clone()),
-            self.broker_addr.as_ref().map(|s| CheetahString::from(s.clone())),
+            self.broker_addr
+                .as_ref()
+                .map(|s| CheetahString::from(s.clone())),
         )
         .await?;
 

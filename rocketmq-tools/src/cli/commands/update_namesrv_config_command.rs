@@ -18,6 +18,7 @@
 //! Update NameServer configuration command
 
 use clap::Args;
+
 use crate::cli::validators;
 use crate::core::admin::AdminBuilder;
 use crate::core::namesrv::NameServerService;
@@ -52,8 +53,9 @@ impl UpdateNamesrvConfigCommand {
             .await?;
 
         // Build properties map
-        use cheetah_string::CheetahString;
         use std::collections::HashMap;
+
+        use cheetah_string::CheetahString;
         let mut properties = HashMap::new();
         properties.insert(
             CheetahString::from(self.key.clone()),
