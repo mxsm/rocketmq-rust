@@ -365,8 +365,8 @@ impl DefaultRequestProcessor {
         self.name_server_runtime_inner
             .route_info_manager_mut()
             .update_broker_info_update_timestamp(
-                request_header.cluster_name.clone(),
-                request_header.broker_addr.clone(),
+                request_header.cluster_name,
+                request_header.broker_addr,
             );
         Ok(RemotingCommand::create_response_command())
     }
