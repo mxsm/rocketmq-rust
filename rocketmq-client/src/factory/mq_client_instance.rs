@@ -267,6 +267,7 @@ impl MQClientInstance {
                         }
                         ConnectionNetEvent::DISCONNECTED => {}
                         ConnectionNetEvent::EXCEPTION => {}
+                        ConnectionNetEvent::IDLE => {}
                     }
                 }
             }
