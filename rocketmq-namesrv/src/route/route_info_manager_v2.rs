@@ -1038,38 +1038,49 @@ impl RouteInfoManagerV2 {
         // Acquire topic write lock to prevent concurrent modifications
         let _topic_lock = self.topic_locks.write_lock(&topic);
 
-        if let Some(cluster_name) = cluster_name {
-            let broker_names = self.cluster_addr_table.get_brokers(cluster_name.as_str());
-            if broker_names.is_empty() {
-                return;
-            }
-            let queue_data_map = self.topic_queue_table.get_topic_queues_map(topic.as_str());
-            if queue_data_map.is_some_and(|map| !map.is_empty()) {
-                for broker_name in broker_names {
-                    let removed_qd = self
+        match cluster_name {
+            Some(cluster_name) => {
+                // Get all the brokerNames for the specified cluster
+                let broker_names = self.cluster_addr_table.get_brokers(cluster_name.as_str());
+
+                if broker_names.is_empty() || !self.topic_queue_table.contains_topic(topic.as_str())
+                {
+                    return;
+                }
+
+                let topic_str = topic.as_str();
+
+                // Remove topic from each broker in the cluster
+                for broker_name in &broker_names {
+                    if let Some(qd) = self
                         .topic_queue_table
-                        .remove_broker(topic.as_ref(), broker_name.as_ref());
-                    if let Some(qd) = removed_qd {
+                        .remove_broker(topic_str, broker_name.as_str())
+                    {
                         info!(
                             "deleteTopic, remove one broker's topic {} {} {:?}",
                             broker_name, topic, qd
                         );
                     }
                 }
-                // Check again if topic is now empty
-                let queue_data_map = self.topic_queue_table.get_topic_queues_map(topic.as_str());
-                if queue_data_map.is_none_or(|map| map.is_empty()) {
-                    self.topic_queue_table.remove_topic(topic.as_ref());
+
+                // Check if topic queue map is empty after removal
+                if !broker_names.is_empty()
+                    && self
+                        .topic_queue_table
+                        .get_topic_queues_map(topic_str)
+                        .is_none_or(|map| map.is_empty())
+                {
                     info!(
-                        "deleteTopic, remove the Cluster {:?} topic {} completely",
+                        "deleteTopic, remove the topic all queue {} {}",
                         cluster_name, topic
                     );
+                    self.topic_queue_table.remove_topic(topic_str);
                 }
             }
-        } else {
-            // Delete entire topic across all brokers
-            self.topic_queue_table.remove_topic(topic.as_ref());
-            info!("deleteTopic, removed topic {} completely", topic);
+            None => {
+                // Delete entire topic across all brokers
+                self.topic_queue_table.remove_topic(topic.as_str());
+            }
         }
     }
 }
