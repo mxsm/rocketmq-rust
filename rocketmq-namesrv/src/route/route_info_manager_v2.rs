@@ -1803,9 +1803,8 @@ impl RouteInfoManagerV2 {
         Some(group_member)
     }
 
-    /// Get all cluster info (v1 compatibility)
+    /// Get all cluster info
     ///
-    /// Note: Unlike Java which directly returns references to internal tables,
     /// Rust requires creating copies due to ownership rules and DashMap usage.
     pub fn get_all_cluster_info(&self) -> RouteResult<ClusterInfo> {
         use std::collections::HashMap;
@@ -1849,24 +1848,36 @@ impl RouteInfoManagerV2 {
         })
     }
 
-    /// Wipe write permission of broker by lock (v1 compatibility)
+    /// Wipe write permission of broker by lock
+    ///
+    /// This method removes write permission from all topics that contain queue data
+    /// for the specified broker:
+    /// 1. Acquiring a write lock
+    /// 2. Directly looking up the broker in each topic's queue map
+    /// 3. Removing write permission from matched queue data
+    ///
+    /// # Arguments
+    /// * `broker_name` - Name of the broker whose write permission should be wiped
+    ///
+    /// # Returns
+    /// Number of topics whose queue data was updated
     pub fn wipe_write_perm_of_broker_by_lock(&self, broker_name: String) -> RouteResult<i32> {
+        use rocketmq_common::common::constant::PermName;
+
+        // Acquire write lock for this broker segment
+        // This ensures no concurrent modifications to topics containing this broker
+        let _broker_lock = self.broker_locks.write_lock(&broker_name);
+
         let mut wipe_topic_count = 0;
 
-        // Iterate over all topics and update permissions
-        for (topic, queue_datas) in self.topic_queue_table.iter_all_with_data() {
-            for queue_data in queue_datas.iter() {
-                if queue_data.broker_name() == broker_name.as_str() {
-                    // Update permission (remove write permission)
-                    let perm = queue_data.perm()
-                        & !rocketmq_common::common::constant::PermName::PERM_WRITE;
-                    self.topic_queue_table.update_queue_data_perm(
-                        &topic,
-                        &broker_name,
-                        perm as i32,
-                    );
-                    wipe_topic_count += 1;
-                }
+        // Iterate over all topics and directly look up the broker
+        for topic in self.topic_queue_table.get_all_topics() {
+            if let Some(queue_data) = self.topic_queue_table.get(&topic, &broker_name) {
+                // Remove write permission
+                let perm = queue_data.perm() & !PermName::PERM_WRITE;
+                self.topic_queue_table
+                    .update_queue_data_perm(&topic, &broker_name, perm as i32);
+                wipe_topic_count += 1;
             }
         }
 
@@ -1874,23 +1885,34 @@ impl RouteInfoManagerV2 {
     }
 
     /// Add write permission of broker by lock (v1 compatibility)
+    ///
+    /// This method adds write permission to all topics that contain queue data
+    /// for the specified broker:
+    /// 1. Acquiring a write lock
+    /// 2. Directly looking up the broker in each topic's queue map
+    /// 3. Setting permission to READ | WRITE (not just adding write flag)
+    ///
+    /// # Arguments
+    /// * `broker_name` - Name of the broker whose write permission should be added
+    ///
+    /// # Returns
+    /// Number of topics whose queue data was updated
     pub fn add_write_perm_of_broker_by_lock(&self, broker_name: String) -> RouteResult<i32> {
+        use rocketmq_common::common::constant::PermName;
+
+        // Acquire write lock for this broker segment
+        // This ensures no concurrent modifications to topics containing this broker
+        let _broker_lock = self.broker_locks.write_lock(&broker_name);
+
         let mut add_topic_count = 0;
 
-        // Iterate over all topics and update permissions
-        for (topic, queue_datas) in self.topic_queue_table.iter_all_with_data() {
-            for queue_data in queue_datas.iter() {
-                if queue_data.broker_name() == broker_name.as_str() {
-                    // Update permission (add write permission)
-                    let perm =
-                        queue_data.perm() | rocketmq_common::common::constant::PermName::PERM_WRITE;
-                    self.topic_queue_table.update_queue_data_perm(
-                        &topic,
-                        &broker_name,
-                        perm as i32,
-                    );
-                    add_topic_count += 1;
-                }
+        // Iterate over all topics and directly look up the broker
+        for topic in self.topic_queue_table.get_all_topics() {
+            if let Some(_queue_data) = self.topic_queue_table.get(&topic, &broker_name) {
+                let perm = PermName::PERM_READ | PermName::PERM_WRITE;
+                self.topic_queue_table
+                    .update_queue_data_perm(&topic, &broker_name, perm as i32);
+                add_topic_count += 1;
             }
         }
 
