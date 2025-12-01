@@ -1677,40 +1677,96 @@ impl RouteInfoManagerV2 {
     /// Scan for inactive brokers and remove them
     ///
     /// This should be called periodically (e.g., every 5 seconds)
+    ///
+    /// # Implementation Notes
+    ///
+    /// 1. Iterate through broker_live_table to find expired brokers
+    /// 2. Close the channel for expired brokers (logged for tracking)
+    /// 3. Call onChannelDestroy to trigger async batch unregistration
+    ///
+    /// The key difference from directly calling unregister_broker:
+    /// - uses BatchUnregistrationService for better performance
+    /// - Submissions are batched and processed together
+    /// - This reduces lock contention on the global route tables
     pub fn scan_not_active_broker(&self) -> RouteResult<usize> {
+        info!("start scanNotActiveBroker");
         let current_time = get_current_millis();
 
-        // Get expired brokers
+        // Get expired brokers by checking heartbeat timeout
         let expired_brokers = self.broker_live_table.get_expired_brokers(current_time);
 
         let count = expired_brokers.len();
         if count > 0 {
-            warn!("Found {} expired brokers, removing...", count);
-
-            // Remove each expired broker
+            // Submit unregistration requests for each expired broker
             for broker_addr_info in expired_brokers {
-                let cluster_name = broker_addr_info.cluster_name.clone();
-                let broker_addr = broker_addr_info.broker_addr.clone();
-
-                // Find broker name and ID from broker addr table
-                if let Some((broker_name, broker_id)) = self.find_broker_by_addr(&broker_addr) {
-                    // Unregister the broker
-                    if let Err(e) = self.unregister_broker(
-                        cluster_name.clone(),
-                        broker_addr,
-                        broker_name.clone(),
-                        broker_id,
-                    ) {
-                        warn!(
-                            "Failed to unregister expired broker: cluster={}, broker={}, error={}",
-                            cluster_name, broker_name, e
-                        );
-                    }
+                // Get the live info to retrieve timeout value for logging
+                if let Some(live_info) = self.broker_live_table.get(&broker_addr_info) {
+                    // Log channel expiration (equivalent to Java's log before closeChannel)
+                    warn!(
+                        "The broker channel expired, {} {}ms",
+                        broker_addr_info, live_info.heartbeat_timeout_millis
+                    );
                 }
+
+                // Trigger channel destroy logic, which will submit to batch unregistration service
+                self.on_channel_destroy_by_addr_info(broker_addr_info);
             }
         }
 
         Ok(count)
+    }
+
+    /// Handle channel destruction by broker address info
+    ///
+    /// 1. Setup unregister request with broker info
+    /// 2. Submit to batch unregistration service
+    ///
+    /// The batch service will process the request asynchronously.
+    fn on_channel_destroy_by_addr_info(&self, broker_addr_info: Arc<BrokerAddrInfo>) {
+        let mut unregister_request = UnRegisterBrokerRequestHeader::default();
+        let need_unregister =
+            self.setup_unregister_request(&mut unregister_request, &broker_addr_info);
+
+        if need_unregister {
+            let result = self.submit_unregister_broker_request(unregister_request.clone());
+            info!(
+                "the broker's channel destroyed, submit the unregister request at once, broker \
+                 info: {}, submit result: {}",
+                unregister_request, result
+            );
+        }
+    }
+
+    /// Setup unregister request from broker address info
+    ///
+    /// Finds the broker name and broker ID from broker_addr_table
+    /// and populates the unregister request header.
+    ///
+    /// Returns true if the broker was found and request was setup successfully.
+    fn setup_unregister_request(
+        &self,
+        unregister_request: &mut UnRegisterBrokerRequestHeader,
+        broker_addr_info: &BrokerAddrInfo,
+    ) -> bool {
+        unregister_request.cluster_name = broker_addr_info.cluster_name.clone();
+        unregister_request.broker_addr = broker_addr_info.broker_addr.clone();
+
+        // Find broker name and broker ID from broker_addr_table
+        for (broker_name, broker_data) in self.broker_addr_table.get_all_brokers() {
+            if broker_addr_info.cluster_name != broker_data.cluster() {
+                continue;
+            }
+
+            for (broker_id, addr) in broker_data.broker_addrs().iter() {
+                if broker_addr_info.broker_addr.as_str() == addr.as_str() {
+                    unregister_request.broker_name = broker_name.clone();
+                    unregister_request.broker_id = *broker_id;
+                    return true;
+                }
+            }
+        }
+
+        false
     }
 
     /// Find broker name and ID by address
