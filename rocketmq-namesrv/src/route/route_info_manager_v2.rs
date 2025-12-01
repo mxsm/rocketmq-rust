@@ -149,44 +149,21 @@ impl RouteInfoManagerV2 {
         }
     }
 
-    /// Start the route manager with channel disconnect listener
-    pub fn start(&self, receiver: tokio::sync::broadcast::Receiver<std::net::SocketAddr>) {
+    /// Start the route manager
+    ///
+    /// This matches Java's start() method which only starts the unRegisterService.
+    /// Channel disconnection events are handled by BrokerHousekeepingService through
+    /// ChannelEventListener interface (on_channel_close, on_channel_exception, on_channel_idle).
+    ///
+    /// Java code:
+    /// ```java
+    /// public void start() {
+    ///     this.unRegisterService.start();
+    /// }
+    /// ```
+    pub fn start(&self) {
         info!("Starting RouteInfoManager v2 with DashMap tables");
         self.un_register_service.mut_from_ref().start();
-
-        let broker_live_table = self.broker_live_table.clone();
-        let broker_addr_table = self.broker_addr_table.clone();
-        let cluster_addr_table = self.cluster_addr_table.clone();
-        let topic_queue_table = self.topic_queue_table.clone();
-
-        let mut receiver = receiver;
-        tokio::spawn(async move {
-            while let Ok(socket_addr) = receiver.recv().await {
-                // Handle connection disconnect - remove broker by socket address
-                // This is called when a broker connection is lost
-                debug!("Connection disconnected: {}", socket_addr);
-
-                // Find and remove broker by socket address
-                if let Some(broker_info) =
-                    Self::find_broker_by_socket_addr(&broker_live_table, socket_addr)
-                {
-                    broker_live_table.remove(&broker_info);
-
-                    // Clean up broker from other tables
-                    if let Some(broker_name) =
-                        Self::find_broker_name_by_addr(&broker_addr_table, &broker_info.broker_addr)
-                    {
-                        Self::cleanup_broker_from_tables(
-                            &broker_name,
-                            &broker_info.cluster_name,
-                            &broker_addr_table,
-                            &cluster_addr_table,
-                            &topic_queue_table,
-                        );
-                    }
-                }
-            }
-        });
     }
 
     /// Find broker info by socket address
@@ -235,11 +212,31 @@ impl RouteInfoManagerV2 {
         topic_queue_table.cleanup_empty_topics();
     }
 
-    /// Handle connection disconnection (compatibility with v1)
-    pub fn connection_disconnected(&self, socket_addr: std::net::SocketAddr) {
-        debug!("Connection disconnected (v2): {}", socket_addr);
-        // In v2, this is handled asynchronously in the start() method
-        // This method is kept for compatibility
+    /// Handle connection disconnection by socket address
+    ///
+    /// 1. Find broker info by socket address
+    /// 2. Setup unregister request
+    /// 3. Submit to batch unregistration service
+    pub fn on_channel_destroy(&self, socket_addr: std::net::SocketAddr) {
+        let mut unregister_request = UnRegisterBrokerRequestHeader::default();
+        let mut need_unregister = false;
+
+        // Find broker by socket address and setup unregister request
+        if let Some(broker_addr_info) =
+            Self::find_broker_by_socket_addr(&self.broker_live_table, socket_addr)
+        {
+            need_unregister =
+                self.setup_unregister_request(&mut unregister_request, &broker_addr_info);
+        }
+
+        if need_unregister {
+            let result = self.submit_unregister_broker_request(unregister_request.clone());
+            info!(
+                "the broker's channel destroyed, submit the unregister request at once, broker \
+                 info: {:?}, submit result: {}",
+                unregister_request, result
+            );
+        }
     }
 
     /// Shutdown the route manager
@@ -1701,7 +1698,6 @@ impl RouteInfoManagerV2 {
             for broker_addr_info in expired_brokers {
                 // Get the live info to retrieve timeout value for logging
                 if let Some(live_info) = self.broker_live_table.get(&broker_addr_info) {
-                    // Log channel expiration (equivalent to Java's log before closeChannel)
                     warn!(
                         "The broker channel expired, {} {}ms",
                         broker_addr_info, live_info.heartbeat_timeout_millis
@@ -1737,7 +1733,7 @@ impl RouteInfoManagerV2 {
         }
     }
 
-    /// Setup unregister request from broker address info
+    /// Setup unregister request from broker address info (instance method)
     ///
     /// Finds the broker name and broker ID from broker_addr_table
     /// and populates the unregister request header.
@@ -1748,18 +1744,37 @@ impl RouteInfoManagerV2 {
         unregister_request: &mut UnRegisterBrokerRequestHeader,
         broker_addr_info: &BrokerAddrInfo,
     ) -> bool {
+        Self::setup_unregister_request_static(
+            unregister_request,
+            broker_addr_info,
+            &self.broker_addr_table,
+        )
+    }
+
+    /// Static helper to setup unregister request from broker address info
+    ///
+    /// This is a static method that doesn't hold &self to allow calling from async contexts.
+    /// Finds the broker name and broker ID from broker_addr_table
+    /// and populates the unregister request header.
+    ///
+    /// Returns true if the broker was found and request was setup successfully.
+    fn setup_unregister_request_static(
+        unregister_request: &mut UnRegisterBrokerRequestHeader,
+        broker_addr_info: &BrokerAddrInfo,
+        broker_addr_table: &BrokerAddrTable,
+    ) -> bool {
         unregister_request.cluster_name = broker_addr_info.cluster_name.clone();
         unregister_request.broker_addr = broker_addr_info.broker_addr.clone();
 
         // Find broker name and broker ID from broker_addr_table
-        for (broker_name, broker_data) in self.broker_addr_table.get_all_brokers() {
+        for (broker_name, broker_data) in broker_addr_table.get_all_brokers() {
             if broker_addr_info.cluster_name != broker_data.cluster() {
                 continue;
             }
 
             for (broker_id, addr) in broker_data.broker_addrs().iter() {
                 if broker_addr_info.broker_addr.as_str() == addr.as_str() {
-                    unregister_request.broker_name = broker_name.clone();
+                    unregister_request.broker_name = broker_name;
                     unregister_request.broker_id = *broker_id;
                     return true;
                 }

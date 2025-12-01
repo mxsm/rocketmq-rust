@@ -104,30 +104,37 @@ impl RouteInfoManagerWrapper {
     }
 
     /// Handle connection disconnection - called when a broker disconnects
+    ///
+    /// This method now delegates to on_channel_destroy for both v1 and v2
     pub fn connection_disconnected(&mut self, socket_addr: SocketAddr) {
         match self {
             RouteInfoManagerWrapper::V1(manager) => manager.connection_disconnected(socket_addr),
-            RouteInfoManagerWrapper::V2(manager) => manager.connection_disconnected(socket_addr),
-        }
-    }
-
-    /// Handle channel destroy event (v1 compatibility)
-    pub fn on_channel_destroy(&self, channel: &Channel) {
-        match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.on_channel_destroy(channel),
             RouteInfoManagerWrapper::V2(manager) => {
-                // V2 uses socket addr directly, extract from channel
-                let socket_addr = channel.remote_address();
-                manager.connection_disconnected(socket_addr);
+                // V2's on_channel_destroy matches Java's onChannelDestroy behavior
+                manager.on_channel_destroy(socket_addr);
             }
         }
     }
 
-    /// Start the route info manager with a receiver for connection events
-    pub fn start(&self, receiver: tokio::sync::broadcast::Receiver<SocketAddr>) {
+    /// Handle channel destroy event
+    pub fn on_channel_destroy(&self, channel: &Channel) {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.start(receiver),
-            RouteInfoManagerWrapper::V2(manager) => manager.start(receiver),
+            RouteInfoManagerWrapper::V1(manager) => manager.on_channel_destroy(channel),
+            RouteInfoManagerWrapper::V2(manager) => {
+                let socket_addr = channel.remote_address();
+                manager.on_channel_destroy(socket_addr);
+            }
+        }
+    }
+
+    /// Start the route info manager
+    ///
+    /// This matches Java's start() method. V2 only starts the unRegisterService.
+    /// V1 still uses the receiver-based approach for backward compatibility.
+    pub fn start(&self) {
+        match self {
+            RouteInfoManagerWrapper::V1(manager) => manager.start(),
+            RouteInfoManagerWrapper::V2(manager) => manager.start(),
         }
     }
 
