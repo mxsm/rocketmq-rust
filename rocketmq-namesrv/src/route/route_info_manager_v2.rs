@@ -983,8 +983,10 @@ impl RouteInfoManagerV2 {
         let _topic_lock = self.topic_locks.write_lock(&topic);
         let _broker_locks = self.broker_locks.read_lock_multiple(&broker_names);
 
-        // Validate all brokers exist before inserting
-        // With locks held, brokers cannot be deleted concurrently
+        // Check if topic already exists
+        let topic_exists = self.topic_queue_table.contains_topic(topic.as_str());
+
+        // Validate all brokers exist first (before any modification)
         for queue_data in &queue_data_vec {
             if !self.broker_addr_table.contains(&queue_data.broker_name) {
                 warn!(
@@ -995,8 +997,7 @@ impl RouteInfoManagerV2 {
             }
         }
 
-        // All brokers valid, proceed with insertion
-        // Locks guarantee brokers still exist and no concurrent modifications
+        // All brokers valid, proceed with insertion/update
         for queue_data in &queue_data_vec {
             self.topic_queue_table.insert(
                 topic.clone(),
@@ -1004,11 +1005,17 @@ impl RouteInfoManagerV2 {
                 queue_data.clone(),
             );
         }
-        info!(
-            "Register topic route. {}, {:?}",
-            topic,
-            self.topic_queue_table.get_topic_queues(&topic)
-        )
+
+        // Log appropriate message based on whether topic existed
+        if topic_exists {
+            info!(
+                "Topic route already exist.{}, {:?}",
+                topic,
+                self.topic_queue_table.get_topic_queues(&topic)
+            );
+        } else {
+            info!("Register topic route:{}, {:?}", topic, queue_data_vec);
+        }
     }
 
     /// Delete a topic from the name server
@@ -1949,13 +1956,23 @@ impl RouteInfoManagerV2 {
     }
 
     /// Get unit topics (v1 compatibility)
+    ///
+    /// Returns topics marked with the Unit flag (FLAG_UNIT = 0x1).
+    /// These are pure unit topics that support unit-based message routing.
     pub fn get_unit_topics(&self) -> RouteResult<TopicList> {
-        // Filter topics with unit flag
+        use rocketmq_common::common::TopicSysFlag;
+
+        // Filter topics with unit flag set
         let topics: Vec<CheetahString> = self
             .topic_queue_table
             .iter_all_with_data()
             .into_iter()
-            .filter(|(_, queue_datas)| queue_datas.iter().any(|qd| qd.topic_sys_flag() == 1))
+            .filter(|(_, queue_datas)| {
+                queue_datas
+                    .first()
+                    .map(|qd| TopicSysFlag::has_unit_flag(qd.topic_sys_flag()))
+                    .unwrap_or(false)
+            })
             .map(|(topic, _)| CheetahString::from_string(topic))
             .collect();
 
@@ -1966,13 +1983,23 @@ impl RouteInfoManagerV2 {
     }
 
     /// Get has unit sub topic list (v1 compatibility)
+    ///
+    /// Returns topics marked with the Unit Subscription flag (FLAG_UNIT_SUB = 0x2).
+    /// These topics have consumers that support unit-based subscription.
     pub fn get_has_unit_sub_topic_list(&self) -> RouteResult<TopicList> {
-        // Filter topics that have unit subscription
+        use rocketmq_common::common::TopicSysFlag;
+
+        // Filter topics with unit subscription flag set
         let topics: Vec<CheetahString> = self
             .topic_queue_table
             .iter_all_with_data()
             .into_iter()
-            .filter(|(_, queue_datas)| queue_datas.iter().any(|qd| qd.topic_sys_flag() == 1))
+            .filter(|(_, queue_datas)| {
+                queue_datas
+                    .first()
+                    .map(|qd| TopicSysFlag::has_unit_sub_flag(qd.topic_sys_flag()))
+                    .unwrap_or(false)
+            })
             .map(|(topic, _)| CheetahString::from_string(topic))
             .collect();
 
@@ -1983,15 +2010,29 @@ impl RouteInfoManagerV2 {
     }
 
     /// Get has unit sub ununit topic list (v1 compatibility)
+    ///
+    /// Returns topics that:
+    /// - Have unit subscription flag (FLAG_UNIT_SUB = 0x2) set
+    /// - Do NOT have unit flag (FLAG_UNIT = 0x1) set
+    ///
+    /// These are non-unit topics whose consumers support unit-based subscription.
     pub fn get_has_unit_sub_ununit_topic_list(&self) -> RouteResult<TopicList> {
+        use rocketmq_common::common::TopicSysFlag;
+
         // Filter topics that have unit subscription but are not unit topics
         let topics: Vec<CheetahString> = self
             .topic_queue_table
             .iter_all_with_data()
             .into_iter()
             .filter(|(_, queue_datas)| {
-                // Has unit subscription flag but topic itself is not unit
-                queue_datas.iter().any(|qd| qd.topic_sys_flag() != 0)
+                queue_datas
+                    .first()
+                    .map(|qd| {
+                        let sys_flag = qd.topic_sys_flag();
+                        !TopicSysFlag::has_unit_flag(sys_flag)
+                            && TopicSysFlag::has_unit_sub_flag(sys_flag)
+                    })
+                    .unwrap_or(false)
             })
             .map(|(topic, _)| CheetahString::from_string(topic))
             .collect();
