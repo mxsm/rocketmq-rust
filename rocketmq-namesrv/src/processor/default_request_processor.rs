@@ -338,9 +338,6 @@ impl DefaultRequestProcessor {
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let request_header =
             request.decode_command_custom_header::<UnRegisterBrokerRequestHeader>()?;
-        /*self.name_server_runtime_inner
-        .route_info_manager_mut()
-        .un_register_broker(vec![request_header]);*/
         if !self
             .name_server_runtime_inner
             .route_info_manager()
