@@ -353,12 +353,9 @@ impl RouteInfoManagerWrapper {
     /// Get broker member group
     pub fn get_broker_member_group(
         &mut self,
-        cluster_name: &str,
-        broker_name: &str,
+        cluster_name: CheetahString,
+        broker_name: CheetahString,
     ) -> Option<BrokerMemberGroup> {
-        use cheetah_string::CheetahString;
-        let cluster_name = CheetahString::from_string(cluster_name.to_string());
-        let broker_name = CheetahString::from_string(broker_name.to_string());
         match self {
             RouteInfoManagerWrapper::V1(manager) => {
                 manager.get_broker_member_group(cluster_name, broker_name)
