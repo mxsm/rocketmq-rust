@@ -41,7 +41,7 @@ cheetah-string = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-criterion = { version = "0.7", features = ["html_reports", "async_futures"] }
+criterion = { version = "0.8", features = ["html_reports", "async_futures"] }
 futures = "0.3"
 
 [[bin]]

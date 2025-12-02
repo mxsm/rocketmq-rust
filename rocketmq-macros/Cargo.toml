@@ -22,7 +22,7 @@ quote = "1.0"
 proc-macro2 = "1.0"
 
 [dev-dependencies]
-criterion = { version = "0.7", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 cheetah-string = { workspace = true }
 rocketmq-error = { workspace = true }
 rocketmq-remoting = { workspace = true }
