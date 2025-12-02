@@ -21,6 +21,7 @@ mod topic_list_sub_command;
 mod topic_route_sub_command;
 mod topic_status_sub_command;
 mod update_order_conf_command;
+mod update_static_topic_sub_command;
 mod update_topic_sub_command;
 use std::sync::Arc;
 
