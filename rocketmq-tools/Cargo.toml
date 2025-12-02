@@ -30,7 +30,7 @@ clap = { version = "4.5.53", features = ["derive"] }
 clap_complete = "4.5"
 tabled = { version = "0.20.0", features = ["derive"] }
 futures = "0.3.31"
-colored = "2.2"
+colored = "3.0"
 indicatif = "0.17"
 dialoguer = "0.12"
 
