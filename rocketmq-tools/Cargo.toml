@@ -32,7 +32,7 @@ tabled = { version = "0.20.0", features = ["derive"] }
 futures = "0.3.31"
 colored = "2.2"
 indicatif = "0.17"
-dialoguer = "0.11"
+dialoguer = "0.12"
 
 [[bin]]
 name = "rocketmq-admin-cli-rust"
