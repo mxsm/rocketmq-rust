@@ -85,7 +85,6 @@ use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_rust::ArcMut;
-use tokio::sync::broadcast;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -722,12 +721,12 @@ impl RouteInfoManager {
 
     pub(crate) fn get_broker_member_group(
         &mut self,
-        cluster_name: &CheetahString,
-        broker_name: &CheetahString,
+        cluster_name: CheetahString,
+        broker_name: CheetahString,
     ) -> Option<BrokerMemberGroup> {
-        let mut group_member = BrokerMemberGroup::new(cluster_name.clone(), broker_name.clone());
+        let mut group_member = BrokerMemberGroup::new(cluster_name, broker_name.clone());
         let lock_ = self.lock.read();
-        if let Some(broker_data) = self.broker_addr_table.get(broker_name) {
+        if let Some(broker_data) = self.broker_addr_table.get(&broker_name) {
             group_member.broker_addrs = broker_data.broker_addrs().clone();
         }
         drop(lock_);
@@ -1224,17 +1223,17 @@ impl RouteInfoManager {
 // Non-instance method implementations
 impl RouteInfoManager {
     //! start client connection disconnected listener
-    pub fn start(&self, receiver: broadcast::Receiver<SocketAddr>) {
-        let mut inner = self.name_server_runtime_inner.clone();
+    pub fn start(&self) {
+        /* let mut inner = self.name_server_runtime_inner.clone(); */
         self.un_register_service.mut_from_ref().start();
-        let mut receiver = receiver;
+        /*let mut receiver = receiver;
         tokio::spawn(async move {
             while let Ok(socket_addr) = receiver.recv().await {
                 inner
                     .route_info_manager_mut()
                     .connection_disconnected(socket_addr);
             }
-        });
+        });*/
     }
 
     pub fn shutdown(&self) {

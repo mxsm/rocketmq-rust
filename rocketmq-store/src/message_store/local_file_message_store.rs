@@ -1970,18 +1970,20 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn notify_message_arrive_if_necessary(&self, dispatch_request: &mut DispatchRequest) {
-        if self.broker_config.long_polling_enable && self.message_arriving_listener.is_some() {
-            self.message_arriving_listener.as_ref().unwrap().arriving(
-                dispatch_request.topic.as_ref(),
-                dispatch_request.queue_id,
-                dispatch_request.consume_queue_offset + 1,
-                Some(dispatch_request.tags_code),
-                dispatch_request.store_timestamp,
-                dispatch_request.bit_map.clone(),
-                dispatch_request.properties_map.as_ref(),
-            );
-            self.reput_message_service
-                .notify_message_arrive4multi_queue(dispatch_request);
+        if self.broker_config.long_polling_enable {
+            if let Some(ref message_arriving_listener) = self.message_arriving_listener {
+                message_arriving_listener.arriving(
+                    dispatch_request.topic.as_ref(),
+                    dispatch_request.queue_id,
+                    dispatch_request.consume_queue_offset + 1,
+                    Some(dispatch_request.tags_code),
+                    dispatch_request.store_timestamp,
+                    dispatch_request.bit_map.clone(),
+                    dispatch_request.properties_map.as_ref(),
+                );
+                self.reput_message_service
+                    .notify_message_arrive4multi_queue(dispatch_request);
+            }
         }
     }
 

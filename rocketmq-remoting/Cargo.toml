@@ -63,7 +63,7 @@ dashmap = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 bytes = "1.11.0"
-criterion = { version = "0.7", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 
 [[bench]]
 name = "encode_decode_bench"

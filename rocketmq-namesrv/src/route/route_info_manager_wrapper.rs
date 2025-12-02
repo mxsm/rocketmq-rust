@@ -104,30 +104,37 @@ impl RouteInfoManagerWrapper {
     }
 
     /// Handle connection disconnection - called when a broker disconnects
+    ///
+    /// This method now delegates to on_channel_destroy for both v1 and v2
     pub fn connection_disconnected(&mut self, socket_addr: SocketAddr) {
         match self {
             RouteInfoManagerWrapper::V1(manager) => manager.connection_disconnected(socket_addr),
-            RouteInfoManagerWrapper::V2(manager) => manager.connection_disconnected(socket_addr),
-        }
-    }
-
-    /// Handle channel destroy event (v1 compatibility)
-    pub fn on_channel_destroy(&self, channel: &Channel) {
-        match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.on_channel_destroy(channel),
             RouteInfoManagerWrapper::V2(manager) => {
-                // V2 uses socket addr directly, extract from channel
-                let socket_addr = channel.remote_address();
-                manager.connection_disconnected(socket_addr);
+                // V2's on_channel_destroy matches Java's onChannelDestroy behavior
+                manager.on_channel_destroy(socket_addr);
             }
         }
     }
 
-    /// Start the route info manager with a receiver for connection events
-    pub fn start(&self, receiver: tokio::sync::broadcast::Receiver<SocketAddr>) {
+    /// Handle channel destroy event
+    pub fn on_channel_destroy(&self, channel: &Channel) {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.start(receiver),
-            RouteInfoManagerWrapper::V2(manager) => manager.start(receiver),
+            RouteInfoManagerWrapper::V1(manager) => manager.on_channel_destroy(channel),
+            RouteInfoManagerWrapper::V2(manager) => {
+                let socket_addr = channel.remote_address();
+                manager.on_channel_destroy(socket_addr);
+            }
+        }
+    }
+
+    /// Start the route info manager
+    ///
+    /// This matches Java's start() method. V2 only starts the unRegisterService.
+    /// V1 still uses the receiver-based approach for backward compatibility.
+    pub fn start(&self) {
+        match self {
+            RouteInfoManagerWrapper::V1(manager) => manager.start(),
+            RouteInfoManagerWrapper::V2(manager) => manager.start(),
         }
     }
 
@@ -163,57 +170,47 @@ impl RouteInfoManagerWrapper {
         }
     }
 
-    // ==================== Forwarding Methods ====================
-    // The following methods forward calls to the underlying implementation
-
     /// Register a broker with the nameserver
     pub fn register_broker(
         &self,
-        cluster_name: String,
-        broker_addr: String,
-        broker_name: String,
+        cluster_name: CheetahString,
+        broker_addr: CheetahString,
+        broker_name: CheetahString,
         broker_id: u64,
-        ha_server_addr: String,
-        zone_name: Option<String>,
+        ha_server_addr: CheetahString,
+        zone_name: Option<CheetahString>,
         timeout_millis: Option<i64>,
         enable_acting_master: Option<bool>,
         topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
-        filter_server_list: Vec<String>,
+        filter_server_list: Vec<CheetahString>,
         channel: Channel,
     ) -> Option<RegisterBrokerResult> {
-        use cheetah_string::CheetahString;
         match self {
             RouteInfoManagerWrapper::V1(manager) => manager.register_broker(
-                CheetahString::from_string(cluster_name),
-                CheetahString::from_string(broker_addr),
-                CheetahString::from_string(broker_name),
+                cluster_name,
+                broker_addr,
+                broker_name,
                 broker_id,
-                CheetahString::from_string(ha_server_addr),
-                zone_name.map(CheetahString::from_string),
+                ha_server_addr,
+                zone_name,
                 timeout_millis,
                 enable_acting_master,
                 topic_config_wrapper,
-                filter_server_list
-                    .into_iter()
-                    .map(CheetahString::from_string)
-                    .collect(),
+                filter_server_list,
                 channel,
             ),
             RouteInfoManagerWrapper::V2(manager) => manager
                 .register_broker(
-                    CheetahString::from_string(cluster_name),
-                    CheetahString::from_string(broker_addr),
-                    CheetahString::from_string(broker_name),
+                    cluster_name,
+                    broker_addr,
+                    broker_name,
                     broker_id,
-                    CheetahString::from_string(ha_server_addr),
-                    zone_name.map(CheetahString::from_string),
+                    ha_server_addr,
+                    zone_name,
                     timeout_millis.map(|t| t as u64),
                     enable_acting_master,
                     topic_config_wrapper,
-                    filter_server_list
-                        .into_iter()
-                        .map(CheetahString::from_string)
-                        .collect(),
+                    filter_server_list,
                     channel,
                 )
                 .ok(),
@@ -360,14 +357,14 @@ impl RouteInfoManagerWrapper {
         broker_name: &str,
     ) -> Option<BrokerMemberGroup> {
         use cheetah_string::CheetahString;
+        let cluster_name = CheetahString::from_string(cluster_name.to_string());
+        let broker_name = CheetahString::from_string(broker_name.to_string());
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.get_broker_member_group(
-                &CheetahString::from_string(cluster_name.to_string()),
-                &CheetahString::from_string(broker_name.to_string()),
-            ),
-            RouteInfoManagerWrapper::V2(_manager) => {
-                // V2 doesn't have this method yet, return None
-                None
+            RouteInfoManagerWrapper::V1(manager) => {
+                manager.get_broker_member_group(cluster_name, broker_name)
+            }
+            RouteInfoManagerWrapper::V2(manager) => {
+                manager.get_broker_member_group(cluster_name, broker_name)
             }
         }
     }
@@ -491,15 +488,7 @@ impl RouteInfoManagerWrapper {
                 manager.un_register_broker(requests);
             }
             RouteInfoManagerWrapper::V2(manager) => {
-                // V2 doesn't have batch unregister yet
-                for req in requests {
-                    let _ = manager.unregister_broker(
-                        req.cluster_name,
-                        req.broker_addr,
-                        req.broker_name,
-                        req.broker_id,
-                    );
-                }
+                manager.un_register_broker(requests);
             }
         }
     }

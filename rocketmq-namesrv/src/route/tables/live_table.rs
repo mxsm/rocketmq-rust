@@ -21,7 +21,9 @@
 
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::DataVersion;
 
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
@@ -38,7 +40,7 @@ pub struct BrokerLiveInfo {
     /// Data version for change detection
     pub data_version: DataVersion,
     /// HA server address (optional)
-    pub ha_server_addr: Option<String>,
+    pub ha_server_addr: Option<CheetahString>,
 }
 
 impl BrokerLiveInfo {
@@ -57,8 +59,8 @@ impl BrokerLiveInfo {
     }
 
     /// Create with HA server address
-    pub fn with_ha_server(mut self, ha_server_addr: String) -> Self {
-        self.ha_server_addr = Some(ha_server_addr);
+    pub fn with_ha_server(mut self, ha_server_addr: impl Into<CheetahString>) -> Self {
+        self.ha_server_addr = Some(ha_server_addr.into());
         self
     }
 
@@ -323,6 +325,23 @@ impl BrokerLiveTable {
             }
         }
     }
+
+    /// Update last update timestamp for a broker by BrokerAddrInfo
+    ///
+    /// Uses `BrokerAddrInfo(clusterName, brokerAddr)` as the lookup key.
+    ///
+    /// # Arguments
+    /// * `broker_addr_info` - BrokerAddrInfo containing cluster name and broker address
+    pub fn update_last_update_timestamp_by_addr_info(&self, broker_addr_info: &BrokerAddrInfo) {
+        if let Some(mut entry) = self.inner.get_mut(broker_addr_info) {
+            let current_time = get_current_millis();
+            let old_info = entry.value();
+            let new_info = BrokerLiveInfo::new(current_time, old_info.data_version.clone())
+                .with_timeout(old_info.heartbeat_timeout_millis)
+                .with_ha_server(old_info.ha_server_addr.clone().unwrap_or_default());
+            *entry.value_mut() = Arc::new(new_info);
+        }
+    }
 }
 
 impl Default for BrokerLiveTable {
@@ -432,12 +451,12 @@ mod tests {
 
     #[test]
     fn test_with_ha_server() {
-        let live_info = BrokerLiveInfo::new(1000, DataVersion::default())
-            .with_ha_server("ha-server:10912".to_string());
+        let live_info =
+            BrokerLiveInfo::new(1000, DataVersion::default()).with_ha_server("ha-server:10912");
 
         assert_eq!(
             live_info.ha_server_addr,
-            Some("ha-server:10912".to_string())
+            Some(CheetahString::from_static_str("ha-server:10912"))
         );
     }
 

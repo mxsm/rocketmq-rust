@@ -22,7 +22,6 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::string_to_properties;
 use rocketmq_common::common::mq_version::RocketMqVersion;
-use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::CRC32Utils;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
@@ -284,28 +283,24 @@ impl DefaultRequestProcessor {
             topic_config_wrapper = register_broker_body.topic_config_serialize_wrapper;
             filter_server_list = register_broker_body.filter_server_list;
         } else {
-            topic_config_wrapper = extract_register_topic_config_from_request(request);
+            topic_config_wrapper = extract_register_topic_config_from_request(request)?;
         }
         let result = self
             .name_server_runtime_inner
             .route_info_manager()
             .register_broker(
-                request_header.cluster_name.to_string(),
-                request_header.broker_addr.to_string(),
-                request_header.broker_name.to_string(),
+                request_header.cluster_name,
+                request_header.broker_addr,
+                request_header.broker_name,
                 request_header.broker_id,
-                request_header.ha_server_addr.to_string(),
+                request_header.ha_server_addr,
                 request
                     .ext_fields()
-                    .and_then(|map| map.get(mix_all::ZONE_NAME).cloned())
-                    .map(|s| s.to_string()),
+                    .and_then(|map| map.get(mix_all::ZONE_NAME).cloned()),
                 request_header.heartbeat_timeout_millis,
                 request_header.enable_acting_master,
                 topic_config_wrapper,
-                filter_server_list
-                    .into_iter()
-                    .map(|s| s.to_string())
-                    .collect(),
+                filter_server_list,
                 channel,
             );
         if result.is_none() {
@@ -343,9 +338,6 @@ impl DefaultRequestProcessor {
     ) -> rocketmq_error::RocketMQResult<RemotingCommand> {
         let request_header =
             request.decode_command_custom_header::<UnRegisterBrokerRequestHeader>()?;
-        /*self.name_server_runtime_inner
-        .route_info_manager_mut()
-        .un_register_broker(vec![request_header]);*/
         if !self
             .name_server_runtime_inner
             .route_info_manager()
@@ -370,8 +362,8 @@ impl DefaultRequestProcessor {
         self.name_server_runtime_inner
             .route_info_manager_mut()
             .update_broker_info_update_timestamp(
-                request_header.cluster_name.clone(),
-                request_header.broker_addr.clone(),
+                request_header.cluster_name,
+                request_header.broker_addr,
             );
         Ok(RemotingCommand::create_response_command())
     }
@@ -700,17 +692,36 @@ impl DefaultRequestProcessor {
 
 fn extract_register_topic_config_from_request(
     request: &RemotingCommand,
-) -> TopicConfigAndMappingSerializeWrapper {
+) -> rocketmq_error::RocketMQResult<TopicConfigAndMappingSerializeWrapper> {
     if let Some(body_inner) = request.body() {
-        if body_inner.is_empty() {
-            return TopicConfigAndMappingSerializeWrapper::default();
+        if !body_inner.is_empty() {
+            return TopicConfigAndMappingSerializeWrapper::decode(body_inner.as_ref()).inspect_err(
+                |e| {
+                    warn!(
+                        "Failed to decode TopicConfigAndMappingSerializeWrapper: {:?}",
+                        e
+                    );
+                },
+            );
         }
-        return SerdeJsonUtils::from_json_bytes::<TopicConfigAndMappingSerializeWrapper>(
-            body_inner.as_ref(),
-        )
-        .expect("decode TopicConfigAndMappingSerializeWrapper failed");
     }
-    TopicConfigAndMappingSerializeWrapper::default()
+
+    // When body is empty or None, create default wrapper with explicitly initialized DataVersion
+    let mut topic_config_wrapper = TopicConfigAndMappingSerializeWrapper::default();
+    topic_config_wrapper
+        .topic_config_serialize_wrapper
+        .data_version
+        .set_counter(0);
+    topic_config_wrapper
+        .topic_config_serialize_wrapper
+        .data_version
+        .set_timestamp(0);
+    topic_config_wrapper
+        .topic_config_serialize_wrapper
+        .data_version
+        .set_state_version(0);
+
+    Ok(topic_config_wrapper)
 }
 
 fn extract_register_broker_body_from_request(
@@ -780,17 +791,50 @@ mod tests {
 
     #[test]
     fn extract_register_topic_config_from_request_with_body() {
-        let body = vec![/* some valid encoded data */];
+        // Use invalid JSON data that will cause decode to fail
+        let body = vec![0xFF, 0xFE, 0xFD, 0xFC]; // Invalid JSON bytes
         let request = RemotingCommand::create_remoting_command(RequestCode::RegisterTopicInNamesrv)
             .set_body(body);
 
-        let _result = extract_register_topic_config_from_request(&request);
+        // Should return error since body is invalid JSON
+        let result = extract_register_topic_config_from_request(&request);
+        // Verify decode fails with invalid data
+        assert!(result.is_err(), "Expected decode to fail with invalid JSON");
     }
 
     #[test]
     fn extract_register_topic_config_from_request_without_body() {
         let request = RemotingCommand::new_request(0, vec![]);
-        let _result = extract_register_topic_config_from_request(&request);
+        let result = extract_register_topic_config_from_request(&request)
+            .expect("should succeed with empty body");
+
+        // Verify DataVersion is explicitly initialized with zeros (align with Java logic)
+        let data_version = &result.topic_config_serialize_wrapper.data_version;
+        assert_eq!(data_version.get_counter(), 0, "counter should be 0");
+        assert_eq!(data_version.get_timestamp(), 0, "timestamp should be 0");
+        assert_eq!(
+            data_version.get_state_version(),
+            0,
+            "stateVersion should be 0"
+        );
+    }
+
+    #[test]
+    fn extract_register_topic_config_from_request_with_empty_body() {
+        // Test with empty body (should initialize DataVersion to zeros)
+        let request = RemotingCommand::new_request(0, vec![]);
+        let result = extract_register_topic_config_from_request(&request)
+            .expect("should succeed with empty body");
+
+        // Verify DataVersion fields are explicitly set to 0 (Java behavior)
+        let data_version = &result.topic_config_serialize_wrapper.data_version;
+        assert_eq!(data_version.get_counter(), 0, "counter should be 0");
+        assert_eq!(data_version.get_timestamp(), 0, "timestamp should be 0");
+        assert_eq!(
+            data_version.get_state_version(),
+            0,
+            "stateVersion should be 0"
+        );
     }
 
     #[test]

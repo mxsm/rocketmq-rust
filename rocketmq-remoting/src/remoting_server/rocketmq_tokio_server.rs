@@ -39,7 +39,6 @@ use crate::base::tokio_event::TokioEvent;
 use crate::connection::Connection;
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
-use crate::protocol::remoting_command::RemotingCommand;
 use crate::remoting::inner::RemotingGeneralHandler;
 use crate::runtime::connection_handler_context::ConnectionHandlerContext;
 use crate::runtime::connection_handler_context::ConnectionHandlerContextWrapper;
@@ -49,11 +48,8 @@ use crate::runtime::RPCHook;
 /// Default limit the max number of connections.
 const DEFAULT_MAX_CONNECTIONS: usize = 1000;
 
-/// Shorthand for the transmit half of the message channel.
-type Tx = mpsc::UnboundedSender<RemotingCommand>;
-
-/// Shorthand for the receive half of the message channel.
-type Rx = mpsc::UnboundedReceiver<RemotingCommand>;
+/// Default idle timeout in seconds (aligned with Java version: 120s)
+const DEFAULT_CHANNEL_IDLE_TIMEOUT_SECONDS: u64 = 120;
 
 /// Per-connection handler managing the lifecycle of a single client connection.
 ///
@@ -92,6 +88,16 @@ pub struct ConnectionHandler<RP> {
     ///
     /// Reference-counted to avoid cloning per-connection (contains processor + hooks)
     cmd_handler: ArcMut<RemotingGeneralHandler<RP>>,
+
+    /// Event notification channel for ChannelEventListener
+    ///
+    /// Used to send IDLE and EXCEPTION events to the event dispatcher
+    event_tx: Option<mpsc::UnboundedSender<TokioEvent>>,
+
+    /// Idle timeout duration for this connection
+    ///
+    /// When no data received for this duration, connection is closed and IDLE event is triggered
+    idle_timeout: Duration,
 }
 
 impl<RP> Drop for ConnectionHandler<RP> {
@@ -127,11 +133,14 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
     /// - Connection closed: graceful return Ok(())
     #[inline]
     async fn handle(&mut self) -> rocketmq_error::RocketMQResult<()> {
+        // Get idle timeout configuration from handler
+        let idle_timeout = self.idle_timeout;
+        let remote_addr = self.connection_handler_context.remote_address();
+
         // HOT PATH: Main server receive loop
         while !self.shutdown.is_shutdown {
             let channel = self.connection_handler_context.channel_mut();
 
-            // Use tokio::select! for cancellation-safe shutdown
             let frame = tokio::select! {
                 // Branch 1: Receive next command from peer
                 res = channel.connection_mut().receive_command() => res,
@@ -142,6 +151,31 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                     channel.connection_mut().close();
                     return Ok(());
                 }
+
+                // Branch 3: Idle timeout - no data received for configured duration
+                _ = tokio::time::sleep(idle_timeout) => {
+                    warn!(
+                        "Connection idle timeout ({}s), remote: {}",
+                        idle_timeout.as_secs(),
+                        remote_addr
+                    );
+
+                    // Clone channel before closing to avoid borrow conflicts
+                    let channel_clone = channel.clone();
+
+                    // Send IDLE event to listener
+                    if let Some(ref event_tx) = self.event_tx {
+                        let _ = event_tx.send(TokioEvent::new(
+                            ConnectionNetEvent::IDLE,
+                            remote_addr,
+                            channel_clone,
+                        ));
+                    }
+
+                    // Close connection due to idle timeout
+                    channel.connection_mut().close();
+                    return Ok(());
+                }
             };
 
             // Extract command or handle end-of-stream
@@ -149,8 +183,20 @@ impl<RP: RequestProcessor + Sync + 'static> ConnectionHandler<RP> {
                 Some(Ok(frame)) => frame,
                 Some(Err(e)) => {
                     // Decode error - log and close connection
-                    // Connection state is automatically managed by receive_command()
                     error!("Failed to decode command: {:?}", e);
+
+                    // Clone channel before closing to avoid borrow conflicts
+                    let channel_clone = channel.clone();
+
+                    // Send EXCEPTION event to listener
+                    if let Some(ref event_tx) = self.event_tx {
+                        let _ = event_tx.send(TokioEvent::new(
+                            ConnectionNetEvent::EXCEPTION,
+                            remote_addr,
+                            channel_clone,
+                        ));
+                    }
+
                     channel.connection_mut().close();
                     return Err(e);
                 }
@@ -277,6 +323,9 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
                         ConnectionNetEvent::EXCEPTION => {
                             listener.on_channel_exception(&addr_str, event.channel());
                         }
+                        ConnectionNetEvent::IDLE => {
+                            listener.on_channel_idle(&addr_str, event.channel());
+                        }
                     }
                 }
                 info!("Event dispatcher task terminated");
@@ -321,6 +370,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
             ));
 
             // Build connection handler
+            let idle_timeout = Duration::from_secs(DEFAULT_CHANNEL_IDLE_TIMEOUT_SECONDS);
             let handler = ConnectionHandler {
                 connection_handler_context: ArcMut::new(ConnectionHandlerContextWrapper {
                     channel: channel.clone(),
@@ -329,6 +379,8 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
                 _shutdown_complete: self.shutdown_complete_tx.clone(),
                 conn_disconnect_notify: self.conn_disconnect_notify.clone(),
                 cmd_handler: self.cmd_handler.clone(),
+                event_tx: Some(event_tx.clone()),
+                idle_timeout,
             };
 
             // Spawn dedicated task for this connection

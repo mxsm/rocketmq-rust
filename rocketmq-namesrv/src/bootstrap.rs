@@ -19,7 +19,6 @@
 //!
 //! Provides the core runtime infrastructure for RocketMQ NameServer.
 
-use std::net::SocketAddr;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -376,15 +375,16 @@ impl NameServerRuntime {
 
         info!("Starting NameServer main loop...");
 
-        let (notify_conn_disconnect, _) = broadcast::channel::<SocketAddr>(100);
-        let receiver = notify_conn_disconnect.subscribe();
-        let request_processor = self.init_processors(receiver);
+        let request_processor = self.init_processors();
 
         // Take server instance for async execution
         let mut server = self
             .server_inner
             .take()
             .expect("Server not initialized - call initialize() first");
+
+        // Start route info manager service
+        self.inner.route_info_manager().start();
 
         // Get broker housekeeping service for server
         let channel_event_listener =
@@ -562,13 +562,7 @@ impl NameServerRuntime {
     /// - ClientRequestProcessor: Handles topic route queries
     /// - DefaultRequestProcessor: Handles all other requests
     #[inline]
-    fn init_processors(
-        &self,
-        receiver: broadcast::Receiver<SocketAddr>,
-    ) -> NameServerRequestProcessor {
-        // Start route info manager with connection event receiver
-        self.inner.route_info_manager().start(receiver);
-
+    fn init_processors(&self) -> NameServerRequestProcessor {
         let client_request_processor = ClientRequestProcessor::new(self.inner.clone());
         let default_request_processor =
             crate::processor::default_request_processor::DefaultRequestProcessor::new(
