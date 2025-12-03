@@ -166,10 +166,10 @@ impl MQAdminUtils {
             let keys = {
                 let addr_table = client_metadata.broker_addr_table();
                 let addr_table = addr_table.read();
-                addr_table.keys().cloned()
+                addr_table.keys().cloned().collect::<Vec<CheetahString>>()
             };
             for broker in keys {
-                let addr = client_metadata.find_master_broker_addr(broker);
+                let addr = client_metadata.find_master_broker_addr(&broker);
                 if let Some(addr) = &addr {
                     let mapping = TopicConfigAndQueueMapping::new(
                         default_mq_admin_ext
