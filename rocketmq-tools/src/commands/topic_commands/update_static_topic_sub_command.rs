@@ -195,7 +195,7 @@ impl CommandExecute for UpdateStaticTopicSubCommand {
         );
 
         //add the existed brokers to target brokers
-        target_brokers.extend(broker_config_map.keys().map(|s| s.clone()));
+        target_brokers.extend(broker_config_map.keys().cloned());
 
         //calculate the new data
         let new_wrapper = TopicQueueMappingUtils::create_topic_config_mapping(

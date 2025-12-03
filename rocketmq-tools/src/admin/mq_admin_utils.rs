@@ -163,9 +163,12 @@ impl MQAdminUtils {
         let cluster_info = default_mq_admin_ext.examine_broker_cluster_info().await?;
         if cluster_info.broker_addr_table.is_some() {
             client_metadata.refresh_cluster_info(Some(&cluster_info));
-            let addr_table = client_metadata.broker_addr_table();
-            let addr_table = addr_table.read();
-            for broker in addr_table.keys() {
+            let keys = {
+                let addr_table = client_metadata.broker_addr_table();
+                let addr_table = addr_table.read();
+                addr_table.keys().cloned()
+            };
+            for broker in keys {
                 let addr = client_metadata.find_master_broker_addr(broker);
                 if let Some(addr) = &addr {
                     let mapping = TopicConfigAndQueueMapping::new(
