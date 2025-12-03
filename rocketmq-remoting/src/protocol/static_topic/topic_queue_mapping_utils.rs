@@ -227,27 +227,26 @@ impl TopicQueueMappingUtils {
             for item in mapping_one.items() {
                 if let Some(bname) = &item.bname {
                     let physical_queue_id = format!("{} - {}", bname, item.queue_id);
-                    if !physical_queue_id_map.contains_key(&physical_queue_id) {
-                        physical_queue_id_map.insert(physical_queue_id, mapping_one);
-                    } else {
-                        if let Some(id) = physical_queue_id_map.get(&physical_queue_id) {
-                            return Err(RocketMQError::Internal(format!(
-                                "Topic {} global queue id {} and {} shared the same physical \
-                                 queue {}",
-                                mapping_one.topic(),
-                                mapping_one.global_id(),
-                                id.global_id(),
-                                physical_queue_id
-                            )));
-                        }
+                    physical_queue_id_map
+                        .entry(physical_queue_id.clone())
+                        .or_insert(mapping_one.clone());
+                    if let Some(id) = physical_queue_id_map.get(&physical_queue_id) {
+                        return Err(RocketMQError::Internal(format!(
+                            "Topic {} global queue id {} and {} shared the same physical queue {}",
+                            mapping_one.topic(),
+                            mapping_one.global_id(),
+                            id.global_id(),
+                            physical_queue_id
+                        )));
                     }
                 }
             }
         }
         Ok(())
     }
+
     pub fn check_logic_queue_mapping_item_offset(
-        items: &Vec<LogicQueueMappingItem>,
+        items: &[LogicQueueMappingItem],
     ) -> RocketMQResult<()> {
         if items.is_empty() {
             return Err(RocketMQError::Internal(
@@ -259,37 +258,37 @@ impl TopicQueueMappingUtils {
         for i in items.len() - 1..=0 {
             let item = &items[i];
             if item.start_offset < 0 || item.gen < 0 || item.queue_id < 0 {
-                return Err(RocketMQError::Internal(format!(
-                    "The field is illegal, should not be negative"
-                )));
+                return Err(RocketMQError::Internal(
+                    "The field is illegal, should not be negative".to_string(),
+                ));
             }
             if items.len() >= 2 && i <= items.len() - 2 && items[i].logic_offset < 0 {
-                return Err(RocketMQError::Internal(format!(
-                    "The non-latest item has negative logic offset"
-                )));
+                return Err(RocketMQError::Internal(
+                    "The non-latest item has negative logic offset".to_string(),
+                ));
             }
             if last_gen != -1 && item.gen >= last_gen {
-                return Err(RocketMQError::Internal(format!(
-                    "The gen does not increase monotonically"
-                )));
+                return Err(RocketMQError::Internal(
+                    "The gen does not increase monotonically".to_string(),
+                ));
             }
 
             if item.end_offset != -1 && item.end_offset < item.start_offset {
-                return Err(RocketMQError::Internal(format!(
-                    "The endOffset is smaller than the start offset"
-                )));
+                return Err(RocketMQError::Internal(
+                    "The endOffset is smaller than the start offset".to_string(),
+                ));
             }
 
             if last_offset != -1 && item.logic_offset != -1 {
                 if item.logic_offset >= last_offset {
-                    return Err(RocketMQError::Internal(format!(
-                        "The base logic offset does not increase monotonically"
-                    )));
+                    return Err(RocketMQError::Internal(
+                        "The base logic offset does not increase monotonically".to_string(),
+                    ));
                 }
                 if item.compute_max_static_queue_offset() >= last_offset {
-                    return Err(RocketMQError::Internal(format!(
-                        "The max logic offset does not increase monotonically"
-                    )));
+                    return Err(RocketMQError::Internal(
+                        "The max logic offset does not increase monotonically".to_string(),
+                    ));
                 }
             }
             last_gen = item.gen;
@@ -298,19 +297,19 @@ impl TopicQueueMappingUtils {
         Ok(())
     }
     pub fn get_leader_item(
-        items: &Vec<LogicQueueMappingItem>,
+        items: &[LogicQueueMappingItem],
     ) -> RocketMQResult<LogicQueueMappingItem> {
-        if items.len() <= 0 {
-            return Err(RocketMQError::Internal(format!(
-                "get_leader_item failed with empty items"
-            )));
+        if items.len() == 0 {
+            return Err(RocketMQError::Internal(
+                "get_leader_item failed with empty items".to_string(),
+            ));
         }
-        if let Some(i) = items.get(items.len() - 1) {
+        if let Some(i) = items.last() {
             return Ok(i.clone());
         }
-        Err(RocketMQError::Internal(format!(
-            "get_leader_item failed with empty items"
-        )))
+        Err(RocketMQError::Internal(
+            "get_leader_item failed with empty items".to_string(),
+        ))
     }
     pub fn get_leader_broker(items: &Vec<LogicQueueMappingItem>) -> RocketMQResult<String> {
         let item = TopicQueueMappingUtils::get_leader_item(items)?;
@@ -360,19 +359,17 @@ impl TopicQueueMappingUtils {
                                     leader_broker_name, broker_name
                                 )));
                             }
-                        } else {
-                            if let Some(top) = &mapping_detail.topic_queue_mapping_info.topic {
-                                global_id_map.insert(
+                        } else if let Some(top) = &mapping_detail.topic_queue_mapping_info.topic {
+                            global_id_map.insert(
+                                *global_id,
+                                TopicQueueMappingOne::new(
+                                    mapping_detail.clone(),
+                                    top.clone().into(),
+                                    broker_name.clone().into(),
                                     *global_id,
-                                    TopicQueueMappingOne::new(
-                                        mapping_detail.clone(),
-                                        top.clone().into(),
-                                        broker_name.clone().into(),
-                                        *global_id,
-                                        entry.1.clone(),
-                                    ),
-                                );
-                            }
+                                    entry.1.clone(),
+                                ),
+                            );
                         }
                     }
                 }
@@ -417,7 +414,7 @@ impl TopicQueueMappingUtils {
             return Ok(file_name);
         }
 
-        Err(RocketMQError::Internal(format!("write file failed")))
+        Err(RocketMQError::Internal("write file failed".to_string()))
     }
     pub fn check_target_brokers_complete(
         target_brokers: &HashSet<String>,
