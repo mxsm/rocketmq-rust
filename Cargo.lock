@@ -2749,6 +2749,7 @@ version = "0.7.0"
 dependencies = [
  "bytes",
  "cheetah-string",
+ "dashmap",
  "futures",
  "lazy_static",
  "num_cpus",
