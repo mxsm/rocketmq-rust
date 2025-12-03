@@ -59,7 +59,8 @@ where
         not_available_duration: u64,
         reachable: bool,
     ) {
-        let entry = self.fault_item_table
+        let entry = self
+            .fault_item_table
             .entry(name.clone())
             .or_insert_with(|| FaultItem::new(name.clone()));
 
@@ -96,7 +97,11 @@ where
     async fn pick_one_at_least(&self) -> Option<CheetahString> {
         let mut reachable_names: Vec<CheetahString> = Vec::new();
         for entry in self.fault_item_table.iter() {
-            if entry.value().reachable_flag.load(std::sync::atomic::Ordering::Acquire) {
+            if entry
+                .value()
+                .reachable_flag
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
                 reachable_names.push(entry.key().clone());
             }
         }
