@@ -687,7 +687,7 @@ impl RemotingCommand {
                 // Deserialize JSON header using simd-json when available
                 #[cfg(feature = "simd")]
                 let cmd = {
-                    let mut slice = src.to_vec();
+                    let mut slice = src.split_to(header_length).to_vec();
                     simd_json::from_slice::<RemotingCommand>(&mut slice).map_err(|error| {
                         rocketmq_error::RocketMQError::Serialization(
                             rocketmq_error::SerializationError::DecodeFailed {
