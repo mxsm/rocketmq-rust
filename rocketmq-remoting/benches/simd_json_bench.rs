@@ -16,21 +16,20 @@
  */
 
 //! Benchmark comparing simd-json vs serde_json performance for RemotingCommand
-//! 
+//!
 //! Run benchmarks:
 //! - Without SIMD: `cargo bench --bench simd_json_bench`
 //! - With SIMD:    `cargo bench --bench simd_json_bench --features simd`
-//! 
+//!
 //! Compare results:
 //! - Run both commands above and compare the output
 //! - Expected: 30-50% improvement with simd feature enabled
 
 use std::collections::HashMap;
+use std::hint::black_box;
 
 use bytes::Bytes;
 use bytes::BytesMut;
-use std::hint::black_box;
-
 use cheetah_string::CheetahString;
 use criterion::criterion_group;
 use criterion::criterion_main;
@@ -124,7 +123,7 @@ fn create_extra_large_command() -> RemotingCommand {
 
 fn bench_json_encode_small(c: &mut Criterion) {
     let mut group = c.benchmark_group("json_encode");
-    
+
     #[cfg(feature = "simd")]
     let label = "small_with_simd";
     #[cfg(not(feature = "simd"))]
@@ -141,13 +140,13 @@ fn bench_json_encode_small(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-    
+
     group.finish();
 }
 
 fn bench_json_encode_medium(c: &mut Criterion) {
     let mut group = c.benchmark_group("json_encode");
-    
+
     #[cfg(feature = "simd")]
     let label = "medium_with_simd";
     #[cfg(not(feature = "simd"))]
@@ -164,13 +163,13 @@ fn bench_json_encode_medium(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-    
+
     group.finish();
 }
 
 fn bench_json_encode_large(c: &mut Criterion) {
     let mut group = c.benchmark_group("json_encode");
-    
+
     #[cfg(feature = "simd")]
     let label = "large_with_simd";
     #[cfg(not(feature = "simd"))]
@@ -187,13 +186,13 @@ fn bench_json_encode_large(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-    
+
     group.finish();
 }
 
 fn bench_json_encode_extra_large(c: &mut Criterion) {
     let mut group = c.benchmark_group("json_encode");
-    
+
     #[cfg(feature = "simd")]
     let label = "xlarge_with_simd";
     #[cfg(not(feature = "simd"))]
@@ -210,7 +209,7 @@ fn bench_json_encode_extra_large(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-    
+
     group.finish();
 }
 
@@ -223,7 +222,7 @@ fn bench_json_decode_small(c: &mut Criterion) {
     let encoded = dst.freeze();
 
     let mut group = c.benchmark_group("json_decode");
-    
+
     #[cfg(feature = "simd")]
     let label = "small_with_simd";
     #[cfg(not(feature = "simd"))]
@@ -236,7 +235,7 @@ fn bench_json_decode_small(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-    
+
     group.finish();
 }
 
@@ -247,7 +246,7 @@ fn bench_json_decode_medium(c: &mut Criterion) {
     let encoded = dst.freeze();
 
     let mut group = c.benchmark_group("json_decode");
-    
+
     #[cfg(feature = "simd")]
     let label = "medium_with_simd";
     #[cfg(not(feature = "simd"))]
@@ -260,7 +259,7 @@ fn bench_json_decode_medium(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-    
+
     group.finish();
 }
 
@@ -271,7 +270,7 @@ fn bench_json_decode_large(c: &mut Criterion) {
     let encoded = dst.freeze();
 
     let mut group = c.benchmark_group("json_decode");
-    
+
     #[cfg(feature = "simd")]
     let label = "large_with_simd";
     #[cfg(not(feature = "simd"))]
@@ -284,7 +283,7 @@ fn bench_json_decode_large(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-    
+
     group.finish();
 }
 
@@ -295,7 +294,7 @@ fn bench_json_decode_extra_large(c: &mut Criterion) {
     let encoded = dst.freeze();
 
     let mut group = c.benchmark_group("json_decode");
-    
+
     #[cfg(feature = "simd")]
     let label = "xlarge_with_simd";
     #[cfg(not(feature = "simd"))]
@@ -308,7 +307,7 @@ fn bench_json_decode_extra_large(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
-    
+
     group.finish();
 }
 
@@ -316,7 +315,7 @@ fn bench_json_decode_extra_large(c: &mut Criterion) {
 
 fn bench_json_roundtrip(c: &mut Criterion) {
     let mut group = c.benchmark_group("json_roundtrip");
-    
+
     #[cfg(feature = "simd")]
     let backend = "simd";
     #[cfg(not(feature = "simd"))]
@@ -341,7 +340,7 @@ fn bench_json_roundtrip(c: &mut Criterion) {
             )
         });
     }
-    
+
     group.finish();
 }
 
@@ -349,7 +348,7 @@ fn bench_json_roundtrip(c: &mut Criterion) {
 
 fn bench_json_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("json_throughput");
-    
+
     #[cfg(feature = "simd")]
     let backend = "simd";
     #[cfg(not(feature = "simd"))]
@@ -378,7 +377,7 @@ fn bench_json_throughput(c: &mut Criterion) {
             )
         });
     }
-    
+
     group.finish();
 }
 
@@ -386,7 +385,7 @@ fn bench_json_throughput(c: &mut Criterion) {
 
 fn bench_json_header_only(c: &mut Criterion) {
     let mut group = c.benchmark_group("json_header_only");
-    
+
     #[cfg(feature = "simd")]
     let backend = "simd";
     #[cfg(not(feature = "simd"))]
@@ -421,7 +420,7 @@ fn bench_json_header_only(c: &mut Criterion) {
             )
         });
     }
-    
+
     group.finish();
 }
 
@@ -441,20 +440,11 @@ criterion_group!(
     bench_json_decode_extra_large
 );
 
-criterion_group!(
-    roundtrip_benches,
-    bench_json_roundtrip
-);
+criterion_group!(roundtrip_benches, bench_json_roundtrip);
 
-criterion_group!(
-    throughput_benches,
-    bench_json_throughput
-);
+criterion_group!(throughput_benches, bench_json_throughput);
 
-criterion_group!(
-    header_benches,
-    bench_json_header_only
-);
+criterion_group!(header_benches, bench_json_header_only);
 
 criterion_main!(
     encode_benches,

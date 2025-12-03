@@ -486,7 +486,7 @@ impl RemotingCommand {
         // Encode header using simd-json for better performance when available
         #[cfg(feature = "simd")]
         let encode_result = simd_json::to_vec(self);
-        
+
         #[cfg(not(feature = "simd"))]
         let encode_result = serde_json::to_vec(self);
 
@@ -695,18 +695,19 @@ impl RemotingCommand {
                                 message: format!("SIMD JSON deserialization error: {error}"),
                             },
                         )
-                    })?  
+                    })?
                 };
 
                 #[cfg(not(feature = "simd"))]
-                let cmd = SerdeJsonUtils::from_json_slice::<RemotingCommand>(src).map_err(|error| {
-                    rocketmq_error::RocketMQError::Serialization(
-                        rocketmq_error::SerializationError::DecodeFailed {
-                            format: "json",
-                            message: format!("JSON deserialization error: {error}"),
-                        },
-                    )
-                })?;
+                let cmd =
+                    SerdeJsonUtils::from_json_slice::<RemotingCommand>(src).map_err(|error| {
+                        rocketmq_error::RocketMQError::Serialization(
+                            rocketmq_error::SerializationError::DecodeFailed {
+                                format: "json",
+                                message: format!("JSON deserialization error: {error}"),
+                            },
+                        )
+                    })?;
 
                 Ok(Some(cmd.set_serialize_type(SerializeType::JSON)))
             }

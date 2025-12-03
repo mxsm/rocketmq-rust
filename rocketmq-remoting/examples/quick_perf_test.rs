@@ -16,10 +16,10 @@
  */
 
 //! Quick performance test for SIMD JSON encoding/decoding
-//! 
+//!
 //! Run without SIMD:
 //!   cargo run --release --example quick_perf_test
-//! 
+//!
 //! Run with SIMD:
 //!   cargo run --release --example quick_perf_test --features simd
 
@@ -56,7 +56,7 @@ fn create_test_command() -> RemotingCommand {
 fn main() {
     #[cfg(feature = "simd")]
     println!("=== Testing with SIMD-JSON ===\n");
-    
+
     #[cfg(not(feature = "simd"))]
     println!("=== Testing with serde_json ===\n");
 
@@ -74,42 +74,48 @@ fn main() {
     // Test encoding
     println!("Testing encoding ({} iterations)...", ITERATIONS);
     let mut cmds: Vec<_> = (0..ITERATIONS).map(|_| create_test_command()).collect();
-    
+
     let start = Instant::now();
     for cmd in cmds.iter_mut() {
         let mut dst = BytesMut::with_capacity(8192);
         cmd.fast_header_encode(&mut dst);
     }
     let encode_duration = start.elapsed();
-    
+
     println!("  Total time: {:?}", encode_duration);
     println!("  Per operation: {:?}", encode_duration / ITERATIONS as u32);
-    println!("  Throughput: {:.2} ops/sec\n", ITERATIONS as f64 / encode_duration.as_secs_f64());
+    println!(
+        "  Throughput: {:.2} ops/sec\n",
+        ITERATIONS as f64 / encode_duration.as_secs_f64()
+    );
 
     // Test decoding
     println!("Testing decoding ({} iterations)...", ITERATIONS);
-    
+
     // Prepare encoded data
     let mut cmd = create_test_command();
     let mut dst = BytesMut::new();
     cmd.fast_header_encode(&mut dst);
     let encoded = dst.freeze();
-    
+
     let start = Instant::now();
     for _ in 0..ITERATIONS {
         let mut src = BytesMut::from(&encoded[..]);
         let _ = RemotingCommand::decode(&mut src).unwrap();
     }
     let decode_duration = start.elapsed();
-    
+
     println!("  Total time: {:?}", decode_duration);
     println!("  Per operation: {:?}", decode_duration / ITERATIONS as u32);
-    println!("  Throughput: {:.2} ops/sec\n", ITERATIONS as f64 / decode_duration.as_secs_f64());
+    println!(
+        "  Throughput: {:.2} ops/sec\n",
+        ITERATIONS as f64 / decode_duration.as_secs_f64()
+    );
 
     // Test roundtrip
     println!("Testing roundtrip ({} iterations)...", ITERATIONS);
     let mut cmds: Vec<_> = (0..ITERATIONS).map(|_| create_test_command()).collect();
-    
+
     let start = Instant::now();
     for cmd in cmds.iter_mut() {
         let mut dst = BytesMut::new();
@@ -117,22 +123,37 @@ fn main() {
         let _ = RemotingCommand::decode(&mut dst).unwrap();
     }
     let roundtrip_duration = start.elapsed();
-    
+
     println!("  Total time: {:?}", roundtrip_duration);
-    println!("  Per operation: {:?}", roundtrip_duration / ITERATIONS as u32);
-    println!("  Throughput: {:.2} ops/sec\n", ITERATIONS as f64 / roundtrip_duration.as_secs_f64());
+    println!(
+        "  Per operation: {:?}",
+        roundtrip_duration / ITERATIONS as u32
+    );
+    println!(
+        "  Throughput: {:.2} ops/sec\n",
+        ITERATIONS as f64 / roundtrip_duration.as_secs_f64()
+    );
 
     println!("\n=== Summary ===");
-    println!("Encoding:  {:?} per op", encode_duration / ITERATIONS as u32);
-    println!("Decoding:  {:?} per op", decode_duration / ITERATIONS as u32);
-    println!("Roundtrip: {:?} per op", roundtrip_duration / ITERATIONS as u32);
-    
+    println!(
+        "Encoding:  {:?} per op",
+        encode_duration / ITERATIONS as u32
+    );
+    println!(
+        "Decoding:  {:?} per op",
+        decode_duration / ITERATIONS as u32
+    );
+    println!(
+        "Roundtrip: {:?} per op",
+        roundtrip_duration / ITERATIONS as u32
+    );
+
     #[cfg(feature = "simd")]
     println!("\n✓ SIMD-JSON enabled");
-    
+
     #[cfg(not(feature = "simd"))]
     println!("\n✓ Standard serde_json (baseline)");
-    
+
     println!("\nTo compare:");
     println!("  cargo run --release --example quick_perf_test");
     println!("  cargo run --release --example quick_perf_test --features simd");
