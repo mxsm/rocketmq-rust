@@ -61,10 +61,21 @@ bytemuck = "1.24.0"
 
 dashmap = { workspace = true, features = ["serde"] }
 
+# SIMD-accelerated JSON parsing (30-50% faster than serde_json)
+simd-json = { version = "0.17", optional = true }
+
+[features]
+default = []
+simd = ["simd-json"]
+
 [dev-dependencies]
 bytes = "1.11.0"
 criterion = { version = "0.8", features = ["html_reports"] }
 
 [[bench]]
 name = "encode_decode_bench"
+harness = false
+
+[[bench]]
+name = "simd_json_bench"
 harness = false
