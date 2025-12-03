@@ -135,7 +135,7 @@ impl TopicQueueMappingUtils {
         //make sure it is not null
         let mut max_epoch = -1;
         let mut max_num = -1;
-        let mut scope = String::new();
+        let scope = String::new();
         for entry in broker_config_map {
             let broker = entry.0;
             let config_mapping = entry.1;
@@ -180,8 +180,6 @@ impl TopicQueueMappingUtils {
                                         "scope does not match {} != {} in {}",
                                         m_scope, scope, broker
                                     )));
-                                } else {
-                                    scope = m_scope.clone().into();
                                 }
                                 if max_epoch != -1
                                     && max_epoch != mapping_detail.topic_queue_mapping_info.epoch
@@ -299,7 +297,7 @@ impl TopicQueueMappingUtils {
     pub fn get_leader_item(
         items: &[LogicQueueMappingItem],
     ) -> RocketMQResult<LogicQueueMappingItem> {
-        if items.len() == 0 {
+        if items.is_empty() {
             return Err(RocketMQError::Internal(
                 "get_leader_item failed with empty items".to_string(),
             ));
@@ -311,7 +309,7 @@ impl TopicQueueMappingUtils {
             "get_leader_item failed with empty items".to_string(),
         ))
     }
-    pub fn get_leader_broker(items: &Vec<LogicQueueMappingItem>) -> RocketMQResult<String> {
+    pub fn get_leader_broker(items: &[LogicQueueMappingItem]) -> RocketMQResult<String> {
         let item = TopicQueueMappingUtils::get_leader_item(items)?;
         if let Some(bname) = &item.bname {
             return Ok(bname.to_string());
