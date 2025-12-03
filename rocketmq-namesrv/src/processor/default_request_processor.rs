@@ -378,7 +378,7 @@ impl DefaultRequestProcessor {
         let broker_member_group = self
             .name_server_runtime_inner
             .route_info_manager_mut()
-            .get_broker_member_group(&request_header.cluster_name, &request_header.broker_name);
+            .get_broker_member_group(request_header.cluster_name, request_header.broker_name);
         let response_body = GetBrokerMemberGroupResponseBody {
             broker_member_group,
         };
