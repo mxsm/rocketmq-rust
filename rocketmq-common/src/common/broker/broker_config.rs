@@ -504,7 +504,7 @@ pub struct BrokerConfig {
     pub broker_permission: u32,
 
     #[serde(default)]
-    pub async_send_enable: bool,
+    pub async_send_enable: bool, //not used in rust version,only for Java compatibility
 
     #[serde(default = "defaults::store_path_root_dir")]
     pub store_path_root_dir: CheetahString,
