@@ -46,7 +46,7 @@ pub trait LatencyFaultTolerance<T, R, S>: Send + Sync + 'static {
     /// # Returns
     ///
     /// * `true` if the broker is available, `false` otherwise.
-    async fn is_available(&self, name: &T) -> bool;
+    fn is_available(&self, name: &T) -> bool;
 
     /// To check if this broker is reachable.
     ///
@@ -57,7 +57,7 @@ pub trait LatencyFaultTolerance<T, R, S>: Send + Sync + 'static {
     /// # Returns
     ///
     /// * `true` if the broker is reachable, `false` otherwise.
-    async fn is_reachable(&self, name: &T) -> bool;
+    fn is_reachable(&self, name: &T) -> bool;
 
     /// Remove the broker in this fault item table.
     ///

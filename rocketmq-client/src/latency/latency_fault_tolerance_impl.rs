@@ -15,15 +15,16 @@
  * limitations under the License.
  */
 use std::any::Any;
-use std::collections::HashMap;
 use std::collections::HashSet;
+
+use dashmap::DashMap;
 
 use crate::latency::latency_fault_tolerance::LatencyFaultTolerance;
 use crate::latency::resolver::Resolver;
 use crate::latency::service_detector::ServiceDetector;
 
 pub struct LatencyFaultToleranceImpl<R, S> {
-    fault_item_table: tokio::sync::Mutex<HashMap<CheetahString, FaultItem>>,
+    fault_item_table: DashMap<CheetahString, FaultItem>,
     detect_timeout: u32,
     detect_interval: u32,
     which_item_worst: ThreadLocalIndex,
@@ -58,14 +59,13 @@ where
         not_available_duration: u64,
         reachable: bool,
     ) {
-        let mut table = self.fault_item_table.lock().await;
-        let fault_item = table
+        let entry = self.fault_item_table
             .entry(name.clone())
             .or_insert_with(|| FaultItem::new(name.clone()));
 
-        fault_item.set_current_latency(current_latency);
-        fault_item.update_not_available_duration(not_available_duration);
-        fault_item.set_reachable(reachable);
+        entry.set_current_latency(current_latency);
+        entry.update_not_available_duration(not_available_duration);
+        entry.set_reachable(reachable);
 
         if !reachable {
             info!(
@@ -75,42 +75,37 @@ where
         }
     }
 
-    async fn is_available(&self, name: &CheetahString) -> bool {
-        let fault_item_table = self.fault_item_table.lock().await;
-        if let Some(fault_item) = fault_item_table.get(name) {
+    fn is_available(&self, name: &CheetahString) -> bool {
+        if let Some(fault_item) = self.fault_item_table.get(name) {
             return fault_item.is_available();
         }
         true
     }
 
-    async fn is_reachable(&self, name: &CheetahString) -> bool {
-        let fault_item_table = self.fault_item_table.lock().await;
-        if let Some(fault_item) = fault_item_table.get(name) {
+    fn is_reachable(&self, name: &CheetahString) -> bool {
+        if let Some(fault_item) = self.fault_item_table.get(name) {
             return fault_item.is_reachable();
         }
         true
     }
 
     async fn remove(&mut self, name: &CheetahString) {
-        self.fault_item_table.lock().await.remove(name);
+        self.fault_item_table.remove(name);
     }
 
     async fn pick_one_at_least(&self) -> Option<CheetahString> {
-        let fault_item_table = self.fault_item_table.lock().await;
-        let mut tmp_list: Vec<_> = fault_item_table.values().collect();
+        let mut reachable_names: Vec<CheetahString> = Vec::new();
+        for entry in self.fault_item_table.iter() {
+            if entry.value().reachable_flag.load(std::sync::atomic::Ordering::Acquire) {
+                reachable_names.push(entry.key().clone());
+            }
+        }
 
-        if !tmp_list.is_empty() {
+        if !reachable_names.is_empty() {
             use rand::seq::SliceRandom;
             let mut rng = rand::rng();
-            tmp_list.shuffle(&mut rng);
-            for fault_item in tmp_list {
-                if fault_item
-                    .reachable_flag
-                    .load(std::sync::atomic::Ordering::Acquire)
-                {
-                    return Some(fault_item.name.clone());
-                }
-            }
+            reachable_names.shuffle(&mut rng);
+            return Some(reachable_names[0].clone());
         }
         None
     }
@@ -134,9 +129,9 @@ where
     fn shutdown(&self) {}
 
     async fn detect_by_one_round(&self) {
-        let mut fault_item_table = self.fault_item_table.lock().await;
         let mut remove_set = HashSet::new();
-        for (name, fault_item) in fault_item_table.iter() {
+        for entry in self.fault_item_table.iter() {
+            let (name, fault_item) = (entry.key(), entry.value());
             if get_current_millis() as i64
                 - (fault_item
                     .check_stamp
@@ -179,7 +174,7 @@ where
             }
         }
         for name in remove_set {
-            fault_item_table.remove(&name);
+            self.fault_item_table.remove(&name);
         }
     }
 

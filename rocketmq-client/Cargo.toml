@@ -37,7 +37,7 @@ tracing.workspace = true
 parking_lot = { workspace = true }
 once_cell = { workspace = true }
 bytes = { workspace = true }
-
+dashmap = { workspace = true }
 
 futures = { workspace = true }
 cheetah-string = { workspace = true }
