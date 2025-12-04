@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use cheetah_string::CheetahString;
 use clap::Parser;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::FileUtils::file_to_string;
@@ -81,7 +82,7 @@ impl UpdateStaticTopicSubCommand {
             if let Ok(wrapper) = serde_json::from_str::<TopicRemappingDetailWrapper>(&map_data) {
                 //double check the config
                 TopicQueueMappingUtils::check_name_epoch_num_consistence(
-                    topic,
+                    &CheetahString::from(topic),
                     wrapper.broker_config_map(),
                 )?;
                 let mut force = false;
@@ -142,14 +143,14 @@ impl CommandExecute for UpdateStaticTopicSubCommand {
 
             let broker_strs = self.broker_addr.trim();
             for broker in broker_strs.split(",") {
-                target_brokers.insert(broker.trim().to_string());
+                target_brokers.insert(CheetahString::from(broker.trim()));
             }
             if let Some(cluster) = &self.cluster_name {
                 let clusters = cluster.trim();
                 for cluster in clusters.split(",") {
                     let cluster = cluster.trim();
                     if let Some(bs) = info.get(cluster) {
-                        let s_iter = bs.iter().map(|s| s.to_string());
+                        let s_iter = bs.iter().cloned();
                         target_brokers.extend(s_iter);
                     }
                 }
@@ -163,8 +164,11 @@ impl CommandExecute for UpdateStaticTopicSubCommand {
 
         //get the existed topic config and mapping
 
-        let mut broker_config_map =
-            MQAdminUtils::examine_topic_config_all(topic, &default_mq_admin_ext).await?;
+        let mut broker_config_map = MQAdminUtils::examine_topic_config_all(
+            &CheetahString::from(topic),
+            &default_mq_admin_ext,
+        )
+        .await?;
         let queue_num =
             self.queue_num.trim().parse::<i32>().map_err(|_e| {
                 RocketMQError::Internal("queue num parse to i32 failed".to_string())
@@ -173,7 +177,7 @@ impl CommandExecute for UpdateStaticTopicSubCommand {
         let mut max_epoch_and_num = (get_current_millis(), queue_num);
         if !broker_config_map.is_empty() {
             let new_max_epoch_and_num = TopicQueueMappingUtils::check_name_epoch_num_consistence(
-                topic,
+                &CheetahString::from(topic),
                 &broker_config_map,
             )?;
             max_epoch_and_num.0 = new_max_epoch_and_num.0 as u64;
@@ -181,8 +185,8 @@ impl CommandExecute for UpdateStaticTopicSubCommand {
         }
 
         let old_wrapper = TopicRemappingDetailWrapper::new(
-            topic.to_string(),
-            topic_remapping_detail_wrapper::TYPE_CREATE_OR_UPDATE.to_string(),
+            CheetahString::from(topic),
+            CheetahString::from(topic_remapping_detail_wrapper::TYPE_CREATE_OR_UPDATE),
             max_epoch_and_num.0,
             broker_config_map.clone(),
             HashSet::new(),

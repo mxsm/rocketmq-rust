@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use cheetah_string::CheetahString;
 use rand::seq::SliceRandom;
 use rocketmq_common::common::config::TopicConfig;
 /*
@@ -99,7 +100,7 @@ impl TopicQueueMappingUtils {
         None
     }
 
-    pub fn get_mock_broker_name(scope: &str) -> String {
+    pub fn get_mock_broker_name(scope: &str) -> CheetahString {
         assert!(!scope.is_empty(), "Scope cannot be null");
 
         if scope == mix_all::METADATA_SCOPE_GLOBAL {
@@ -108,8 +109,9 @@ impl TopicQueueMappingUtils {
                 mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX,
                 &scope[2..]
             )
+            .into()
         } else {
-            format!("{}{}", mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX, scope)
+            format!("{}{}", mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX, scope).into()
         }
     }
     pub fn get_mapping_detail_from_config(
@@ -124,8 +126,8 @@ impl TopicQueueMappingUtils {
         Ok(detail_list)
     }
     pub fn check_name_epoch_num_consistence(
-        topic: &str,
-        broker_config_map: &HashMap<String, TopicConfigAndQueueMapping>,
+        topic: &CheetahString,
+        broker_config_map: &HashMap<CheetahString, TopicConfigAndQueueMapping>,
     ) -> RocketMQResult<(i64, i32)> {
         if broker_config_map.is_empty() {
             return Err(RocketMQError::Internal(
@@ -135,7 +137,7 @@ impl TopicQueueMappingUtils {
         //make sure it is not null
         let mut max_epoch = -1;
         let mut max_num = -1;
-        let scope = String::new();
+        let scope = CheetahString::new();
         for entry in broker_config_map {
             let broker = entry.0;
             let config_mapping = entry.1;
@@ -309,10 +311,10 @@ impl TopicQueueMappingUtils {
             "get_leader_item failed with empty items".to_string(),
         ))
     }
-    pub fn get_leader_broker(items: &[LogicQueueMappingItem]) -> RocketMQResult<String> {
+    pub fn get_leader_broker(items: &[LogicQueueMappingItem]) -> RocketMQResult<CheetahString> {
         let item = TopicQueueMappingUtils::get_leader_item(items)?;
         if let Some(bname) = &item.bname {
-            return Ok(bname.to_string());
+            return Ok(bname.to_string().into());
         }
         Err(RocketMQError::Internal(
             "get_leader_broker fn get Item with None bname".to_string(),
@@ -399,7 +401,7 @@ impl TopicQueueMappingUtils {
     pub fn write_to_temp(
         wrapper: &TopicRemappingDetailWrapper,
         after: bool,
-    ) -> RocketMQResult<String> {
+    ) -> RocketMQResult<CheetahString> {
         let topic = wrapper.topic();
         let data = wrapper.serialize_json()?;
         let mut suffix = topic_remapping_detail_wrapper::SUFFIX_BEFORE;
@@ -409,14 +411,14 @@ impl TopicQueueMappingUtils {
         if let Some(tmpdir) = &EnvUtils::get_property("java.io.tmpdir") {
             let file_name = format!("{}/{}-{}{}", tmpdir, topic, wrapper.get_epoch(), suffix);
             string_to_file(&data, &file_name)?;
-            return Ok(file_name);
+            return Ok(file_name.into());
         }
 
         Err(RocketMQError::Internal("write file failed".to_string()))
     }
     pub fn check_target_brokers_complete(
-        target_brokers: &HashSet<String>,
-        broker_config_map: &HashMap<String, TopicConfigAndQueueMapping>,
+        target_brokers: &HashSet<CheetahString>,
+        broker_config_map: &HashMap<CheetahString, TopicConfigAndQueueMapping>,
     ) -> RocketMQResult<()> {
         for broker in broker_config_map.keys() {
             if let Some(mapping) = broker_config_map.get(broker) {
@@ -439,7 +441,7 @@ impl TopicQueueMappingUtils {
         Ok(())
     }
     pub fn check_physical_queue_consistence(
-        broker_config_map: &HashMap<String, TopicConfigAndQueueMapping>,
+        broker_config_map: &HashMap<CheetahString, TopicConfigAndQueueMapping>,
     ) -> RocketMQResult<()> {
         for entry in broker_config_map {
             let config_mapping = entry.1;
@@ -460,7 +462,8 @@ impl TopicQueueMappingUtils {
                                 ));
                             }
                             if let Some(bname) = &item.bname {
-                                let topic_config = broker_config_map.get(&bname.to_string());
+                                let topic_config =
+                                    broker_config_map.get(&CheetahString::from(bname));
                                 if topic_config.is_none() {
                                     return Err(RocketMQError::Internal(
                                         "The broker of item does not exist".to_string(),
@@ -487,15 +490,17 @@ impl TopicQueueMappingUtils {
     pub fn create_topic_config_mapping(
         topic: &str,
         queue_num: i32,
-        target_brokers: &HashSet<String>,
-        broker_config_map: &mut HashMap<String, TopicConfigAndQueueMapping>,
+        target_brokers: &HashSet<CheetahString>,
+        broker_config_map: &mut HashMap<CheetahString, TopicConfigAndQueueMapping>,
     ) -> RocketMQResult<TopicRemappingDetailWrapper> {
         TopicQueueMappingUtils::check_target_brokers_complete(target_brokers, broker_config_map)?;
         let mut global_id_map = HashMap::new();
         let mut max_epoch_and_num = (get_current_millis(), queue_num);
         if !broker_config_map.is_empty() {
-            let new_max_epoch_and_num =
-                TopicQueueMappingUtils::check_name_epoch_num_consistence(topic, broker_config_map)?;
+            let new_max_epoch_and_num = TopicQueueMappingUtils::check_name_epoch_num_consistence(
+                &CheetahString::from(topic),
+                broker_config_map,
+            )?;
             max_epoch_and_num.0 = new_max_epoch_and_num.0 as u64;
             max_epoch_and_num.1 = new_max_epoch_and_num.1;
             let mut detail_list = vec![];
@@ -531,11 +536,11 @@ impl TopicQueueMappingUtils {
         let mut old_id_to_broker = HashMap::new();
         for entry in &global_id_map {
             let leader_broker = entry.1.bname();
-            old_id_to_broker.insert(*entry.0, leader_broker.to_string());
+            old_id_to_broker.insert(*entry.0, CheetahString::from(leader_broker));
             if !broker_num_map.contains_key(leader_broker) {
-                broker_num_map.insert(leader_broker.to_string(), 1);
+                broker_num_map.insert(leader_broker.into(), 1);
             } else {
-                broker_num_map.insert(leader_broker.to_string(), broker_num_map[leader_broker] + 1);
+                broker_num_map.insert(leader_broker.into(), broker_num_map[leader_broker] + 1);
             }
         }
         let mut allocator = MappingAllocator::new(old_id_to_broker, broker_num_map, HashMap::new());
@@ -602,7 +607,10 @@ impl TopicQueueMappingUtils {
         }
         //double check the config
 
-        TopicQueueMappingUtils::check_name_epoch_num_consistence(topic, broker_config_map)?;
+        TopicQueueMappingUtils::check_name_epoch_num_consistence(
+            &CheetahString::from(topic),
+            broker_config_map,
+        )?;
         global_id_map = TopicQueueMappingUtils::check_and_build_mapping_items(
             TopicQueueMappingUtils::get_mapping_detail_from_config(
                 broker_config_map.values().cloned().collect(),
@@ -614,29 +622,35 @@ impl TopicQueueMappingUtils {
             &global_id_map.values().cloned().collect(),
         )?;
         TopicQueueMappingUtils::check_physical_queue_consistence(broker_config_map)?;
+        let map = broker_config_map
+            .iter()
+            .map(|(k, v)| (CheetahString::from_string(k.to_string()), v.clone()))
+            .collect();
         Ok(TopicRemappingDetailWrapper::new(
-            topic.to_string(),
-            topic_remapping_detail_wrapper::TYPE_CREATE_OR_UPDATE.to_string(),
+            topic.to_string().into(),
+            topic_remapping_detail_wrapper::TYPE_CREATE_OR_UPDATE
+                .to_string()
+                .into(),
             new_epoch,
-            broker_config_map.clone(),
+            map,
             HashSet::new(),
             HashSet::new(),
         ))
     }
 }
 pub struct MappingAllocator {
-    broker_num_map: HashMap<String, i32>,
-    id_to_broker: HashMap<i32, String>,
+    broker_num_map: HashMap<CheetahString, i32>,
+    id_to_broker: HashMap<i32, CheetahString>,
     //used for remapping
-    broker_num_map_before_remapping: HashMap<String, i32>,
+    broker_num_map_before_remapping: HashMap<CheetahString, i32>,
     current_index: i32,
-    least_brokers: Vec<String>,
+    least_brokers: Vec<CheetahString>,
 }
 impl MappingAllocator {
     pub fn new(
-        id_to_broker: HashMap<i32, String>,
-        broker_num_map: HashMap<String, i32>,
-        broker_num_map_before_remapping: HashMap<String, i32>,
+        id_to_broker: HashMap<i32, CheetahString>,
+        broker_num_map: HashMap<CheetahString, i32>,
+        broker_num_map_before_remapping: HashMap<CheetahString, i32>,
     ) -> Self {
         Self {
             id_to_broker,
@@ -687,7 +701,7 @@ impl MappingAllocator {
         }
         self.current_index = (self.least_brokers.len() - 1) as i32;
     }
-    fn next_broker(&mut self) -> String {
+    fn next_broker(&mut self) -> CheetahString {
         if self.least_brokers.is_empty() {
             self.fresh_state();
         }
@@ -695,7 +709,7 @@ impl MappingAllocator {
         self.least_brokers.remove(tmp_index)
     }
 
-    pub fn broker_num_map(&self) -> &HashMap<String, i32> {
+    pub fn broker_num_map(&self) -> &HashMap<CheetahString, i32> {
         &self.broker_num_map
     }
 
@@ -716,7 +730,7 @@ impl MappingAllocator {
         }
     }
 
-    pub fn id_to_broker(&self) -> &HashMap<i32, String> {
+    pub fn id_to_broker(&self) -> &HashMap<i32, CheetahString> {
         &self.id_to_broker
     }
 }

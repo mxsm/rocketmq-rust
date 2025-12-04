@@ -17,7 +17,7 @@ use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 pub struct MQAdminUtils {}
 impl MQAdminUtils {
     pub async fn get_all_brokers_in_same_cluster(
-        brokers: Vec<String>,
+        brokers: Vec<CheetahString>,
         default_mq_admin_ext: &DefaultMQAdminExt,
     ) -> RocketMQResult<HashSet<CheetahString>> {
         let cluster_info = default_mq_admin_ext.examine_broker_cluster_info().await?;
@@ -45,7 +45,7 @@ impl MQAdminUtils {
         ))
     }
     pub async fn complete_no_target_brokers(
-        mut broker_config_map: HashMap<String, TopicConfigAndQueueMapping>,
+        mut broker_config_map: HashMap<CheetahString, TopicConfigAndQueueMapping>,
         default_mq_admin_ext: &DefaultMQAdminExt,
     ) -> RocketMQResult<()> {
         let config_mapping = broker_config_map.values_mut().next().cloned();
@@ -61,9 +61,9 @@ impl MQAdminUtils {
                     .await;
                     if let Ok(all_brokers) = &all_brokers {
                         for broker in all_brokers {
-                            if !broker_config_map.contains_key(&broker.to_string()) {
+                            if !broker_config_map.contains_key(&CheetahString::from(broker)) {
                                 broker_config_map.insert(
-                                    broker.clone().to_string(),
+                                    CheetahString::from(broker),
                                     TopicConfigAndQueueMapping::new(
                                         TopicConfig::new(topic.clone()),
                                         Some(ArcMut::new(TopicQueueMappingDetail {
@@ -106,7 +106,7 @@ impl MQAdminUtils {
         Ok(client_metadata)
     }
     pub fn check_if_master_alive(
-        brokers: Vec<String>,
+        brokers: Vec<CheetahString>,
         client_metadata: &ClientMetadata,
     ) -> RocketMQResult<()> {
         for broker in &brokers {
@@ -121,7 +121,7 @@ impl MQAdminUtils {
         Ok(())
     }
     pub async fn update_topic_config_mapping_all(
-        broker_config_map: &HashMap<String, TopicConfigAndQueueMapping>,
+        broker_config_map: &HashMap<CheetahString, TopicConfigAndQueueMapping>,
         default_mq_admin_ext: &DefaultMQAdminExt,
         force: bool,
     ) -> RocketMQResult<()> {
@@ -154,9 +154,9 @@ impl MQAdminUtils {
         Ok(())
     }
     pub async fn examine_topic_config_all(
-        topic: &str,
+        topic: &CheetahString,
         default_mq_admin_ext: &DefaultMQAdminExt,
-    ) -> RocketMQResult<HashMap<String, TopicConfigAndQueueMapping>> {
+    ) -> RocketMQResult<HashMap<CheetahString, TopicConfigAndQueueMapping>> {
         let mut broker_config_map = HashMap::new();
         let client_metadata = ClientMetadata::new();
         //check all the brokers
@@ -178,7 +178,7 @@ impl MQAdminUtils {
                         None,
                     );
                     //allow the config is null
-                    broker_config_map.insert(broker.to_string(), mapping);
+                    broker_config_map.insert(CheetahString::from(broker), mapping);
                 }
             }
         }

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -12,19 +13,20 @@ pub const TYPE_REMAPPING: &str = "REMAPPING";
 pub const SUFFIX_BEFORE: &str = ".before";
 pub const SUFFIX_AFTER: &str = ".after";
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TopicRemappingDetailWrapper {
-    topic: String,
-    method: String,
+    topic: CheetahString,
+    method: CheetahString,
     epoch: u64,
-    broker_config_map: HashMap<String, TopicConfigAndQueueMapping>,
-    broker_to_map_in: HashSet<String>,
-    broker_to_map_out: HashSet<String>,
+    broker_config_map: HashMap<CheetahString, TopicConfigAndQueueMapping>,
+    broker_to_map_in: HashSet<CheetahString>,
+    broker_to_map_out: HashSet<CheetahString>,
 }
 impl TopicRemappingDetailWrapper {
     pub fn empty() -> Self {
         Self {
-            topic: String::new(),
-            method: String::new(),
+            topic: CheetahString::new(),
+            method: CheetahString::new(),
             epoch: 0,
             broker_config_map: HashMap::new(),
             broker_to_map_in: HashSet::new(),
@@ -33,12 +35,12 @@ impl TopicRemappingDetailWrapper {
     }
 
     pub fn new(
-        topic: String,
-        method: String,
+        topic: CheetahString,
+        method: CheetahString,
         epoch: u64,
-        broker_config_map: HashMap<String, TopicConfigAndQueueMapping>,
-        broker_to_map_in: HashSet<String>,
-        broker_to_map_out: HashSet<String>,
+        broker_config_map: HashMap<CheetahString, TopicConfigAndQueueMapping>,
+        broker_to_map_in: HashSet<CheetahString>,
+        broker_to_map_out: HashSet<CheetahString>,
     ) -> Self {
         Self {
             topic,
@@ -62,38 +64,38 @@ impl TopicRemappingDetailWrapper {
         self.epoch
     }
 
-    pub fn broker_config_map(&self) -> &HashMap<String, TopicConfigAndQueueMapping> {
+    pub fn broker_config_map(&self) -> &HashMap<CheetahString, TopicConfigAndQueueMapping> {
         &self.broker_config_map
     }
 
-    pub fn broker_to_map_in(&self) -> &HashSet<String> {
+    pub fn broker_to_map_in(&self) -> &HashSet<CheetahString> {
         &self.broker_to_map_in
     }
 
-    pub fn broker_to_map_out(&self) -> &HashSet<String> {
+    pub fn broker_to_map_out(&self) -> &HashSet<CheetahString> {
         &self.broker_to_map_out
     }
 
     pub fn set_broker_config_map(
         &mut self,
-        broker_config_map: HashMap<String, TopicConfigAndQueueMapping>,
+        broker_config_map: HashMap<CheetahString, TopicConfigAndQueueMapping>,
     ) {
         self.broker_config_map = broker_config_map;
     }
 
-    pub fn set_broker_to_map_in(&mut self, broker_to_map_in: HashSet<String>) {
+    pub fn set_broker_to_map_in(&mut self, broker_to_map_in: HashSet<CheetahString>) {
         self.broker_to_map_in = broker_to_map_in;
     }
 
-    pub fn set_broker_to_map_out(&mut self, broker_to_map_out: HashSet<String>) {
+    pub fn set_broker_to_map_out(&mut self, broker_to_map_out: HashSet<CheetahString>) {
         self.broker_to_map_out = broker_to_map_out;
     }
 
-    pub fn set_topic(&mut self, topic: String) {
+    pub fn set_topic(&mut self, topic: CheetahString) {
         self.topic = topic;
     }
 
-    pub fn set_method(&mut self, method: String) {
+    pub fn set_method(&mut self, method: CheetahString) {
         self.method = method;
     }
 
