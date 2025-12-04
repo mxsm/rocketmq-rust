@@ -27,7 +27,6 @@ pub struct LatencyFaultToleranceImpl<R, S> {
     fault_item_table: DashMap<CheetahString, FaultItem>,
     detect_timeout: u32,
     detect_interval: u32,
-    which_item_worst: ThreadLocalIndex,
     start_detector_enable: AtomicBool,
     resolver: Option<R>,
     service_detector: Option<S>,
@@ -41,7 +40,6 @@ impl<R, S> LatencyFaultToleranceImpl<R, S> {
             fault_item_table: Default::default(),
             detect_timeout: 200,
             detect_interval: 2000,
-            which_item_worst: Default::default(),
             start_detector_enable: AtomicBool::new(false),
         }
     }
@@ -226,8 +224,6 @@ use cheetah_string::CheetahString;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_rust::ArcMut;
 use tracing::info;
-
-use crate::common::thread_local_index::ThreadLocalIndex;
 
 #[derive(Debug)]
 pub struct FaultItem {
