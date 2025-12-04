@@ -237,10 +237,9 @@ where
         };
         config.set_attributes(final_attributes);
 
-        let group_name = config.group_name().to_string();
         let old = self
             .subscription_group_table
-            .insert(CheetahString::from_string(group_name), config.clone());
+            .insert(config.group_name().clone(), config.clone());
 
         match old {
             Some(old_config) => {
@@ -410,7 +409,7 @@ where
     ) -> Option<SubscriptionGroupConfig> {
         self.subscription_group_table
             .get(group)
-            .map(|entry| entry.clone())
+            .map(|entry| entry.value().clone())
     }
 
     pub fn get_forbidden(
@@ -455,7 +454,6 @@ where
 
         if result.is_some() {
             self.update_data_version();
-            // Note: Java version does NOT persist here, only updates data version
             info!("Disabled consume for group: {}", group_name);
         } else {
             warn!("Cannot disable consume, group not found: {}", group_name);
@@ -591,6 +589,10 @@ where
         topic: &CheetahString,
         forbidden_index: i32,
     ) {
+        if !Self::validate_forbidden_index(forbidden_index) {
+            warn!("Invalid forbidden index: {}", forbidden_index);
+            return;
+        }
         let topic_forbidden = self.get_forbidden_internal(group, topic);
         let new_forbidden = topic_forbidden & !(1 << forbidden_index);
         self.update_forbidden_value(group, topic, new_forbidden);
