@@ -51,7 +51,6 @@ use rocketmq_common::MessageDecoder::message_properties_to_string;
 use rocketmq_common::MessageDecoder::string_to_message_properties;
 use rocketmq_common::TimeUtils;
 use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketmqError::TokioHandlerError;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -431,88 +430,41 @@ where
             .message_ext_inner
             .topic()
             .clone();
-        if self
-            .inner
-            .broker_runtime_inner
-            .broker_config()
-            .async_send_enable
-        {
-            let mut message_store = self
-                .inner
+        let put_message_result = if is_inner_batch {
+            self.inner
                 .broker_runtime_inner
-                .message_store_unchecked()
-                .clone();
-            let put_message_result = tokio::spawn(async move {
-                if is_inner_batch {
-                    message_store
-                        .put_message(batch_message.message_ext_broker_inner)
-                        .await
-                } else {
-                    message_store.put_messages(batch_message).await
-                }
-            })
-            .await
-            .map_err(|e| TokioHandlerError(e.to_string()))?;
-            let result = self
-                .handle_put_message_result(
-                    put_message_result,
-                    &mut response,
-                    request,
-                    topic.as_ref(),
-                    transaction_id,
-                    &mut send_message_context,
-                    ctx,
-                    queue_id,
-                    start,
-                    &mut mapping_context,
-                    MessageType::NormalMsg,
-                )
-                .await;
-            send_message_callback(&mut send_message_context, &mut response);
-            if result.1 {
-                Ok(None)
-            } else if result.0.is_some() {
-                Ok(result.0)
-            } else {
-                Ok(Some(response))
-            }
+                .message_store_unchecked_mut()
+                .put_message(batch_message.message_ext_broker_inner)
+                .await
         } else {
-            let put_message_result = if is_inner_batch {
-                self.inner
-                    .broker_runtime_inner
-                    .message_store_unchecked_mut()
-                    .put_message(batch_message.message_ext_broker_inner)
-                    .await
-            } else {
-                self.inner
-                    .broker_runtime_inner
-                    .message_store_unchecked_mut()
-                    .put_messages(batch_message)
-                    .await
-            };
-            let result = self
-                .handle_put_message_result(
-                    put_message_result,
-                    &mut response,
-                    request,
-                    topic.as_str(),
-                    transaction_id,
-                    &mut send_message_context,
-                    ctx,
-                    queue_id,
-                    start,
-                    &mut mapping_context,
-                    MessageType::NormalMsg,
-                )
-                .await;
-            send_message_callback(&mut send_message_context, &mut response);
-            if result.1 {
-                Ok(None)
-            } else if result.0.is_some() {
-                Ok(result.0)
-            } else {
-                Ok(Some(response))
-            }
+            self.inner
+                .broker_runtime_inner
+                .message_store_unchecked_mut()
+                .put_messages(batch_message)
+                .await
+        };
+        let result = self
+            .handle_put_message_result(
+                put_message_result,
+                &mut response,
+                request,
+                topic.as_str(),
+                transaction_id,
+                &mut send_message_context,
+                ctx,
+                queue_id,
+                start,
+                &mut mapping_context,
+                MessageType::NormalMsg,
+            )
+            .await;
+        send_message_callback(&mut send_message_context, &mut response);
+        if result.1 {
+            Ok(None)
+        } else if result.0.is_some() {
+            Ok(result.0)
+        } else {
+            Ok(Some(response))
         }
     }
 
@@ -648,91 +600,40 @@ where
         let topic = message_ext.topic().clone();
         let transaction_id =
             MessageClientIDSetter::get_uniq_id(&message_ext.message_ext_inner.message);
-        if self
-            .inner
-            .broker_runtime_inner
-            .broker_config()
-            .async_send_enable
-        {
-            let put_message_handle = if send_transaction_prepare_message {
-                let mut transactional_message_service =
-                    self.inner.transactional_message_service.clone();
-                tokio::spawn(async move {
-                    transactional_message_service
-                        .async_prepare_message(message_ext)
-                        .await
-                })
-            } else {
-                let mut message_store = self
-                    .inner
-                    .broker_runtime_inner
-                    .message_store_unchecked()
-                    .clone();
-                tokio::spawn(async move { message_store.put_message(message_ext).await })
-            };
-            let put_message_result = put_message_handle
+        let put_message_result = if send_transaction_prepare_message {
+            self.inner
+                .transactional_message_service
+                .prepare_message(message_ext)
                 .await
-                .map_err(|e| TokioHandlerError(e.to_string()))?;
-
-            let result = self
-                .handle_put_message_result(
-                    put_message_result,
-                    &mut response,
-                    request,
-                    topic.as_str(),
-                    transaction_id,
-                    &mut send_message_context,
-                    ctx,
-                    queue_id,
-                    start,
-                    &mut mapping_context,
-                    MessageType::NormalMsg,
-                )
-                .await;
-            send_message_callback(&mut send_message_context, &mut response);
-            if result.1 {
-                Ok(None)
-            } else if result.0.is_some() {
-                Ok(result.0)
-            } else {
-                Ok(Some(response))
-            }
         } else {
-            let put_message_result = if send_transaction_prepare_message {
-                self.inner
-                    .transactional_message_service
-                    .prepare_message(message_ext)
-                    .await
-            } else {
-                self.inner
-                    .broker_runtime_inner
-                    .message_store_unchecked_mut()
-                    .put_message(message_ext)
-                    .await
-            };
-            let result = self
-                .handle_put_message_result(
-                    put_message_result,
-                    &mut response,
-                    request,
-                    topic.as_str(),
-                    transaction_id,
-                    &mut send_message_context,
-                    ctx,
-                    queue_id,
-                    start,
-                    &mut mapping_context,
-                    MessageType::NormalMsg,
-                )
-                .await;
-            send_message_callback(&mut send_message_context, &mut response);
-            if result.1 {
-                Ok(None)
-            } else if result.0.is_some() {
-                Ok(result.0)
-            } else {
-                Ok(Some(response))
-            }
+            self.inner
+                .broker_runtime_inner
+                .message_store_unchecked_mut()
+                .put_message(message_ext)
+                .await
+        };
+        let result = self
+            .handle_put_message_result(
+                put_message_result,
+                &mut response,
+                request,
+                topic.as_str(),
+                transaction_id,
+                &mut send_message_context,
+                ctx,
+                queue_id,
+                start,
+                &mut mapping_context,
+                MessageType::NormalMsg,
+            )
+            .await;
+        send_message_callback(&mut send_message_context, &mut response);
+        if result.1 {
+            Ok(None)
+        } else if result.0.is_some() {
+            Ok(result.0)
+        } else {
+            Ok(Some(response))
         }
     }
 

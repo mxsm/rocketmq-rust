@@ -472,7 +472,12 @@ impl DefaultRequestProcessor {
         let request_header =
             request.decode_command_custom_header::<RegisterTopicRequestHeader>()?;
         if let Some(body) = request.body() {
-            let topic_route_data = TopicRouteData::decode(body).unwrap_or_default();
+            let topic_route_data = TopicRouteData::decode(body).map_err(|e| {
+                rocketmq_error::RocketMQError::request_body_invalid(
+                    "decode",
+                    format!("TopicRouteData decode failed: {}", e),
+                )
+            })?;
             if !topic_route_data.queue_datas.is_empty() {
                 self.name_server_runtime_inner
                     .route_info_manager_mut()

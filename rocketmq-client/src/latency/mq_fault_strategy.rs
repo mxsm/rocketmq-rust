@@ -17,12 +17,10 @@
 use std::cell::RefCell;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::thread::scope;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_rust::ArcMut;
-use tokio::runtime::Handle;
 
 use crate::base::client_config::ClientConfig;
 use crate::latency::latency_fault_tolerance::LatencyFaultTolerance;
@@ -184,18 +182,8 @@ struct ReachableFilter {
 
 impl QueueFilter for ReachableFilter {
     fn filter(&self, message_queue: &MessageQueue) -> bool {
-        let mut flag = false;
-        let handle = Handle::current();
-        scope(|s| {
-            s.spawn(|| {
-                flag = handle.block_on(async {
-                    self.latency_fault_tolerance
-                        .is_reachable(message_queue.get_broker_name())
-                        .await
-                });
-            });
-        });
-        flag
+        self.latency_fault_tolerance
+            .is_reachable(message_queue.get_broker_name())
     }
 }
 
@@ -206,17 +194,7 @@ struct AvailableFilter {
 
 impl QueueFilter for AvailableFilter {
     fn filter(&self, message_queue: &MessageQueue) -> bool {
-        let mut flag = false;
-        let handle = Handle::current();
-        scope(|s| {
-            s.spawn(|| {
-                flag = handle.block_on(async {
-                    self.latency_fault_tolerance
-                        .is_available(message_queue.get_broker_name())
-                        .await
-                });
-            });
-        });
-        flag
+        self.latency_fault_tolerance
+            .is_available(message_queue.get_broker_name())
     }
 }

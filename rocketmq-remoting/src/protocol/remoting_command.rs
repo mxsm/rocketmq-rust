@@ -30,6 +30,7 @@ use bytes::BytesMut;
 use cheetah_string::CheetahString;
 use lazy_static::lazy_static;
 use rocketmq_common::common::mq_version::RocketMqVersion;
+#[cfg(not(feature = "simd"))]
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_rust::ArcMut;
@@ -380,13 +381,28 @@ impl RemotingCommand {
             SerializeType::ROCKETMQ => {
                 Some(RocketMQSerializable::rocket_mq_protocol_encode_bytes(self))
             }
-            SerializeType::JSON => match serde_json::to_vec(self) {
-                Ok(value) => Some(Bytes::from(value)),
-                Err(e) => {
-                    error!("Failed to encode JSON header: {}", e);
-                    None
+            SerializeType::JSON => {
+                #[cfg(feature = "simd")]
+                {
+                    match simd_json::to_vec(self) {
+                        Ok(value) => Some(Bytes::from(value)),
+                        Err(e) => {
+                            error!("Failed to encode JSON header with simd-json: {}", e);
+                            None
+                        }
+                    }
                 }
-            },
+                #[cfg(not(feature = "simd"))]
+                {
+                    match serde_json::to_vec(self) {
+                        Ok(value) => Some(Bytes::from(value)),
+                        Err(e) => {
+                            error!("Failed to encode JSON header: {}", e);
+                            None
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -467,8 +483,14 @@ impl RemotingCommand {
         // Reserve space upfront: 4 (total_length) + 4 (serialize_type) + estimated_header + body
         dst.reserve(8 + estimated_header_size + body_length);
 
-        // Encode header using serde_json (direct to Vec for better performance)
-        match serde_json::to_vec(self) {
+        // Encode header using simd-json for better performance when available
+        #[cfg(feature = "simd")]
+        let encode_result = simd_json::to_vec(self);
+
+        #[cfg(not(feature = "simd"))]
+        let encode_result = serde_json::to_vec(self);
+
+        match encode_result {
             Ok(header_bytes) => {
                 let header_length = header_bytes.len() as i32;
                 let body_length = body_length as i32;
@@ -662,7 +684,21 @@ impl RemotingCommand {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match type_ {
             SerializeType::JSON => {
-                // Deserialize JSON header
+                // Deserialize JSON header using simd-json when available
+                #[cfg(feature = "simd")]
+                let cmd = {
+                    let mut slice = src.split_to(header_length).to_vec();
+                    simd_json::from_slice::<RemotingCommand>(&mut slice).map_err(|error| {
+                        rocketmq_error::RocketMQError::Serialization(
+                            rocketmq_error::SerializationError::DecodeFailed {
+                                format: "json",
+                                message: format!("SIMD JSON deserialization error: {error}"),
+                            },
+                        )
+                    })?
+                };
+
+                #[cfg(not(feature = "simd"))]
                 let cmd =
                     SerdeJsonUtils::from_json_slice::<RemotingCommand>(src).map_err(|error| {
                         rocketmq_error::RocketMQError::Serialization(
