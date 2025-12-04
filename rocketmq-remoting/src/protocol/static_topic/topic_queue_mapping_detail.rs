@@ -16,18 +16,6 @@ pub struct TopicQueueMappingDetail {
 }
 
 impl TopicQueueMappingDetail {
-    /*    pub fn get_mapping_info(
-        mapping_detail: &TopicQueueMappingDetail,
-        global_id: i32,
-    ) -> Option<Vec<LogicQueueMappingItem>> {
-        if let Some(hosted_queues) = &mapping_detail.hosted_queues {
-            if let Some(queue_items) = hosted_queues.get(&global_id) {
-                return Some(queue_items.clone());
-            }
-        }
-        None
-    }*/
-
     pub fn get_mapping_info(
         mapping_detail: &TopicQueueMappingDetail,
         global_id: i32,
