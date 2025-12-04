@@ -581,7 +581,7 @@ impl TopicQueueMappingUtils {
             let mapping_item = LogicQueueMappingItem {
                 gen: 0,
                 queue_id: config_mapping.topic_config.write_queue_nums as i32,
-                bname: Some(broker.clone().into()),
+                bname: Some(broker.clone()),
                 logic_offset: 0,
                 start_offset: 0,
                 end_offset: -1,
