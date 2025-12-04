@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use rocketmq_rust::ArcMut;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -51,6 +52,18 @@ impl TopicQueueMappingDetail {
             bname: mapping_detail.topic_queue_mapping_info.bname.clone(),
             epoch: mapping_detail.topic_queue_mapping_info.epoch,
             ..TopicQueueMappingInfo::default()
+        }
+    }
+    pub fn put_mapping_info(
+        mut mapping_detail: ArcMut<TopicQueueMappingDetail>,
+        global_id: i32,
+        mapping_info: Vec<LogicQueueMappingItem>,
+    ) {
+        if mapping_info.is_empty() {
+            return;
+        }
+        if let Some(q_map) = &mut mapping_detail.hosted_queues {
+            q_map.insert(global_id, mapping_info);
         }
     }
 }
