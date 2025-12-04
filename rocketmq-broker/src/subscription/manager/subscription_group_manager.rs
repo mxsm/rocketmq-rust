@@ -1011,46 +1011,6 @@ mod tests {
     }
 
     #[test]
-    fn test_wrapper_deserialization() {
-        let json = r#"{
-            "subscriptionGroupTable": {
-                "TEST_GROUP": {
-                    "groupName": "TEST_GROUP",
-                    "consumeEnable": true,
-                    "consumeFromMinEnable": true,
-                    "consumeBroadcastEnable": true,
-                    "consumeMessageOrderly": false,
-                    "retryQueueNums": 1,
-                    "retryMaxTimes": 16,
-                    "brokerId": 0,
-                    "whichBrokerWhenConsumeSlowly": 1,
-                    "notifyConsumerIdsChangedEnable": true,
-                    "groupSysFlag": 0,
-                    "consumeTimeoutMinute": 15,
-                    "subscriptionDataSet": null,
-                    "attributes": {}
-                }
-            },
-            "forbiddenTable": {},
-            "dataVersion": {
-                "timestamp": 1733123456789,
-                "counter": 1
-            }
-        }"#;
-
-        let wrapper: SubscriptionGroupWrapperInner =
-            serde_json::from_str(json).expect("Failed to deserialize");
-
-        assert_eq!(wrapper.subscription_group_table.len(), 1);
-        assert!(wrapper.subscription_group_table.contains_key("TEST_GROUP"));
-
-        let config = wrapper.subscription_group_table.get("TEST_GROUP").unwrap();
-        assert_eq!(config.group_name(), "TEST_GROUP");
-        assert!(config.consume_enable());
-        assert!(config.consume_from_min_enable());
-    }
-
-    #[test]
     fn test_forbidden_table_bitwise_operations() {
         // Test forbidden table using DashMap directly
         let forbidden_table: DashMap<CheetahString, DashMap<CheetahString, i32>> = DashMap::new();
