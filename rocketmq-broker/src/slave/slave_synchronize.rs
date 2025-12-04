@@ -291,24 +291,25 @@ where
                                 .broker_runtime_inner
                                 .mut_from_ref()
                                 .subscription_group_manager_mut();
-                            if subscription_group_manager.date_version()
-                                != subscription_wrapper.data_version()
-                            {
-                                let data_version = subscription_group_manager.date_version_mut();
-                                data_version.assign_new_one(subscription_wrapper.data_version());
+
+                            // Compare data versions using read locks
+                            let current_version =
+                                subscription_group_manager.data_version().read().clone();
+                            if current_version != *subscription_wrapper.data_version() {
+                                // Update data version
+                                *subscription_group_manager.data_version().write() =
+                                    subscription_wrapper.data_version().clone();
 
                                 let new_subscription_table =
                                     subscription_wrapper.subscription_group_table;
-                                let subscription_table_inner =
-                                    subscription_group_manager.get_subscription_group_table();
-
-                                let mut subscription_table_guard = subscription_table_inner.lock();
-                                // Update with new entries
                                 let subscription_table =
-                                    subscription_table_guard.subscription_group_table_mut();
+                                    subscription_group_manager.subscription_group_table();
+
+                                // Clear and update subscription table using DashMap
                                 subscription_table.clear();
-                                subscription_table.extend(new_subscription_table);
-                                drop(subscription_table_guard);
+                                for (key, value) in new_subscription_table {
+                                    subscription_table.insert(key, value);
+                                }
                                 subscription_group_manager.persist();
                             }
                             info!(

@@ -67,7 +67,7 @@ impl Default for SubscriptionGroupConfig {
             group_name: CheetahString::default(),
 
             consume_enable: true,
-            consume_from_min_enable: false,
+            consume_from_min_enable: true,
             consume_broadcast_enable: true,
             consume_message_orderly: false,
 
@@ -92,7 +92,7 @@ impl Default for SubscriptionGroupConfig {
 
 impl SubscriptionGroupConfig {
     #[inline]
-    pub fn group_name(&self) -> &str {
+    pub fn group_name(&self) -> &CheetahString {
         &self.group_name
     }
 
@@ -258,7 +258,7 @@ mod subscription_group_config_tests {
         let config = SubscriptionGroupConfig::default();
         assert_eq!(config.group_name, "");
         assert!(config.consume_enable);
-        assert!(!config.consume_from_min_enable);
+        assert!(config.consume_from_min_enable);
         assert!(config.consume_broadcast_enable);
         assert!(!config.consume_message_orderly);
         assert_eq!(config.retry_queue_nums, 1);

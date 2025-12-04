@@ -135,14 +135,12 @@ impl<MS: MessageStore> ConsumerOrderInfoManager<MS> {
                 keys_to_remove.push(topic_at_group.clone());
                 continue;
             }
-            let subscription_group_wrapper = self
+            let subscription_group_table = self
                 .broker_runtime_inner
                 .subscription_group_manager()
-                .subscription_group_wrapper()
-                .lock();
-            let subscription_group_config = subscription_group_wrapper
-                .subscription_group_table()
-                .get(&CheetahString::from(group));
+                .subscription_group_table();
+            let subscription_group_config =
+                subscription_group_table.get(&CheetahString::from(group));
             if subscription_group_config.is_none() {
                 info!(
                     "Group not exist, Clean order info, {}:{:?}",

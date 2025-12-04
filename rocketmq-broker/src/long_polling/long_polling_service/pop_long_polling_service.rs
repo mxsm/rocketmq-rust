@@ -153,15 +153,11 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                 for cid_entry in cid_map.iter() {
                     let cid = cid_entry.key();
 
-                    let subscription_group_wrapper = self
+                    let subscription_group_table = self
                         .broker_runtime_inner
                         .subscription_group_manager()
-                        .subscription_group_wrapper()
-                        .lock();
-                    if !subscription_group_wrapper
-                        .subscription_group_table()
-                        .contains_key(cid)
-                    {
+                        .subscription_group_table();
+                    if !subscription_group_table.contains_key(cid) {
                         info!(target: "pop_logger", "remove non-existent sub {} of topic {} in topicCidMap!", cid, topic);
                         cid_keys_to_remove.push(cid.clone());
                     }
@@ -208,15 +204,11 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                     polling_keys_to_remove.push(key.clone());
                     continue;
                 }
-                let subscription_group_wrapper = self
+                let subscription_group_table = self
                     .broker_runtime_inner
                     .subscription_group_manager()
-                    .subscription_group_wrapper()
-                    .lock();
-                if !subscription_group_wrapper
-                    .subscription_group_table()
-                    .contains_key(&cid)
-                {
+                    .subscription_group_table();
+                if !subscription_group_table.contains_key(&cid) {
                     info!(target: "pop_logger", "remove non-existent sub {} of topic {} in pollingMap!", cid, topic);
                     polling_keys_to_remove.push(key.clone());
                 }
