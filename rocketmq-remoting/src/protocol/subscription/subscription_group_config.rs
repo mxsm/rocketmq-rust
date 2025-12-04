@@ -258,7 +258,7 @@ mod subscription_group_config_tests {
         let config = SubscriptionGroupConfig::default();
         assert_eq!(config.group_name, "");
         assert!(config.consume_enable);
-        assert!(!config.consume_from_min_enable);
+        assert!(config.consume_from_min_enable);
         assert!(config.consume_broadcast_enable);
         assert!(!config.consume_message_orderly);
         assert_eq!(config.retry_queue_nums, 1);
