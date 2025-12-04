@@ -61,23 +61,20 @@ impl MQAdminUtils {
                     .await;
                     if let Ok(all_brokers) = &all_brokers {
                         for broker in all_brokers {
-                            if !broker_config_map.contains_key(&CheetahString::from(broker)) {
-                                broker_config_map.insert(
-                                    CheetahString::from(broker),
-                                    TopicConfigAndQueueMapping::new(
-                                        TopicConfig::new(topic.clone()),
-                                        Some(ArcMut::new(TopicQueueMappingDetail {
-                                            topic_queue_mapping_info: TopicQueueMappingInfo::new(
-                                                topic.clone(),
-                                                queue_num,
-                                                broker.clone(),
-                                                new_epoch,
-                                            ),
-                                            hosted_queues: None,
-                                        })),
-                                    ),
-                                );
-                            }
+                            broker_config_map.entry(broker.clone()).or_insert_with(|| {
+                                TopicConfigAndQueueMapping::new(
+                                    TopicConfig::new(topic.clone()),
+                                    Some(ArcMut::new(TopicQueueMappingDetail {
+                                        topic_queue_mapping_info: TopicQueueMappingInfo::new(
+                                            topic.clone(),
+                                            queue_num,
+                                            broker.clone(),
+                                            new_epoch,
+                                        ),
+                                        hosted_queues: None,
+                                    })),
+                                )
+                            });
                         }
                     }
                 }
@@ -178,7 +175,7 @@ impl MQAdminUtils {
                         None,
                     );
                     //allow the config is null
-                    broker_config_map.insert(CheetahString::from(broker), mapping);
+                    broker_config_map.insert(broker.clone(), mapping);
                 }
             }
         }
