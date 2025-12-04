@@ -1098,11 +1098,14 @@ mod tests {
         let topic_a = CheetahString::from_static_str("TOPIC_A");
         let topic_b = CheetahString::from_static_str("TOPIC_B");
 
-        let topic_map = forbidden_table.entry(group.clone()).or_default();
-        topic_map.value().insert(topic_a.clone(), 1);
-        topic_map.value().insert(topic_b.clone(), 2);
+        {
+            let topic_map = forbidden_table.entry(group.clone()).or_default();
+            topic_map.value().insert(topic_a.clone(), 1);
+            topic_map.value().insert(topic_b.clone(), 2);
+            // Drop the entry lock here before reading
+        }
 
-        // Verify both topics exist
+        // Verify both topics exist (after releasing the entry lock)
         let topics = forbidden_table.get(&group).unwrap();
         assert_eq!(topics.len(), 2);
         assert_eq!(*topics.get(&topic_a).unwrap(), 1);
@@ -1416,13 +1419,14 @@ mod tests {
                         let group = CheetahString::from_string(format!("GROUP_{}", thread_id));
                         let topic = CheetahString::from_string(format!("TOPIC_{}", i));
 
-                        // Create or get inner map
-                        let inner = table.entry(group.clone()).or_default();
+                        // Create or get inner map and set forbidden flag
+                        {
+                            let inner = table.entry(group.clone()).or_default();
+                            inner.value().insert(topic.clone(), 1 << (i % 32));
+                            // Drop the entry lock here before reading
+                        }
 
-                        // Set forbidden flag
-                        inner.value().insert(topic.clone(), 1 << (i % 32));
-
-                        // Read forbidden flag
+                        // Read forbidden flag (after releasing the entry lock)
                         if let Some(inner_map) = table.get(&group) {
                             let _ = inner_map.get(&topic);
                         }
