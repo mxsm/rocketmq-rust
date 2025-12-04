@@ -93,9 +93,8 @@ impl SimdJsonUtils {
     where
         T: serde::de::DeserializeOwned,
     {
-        simd_json::from_slice(bytes).map_err(|e| {
-            SerializationError::decode_failed("SIMD-JSON", e.to_string()).into()
-        })
+        simd_json::from_slice(bytes)
+            .map_err(|e| SerializationError::decode_failed("SIMD-JSON", e.to_string()).into())
     }
 
     /// Deserialize JSON from a mutable byte slice into a Rust type.
@@ -133,9 +132,8 @@ impl SimdJsonUtils {
         T: serde::de::DeserializeOwned,
     {
         let mut bytes = json.as_bytes().to_vec();
-        simd_json::from_slice(&mut bytes).map_err(|e| {
-            SerializationError::decode_failed("SIMD-JSON", e.to_string()).into()
-        })
+        simd_json::from_slice(&mut bytes)
+            .map_err(|e| SerializationError::decode_failed("SIMD-JSON", e.to_string()).into())
     }
 
     /// Serialize a Rust type into a JSON string (compact format) using SIMD acceleration.
@@ -159,9 +157,8 @@ impl SimdJsonUtils {
     where
         T: serde::Serialize,
     {
-        simd_json::to_string(value).map_err(|e| {
-            SerializationError::encode_failed("SIMD-JSON", e.to_string()).into()
-        })
+        simd_json::to_string(value)
+            .map_err(|e| SerializationError::encode_failed("SIMD-JSON", e.to_string()).into())
     }
 
     /// Serialize a Rust type into a JSON string (pretty-printed format).
@@ -206,9 +203,8 @@ impl SimdJsonUtils {
     where
         T: serde::Serialize,
     {
-        simd_json::to_vec(value).map_err(|e| {
-            SerializationError::encode_failed("SIMD-JSON", e.to_string()).into()
-        })
+        simd_json::to_vec(value)
+            .map_err(|e| SerializationError::encode_failed("SIMD-JSON", e.to_string()).into())
     }
 
     /// Serialize a Rust type into a JSON byte vector (pretty-printed format).
@@ -252,9 +248,8 @@ impl SimdJsonUtils {
     where
         T: serde::Serialize,
     {
-        simd_json::to_writer(writer, value).map_err(|e| {
-            SerializationError::encode_failed("SIMD-JSON", e.to_string()).into()
-        })
+        simd_json::to_writer(writer, value)
+            .map_err(|e| SerializationError::encode_failed("SIMD-JSON", e.to_string()).into())
     }
 }
 
