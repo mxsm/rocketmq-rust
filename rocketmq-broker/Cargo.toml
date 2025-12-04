@@ -73,3 +73,7 @@ path = "src/bin/broker_bootstrap_server.rs"
 [[bench]]
 name = "syncunsafecell_mut"
 harness = false
+
+[[bench]]
+name = "subscription_group_manager_benchmark"
+harness = false

@@ -67,7 +67,7 @@ impl Default for SubscriptionGroupConfig {
             group_name: CheetahString::default(),
 
             consume_enable: true,
-            consume_from_min_enable: false,
+            consume_from_min_enable: true,
             consume_broadcast_enable: true,
             consume_message_orderly: false,
 
@@ -92,7 +92,7 @@ impl Default for SubscriptionGroupConfig {
 
 impl SubscriptionGroupConfig {
     #[inline]
-    pub fn group_name(&self) -> &str {
+    pub fn group_name(&self) -> &CheetahString {
         &self.group_name
     }
 

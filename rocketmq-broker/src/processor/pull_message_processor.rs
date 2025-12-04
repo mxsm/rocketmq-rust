@@ -622,7 +622,7 @@ where
                 .subscription_group_manager()
                 .get_forbidden(
                     sgc_ref.group_name(),
-                    request_header.topic.as_str(),
+                    &request_header.topic,
                     PermName::INDEX_PERM_READ as i32,
                 );
             if read_forbidden {
