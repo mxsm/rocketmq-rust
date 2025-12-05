@@ -80,8 +80,10 @@ impl SelectMappedBufferResult {
             }
         }
     }
+}
 
-    pub fn release(&mut self) {
+impl Drop for SelectMappedBufferResult {
+    fn drop(&mut self) {
         if let Some(mapped_file) = self.mapped_file.take() {
             mapped_file.release()
         }

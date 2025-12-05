@@ -903,9 +903,9 @@ impl ConsumeQueueIterator {
 
 impl ReferredIterator<CqUnit> for ConsumeQueueIterator {
     fn release(&mut self) {
-        if let Some(mapped_file) = &mut self.smbr {
-            mapped_file.release();
-        }
+        // if let Some(mapped_file) = &mut self.smbr {
+        //     mapped_file.release();
+        // }
     }
 
     fn next_and_release(&mut self) -> Option<Self::Item> {

@@ -575,7 +575,7 @@ impl MappedFile for IoUringMappedFile {
             size,
             bytes: Some(bytes),
             is_in_cache: true,
-            ..Default::default()
+            mapped_file: None,
         })
     }
 

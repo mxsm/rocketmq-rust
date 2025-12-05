@@ -1144,7 +1144,7 @@ where
                     .broker_name
                     .as_str();
                 let message_count = result_inner.message_count();
-                for mut maped_buffer in result_inner.message_mapped_vec() {
+                for maped_buffer in result_inner.message_mapped_vec() {
                     if self
                         .broker_runtime_inner
                         .broker_config()
@@ -1156,7 +1156,7 @@ where
                         let mut bytes = maped_buffer.get_bytes().unwrap_or_default();
                         let message_ext_list =
                             message_decoder::decodes_batch(&mut bytes, true, false);
-                        maped_buffer.release();
+                        //maped_buffer.release();
                         for mut message_ext in message_ext_list {
                             let ck_info = ExtraInfoUtil::build_extra_info_with_offset(
                                 final_offset,
@@ -1184,7 +1184,8 @@ where
                                 start_offset: maped_buffer.start_offset,
                                 size: encode.len() as i32,
                                 bytes: Some(encode),
-                                ..Default::default()
+                                mapped_file: None,
+                                is_in_cache: true,
                             };
                             get_message_result.add_message_inner(tmp_result);
                         }

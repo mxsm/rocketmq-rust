@@ -2464,7 +2464,6 @@ impl ReputMessageServiceInner {
                     }
                 }
             }
-            result.release();
         }
 
         // Dispatch remaining messages in batch
@@ -2603,7 +2602,6 @@ impl ReputMessageServiceInner {
                 break;
             }
         }
-        result.release();
 
         if dispatch_batch.is_empty() {
             None
