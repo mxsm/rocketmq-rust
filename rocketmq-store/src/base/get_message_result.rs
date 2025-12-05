@@ -296,9 +296,9 @@ impl GetMessageResult {
 
     #[inline]
     pub fn release(&mut self) {
-        for mapped_buffer in &mut self.message_mapped_list {
-            mapped_buffer.release();
-        }
+        // for mapped_buffer in &mut self.message_mapped_list {
+        //     mapped_buffer.release();
+        // }
     }
 }
 

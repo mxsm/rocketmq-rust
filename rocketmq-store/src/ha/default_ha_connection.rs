@@ -662,7 +662,7 @@ impl WriteSocketService {
         }
 
         let next_offset = self.next_transfer_from_where.load(Ordering::Relaxed);
-        if let Some(mut select_result) = self
+        if let Some(select_result) = self
             .ha_service
             .get_default_message_store()
             .get_commit_log_data(next_offset)
@@ -698,7 +698,6 @@ impl WriteSocketService {
 
             self.send_data(this_offset, select_result.get_bytes(), size)
                 .await?;
-            select_result.release();
         } else {
             //self.ha_service.wait_for_running(100).await;
         }
