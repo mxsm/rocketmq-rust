@@ -141,27 +141,27 @@ pub struct RefactoredConnection {
 ///
 /// ```text
 /// ┌─────────────────────────────────────────────────────────────�?
-/// �?                  ConcurrentConnection                      �?
-/// �?                                                            �?
-/// �? Multiple Writers (cloneable Sender):                       �?
-/// �? Task1 �?�?                                                 �?
-/// �? Task2 �?├─�?mpsc::Sender<WriteCommand>                     �?
-/// �? Task3 �?�?          �?                                     �?
-/// �?                Channel Queue                               �?
-/// �?                     �?                                     �?
-/// �? Dedicated Writer Task:                                     �?
-/// �? loop {                                                     �?
-/// �?   cmd = rx.recv()                                          �?
-/// �?   match cmd {                                              �?
-/// �?     SendCommand => framed_writer.send(encoded)             �?
-/// �?     SendBytes => direct write                              �?
-/// �?     ...                                                    �?
-/// �?   }                                                        �?
-/// �? }                                                          �?
-/// �?                                                            �?
-/// �? Single Reader:                                             �?
-/// �? FramedRead<Codec> (no synchronization needed)              �?
-/// └─────────────────────────────────────────────────────────────�?
+/// +---------------------- ConcurrentConnection ----------------------+
+/// |                                                                |
+/// | Multiple Writers (cloneable Sender):                           |
+/// | Task1  |                                                      |
+/// | Task2  +---> mpsc::Sender<WriteCommand>                       |
+/// | Task3  |              |                                       |
+/// |                Channel Queue                                  |
+/// |                     |                                         |
+/// | Dedicated Writer Task:                                        |
+/// | loop {                                                        |
+/// |   cmd = rx.recv()                                             |
+/// |   match cmd {                                                 |
+/// |     SendCommand => framed_writer.send(encoded)                |
+/// |     SendBytes => direct write                                 |
+/// |     ...                                                       |
+/// |   }                                                           |
+/// | }                                                             |
+/// |                                                                |
+/// | Single Reader:                                                |
+/// | FramedRead<Codec> (no synchronization needed)                 |
+/// +----------------------------------------------------------------+
 /// ```
 ///
 /// # Advantages
