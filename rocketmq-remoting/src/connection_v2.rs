@@ -81,21 +81,21 @@ pub(crate) enum WriteCommand {
 /// # Architecture Design
 ///
 /// ```text
-/// ┌───────────────────────────────────────────────────────────�?
-/// �?             RefactoredConnection                         �?
-/// ├───────────────────────────────────────────────────────────�?
-/// �?                                                          �?
-/// �? Read Side (FramedRead):                                  �?
-/// �? TcpStream �?OwnedReadHalf �?FramedRead<Codec>            �?
-/// �?             �?                   �?                      �?
-/// �?      Direct Access         Auto Decode                   �?
-/// �?                                                          �?
-/// �? Write Side (FramedWrite - Lock-free):                    �?
-/// �? TcpStream �?OwnedWriteHalf �?FramedWrite<Codec>          �?
-/// �?             �?                   �?                      �?
-/// �?      Zero-copy Write        Codec Encode                 �?
-/// �?                                                          �?
-/// └───────────────────────────────────────────────────────────�?
+/// +-----------------------------------------------------------+
+/// |             RefactoredConnection                          |
+/// +-----------------------------------------------------------+
+/// |                                                           |
+/// | Read Side (FramedRead):                                   |
+/// | TcpStream -> OwnedReadHalf -> FramedRead<Codec>           |
+/// |             |                   |                         |
+/// |      Direct Access         Auto Decode                    |
+/// |                                                           |
+/// | Write Side (FramedWrite - Lock-free):                     |
+/// | TcpStream -> OwnedWriteHalf -> FramedWrite<Codec>         |
+/// |             |                   |                         |
+/// |      Zero-copy Write        Codec Encode                  |
+/// |                                                           |
+/// +-----------------------------------------------------------+
 /// ```
 ///
 /// # Core Advantages
