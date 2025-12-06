@@ -69,9 +69,10 @@ where
             request_code
         );
         match request_code {
-            RequestCode::SendReplyMessage | RequestCode::SendReplyMessageV2 => Ok(self
-                .process_request_inner(channel, ctx, request_code, request)
-                .await),
+            RequestCode::SendReplyMessage | RequestCode::SendReplyMessageV2 => {
+                self.process_request_inner(channel, ctx, request_code, request)
+                    .await
+            }
             _ => {
                 warn!(
                     "ReplyMessageProcessor received unknown request code: {:?}",
@@ -121,9 +122,8 @@ where
         ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
-        let request_header = parse_request_header(request);
-        let mut request_header = request_header.unwrap(); //need to optimize
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let mut request_header = parse_request_header(request)?;
         let mut mqtrace_context =
             self.inner
                 .build_msg_context(&channel, &ctx, &mut request_header, request);
@@ -142,7 +142,7 @@ where
 
         self.inner
             .execute_send_message_hook_after(Some(&mut response), &mut mqtrace_context);
-        Some(response)
+        Ok(Some(response))
     }
 
     async fn process_reply_message_request(
@@ -189,12 +189,20 @@ where
             return response;
         }
         let mut queue_id_int = request_header.queue_id;
-        let topic_config = self
+        let topic_config = match self
             .inner
             .broker_runtime_inner
             .topic_config_manager()
             .select_topic_config(request_header.topic())
-            .unwrap();
+        {
+            Some(config) => config,
+            None => {
+                warn!("Topic {} not found", request_header.topic());
+                return response
+                    .set_code(ResponseCode::TopicNotExist)
+                    .set_remark(format!("Topic {} does not exist", request_header.topic()));
+            }
+        };
         if queue_id_int < 0 {
             queue_id_int = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
         }
@@ -282,9 +290,18 @@ where
                 false
             }
             PutMessageStatus::MessageIllegal => {
-                /* warn!(
-                "the message is illegal, maybe msg body or properties length not matched. msg body length limit {}B.",
-                self.inner..getMaxMessageSize())*/
+                let max_size = self
+                    .inner
+                    .broker_runtime_inner
+                    .message_store()
+                    .as_ref()
+                    .map(|store| store.get_message_store_config().max_message_size)
+                    .unwrap_or(4 * 1024 * 1024); // Default 4MB
+                warn!(
+                    "the message is illegal, maybe msg body or properties length not matched. msg \
+                     body length limit {}B.",
+                    max_size
+                );
                 false
             }
             PutMessageStatus::PropertiesSizeExceeded => {
@@ -414,6 +431,14 @@ where
         request_header: &SendMessageRequestHeader,
         msg: &M,
     ) -> PushReplyResult {
+        // Clone message properties and add PUSH_REPLY_TIME
+        let mut msg_properties = msg.get_properties().clone();
+        msg_properties.insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_PUSH_REPLY_TIME),
+            CheetahString::from_string(get_current_millis().to_string()),
+        );
+        let properties_string = MessageDecoder::message_properties_to_string(&msg_properties);
+
         let reply_message_request_header = ReplyMessageRequestHeader {
             born_host: CheetahString::from_string(channel.remote_address().to_string()),
             store_host: CheetahString::from_string(
@@ -428,7 +453,7 @@ where
             sys_flag: request_header.sys_flag,
             born_timestamp: request_header.born_timestamp,
             flag: request_header.flag,
-            properties: request_header.properties.clone(),
+            properties: Some(properties_string),
             reconsume_times: request_header.reconsume_times,
             unit_mode: request_header.unit_mode,
             ..Default::default()
@@ -461,17 +486,30 @@ where
                         if response.code() == ResponseCode::Success as i32 {
                             push_reply_result.0 = true;
                         } else {
+                            let remark = response
+                                .remark()
+                                .map(|r| r.as_str())
+                                .unwrap_or("unknown error");
                             push_reply_result.1 = format!(
-                                "push reply message to client failed, response code: {},{}",
+                                "push reply message to {} failed, code: {}, remark: {}",
+                                sender_id,
                                 response.code(),
-                                sender_id
+                                remark
+                            );
+                            warn!(
+                                "push reply message to <{}> return fail, code: {}, remark: {}",
+                                sender_id,
+                                response.code(),
+                                remark
                             );
                         }
                     }
                     Err(error) => {
                         push_reply_result.1 = format!(
-                            "push reply message to client failed, error: {error},{sender_id}"
+                            "push reply message to {} failed, error: {}",
+                            sender_id, error
                         );
+                        warn!("push reply message to <{}> failed: {}", sender_id, error);
                     }
                 };
             } else {
