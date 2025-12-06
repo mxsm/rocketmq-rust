@@ -39,3 +39,4 @@ pub mod runtime;
 
 // Error helpers for unified error system
 pub mod error_helpers;
+pub mod smart_encode_buffer;

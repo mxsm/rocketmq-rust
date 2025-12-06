@@ -79,3 +79,7 @@ harness = false
 [[bench]]
 name = "simd_json_bench"
 harness = false
+
+[[bench]]
+name = "encode_buffer_bench"
+harness = false
