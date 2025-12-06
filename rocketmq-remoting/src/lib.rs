@@ -38,5 +38,6 @@ pub mod rpc;
 pub mod runtime;
 
 // Error helpers for unified error system
+pub mod connection_v2;
 pub mod error_helpers;
 pub mod smart_encode_buffer;
