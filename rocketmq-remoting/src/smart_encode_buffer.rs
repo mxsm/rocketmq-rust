@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-// encode_buffer.rs
+// smart_encode_buffer.rs
 //
 // High-performance adaptive EncodeBuffer with automatic shrink behavior.
 // - Expands as needed (using BytesMut growth rules).
@@ -153,8 +153,8 @@ impl EncodeBuffer {
     }
 
     /// Append a Bytes value into the buffer (will copy into internal BytesMut).
-    /// Note: if you already have a complete chunk (single Bytes) to send, use
-    /// send Bytes directly outside.
+    /// Note: if you already have a complete chunk (single Bytes) to send,
+    /// send the Bytes directly instead of appending them to the buffer.
     #[inline]
     pub fn append_bytes(&mut self, bytes: &Bytes) {
         self.track_expansion();
