@@ -155,28 +155,21 @@ where
     ) -> RemotingCommand {
         let mut response = RemotingCommand::create_response_command().set_opaque(request.opaque());
 
-        response
-            .add_ext_field(
-                MessageConst::PROPERTY_MSG_REGION,
-                self.inner
-                    .broker_runtime_inner
-                    .broker_config()
-                    .region_id
-                    .as_str(),
+        // Cache broker config values to reduce lock contention
+        let (region_id, trace_on, start_timstamp, store_reply_message_enable) = {
+            let config = self.inner.broker_runtime_inner.broker_config();
+            (
+                config.region_id.clone(),
+                config.trace_on,
+                config.start_accept_send_request_time_stamp as u64,
+                config.store_reply_message_enable,
             )
-            .add_ext_field(
-                MessageConst::PROPERTY_TRACE_SWITCH,
-                self.inner
-                    .broker_runtime_inner
-                    .broker_config()
-                    .trace_on
-                    .to_string(),
-            );
-        let start_timstamp = self
-            .inner
-            .broker_runtime_inner
-            .broker_config()
-            .start_accept_send_request_time_stamp as u64;
+        };
+
+        response
+            .add_ext_field(MessageConst::PROPERTY_MSG_REGION, region_id.as_str())
+            .add_ext_field(MessageConst::PROPERTY_TRACE_SWITCH, trace_on.to_string());
+
         if get_current_millis() < start_timstamp {
             return response
                 .set_code(ResponseCode::SystemError)
@@ -207,26 +200,16 @@ where
             queue_id_int = self.inner.random_queue_id(topic_config.write_queue_nums) as i32;
         }
 
-        let mut msg_inner = MessageExtBrokerInner::default();
-        msg_inner.set_topic(request_header.topic().to_owned());
-        msg_inner.message_ext_inner.queue_id = queue_id_int;
-        if let Some(body) = request.body() {
-            msg_inner.set_body(body.clone());
-        }
-        msg_inner.set_flag(request_header.flag);
-        MessageAccessor::set_properties(
-            &mut msg_inner,
-            MessageDecoder::string_to_message_properties(request_header.properties.as_ref()),
-        );
-        msg_inner.properties_string = request_header.properties.clone().unwrap_or_default();
-        msg_inner.message_ext_inner.born_timestamp = request_header.born_timestamp;
-        msg_inner.message_ext_inner.born_host = channel.remote_address();
-        msg_inner.message_ext_inner.store_host = self.inner.broker_runtime_inner.store_host();
-        msg_inner.message_ext_inner.reconsume_times = request_header.reconsume_times.unwrap_or(0);
+        // Build message inner with extracted helper
+        let mut msg_inner = self.build_msg_inner(channel, request, &request_header, queue_id_int);
 
         let mut push_reply_result = self
-            .push_reply_message(channel, ctx, &request_header, &msg_inner)
+            .push_reply_message(channel, ctx, &request_header, &mut msg_inner)
             .await;
+        
+        // Update properties_string after msg_inner properties are modified
+        msg_inner.properties_string = MessageDecoder::message_properties_to_string(msg_inner.get_properties());
+        
         let mut response_header = SendMessageResponseHeader::default();
         Self::handle_push_reply_result(
             &mut push_reply_result,
@@ -235,12 +218,8 @@ where
             queue_id_int,
         );
 
-        if self
-            .inner
-            .broker_runtime_inner
-            .broker_config()
-            .store_reply_message_enable
-        {
+        // Use cached config value
+        if store_reply_message_enable {
             let put_message_result = self
                 .inner
                 .broker_runtime_inner
@@ -260,6 +239,33 @@ where
             );
         }
         response.set_command_custom_header(response_header)
+    }
+
+    // Build MessageExtBrokerInner to improve readability
+    fn build_msg_inner(
+        &self,
+        channel: &Channel,
+        request: &RemotingCommand,
+        request_header: &SendMessageRequestHeader,
+        queue_id_int: i32,
+    ) -> MessageExtBrokerInner {
+        let mut msg_inner = MessageExtBrokerInner::default();
+        msg_inner.set_topic(request_header.topic().to_owned());
+        msg_inner.message_ext_inner.queue_id = queue_id_int;
+        if let Some(body) = request.body() {
+            msg_inner.set_body(body.clone());
+        }
+        msg_inner.set_flag(request_header.flag);
+        MessageAccessor::set_properties(
+            &mut msg_inner,
+            MessageDecoder::string_to_message_properties(request_header.properties.as_ref()),
+        );
+        msg_inner.properties_string = request_header.properties.clone().unwrap_or_default();
+        msg_inner.message_ext_inner.born_timestamp = request_header.born_timestamp;
+        msg_inner.message_ext_inner.born_host = channel.remote_address();
+        msg_inner.message_ext_inner.store_host = self.inner.broker_runtime_inner.store_host();
+        msg_inner.message_ext_inner.reconsume_times = request_header.reconsume_times.unwrap_or(0);
+        msg_inner
     }
 
     fn handle_put_message_result(
@@ -326,52 +332,25 @@ where
             .unwrap()
             .get(BrokerStatsManager::COMMERCIAL_OWNER)
             .cloned();
-        let commercial_size_per_msg = self
-            .inner
-            .broker_runtime_inner
-            .broker_config()
-            .commercial_size_per_msg;
+        // Cache config values (extract immediately to release lock)
+        let (commercial_size_per_msg, commercial_base_count) = {
+            let config = self.inner.broker_runtime_inner.broker_config();
+            (config.commercial_size_per_msg, config.commercial_base_count)
+        };
+
         if put_ok {
-            self.inner
-                .broker_runtime_inner
-                .broker_stats_manager()
-                .inc_topic_put_nums(
-                    topic,
-                    put_message_result.append_message_result().unwrap().msg_num,
-                    1,
-                );
-            self.inner
-                .broker_runtime_inner
-                .broker_stats_manager()
-                .inc_topic_put_size(
-                    topic,
-                    put_message_result
-                        .append_message_result()
-                        .unwrap()
-                        .wrote_bytes,
-                );
-            self.inner
-                .broker_runtime_inner
-                .broker_stats_manager()
-                .inc_broker_put_nums(
-                    topic,
-                    put_message_result.append_message_result().unwrap().msg_num,
-                );
-            response_header.set_msg_id(
-                put_message_result
-                    .append_message_result()
-                    .unwrap()
-                    .msg_id
-                    .clone()
-                    .unwrap_or_default(),
-            );
+            // Cache append_message_result to avoid repeated unwrap
+            let append_result = put_message_result.append_message_result().unwrap();
+            let stats_manager = self.inner.broker_runtime_inner.broker_stats_manager();
+
+            stats_manager.inc_topic_put_nums(topic, append_result.msg_num, 1);
+            stats_manager.inc_topic_put_size(topic, append_result.wrote_bytes);
+            stats_manager.inc_broker_put_nums(topic, append_result.msg_num);
+
+            response_header.set_msg_id(append_result.msg_id.clone().unwrap_or_default());
             response_header.set_queue_id(queue_id_int);
-            response_header.set_queue_offset(
-                put_message_result
-                    .append_message_result()
-                    .unwrap()
-                    .logics_offset,
-            );
+            response_header.set_queue_offset(append_result.logics_offset);
+
             if self.inner.has_send_message_hook() {
                 let msg_id = response_header.msg_id().clone();
                 let queue_id = Some(response_header.queue_id());
@@ -379,15 +358,8 @@ where
                 send_message_context.msg_id = msg_id;
                 send_message_context.queue_id = queue_id;
                 send_message_context.queue_offset = queue_offset;
-                let commercial_base_count = self
-                    .inner
-                    .broker_runtime_inner
-                    .broker_config()
-                    .commercial_base_count;
-                let wrote_size = put_message_result
-                    .append_message_result()
-                    .unwrap()
-                    .wrote_bytes;
+
+                let wrote_size = append_result.wrote_bytes;
                 let commercial_msg_num =
                     (wrote_size as f64 / commercial_size_per_msg as f64).ceil() as i32;
                 let inc_value = commercial_msg_num * commercial_base_count;
@@ -429,35 +401,11 @@ where
         channel: &Channel,
         _ctx: &ConnectionHandlerContext,
         request_header: &SendMessageRequestHeader,
-        msg: &M,
+        msg: &mut M,
     ) -> PushReplyResult {
-        // Clone message properties and add PUSH_REPLY_TIME
-        let mut msg_properties = msg.get_properties().clone();
-        msg_properties.insert(
-            CheetahString::from_static_str(MessageConst::PROPERTY_PUSH_REPLY_TIME),
-            CheetahString::from_string(get_current_millis().to_string()),
-        );
-        let properties_string = MessageDecoder::message_properties_to_string(&msg_properties);
-
-        let reply_message_request_header = ReplyMessageRequestHeader {
-            born_host: CheetahString::from_string(channel.remote_address().to_string()),
-            store_host: CheetahString::from_string(
-                self.inner.broker_runtime_inner.store_host().to_string(),
-            ),
-            store_timestamp: get_current_millis() as i64,
-            producer_group: request_header.producer_group.clone(),
-            topic: request_header.topic.clone(),
-            default_topic: request_header.default_topic.clone(),
-            default_topic_queue_nums: request_header.default_topic_queue_nums,
-            queue_id: request_header.queue_id,
-            sys_flag: request_header.sys_flag,
-            born_timestamp: request_header.born_timestamp,
-            flag: request_header.flag,
-            properties: Some(properties_string),
-            reconsume_times: request_header.reconsume_times,
-            unit_mode: request_header.unit_mode,
-            ..Default::default()
-        };
+        // Build reply message request header with properties
+        let reply_message_request_header =
+            self.build_reply_request_header(channel, request_header, msg);
         let mut command = RemotingCommand::create_request_command(
             RequestCode::PushReplyMessageToClient,
             reply_message_request_header,
@@ -476,6 +424,11 @@ where
                 .producer_manager()
                 .find_channel(sender_id.as_str());
             if let Some(mut channel) = channel {
+                // Add PROPERTY_PUSH_REPLY_TIME to message properties (same as Java)
+                msg.put_property(
+                    CheetahString::from_static_str(MessageConst::PROPERTY_PUSH_REPLY_TIME),
+                    CheetahString::from_string(get_current_millis().to_string()),
+                );
                 let push_response = self
                     .inner
                     .broker_to_client
@@ -527,6 +480,42 @@ where
             );
         }
         push_reply_result
+    }
+
+    // Build ReplyMessageRequestHeader with PUSH_REPLY_TIME
+    fn build_reply_request_header<M: MessageTrait>(
+        &self,
+        channel: &Channel,
+        request_header: &SendMessageRequestHeader,
+        msg: &M,
+    ) -> ReplyMessageRequestHeader {
+        // Clone message properties and add PUSH_REPLY_TIME
+        let mut msg_properties = msg.get_properties().clone();
+        msg_properties.insert(
+            CheetahString::from_static_str(MessageConst::PROPERTY_PUSH_REPLY_TIME),
+            CheetahString::from_string(get_current_millis().to_string()),
+        );
+        let properties_string = MessageDecoder::message_properties_to_string(&msg_properties);
+
+        ReplyMessageRequestHeader {
+            born_host: CheetahString::from_string(channel.remote_address().to_string()),
+            store_host: CheetahString::from_string(
+                self.inner.broker_runtime_inner.store_host().to_string(),
+            ),
+            store_timestamp: get_current_millis() as i64,
+            producer_group: request_header.producer_group.clone(),
+            topic: request_header.topic.clone(),
+            default_topic: request_header.default_topic.clone(),
+            default_topic_queue_nums: request_header.default_topic_queue_nums,
+            queue_id: request_header.queue_id,
+            sys_flag: request_header.sys_flag,
+            born_timestamp: request_header.born_timestamp,
+            flag: request_header.flag,
+            properties: Some(properties_string),
+            reconsume_times: request_header.reconsume_times,
+            unit_mode: request_header.unit_mode,
+            ..Default::default()
+        }
     }
 }
 
