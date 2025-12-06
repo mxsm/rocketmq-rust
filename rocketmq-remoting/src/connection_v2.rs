@@ -44,6 +44,36 @@ use uuid::Uuid;
 use crate::codec::remoting_command_codec::CompositeCodec;
 use crate::protocol::remoting_command::RemotingCommand;
 
+/// Helper function to write all data using vectored I/O
+///
+/// Ensures all data in IoSlice is written by looping until complete
+async fn write_all_vectored(
+    writer: &mut OwnedWriteHalf,
+    mut slices: &mut [IoSlice<'_>],
+) -> RocketMQResult<()> {
+    while !slices.is_empty() {
+        let written = writer.write_vectored(slices).await.map_err(|e| {
+            RocketMQError::Network(rocketmq_error::NetworkError::connection_failed(
+                "write_vectored",
+                format!("{}", e),
+            ))
+        })?;
+
+        if written == 0 {
+            return Err(RocketMQError::Network(
+                rocketmq_error::NetworkError::connection_failed(
+                    "write_vectored",
+                    "Write returned 0 bytes",
+                ),
+            ));
+        }
+
+        // Advance slices past the written data
+        IoSlice::advance_slices(&mut slices, written);
+    }
+    Ok(())
+}
+
 /// Connection state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionState {
@@ -140,28 +170,27 @@ pub struct RefactoredConnection {
 /// # Architecture
 ///
 /// ```text
-/// ┌─────────────────────────────────────────────────────────────�?
 /// +---------------------- ConcurrentConnection ----------------------+
-/// |                                                                |
-/// | Multiple Writers (cloneable Sender):                           |
-/// | Task1  |                                                      |
-/// | Task2  +---> mpsc::Sender<WriteCommand>                       |
-/// | Task3  |              |                                       |
-/// |                Channel Queue                                  |
-/// |                     |                                         |
-/// | Dedicated Writer Task:                                        |
-/// | loop {                                                        |
-/// |   cmd = rx.recv()                                             |
-/// |   match cmd {                                                 |
-/// |     SendCommand => framed_writer.send(encoded)                |
-/// |     SendBytes => direct write                                 |
-/// |     ...                                                       |
-/// |   }                                                           |
-/// | }                                                             |
-/// |                                                                |
-/// | Single Reader:                                                |
-/// | FramedRead<Codec> (no synchronization needed)                 |
-/// +----------------------------------------------------------------+
+/// |                                                                  |
+/// | Multiple Writers (cloneable Sender):                             |
+/// | Task1  |                                                         |
+/// | Task2  +---> mpsc::Sender<WriteCommand>                          |
+/// | Task3  |              |                                          |
+/// |                Channel Queue                                     |
+/// |                     |                                            |
+/// | Dedicated Writer Task:                                           |
+/// | loop {                                                           |
+/// |   cmd = rx.recv()                                                |
+/// |   match cmd {                                                    |
+/// |     SendCommand => framed_writer.send(encoded)                   |
+/// |     SendBytes => direct write                                    |
+/// |     ...                                                          |
+/// |   }                                                              |
+/// | }                                                                |
+/// |                                                                  |
+/// | Single Reader:                                                   |
+/// | FramedRead<Codec> (no synchronization needed)                    |
+/// +------------------------------------------------------------------+
 /// ```
 ///
 /// # Advantages
@@ -346,10 +375,10 @@ impl RefactoredConnection {
         let inner = self.framed_writer.get_mut();
 
         // Convert to IoSlice for writev (zero-copy scatter-gather I/O)
-        let slices: Vec<IoSlice> = chunks.iter().map(|b| IoSlice::new(b.as_ref())).collect();
+        let mut slices: Vec<IoSlice> = chunks.iter().map(|b| IoSlice::new(b.as_ref())).collect();
 
-        // Direct write (zero-copy)
-        let _ = inner.write_vectored(&slices).await?;
+        // Direct write (zero-copy) - ensure all data is written
+        write_all_vectored(inner, &mut slices).await?;
         inner.flush().await?;
 
         Ok(())
@@ -445,9 +474,9 @@ impl RefactoredConnection {
             slices.push(IoSlice::new(body.as_ref()));
         }
 
-        // Send all data at once (true scatter-gather I/O)
+        // Send all data at once (true scatter-gather I/O) - ensure all data is written
         let inner = self.framed_writer.get_mut();
-        let _ = inner.write_vectored(&slices).await?;
+        write_all_vectored(inner, &mut slices).await?;
         inner.flush().await?;
 
         Ok(())
@@ -631,6 +660,9 @@ impl ConcurrentConnection {
         mut remote_cmd: RemotingCommand,
     ) -> RocketMQResult<()> {
         remote_cmd.fast_header_encode(encode_buffer);
+        if let Some(body) = remote_cmd.take_body() {
+            encode_buffer.extend_from_slice(&body);
+        }
         let bytes = encode_buffer.split().freeze();
         framed_writer.send(bytes).await?;
         framed_writer.flush().await?;
@@ -655,6 +687,9 @@ impl ConcurrentConnection {
     ) -> RocketMQResult<()> {
         for mut cmd in commands {
             cmd.fast_header_encode(encode_buffer);
+            if let Some(body) = cmd.take_body() {
+                encode_buffer.extend_from_slice(&body);
+            }
             let bytes = encode_buffer.split().freeze();
             framed_writer.feed(bytes).await?;
         }
@@ -679,8 +714,9 @@ impl ConcurrentConnection {
         framed_writer: &mut FramedWrite<OwnedWriteHalf, CompositeCodec>,
         bytes_vec: Vec<Bytes>,
     ) -> RocketMQResult<()> {
-        let io_slices: Vec<IoSlice> = bytes_vec.iter().map(|b| IoSlice::new(b)).collect();
-        let _ = framed_writer.get_mut().write_vectored(&io_slices).await?;
+        let mut io_slices: Vec<IoSlice> =
+            bytes_vec.iter().map(|b| IoSlice::new(b.as_ref())).collect();
+        write_all_vectored(framed_writer.get_mut(), &mut io_slices).await?;
         framed_writer.flush().await?;
         Ok(())
     }
@@ -694,12 +730,15 @@ impl ConcurrentConnection {
     ) -> RocketMQResult<()> {
         // Send header via codec
         remote_cmd.fast_header_encode(encode_buffer);
+        if let Some(body) = remote_cmd.take_body() {
+            encode_buffer.extend_from_slice(&body);
+        }
         let header_bytes = encode_buffer.split().freeze();
         framed_writer.send(header_bytes).await?;
 
-        // Zero-copy send bodies
-        let io_slices: Vec<IoSlice> = bodies.iter().map(|b| IoSlice::new(b)).collect();
-        let _ = framed_writer.get_mut().write_vectored(&io_slices).await?;
+        // Zero-copy send bodies - ensure all data is written
+        let mut io_slices: Vec<IoSlice> = bodies.iter().map(|b| IoSlice::new(b.as_ref())).collect();
+        write_all_vectored(framed_writer.get_mut(), &mut io_slices).await?;
         framed_writer.flush().await?;
         Ok(())
     }
@@ -713,8 +752,9 @@ impl ConcurrentConnection {
         let mut all_bytes = vec![header_bytes];
         all_bytes.extend(bodies);
 
-        let io_slices: Vec<IoSlice> = all_bytes.iter().map(|b| IoSlice::new(b)).collect();
-        let _ = framed_writer.get_mut().write_vectored(&io_slices).await?;
+        let mut io_slices: Vec<IoSlice> =
+            all_bytes.iter().map(|b| IoSlice::new(b.as_ref())).collect();
+        write_all_vectored(framed_writer.get_mut(), &mut io_slices).await?;
         framed_writer.flush().await?;
         Ok(())
     }
