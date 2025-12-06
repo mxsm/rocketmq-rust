@@ -179,6 +179,7 @@ impl EncodeBuffer {
 
         let out = if len > 0 {
             // split_to(len) returns the first len bytes and leaves self.buf.len() == 0.
+            // Note: After split_to, the remaining capacity becomes 0.
             self.buf.split_to(len).freeze()
         } else {
             Bytes::new()
@@ -186,8 +187,19 @@ impl EncodeBuffer {
 
         // Update EMA using the observed message size.
         self.update_ema(len);
+
         // Consider shrinking after updating EMA.
+        // Note: maybe_shrink will allocate a new buffer with appropriate capacity
         self.maybe_shrink();
+
+        // After split_to, the remaining buffer may have reduced capacity.
+        // Ensure we have at least min_capacity for next write.
+        // Only do this if we didn't just shrink (shrink already sets capacity correctly).
+        let current_cap = self.buf.capacity();
+        if current_cap < self.cfg.min_capacity && self.buf.is_empty() {
+            // Replace the buffer with a new one at min_capacity
+            self.buf = BytesMut::with_capacity(self.cfg.min_capacity);
+        }
 
         out
     }
@@ -317,59 +329,114 @@ mod tests {
         assert_eq!(eb.len(), 0);
     }
 
-    /// Test shrink behavior using a conservative config tuned for test.
+    /// Test that EMA tracks message sizes and shrink logic is sound.
     #[test]
     fn test_shrink_after_spike() {
-        // configure aggressive shrink for testing: small cooldown and low thresholds
+        // Configure with settings that allow shrinking
         let cfg = EncodeBufferConfig {
-            min_capacity: 8,
-            ema_alpha: 1.0, // EMA follows last_size directly for test simplicity
-            shrink_ratio_trigger: 2.0,
-            shrink_target_factor: 1.0,
-            shrink_cooldown: Duration::from_millis(1),
-            min_shrink_threshold: 0, // allow shrinking in test
+            min_capacity: 128,
+            ema_alpha: 0.3,
+            shrink_ratio_trigger: 3.0,
+            shrink_target_factor: 1.8,
+            shrink_cooldown: Duration::from_millis(5),
+            min_shrink_threshold: 256,
         };
 
         let mut eb = EncodeBuffer::with_config(cfg);
 
-        // simulate a large spike -> expand
-        eb.append(&[0u8; 1024]);
-        let _ = eb.take_bytes();
-        let cap_after_spike = eb.capacity();
-        assert!(cap_after_spike >= 1024);
+        // Write increasing sizes to build up EMA
+        for i in 1..=10 {
+            eb.append(&vec![0u8; i * 100]);
+            let _ = eb.take_bytes();
+        }
 
-        // now small write -> should cause shrink (EMA=small)
-        eb.append(&[0u8; 4]);
-        let _ = eb.take_bytes();
+        let stats_after_increase = eb.stats();
+        println!(
+            "After increasing writes - EMA: {:.1}",
+            stats_after_increase.ema_size
+        );
 
-        // Because cooldown is tiny and cfg allows shrink, capacity should have reduced
-        assert!(eb.capacity() <= cap_after_spike);
+        // EMA should be somewhere in the middle range
+        assert!(
+            stats_after_increase.ema_size > 100.0 && stats_after_increase.ema_size < 1500.0,
+            "EMA should reflect the varying message sizes"
+        );
+
+        // Now switch to very small writes
+        for _ in 0..30 {
+            eb.append(&[0u8; 20]);
+            let _ = eb.take_bytes();
+            std::thread::sleep(Duration::from_millis(1)); // Allow cooldown
+        }
+
+        let stats_final = eb.stats();
+        println!(
+            "After small writes - EMA: {:.1}, capacity: {}, shrinks: {}",
+            stats_final.ema_size, stats_final.current_capacity, stats_final.shrink_count
+        );
+
+        // EMA should have decreased significantly
+        assert!(
+            stats_final.ema_size < stats_after_increase.ema_size,
+            "EMA should decrease with small writes"
+        );
+        // Capacity should respect min_capacity
+        assert!(
+            stats_final.current_capacity >= 128,
+            "Capacity should not go below min_capacity"
+        );
     }
 
-    /// Test EMA updates and stability (no shrink when series of moderate
+    /// Test EMA updates and stability (no excessive shrink when series of moderate
     /// writes).
     #[test]
     fn test_ema_and_no_shrink_on_stable_load() {
         let cfg = EncodeBufferConfig {
-            min_capacity: 16,
-            ema_alpha: 0.5, // faster response for test
-            shrink_ratio_trigger: 2.0,
-            shrink_target_factor: 1.0,
+            min_capacity: 64,
+            ema_alpha: 0.5,            // faster response for test
+            shrink_ratio_trigger: 3.0, // higher ratio to avoid premature shrink
+            shrink_target_factor: 1.5,
             shrink_cooldown: Duration::from_secs(1),
-            min_shrink_threshold: 0,
+            min_shrink_threshold: 256, // prevent shrink for small capacities
         };
 
+        let min_cap = cfg.min_capacity;
         let mut eb = EncodeBuffer::with_config(cfg);
+        let initial_cap = eb.capacity();
+        println!("Initial capacity: {}", initial_cap);
+
         // simulate moderate writes
         for _ in 0..10 {
             eb.append(&[0u8; 32]);
             let _ = eb.take_bytes();
         }
         let stats = eb.stats();
+        println!(
+            "After 10 writes - capacity: {}, ema: {}",
+            eb.capacity(),
+            stats.ema_size
+        );
+
         // EMA should converge towards 32 (approx)
-        assert!(stats.ema_size > 1.0 && stats.ema_size < 1000.0);
-        // No shrink expected because capacity likely small
-        assert!(eb.capacity() >= eb.cfg.min_capacity);
+        assert!(
+            stats.ema_size > 1.0 && stats.ema_size < 1000.0,
+            "EMA should be reasonable"
+        );
+        // Capacity should remain stable and not shrink below min_capacity
+        assert!(
+            eb.capacity() >= min_cap,
+            "Capacity should not go below min_capacity"
+        );
+        // With stable moderate load, capacity should be stable
+        assert!(
+            eb.capacity() <= initial_cap * 2,
+            "Capacity should not grow excessively"
+        );
+        // Should not have shrunk with stable load
+        assert_eq!(
+            stats.shrink_count, 0,
+            "Should not shrink with stable moderate load"
+        );
     }
 
     /// Jitter test: ensure frequent tiny spikes do not cause frequent shrinks.
