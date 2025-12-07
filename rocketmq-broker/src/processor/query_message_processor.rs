@@ -53,9 +53,10 @@ where
             request_code
         );
         match request_code {
-            RequestCode::QueryMessage | RequestCode::ViewMessageById => Ok(self
-                .process_request_inner(channel, ctx, request_code, request)
-                .await),
+            RequestCode::QueryMessage | RequestCode::ViewMessageById => {
+                self.process_request_inner(channel, ctx, request_code, request)
+                    .await
+            }
             _ => {
                 warn!(
                     "QueryMessageProcessor received unknown request code: {:?}",
@@ -97,11 +98,11 @@ where
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match request_code {
             RequestCode::QueryMessage => self.query_message(channel, ctx, request).await,
             RequestCode::ViewMessageById => self.view_message_by_id(channel, ctx, request).await,
-            _ => None,
+            _ => Ok(None),
         }
     }
 
@@ -110,7 +111,7 @@ where
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command_with_header(
             QueryMessageResponseHeader::default(),
         );
@@ -125,7 +126,7 @@ where
                 .message_store_config()
                 .default_query_max_num as i32;
         }
-        let query_message_result = self
+        let Some(query_message_result) = self
             .broker_runtime_inner
             .message_store()
             .as_ref()
@@ -137,7 +138,14 @@ where
                 request_header.begin_timestamp,
                 request_header.end_timestamp,
             )
-            .await?;
+            .await
+        else {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::QueryNotFound)
+                    .set_remark("query message failed, no result returned"),
+            ));
+        };
 
         let response_header = response
             .read_custom_header_mut::<QueryMessageResponseHeader>()
@@ -152,13 +160,13 @@ where
             if let Some(body) = message_data {
                 response.set_body_mut_ref(body);
             }
-            return Some(response);
+            return Ok(Some(response));
         }
-        Some(
+        Ok(Some(
             response
                 .set_code(ResponseCode::QueryNotFound)
                 .set_remark("can not find message, maybe time range not correct"),
-        )
+        ))
     }
 
     async fn view_message_by_id(
@@ -166,7 +174,7 @@ where
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request
             .decode_command_custom_header::<ViewMessageRequestHeader>()
@@ -182,15 +190,15 @@ where
             if let Some(body) = message_data {
                 response.set_body_mut_ref(body)
             }
-            return Some(response);
+            return Ok(Some(response));
         }
-        Some(
+        Ok(Some(
             response
                 .set_code(ResponseCode::SystemError)
                 .set_remark(format!(
                     "can not find message by offset: {}",
                     request_header.offset
                 )),
-        )
+        ))
     }
 }
