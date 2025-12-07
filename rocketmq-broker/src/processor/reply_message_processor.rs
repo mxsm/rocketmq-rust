@@ -206,10 +206,11 @@ where
         let mut push_reply_result = self
             .push_reply_message(channel, ctx, &request_header, &mut msg_inner)
             .await;
-        
+
         // Update properties_string after msg_inner properties are modified
-        msg_inner.properties_string = MessageDecoder::message_properties_to_string(msg_inner.get_properties());
-        
+        msg_inner.properties_string =
+            MessageDecoder::message_properties_to_string(msg_inner.get_properties());
+
         let mut response_header = SendMessageResponseHeader::default();
         Self::handle_push_reply_result(
             &mut push_reply_result,
