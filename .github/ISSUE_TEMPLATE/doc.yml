@@ -15,41 +15,58 @@
 # limitations under the License.
 #
 
-name: Documentation Related
-title: "[Doc📝] Documentation Related "
-description: I find some issues related to the documentation.
+name: Documentation
+title: "[Doc📝] "
+description: Report documentation issues or improvements
 labels: [ "documentation📝" ]
 body:
-  - type: checkboxes
+  - type: dropdown
+    id: issue-type
     attributes:
-      label: Search before creation
-      description: >
-        Please make sure to search in the [issues](https://github.com/mxsm/rocketmq-rust/issues)
-        first to see whether the same issue was reported already.
+      label: Issue Type
+      description: Select the type of documentation issue
       options:
-        - label: >
-            I had searched in the [issues](https://github.com/mxsm/rocketmq-rust/issues) and found
-            no similar issues.
-          required: true
+        - Typo/Grammar
+        - Missing documentation
+        - Incorrect/Outdated information
+        - Improvement suggestion
+    validations:
+      required: true
 
   - type: textarea
     attributes:
-      label: Documentation Related
-      description: Describe the suggestion about document.
-      placeholder: >
-        e.g There is a typo
+      label: Location
+      description: Where is the issue?
+      placeholder: |
+        File: README.md line 42
+        Or: https://docs.rs/rocketmq-rust/...
     validations:
-      required: false
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Description
+      description: What needs to be fixed or improved?
+      placeholder: The example code is outdated and doesn't compile
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Suggested Fix
+      description: How should it be corrected?
+      placeholder: |
+        Change:
+        ```rust
+        // old code
+        ```
+        To:
+        ```rust
+        // new code
+        ```
 
   - type: checkboxes
     attributes:
-      label: Are you willing to submit PR?
-      description: >
-        This is absolutely not required, but we are happy to guide you in the contribution process
-        especially if you already have a good understanding of how to implement the fix.
+      label: Willing to contribute?
       options:
-        - label: Yes I am willing to submit a PR!
-
-  - type: markdown
-    attributes:
-      value: "Thanks for completing our form!"
+        - label: I can submit a PR for this

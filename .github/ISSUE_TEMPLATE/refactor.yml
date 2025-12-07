@@ -16,59 +16,45 @@
 #
 
 name: Code Refactor
-title: "[Refactor♻️]short description of the refactor"
-description: Template for creating issues related to code refactoring
+title: "[Refactor♻️] "
+description: Propose code refactoring for better quality
 labels: [ 'refactor♻️' ]
 
 body:
-  - type: markdown
+  - type: textarea
     attributes:
-      value: |
-        ## Description
-        <!-- Provide a clear and concise description of the changes to be made in the refactor. -->
-        - Why is this refactor necessary? (e.g., code readability, performance, maintainability)
-        - What is the expected outcome of the refactor?
+      label: Target Code
+      description: Which part needs refactoring?
+      placeholder: |
+        Module: rocketmq-broker/src/processor/
+        Files: reply_message_processor.rs, query_message_processor.rs
+    validations:
+      required: true
 
   - type: textarea
     attributes:
-      label: "Which part of the code will be refactored?"
-      description: "Specify the files, modules, or functions that will be changed."
-      placeholder: "E.g., refactor the user authentication module"
+      label: Problems
+      description: What issues are being addressed?
+      placeholder: |
+        - Code duplication in message handling
+        - Complex nested conditions
+        - Poor error handling
+    validations:
+      required: true
 
   - type: textarea
     attributes:
-      label: "What problems does the refactor aim to solve?"
-      description: "List the issues, inefficiencies, or code smells being addressed."
-      placeholder: "E.g., code duplication, long functions, lack of test coverage"
+      label: Proposed Changes
+      description: How to improve it?
+      placeholder: |
+        1. Extract common logic to shared function
+        2. Use early returns for better readability
+        3. Implement proper Result types
+    validations:
+      required: true
 
   - type: textarea
     attributes:
-      label: "Do you have any specific design or implementation considerations?"
-      description: "Any specific patterns, tools, or libraries to be used?"
-      placeholder: "E.g., use of design patterns, prefer async/await over callbacks, etc."
-
-  - type: textarea
-    attributes:
-      label: "Is there a related issue or PR?"
-      description: "Link to any related GitHub issues or pull requests that are part of the refactor."
-      placeholder: "E.g., #123, PR #456"
-
-  - type: checkboxes
-    attributes:
-      label: "Checklist"
-      options:
-        - label: >
-            Ensure the refactor does not introduce new bugs
-          required: false
-        - label: >
-            Update unit tests if applicable
-          required: false
-        - label: >
-            Ensure the refactor does not negatively impact performance
-          required: false
-        - label: >
-            Document any new patterns or architecture changes
-          required: false
-        - label: >
-            Test the refactor in different environments (e.g., staging, production)
-          required: false
+      label: Related Issues/PRs
+      description: Links to related work
+      placeholder: "Fixes #123, Related to #456"

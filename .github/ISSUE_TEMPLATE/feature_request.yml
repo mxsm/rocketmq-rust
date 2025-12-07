@@ -16,43 +16,51 @@
 #
 
 
-name: Feature Request
-title: "[Feature🚀] New feature title"
-description: Suggest an idea for this project.
+name: Feature/Enhancement Request
+title: "[Feature🚀] "
+description: Suggest a new feature or improvement
 labels: [ "feature🚀" ]
 body:
-  - type: textarea
+  - type: dropdown
+    id: type
     attributes:
-      label: Is Your Feature Request Related to a Problem?
-      description: Please Describe It.
-      placeholder: >
-        A clear and concise description of what the problem is.
+      label: Type
+      description: Choose the type of request
+      options:
+        - New Feature
+        - Enhancement (improvement to existing functionality)
     validations:
-      required: false
+      required: true
 
   - type: textarea
     attributes:
-      label: Describe the Solution You'd Like
-      description: Describe how you solved it.
-      placeholder: >
-        A clear and concise description of what you want to happen.
+      label: Problem/Motivation
+      description: What problem does this solve? Why is it needed?
+      placeholder: Currently, users cannot...
     validations:
-      required: false
+      required: true
 
   - type: textarea
     attributes:
-      label: Describe Alternatives You've Considered
-      description: Describe your solution
-      placeholder: >
-        A clear and concise description of any alternative solutions or features you've considered.
+      label: Proposed Solution
+      description: How would you implement this?
+      placeholder: |
+        Add a new API that allows...
+        
+        Example:
+        ```rust
+        let producer = Producer::new();
+        ```
     validations:
-      required: false
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Alternatives
+      description: Other approaches you've considered
+      placeholder: Could also use... but that has limitations...
 
   - type: textarea
     attributes:
       label: Additional Context
-      description: Additional context.
-      placeholder: >
-        Add any other context about the problem here.
-    validations:
-      required: false
+      description: Links, references, or examples
