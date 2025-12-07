@@ -16,60 +16,42 @@
 #
 
 name: Unit Test
-title: "[Unit Test🧪] Unit test title"
-description: I want to do some unit tests for this project
+title: "[Test🧪] "
+description: Propose unit tests for better coverage
 labels: [ "testing🧪" ]
 body:
-  - type: markdown
-    attributes:
-      value: |
-        For better global communication, Please write in English.
-
   - type: checkboxes
     attributes:
-      label: Search before asking
-      description: >
-        Please make sure to search in the [issues](https://github.com/mxsm/rocketmq-rust/issues?q=is%3Aissue)
-        first to see whether the same issue was reported already.
+      label: Prerequisites
       options:
-        - label: >
-            I had searched in the [issues](https://github.com/mxsm/rocketmq-rust/issues?q=is%3Aissue) and found
-            no similar issues.
+        - label: I have searched existing test issues
           required: true
 
   - type: textarea
     attributes:
-      label: Unit test request
-      description: Describe the unit test.
-      placeholder: >
-        GitHub issues whether someone else has already reported your issue?
-        Maybe the unit tests you want to do have already been done?
+      label: Test Scope
+      description: What needs testing?
+      placeholder: |
+        Module: rocketmq-store
+        Files: commit_log.rs, consume_queue.rs
+        Coverage: Currently 45%, target 80%
     validations:
-      required: false
+      required: true
 
   - type: textarea
     attributes:
-      label: Describe the unit tests you want to do
-      description: Describe the unit test.
-      value: |
-        Module name:
-        Located at:
-        Task status: ×(unfinished) / √(finished)
-        | Task Status | Class | Type |
-        | :------: | :------ | :------ |
-        | × | xxxxxx | xxxxxx |
+      label: Test Cases
+      description: List test scenarios
+      placeholder: |
+        - [ ] Test commit log append operation
+        - [ ] Test commit log recovery on restart
+        - [ ] Test consume queue index building
+        - [ ] Test concurrent read/write scenarios
     validations:
-      required: false
+      required: true
 
   - type: checkboxes
     attributes:
-      label: Are you willing to submit PR?
-      description: >
-        This is absolutely not required, but we are happy to guide you in the contribution process
-        especially if you already have a good understanding of how to implement the fix.
+      label: Willing to contribute?
       options:
-        - label: Yes I am willing to submit a PR!
-
-  - type: markdown
-    attributes:
-      value: "Thanks for completing our form!"
+        - label: I can submit a PR for this
