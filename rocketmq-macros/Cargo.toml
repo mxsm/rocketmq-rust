@@ -26,4 +26,4 @@ criterion = { version = "0.8", features = ["html_reports"] }
 cheetah-string = { workspace = true }
 rocketmq-error = { workspace = true }
 rocketmq-remoting = { workspace = true }
-rocketmq-macros = { workspace = true }
+# rocketmq-macros = { workspace = true }  # Removed: proc-macro crates cannot depend on themselves

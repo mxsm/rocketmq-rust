@@ -2930,7 +2930,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rocketmq-error",
- "rocketmq-macros",
  "rocketmq-remoting",
  "syn 2.0.111",
 ]
