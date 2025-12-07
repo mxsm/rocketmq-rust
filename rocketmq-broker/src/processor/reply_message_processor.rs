@@ -385,9 +385,9 @@ where
         response_header: &mut SendMessageResponseHeader,
         queue_id_int: i32,
     ) {
-        if !push_reply_result.0 {
+        if !push_reply_result.success {
             response.set_code_mut(ResponseCode::SystemError);
-            response.set_remark_mut(push_reply_result.1.clone());
+            response.set_remark_mut(push_reply_result.remark.clone());
         } else {
             response.set_code_mut(ResponseCode::Success);
             //response.set_remark_mut(None);
@@ -404,7 +404,39 @@ where
         request_header: &SendMessageRequestHeader,
         msg: &mut M,
     ) -> PushReplyResult {
-        // Build reply message request header with properties
+        let sender_id = msg.get_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT,
+        ));
+
+        let Some(sender_id) = sender_id else {
+            warn!(
+                "{} is null, can not reply message",
+                MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT
+            );
+            return PushReplyResult::failure(format!(
+                "{} is null, can not reply message",
+                MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT
+            ));
+        };
+
+        let Some(mut reply_channel) = self
+            .inner
+            .broker_runtime_inner
+            .producer_manager()
+            .find_channel(sender_id.as_str())
+        else {
+            let msg = format!("can not find channel by sender_id: {sender_id}");
+            warn!("{}", msg);
+            return PushReplyResult::failure(msg);
+        };
+
+        // Add PROPERTY_PUSH_REPLY_TIME to message properties BEFORE building header
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_PUSH_REPLY_TIME),
+            CheetahString::from_string(get_current_millis().to_string()),
+        );
+
+        // Build reply message request header with properties (including PROPERTY_PUSH_REPLY_TIME)
         let reply_message_request_header =
             self.build_reply_request_header(channel, request_header, msg);
         let mut command = RemotingCommand::create_request_command(
@@ -414,89 +446,53 @@ where
         if let Some(body) = msg.get_body().cloned() {
             command.set_body_mut_ref(body);
         }
-        let sender_id = msg.get_property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT,
-        ));
-        let mut push_reply_result = PushReplyResult(false, "".to_string());
-        if let Some(sender_id) = sender_id {
-            let channel = self
-                .inner
-                .broker_runtime_inner
-                .producer_manager()
-                .find_channel(sender_id.as_str());
-            if let Some(mut channel) = channel {
-                // Add PROPERTY_PUSH_REPLY_TIME to message properties (same as Java)
-                msg.put_property(
-                    CheetahString::from_static_str(MessageConst::PROPERTY_PUSH_REPLY_TIME),
-                    CheetahString::from_string(get_current_millis().to_string()),
-                );
-                let push_response = self
-                    .inner
-                    .broker_to_client
-                    .call_client(&mut channel, command, 3000)
-                    .await;
-                match push_response {
-                    Ok(response) => {
-                        if response.code() == ResponseCode::Success as i32 {
-                            push_reply_result.0 = true;
-                        } else {
-                            let remark = response
-                                .remark()
-                                .map(|r| r.as_str())
-                                .unwrap_or("unknown error");
-                            push_reply_result.1 = format!(
-                                "push reply message to {} failed, code: {}, remark: {}",
-                                sender_id,
-                                response.code(),
-                                remark
-                            );
-                            warn!(
-                                "push reply message to <{}> return fail, code: {}, remark: {}",
-                                sender_id,
-                                response.code(),
-                                remark
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        push_reply_result.1 = format!(
-                            "push reply message to {} failed, error: {}",
-                            sender_id, error
-                        );
-                        warn!("push reply message to <{}> failed: {}", sender_id, error);
-                    }
-                };
-            } else {
-                warn!("can not find channel by sender_id: {}", sender_id);
-                push_reply_result.1 = format!("can not find channel by sender_id: {sender_id}");
+
+        match self
+            .inner
+            .broker_to_client
+            .call_client(&mut reply_channel, command, 3000)
+            .await
+        {
+            Ok(response) if response.code() == ResponseCode::Success as i32 => {
+                PushReplyResult::success()
             }
-        } else {
-            warn!(
-                " {}is null, can not reply message",
-                MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT
-            );
-            push_reply_result.1 = format!(
-                "{} is null, can not reply message",
-                MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT
-            );
+            Ok(response) => {
+                let remark = response
+                    .remark()
+                    .map(|r| r.as_str())
+                    .unwrap_or("unknown error");
+                warn!(
+                    "push reply message to <{}> return fail, code: {}, remark: {}",
+                    sender_id,
+                    response.code(),
+                    remark
+                );
+                PushReplyResult::failure(format!(
+                    "push reply message to {} failed, code: {}, remark: {}",
+                    sender_id,
+                    response.code(),
+                    remark
+                ))
+            }
+            Err(error) => {
+                warn!("push reply message to <{}> failed: {}", sender_id, error);
+                PushReplyResult::failure(format!(
+                    "push reply message to {} failed, error: {}",
+                    sender_id, error
+                ))
+            }
         }
-        push_reply_result
     }
 
-    // Build ReplyMessageRequestHeader with PUSH_REPLY_TIME
+    // Build ReplyMessageRequestHeader with message properties
     fn build_reply_request_header<M: MessageTrait>(
         &self,
         channel: &Channel,
         request_header: &SendMessageRequestHeader,
         msg: &M,
     ) -> ReplyMessageRequestHeader {
-        // Clone message properties and add PUSH_REPLY_TIME
-        let mut msg_properties = msg.get_properties().clone();
-        msg_properties.insert(
-            CheetahString::from_static_str(MessageConst::PROPERTY_PUSH_REPLY_TIME),
-            CheetahString::from_string(get_current_millis().to_string()),
-        );
-        let properties_string = MessageDecoder::message_properties_to_string(&msg_properties);
+        // Use message properties directly (PROPERTY_PUSH_REPLY_TIME will be added later)
+        let properties_string = MessageDecoder::message_properties_to_string(msg.get_properties());
 
         ReplyMessageRequestHeader {
             born_host: CheetahString::from_string(channel.remote_address().to_string()),
@@ -542,4 +538,23 @@ fn parse_request_header(
 }
 
 #[derive(Debug, Clone)]
-struct PushReplyResult(bool, String);
+struct PushReplyResult {
+    success: bool,
+    remark: String,
+}
+
+impl PushReplyResult {
+    fn success() -> Self {
+        Self {
+            success: true,
+            remark: String::new(),
+        }
+    }
+
+    fn failure(remark: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            remark: remark.into(),
+        }
+    }
+}
