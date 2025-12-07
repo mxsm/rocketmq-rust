@@ -19,7 +19,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.7.0"
+version = "0.8.0"
 authors = ["mxsm <mxsm@apache.org>"]
 edition = "2021"
 homepage = "https://github.com/mxsm/rocketmq-rust"
@@ -33,16 +33,16 @@ Unofficial Rust implementation of Apache RocketMQ
 """
 rust-version = "1.85.0"
 [workspace.dependencies]
-rocketmq-common = { version = "0.7.0", path = "./rocketmq-common" }
-rocketmq-runtime = { version = "0.7.0", path = "./rocketmq-runtime" }
-rocketmq-macros = { version = "0.7.0", path = "./rocketmq-macros" }
-rocketmq-rust = { version = "0.7.0", path = "./rocketmq" }
-rocketmq-filter = { version = "0.7.0", path = "./rocketmq-filter" }
-rocketmq-store = { version = "0.7.0", path = "./rocketmq-store", default-features = true }
-rocketmq-remoting = { version = "0.7.0", path = "./rocketmq-remoting" }
-rocketmq-client-rust = { version = "0.7.0", path = "./rocketmq-client" }
-rocketmq-tools = { version = "0.7.0", path = "./rocketmq-tools" }
-rocketmq-error = { version = "0.7.0", path = "./rocketmq-error" }
+rocketmq-common = { version = "0.8.0", path = "./rocketmq-common" }
+rocketmq-runtime = { version = "0.8.0", path = "./rocketmq-runtime" }
+rocketmq-macros = { version = "0.8.0", path = "./rocketmq-macros" }
+rocketmq-rust = { version = "0.8.0", path = "./rocketmq" }
+rocketmq-filter = { version = "0.8.0", path = "./rocketmq-filter" }
+rocketmq-store = { version = "0.8.0", path = "./rocketmq-store", default-features = true }
+rocketmq-remoting = { version = "0.8.0", path = "./rocketmq-remoting" }
+rocketmq-client-rust = { version = "0.8.0", path = "./rocketmq-client" }
+rocketmq-tools = { version = "0.8.0", path = "./rocketmq-tools" }
+rocketmq-error = { version = "0.8.0", path = "./rocketmq-error" }
 
 tokio = { version = "1.48", features = ["full"] }
 tokio-util = { version = "0.7.17", features = ["full"] }
