@@ -2925,12 +2925,9 @@ dependencies = [
 name = "rocketmq-macros"
 version = "0.7.0"
 dependencies = [
- "cheetah-string",
  "criterion",
  "proc-macro2",
  "quote",
- "rocketmq-error",
- "rocketmq-remoting",
  "syn 2.0.111",
 ]
 
