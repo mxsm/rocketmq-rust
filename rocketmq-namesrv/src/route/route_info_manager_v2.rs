@@ -1686,7 +1686,7 @@ impl RouteInfoManagerV2 {
     /// - Submissions are batched and processed together
     /// - This reduces lock contention on the global route tables
     pub fn scan_not_active_broker(&self) -> RouteResult<usize> {
-        info!("start scanNotActiveBroker");
+        debug!("start scanNotActiveBroker");
         let current_time = get_current_millis();
 
         // Get expired brokers by checking heartbeat timeout
