@@ -1,6 +1,7 @@
 #!/bin/bash
 
-set -e  # Exit on error
+# Note: We don't use 'set -e' here because we want to continue processing
+# all projects even if some fail, and report a summary at the end.
 set -u  # Exit on undefined variable
 set -o pipefail  # Exit on pipe failure
 

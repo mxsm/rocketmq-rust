@@ -177,7 +177,7 @@ for %%P in (%PROJECTS%) do (
         if %VERBOSE%==1 set PACKAGE_CMD=!PACKAGE_CMD! --verbose
         if %ALL_FEATURES%==1 set PACKAGE_CMD=!PACKAGE_CMD! --all-features
         if %NO_DEFAULT_FEATURES%==1 set PACKAGE_CMD=!PACKAGE_CMD! --no-default-features
-        if not "%FEATURES%"=="" set PACKAGE_CMD=!PACKAGE_CMD! --features "%FEATURES%"
+        if not "!FEATURES!"==" set PACKAGE_CMD=!PACKAGE_CMD! --features !FEATURES!
         !PACKAGE_CMD!
         if !errorlevel! neq 0 (
             echo [%%P] ERROR: cargo package failed
@@ -196,7 +196,7 @@ for %%P in (%PROJECTS%) do (
         if %VERBOSE%==1 set PUBLISH_CMD=!PUBLISH_CMD! --verbose
         if %ALL_FEATURES%==1 set PUBLISH_CMD=!PUBLISH_CMD! --all-features
         if %NO_DEFAULT_FEATURES%==1 set PUBLISH_CMD=!PUBLISH_CMD! --no-default-features
-        if not "%FEATURES%"=="" set PUBLISH_CMD=!PUBLISH_CMD! --features "%FEATURES%"
+        if not "!FEATURES!"=="" set PUBLISH_CMD=!PUBLISH_CMD! --features !FEATURES!
         !PUBLISH_CMD!
         if !errorlevel! neq 0 (
             echo [%%P] ERROR: cargo publish failed
