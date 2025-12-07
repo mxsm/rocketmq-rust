@@ -699,6 +699,19 @@ impl RouteInfoManagerV2 {
                     topic_config.topic_sys_flag,
                 );
 
+                // Check if queue data exists and log appropriately
+                let old_queue_data = self.topic_queue_table.get(topic_name, broker_name.as_str());
+                if let Some(existed_qd) = old_queue_data {
+                    if existed_qd.as_ref() != &queue_data {
+                        info!(
+                            "topic changed, {} OLD: {:?} NEW: {:?}",
+                            topic_name, existed_qd, queue_data
+                        );
+                    }
+                } else {
+                    info!("new topic registered, {} {:?}", topic_name, &queue_data);
+                }
+
                 self.topic_queue_table.insert(
                     topic_name_cheetah.clone(),
                     broker_name.clone(),
