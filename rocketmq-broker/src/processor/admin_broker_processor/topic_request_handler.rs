@@ -472,7 +472,6 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             let min = std::cmp::max(
                 self.broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_min_offset_in_queue(topic, i as i32),
                 0,
@@ -480,7 +479,6 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             let max = std::cmp::max(
                 self.broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_max_offset_in_queue(topic, i as i32),
                 0,
@@ -490,7 +488,6 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 timestamp = self
                     .broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_message_store_timestamp(topic, i as i32, max - 1);
             }

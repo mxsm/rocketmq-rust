@@ -180,7 +180,6 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                 let mut broker_offset = self
                     .broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_max_offset_in_queue(topic, i as i32);
                 if broker_offset < 0 {
@@ -210,7 +209,6 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                     let last_timestamp = self
                         .broker_runtime_inner
                         .message_store()
-                        .as_ref()
                         .unwrap()
                         .get_message_store_timestamp(topic, i as i32, time_offset);
                     if last_timestamp > 0 {

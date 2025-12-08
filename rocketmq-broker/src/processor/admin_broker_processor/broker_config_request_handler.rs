@@ -68,7 +68,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         let message_store_config = self
             .broker_runtime_inner
             .message_store()
-            .as_ref()
             .unwrap()
             .get_message_store_config()
             .clone();
@@ -108,7 +107,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         let mut runtime_info = self
             .broker_runtime_inner
             .message_store()
-            .as_ref()
             .unwrap()
             .get_runtime_info();
         self.broker_runtime_inner
@@ -176,7 +174,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             "dispatchBehindBytes".to_string(),
             self.broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .dispatch_behind_bytes()
                 .to_string(),
@@ -185,7 +182,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             "pageCacheLockTimeMills".to_string(),
             self.broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .lock_time_millis()
                 .to_string(),
@@ -194,7 +190,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             "earliestMessageTimeStamp".to_string(),
             self.broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_earliest_message_time_store()
                 .to_string(),
@@ -215,7 +210,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
                 "timerReadBehind".to_string(),
                 self.broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_timer_message_store()
                     .unwrap()
@@ -226,7 +220,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
                 "timerOffsetBehind".to_string(),
                 self.broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_timer_message_store()
                     .unwrap()
@@ -237,7 +230,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
                 "timerCongestNum".to_string(),
                 self.broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_timer_message_store()
                     .unwrap()
@@ -248,7 +240,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
                 "timerEnqueueTps".to_string(),
                 self.broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_timer_message_store()
                     .unwrap()
@@ -259,7 +250,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
                 "timerDequeueTps".to_string(),
                 self.broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_timer_message_store()
                     .unwrap()
@@ -273,7 +263,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             runtime_info.insert("timerEnqueueTps".to_string(), "0.0".to_string());
             runtime_info.insert("timerDequeueTps".to_string(), "0.0".to_string());
         }
-        let default_message_store = self.broker_runtime_inner.message_store().as_ref().unwrap();
+        let default_message_store = self.broker_runtime_inner.message_store().unwrap();
         runtime_info.insert(
             "remainTransientStoreBufferNumbs".to_string(),
             default_message_store

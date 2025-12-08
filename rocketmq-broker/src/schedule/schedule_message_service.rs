@@ -151,7 +151,6 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
             let max_offset = self
                 .broker_controller
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_max_offset_in_queue(
                     &CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC),

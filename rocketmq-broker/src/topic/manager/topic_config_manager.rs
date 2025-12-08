@@ -360,7 +360,6 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                     self.data_version.mut_from_ref().next_version_with(
                         self.broker_runtime_inner
                             .message_store()
-                            .as_ref()
                             .unwrap()
                             .get_state_machine_version(),
                     );
@@ -422,7 +421,6 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             self.data_version.mut_from_ref().next_version_with(
                 self.broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_state_machine_version(),
             );
@@ -479,7 +477,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         if let Some(old) = old {
             info!("delete topic config OK, topic: {:?}", old);
             let state_machine_version =
-                if let Some(message_store) = self.broker_runtime_inner.message_store().as_ref() {
+                if let Some(message_store) = self.broker_runtime_inner.message_store() {
                     message_store.get_state_machine_version()
                 } else {
                     0
@@ -532,7 +530,6 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         self.data_version.mut_from_ref().next_version_with(
             self.broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_state_machine_version(),
         );
@@ -605,7 +602,6 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             self.data_version.mut_from_ref().next_version_with(
                 self.broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_state_machine_version(),
             );

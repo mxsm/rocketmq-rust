@@ -129,7 +129,6 @@ where
         let Some(query_message_result) = self
             .broker_runtime_inner
             .message_store()
-            .as_ref()
             .unwrap()
             .query_message(
                 request_header.topic.as_ref(),
@@ -182,7 +181,6 @@ where
         let select_mapped_buffer_result = self
             .broker_runtime_inner
             .message_store()
-            .as_ref()
             .unwrap()
             .select_one_message_by_offset(request_header.offset);
         if let Some(result) = select_mapped_buffer_result {

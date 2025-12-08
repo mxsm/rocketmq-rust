@@ -900,7 +900,6 @@ where
             return self
                 .broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_max_offset_in_queue(topic, queue_id)
                 - offset
@@ -910,7 +909,6 @@ where
             let result = self
                 .broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_max_offset_in_queue(topic, queue_id)
                 - offset
@@ -958,7 +956,6 @@ where
             let result = self
                 .broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_max_offset_in_queue(topic, queue_id)
                 - offset
@@ -971,7 +968,6 @@ where
         let get_message_result_inner = self
             .broker_runtime_inner
             .message_store()
-            .as_ref()
             .unwrap()
             .get_message(
                 &request_header.consumer_group,
@@ -1009,7 +1005,6 @@ where
                             atomic_offset.store(value.next_begin_offset(), Ordering::Release);
                             self.broker_runtime_inner
                                 .message_store()
-                                .as_ref()
                                 .unwrap()
                                 .get_message(
                                     &request_header.consumer_group,
@@ -1032,7 +1027,6 @@ where
                 let num = self
                     .broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_max_offset_in_queue(topic, queue_id)
                     - atomic_offset.load(Ordering::Acquire)
@@ -1344,7 +1338,6 @@ where
             offset = self
                 .broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_min_offset_in_queue(topic, queue_id);
         } else if self
@@ -1354,14 +1347,12 @@ where
             && self
                 .broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_min_offset_in_queue(topic, queue_id)
                 <= 0
             && self
                 .broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .check_in_mem_by_consume_offset(topic, queue_id, 0, 1)
         {
@@ -1370,7 +1361,6 @@ where
             offset = self
                 .broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_max_offset_in_queue(topic, queue_id)
                 - 1;

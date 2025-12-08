@@ -86,7 +86,6 @@ where
             offset = self
                 .broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_min_offset_in_queue(topic, queue_id);
         }
@@ -169,7 +168,6 @@ where
         let get_message_result = self
             .broker_runtime_inner
             .message_store()
-            .as_ref()
             .unwrap()
             .get_message(
                 group, topic, queue_id, offset, nums, //  MAX_PULL_MSG_SIZE,
@@ -393,7 +391,6 @@ where
     pub fn look_message_by_offset(&self, offset: i64) -> Option<MessageExt> {
         self.broker_runtime_inner
             .message_store()
-            .as_ref()
             .unwrap()
             .look_message_by_offset(offset)
     }

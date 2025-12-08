@@ -776,14 +776,12 @@ where
                 get_message_result.set_min_offset(
                     self.broker_runtime_inner
                         .message_store()
-                        .as_ref()
                         .unwrap()
                         .get_min_offset_in_queue(topic, queue_id),
                 );
                 get_message_result.set_max_offset(
                     self.broker_runtime_inner
                         .message_store()
-                        .as_ref()
                         .unwrap()
                         .get_max_offset_in_queue(topic, queue_id),
                 );
@@ -806,7 +804,6 @@ where
                     let result = self
                         .broker_runtime_inner
                         .message_store()
-                        .as_ref()
                         .unwrap()
                         .get_message(
                             group,

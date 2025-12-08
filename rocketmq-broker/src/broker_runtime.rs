@@ -1919,8 +1919,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn message_store(&self) -> &Option<ArcMut<MS>> {
-        &self.message_store
+    pub fn message_store(&self) -> Option<&ArcMut<MS>> {
+        self.message_store.as_ref()
     }
 
     #[inline]

@@ -232,7 +232,7 @@ where
                 ),
             ));
         }
-        let message_store_inner = self.broker_runtime_inner.message_store().as_ref().unwrap();
+        let message_store_inner = self.broker_runtime_inner.message_store().unwrap();
         let min_offset = message_store_inner
             .get_min_offset_in_queue(&request_header.topic, request_header.queue_id);
         let max_offset = message_store_inner
@@ -361,7 +361,7 @@ where
             let akc_offset = -1;
             let pop_time = batch_ack.pop_time;
             let invisible_time = batch_ack.invisible_time;
-            let message_store = self.broker_runtime_inner.message_store().as_ref().unwrap();
+            let message_store = self.broker_runtime_inner.message_store().unwrap();
             let min_offset = message_store.get_min_offset_in_queue(&topic, qid);
             let max_offset = message_store.get_max_offset_in_queue(&topic, qid);
             if min_offset == -1 || max_offset == -1 {

@@ -273,7 +273,6 @@ where
         let state_machine_version = self
             .broker_runtime_inner
             .message_store()
-            .as_ref()
             .map(|store| store.get_state_machine_version())
             .unwrap_or(0);
 
