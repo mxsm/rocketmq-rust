@@ -126,7 +126,6 @@ where
             let max_offset = self
                 .broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_max_offset_in_queue(&topic, queue_id);
             self.notify_message_arriving(&topic, queue_id, max_offset);
@@ -163,7 +162,6 @@ where
                         newest_offset = self
                             .broker_runtime_inner
                             .message_store()
-                            .as_ref()
                             .unwrap()
                             .get_max_offset_in_queue(topic, queue_id);
                     }

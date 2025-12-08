@@ -68,7 +68,7 @@ impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
 
         let broker_identity = &broker_config.broker_identity;
 
-        let message_store = broker_runtime_inner.message_store().as_ref().unwrap();
+        let message_store = broker_runtime_inner.message_store().unwrap();
 
         let entry_code = EpochEntryCache::new(
             &broker_identity.broker_cluster_name,

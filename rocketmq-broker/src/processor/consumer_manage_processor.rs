@@ -301,7 +301,6 @@ where
             let min_offset = self
                 .broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_min_offset_in_queue(request_header.topic.as_ref(), request_header.queue_id);
             if let Some(value) = request_header.set_zero_if_not_found {
@@ -314,7 +313,6 @@ where
                 && self
                     .broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .check_in_mem_by_consume_offset(
                         request_header.topic.as_ref(),

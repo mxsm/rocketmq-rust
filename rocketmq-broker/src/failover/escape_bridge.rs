@@ -470,7 +470,7 @@ where
         broker_name: &CheetahString,
         de_compress_body: bool,
     ) -> BoxFuture<'_, (Option<MessageExt>, String, bool)> {
-        let message_store = self.broker_runtime_inner.message_store().clone().unwrap();
+        let message_store = self.broker_runtime_inner.message_store().unwrap();
         let inner_consumer_group_name = self.inner_consumer_group_name.clone();
         let topic = topic.clone();
         let broker_name = broker_name.clone();

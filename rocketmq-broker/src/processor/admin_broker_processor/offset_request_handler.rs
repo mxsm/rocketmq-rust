@@ -75,7 +75,6 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         let offset = self
             .broker_runtime_inner
             .message_store()
-            .as_ref()
             .unwrap()
             .get_max_offset_in_queue(topic.as_ref(), queue_id);
         let response_header = GetMaxOffsetResponseHeader { offset };
@@ -111,7 +110,6 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         let offset = self
             .broker_runtime_inner
             .message_store()
-            .as_ref()
             .unwrap()
             .get_min_offset_in_queue(topic.as_ref(), queue_id);
         let response_header = GetMinOffsetResponseHeader { offset };
@@ -157,7 +155,6 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         {
             self.broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_min_offset_in_queue(mapping_context.topic.as_ref(), max_item.queue_id)
         } else {
@@ -231,7 +228,6 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         {
             self.broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_max_offset_in_queue(mapping_context.topic.as_ref(), max_item.queue_id)
         } else {

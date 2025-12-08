@@ -245,7 +245,6 @@ impl<MS: MessageStore> PopReviveService<MS> {
         let get_message_result = self
             .broker_runtime_inner
             .message_store()
-            .as_ref()
             .unwrap()
             .get_message(
                 group, topic, queue_id, offset, nums, //    128 * 1024 * 1024,
@@ -285,7 +284,6 @@ impl<MS: MessageStore> PopReviveService<MS> {
             let max_queue_offset = self
                 .broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_max_offset_in_queue(topic, queue_id);
             if max_queue_offset > offset {
@@ -331,7 +329,6 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 if !this
                     .broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_message_store_config()
                     .timer_wheel_enable
@@ -441,7 +438,6 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 let timer_delay = self
                     .broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_timer_message_store()
                     .unwrap() // may be need to unwrap
@@ -449,7 +445,6 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 let commit_log_delay = self
                     .broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_timer_message_store()
                     .unwrap() // may be need to unwrap
@@ -854,7 +849,6 @@ impl<MS: MessageStore> PopReviveService<MS> {
         );
         self.broker_runtime_inner
             .message_store()
-            .as_ref()
             .unwrap()
             .mut_from_ref()
             .put_message(ck_msg)

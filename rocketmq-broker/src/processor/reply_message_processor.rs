@@ -301,7 +301,6 @@ where
                     .inner
                     .broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .map(|store| store.get_message_store_config().max_message_size)
                     .unwrap_or(4 * 1024 * 1024); // Default 4MB
                 warn!(

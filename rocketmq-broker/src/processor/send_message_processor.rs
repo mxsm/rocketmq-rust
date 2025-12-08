@@ -1306,7 +1306,6 @@ where
         let message_store = self
             .broker_runtime_inner
             .message_store()
-            .as_ref()
             .ok_or_else(|| RocketMQError::Internal("Message store not initialized".to_string()))?;
 
         let msg_ext: Option<MessageExt> =

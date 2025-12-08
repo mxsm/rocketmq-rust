@@ -181,13 +181,11 @@ where
         let mix_offset = self
             .broker_runtime_inner
             .message_store()
-            .as_ref()
             .unwrap()
             .get_min_offset_in_queue(&request_header.topic, request_header.queue_id);
         let max_offset = self
             .broker_runtime_inner
             .message_store()
-            .as_ref()
             .unwrap()
             .get_max_offset_in_queue(&request_header.topic, request_header.queue_id);
         if request_header.offset < mix_offset || request_header.offset > max_offset {
