@@ -92,9 +92,10 @@ where
             request_code
         );
         match request_code {
-            RequestCode::PullMessage | RequestCode::LitePullMessage => Ok(self
-                .process_request_(channel, ctx, request_code, request)
-                .await),
+            RequestCode::PullMessage | RequestCode::LitePullMessage => {
+                self.process_request_(channel, ctx, request_code, request)
+                    .await
+            }
             _ => {
                 warn!(
                     "PullMessageProcessor received unknown request code: {:?}",
@@ -379,7 +380,7 @@ where
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         self.process_request_inner(request_code, channel, ctx, request, true, true)
             .await
     }
@@ -393,7 +394,7 @@ where
         request: &mut RemotingCommand,
         broker_allow_suspend: bool,
         broker_allow_flow_ctr_suspend: bool,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let begin_time_mills = get_current_millis();
         let mut response = RemotingCommand::create_response_command();
         response.set_opaque_mut(request.opaque());
@@ -405,7 +406,7 @@ where
 
         if !PermName::is_readable(self.broker_runtime_inner.broker_config().broker_permission) {
             response_header.forbidden_type = Some(ForbiddenType::BROKER_FORBIDDEN);
-            return Some(
+            return Ok(Some(
                 response
                     .set_code(ResponseCode::NoPermission)
                     .set_command_custom_header(response_header)
@@ -413,7 +414,7 @@ where
                         "the broker[{}] pulling message is forbidden",
                         self.broker_runtime_inner.broker_config().broker_ip1
                     )),
-            );
+            ));
         }
         if RequestCode::LitePullMessage == request_code
             && !self
@@ -422,7 +423,7 @@ where
                 .lite_pull_message_enable
         {
             response_header.forbidden_type = Some(ForbiddenType::BROKER_FORBIDDEN);
-            return Some(
+            return Ok(Some(
                 response
                     .set_code(ResponseCode::NoPermission)
                     .set_command_custom_header(response_header)
@@ -430,7 +431,7 @@ where
                         "the broker[{}] pulling message is forbidden",
                         self.broker_runtime_inner.broker_config().broker_ip1
                     )),
-            );
+            ));
         }
         let subscription_group_config = self
             .broker_runtime_inner
@@ -438,7 +439,7 @@ where
             .find_subscription_group_config(request_header.consumer_group.as_ref());
 
         if subscription_group_config.is_none() {
-            return Some(
+            return Ok(Some(
                 response
                     .set_code(ResponseCode::SubscriptionGroupNotExist)
                     .set_remark(format!(
@@ -446,19 +447,19 @@ where
                         request_header.consumer_group,
                         FAQUrl::suggest_todo(FAQUrl::SUBSCRIPTION_GROUP_NOT_EXIST)
                     )),
-            );
+            ));
         }
 
         if !subscription_group_config.as_ref().unwrap().consume_enable() {
             response_header.forbidden_type = Some(ForbiddenType::GROUP_FORBIDDEN);
-            return Some(
+            return Ok(Some(
                 response
                     .set_code(ResponseCode::NoPermission)
                     .set_remark(format!(
                         "subscription group no permission, {}",
                         request_header.consumer_group,
                     )),
-            );
+            ));
         }
         let topic_config = self
             .broker_runtime_inner
@@ -470,7 +471,7 @@ where
                 request_header.topic,
                 channel.remote_address()
             );
-            return Some(
+            return Ok(Some(
                 response
                     .set_code(ResponseCode::TopicNotExist)
                     .set_remark(format!(
@@ -478,18 +479,18 @@ where
                         request_header.topic,
                         FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
                     )),
-            );
+            ));
         }
         if !PermName::is_readable(topic_config.as_ref().unwrap().perm) {
             response_header.forbidden_type = Some(ForbiddenType::TOPIC_FORBIDDEN);
-            return Some(
+            return Ok(Some(
                 response
                     .set_code(ResponseCode::NoPermission)
                     .set_remark(format!(
                         "the topic[{}] pulling message is forbidden",
                         request_header.topic,
                     )),
-            );
+            ));
         }
         let mut topic_queue_mapping_context = self
             .broker_runtime_inner
@@ -499,12 +500,12 @@ where
             .rewrite_request_for_static_topic(&mut request_header, &mut topic_queue_mapping_context)
             .await
         {
-            return Some(resp);
+            return Ok(Some(resp));
         }
         if request_header.queue_id < 0
             || request_header.queue_id >= topic_config.as_ref().unwrap().read_queue_nums as i32
         {
-            return Some(
+            return Ok(Some(
                 response
                     .set_code(RemotingSysResponseCode::SystemError)
                     .set_remark(format!(
@@ -515,7 +516,7 @@ where
                         topic_config.as_ref().unwrap().read_queue_nums,
                         channel.remote_address()
                     )),
-            );
+            ));
         }
         match RequestSource::parse_integer(request_header.request_source) {
             RequestSource::ProxyForBroadcast => {
@@ -545,11 +546,11 @@ where
                 request_header.expression_type.clone(),
             );
             if subscription_data.is_err() {
-                return Some(
+                return Ok(Some(
                     response
                         .set_code(ResponseCode::SubscriptionParseFailed)
                         .set_remark("parse the consumer's subscription failed"),
-                );
+                ));
             }
             let subscription_data = subscription_data.unwrap();
             self.broker_runtime_inner
@@ -569,11 +570,11 @@ where
                         request_header.sub_version as u64,
                     );
                     if consumer_filter_data.is_none() {
-                        return Some(
+                        return Ok(Some(
                             response
                                 .set_code(ResponseCode::SubscriptionParseFailed)
                                 .set_remark("parse the consumer's subscription failed"),
-                        );
+                        ));
                     }
                     consumer_filter_data
                 } else {
@@ -590,14 +591,14 @@ where
                     "the consumer's group info not exist, group: {}",
                     request_header.consumer_group.as_str()
                 );
-                return Some(
+                return Ok(Some(
                     response
                         .set_code(ResponseCode::SubscriptionNotExist)
                         .set_remark(format!(
                             "the consumer's group info not exist {}",
                             FAQUrl::suggest_todo(FAQUrl::SAME_GROUP_DIFFERENT_TOPIC),
                         )),
-                );
+                ));
             }
             let sgc_ref = subscription_group_config.as_ref().unwrap();
             if !sgc_ref.consume_broadcast_enable()
@@ -606,7 +607,7 @@ where
             {
                 response_header.forbidden_type =
                     Some(ForbiddenType::BROADCASTING_DISABLE_FORBIDDEN);
-                return Some(
+                return Ok(Some(
                     response
                         .set_code(ResponseCode::NoPermission)
                         .set_command_custom_header(response_header)
@@ -614,7 +615,7 @@ where
                             " the consumer group[{}] can not consume by broadcast way",
                             request_header.consumer_group.as_str(),
                         )),
-                );
+                ));
             }
 
             let read_forbidden = self
@@ -627,7 +628,7 @@ where
                 );
             if read_forbidden {
                 response_header.forbidden_type = Some(ForbiddenType::SUBSCRIPTION_FORBIDDEN);
-                return Some(
+                return Ok(Some(
                     response
                         .set_code(ResponseCode::NoPermission)
                         .set_command_custom_header(response_header)
@@ -636,7 +637,7 @@ where
                             request_header.consumer_group.as_str(),
                             request_header.topic
                         )),
-                );
+                ));
             }
             let subscription_data = consumer_group_info
                 .as_ref()
@@ -647,14 +648,14 @@ where
                     "the consumer's subscription not exist, group: {}, topic:{}",
                     request_header.consumer_group, request_header.topic
                 );
-                return Some(
+                return Ok(Some(
                     response
                         .set_code(ResponseCode::SubscriptionNotExist)
                         .set_remark(format!(
                             "the consumer's subscription not exist {}",
                             FAQUrl::suggest_todo(FAQUrl::SAME_GROUP_DIFFERENT_TOPIC),
                         )),
-                );
+                ));
             }
 
             if subscription_data.as_ref().unwrap().sub_version < request_header.sub_version {
@@ -663,11 +664,11 @@ where
                     request_header.consumer_group,
                     subscription_data.as_ref().unwrap().sub_string
                 );
-                return Some(
+                return Ok(Some(
                     response
                         .set_code(ResponseCode::SubscriptionNotExist)
                         .set_remark("the consumer's subscription not latest"),
-                );
+                ));
             }
 
             let consumer_filter_data = if !ExpressionType::is_tag_type(Some(
@@ -681,14 +682,14 @@ where
                         request_header.consumer_group.as_ref(),
                     );
                 if consumer_filter_data.is_none() {
-                    return Some(
+                    return Ok(Some(
                         response
                             .set_code(ResponseCode::FilterDataNotExist)
                             .set_remark(
                                 "The broker's consumer filter data is not exist!Your expression \
                                  may be wrong!",
                             ),
-                    );
+                    ));
                 }
                 if consumer_filter_data.as_ref().unwrap().client_version()
                     < request_header.sub_version as u64
@@ -701,11 +702,11 @@ where
                         consumer_filter_data.as_ref().unwrap().client_version(),
                         request_header.sub_version,
                     );
-                    return Some(
+                    return Ok(Some(
                         response
                             .set_code(ResponseCode::FilterDataNotExist)
                             .set_remark("the consumer's consumer filter data not latest"),
-                    );
+                    ));
                 }
                 consumer_filter_data
             } else {
@@ -721,14 +722,14 @@ where
                 .broker_config()
                 .enable_property_filter
         {
-            return Some(
+            return Ok(Some(
                 response
                     .set_code(RemotingSysResponseCode::SystemError)
                     .set_remark(format!(
                         "The broker does not support consumer to filter message by {}",
                         subscription_data.expression_type
                     )),
-            );
+            ));
         }
 
         //need optimize
@@ -818,17 +819,17 @@ where
                         )
                         .await;
                     if result.is_none() {
-                        return Some(
+                        return Ok(Some(
                             response
                                 .set_code(ResponseCode::SystemError)
                                 .set_remark("store getMessage return None"),
-                        );
+                        ));
                     }
                     result
                 }
             };
         if let Some(get_message_result) = get_message_result {
-            return self
+            return Ok(self
                 .pull_message_result_handler
                 .handle(
                     get_message_result,
@@ -844,9 +845,9 @@ where
                     topic_queue_mapping_context,
                     begin_time_mills,
                 )
-                .await;
+                .await);
         }
-        None
+        Ok(None)
     }
 
     fn query_broadcast_pull_init_offset(
@@ -925,7 +926,7 @@ where
                 )
                 .await;
 
-            if let Some(response) = response {
+            if let Ok(Some(response)) = response {
                 let command = response.set_opaque(opaque).mark_response_type();
 
                 let guard = lock.lock().await;
