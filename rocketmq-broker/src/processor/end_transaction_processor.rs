@@ -67,9 +67,10 @@ where
             request_code
         );
         match request_code {
-            RequestCode::EndTransaction => Ok(self
-                .process_request_inner(channel, ctx, request_code, request)
-                .await),
+            RequestCode::EndTransaction => {
+                self.process_request_inner(channel, ctx, request_code, request)
+                    .await
+            }
             _ => {
                 warn!(
                     "EndTransactionProcessor received unknown request code: {:?}",
@@ -108,33 +109,33 @@ where
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request
             .decode_command_custom_header::<EndTransactionRequestHeader>()
             .expect("EndTransactionRequestHeader decode failed");
         if BrokerRole::Slave == self.broker_runtime_inner.message_store_config().broker_role {
             warn!("Message store is slave mode, so end transaction is forbidden. ");
-            return Some(RemotingCommand::create_response_command_with_code(
+            return Ok(Some(RemotingCommand::create_response_command_with_code(
                 ResponseCode::SlaveNotAvailable,
-            ));
+            )));
         }
         if request_header.from_transaction_check {
             match request_header.commit_or_rollback {
-                MessageSysFlag::TRANSACTION_NOT_TYPE => return None,
+                MessageSysFlag::TRANSACTION_NOT_TYPE => return Ok(None),
                 MessageSysFlag::TRANSACTION_COMMIT_TYPE
                 | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => {
                     //nothing to do, can add some log
                 }
-                _ => return None,
+                _ => return Ok(None),
             }
         } else {
             match request_header.commit_or_rollback {
-                MessageSysFlag::TRANSACTION_NOT_TYPE => return None,
+                MessageSysFlag::TRANSACTION_NOT_TYPE => return Ok(None),
                 MessageSysFlag::TRANSACTION_COMMIT_TYPE
                 | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => {
                     //nothing to do, can add some log
                 }
-                _ => return None,
+                _ => return Ok(None),
             }
         }
 
@@ -156,9 +157,9 @@ where
                          checkImmunityTime, msgId={},commitLogOffset={}, wait check",
                         request_header.msg_id, request_header.commit_log_offset
                     );
-                    return Some(RemotingCommand::create_response_command_with_code(
+                    return Ok(Some(RemotingCommand::create_response_command_with_code(
                         ResponseCode::IllegalOperation,
-                    ));
+                    )));
                 }
                 let res =
                     self.check_prepare_message(result.prepare_message.as_ref(), &request_header);
@@ -186,9 +187,9 @@ where
                             .delete_prepare_message(result.prepare_message.as_ref().unwrap())
                             .await;
                     }
-                    return Some(send_result);
+                    return Ok(Some(send_result));
                 }
-                return Some(res);
+                return Ok(Some(res));
             } else {
                 OperationResult::default()
             }
@@ -206,9 +207,9 @@ where
                          checkImmunityTime, msgId={},commitLogOffset={}, wait check",
                         request_header.msg_id, request_header.commit_log_offset
                     );
-                    return Some(RemotingCommand::create_response_command_with_code(
+                    return Ok(Some(RemotingCommand::create_response_command_with_code(
                         ResponseCode::IllegalOperation,
-                    ));
+                    )));
                 }
                 let res =
                     self.check_prepare_message(result.prepare_message.as_ref(), &request_header);
@@ -218,17 +219,17 @@ where
                         .delete_prepare_message(result.prepare_message.as_ref().unwrap())
                         .await;
                 }
-                return Some(res);
+                return Ok(Some(res));
             }
             result
         } else {
             OperationResult::default()
         };
 
-        Some(
+        Ok(Some(
             RemotingCommand::create_remoting_command(response_code)
                 .set_remark_option(response_remark),
-        )
+        ))
     }
 
     pub fn reject_commit_or_rollback(
