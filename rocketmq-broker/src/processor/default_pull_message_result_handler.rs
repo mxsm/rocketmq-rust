@@ -93,7 +93,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
         mut channel: Channel,
         ctx: ConnectionHandlerContext,
         subscription_data: SubscriptionData,
-        subscription_group_config: SubscriptionGroupConfig,
+        subscription_group_config: &SubscriptionGroupConfig,
         broker_allow_suspend: bool,
         message_filter: Arc<Box<dyn MessageFilter>>,
         mut response: RemotingCommand,
@@ -110,7 +110,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
             &request_header,
             &get_message_result,
             topic_config.as_ref().unwrap().topic_sys_flag as i32,
-            &subscription_group_config,
+            subscription_group_config,
             &mut response,
             client_address.as_str(),
         );

@@ -835,7 +835,7 @@ where
                     channel,
                     ctx,
                     subscription_data,
-                    subscription_group_config.unwrap(),
+                    &subscription_group_config.unwrap(),
                     broker_allow_suspend,
                     message_filter,
                     response,

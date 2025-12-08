@@ -66,7 +66,7 @@ pub trait PullMessageResultHandler: Sync + Send + Any + 'static {
         channel: Channel,
         ctx: ConnectionHandlerContext,
         subscription_data: SubscriptionData,
-        subscription_group_config: SubscriptionGroupConfig,
+        subscription_group_config: &SubscriptionGroupConfig,
         broker_allow_suspend: bool,
         message_filter: Arc<Box<dyn MessageFilter>>,
         response: RemotingCommand,
