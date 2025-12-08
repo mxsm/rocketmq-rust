@@ -781,7 +781,9 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                     SerdeJsonUtils::from_json_str::<TopicConfigSerializeWrapper>(&json_string)
                 {
                     if let Some(data_version) = wrapper.data_version() {
-                        self.data_version.mut_from_ref().assign_new_one(data_version);
+                        self.data_version
+                            .mut_from_ref()
+                            .assign_new_one(data_version);
                         info!(
                             "load topic metadata dataVersion success {}, {:?}",
                             file_path, data_version
