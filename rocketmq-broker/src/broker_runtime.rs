@@ -1474,7 +1474,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             }
             if check_order_config {
                 if let Some(topic_config_manager) = &mut self.topic_config_manager {
-                    topic_config_manager.update_order_topic_config(result.kv_table);
+                    topic_config_manager.update_order_topic_config(&result.kv_table);
                 }
             }
         }

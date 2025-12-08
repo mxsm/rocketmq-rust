@@ -29,6 +29,7 @@ use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_common::common::TopicSysFlag;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::TopicAttributes::TopicAttributes;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
@@ -638,8 +639,166 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         &self.broker_runtime_inner
     }
 
-    pub fn update_order_topic_config(&mut self, _order_kv_table_from_ns: KVTable) {
-        error!("update_order_topic_config unimplemented ");
+    pub fn update_order_topic_config(&mut self, order_kv_table_from_ns: &KVTable) {
+        if !order_kv_table_from_ns.table.is_empty() {
+            let mut is_change = false;
+
+            for topic in order_kv_table_from_ns.table.keys() {
+                if let Some(mut topic_config) = self.get_topic_config(topic) {
+                    if !topic_config.order {
+                        topic_config.order = true;
+                        self.put_topic_config(topic_config);
+                        is_change = true;
+                        info!("update order topic config, topic={}, order=true", topic);
+                    }
+                }
+            }
+
+            if is_change {
+                self.data_version.mut_from_ref().next_version_with(
+                    self.broker_runtime_inner
+                        .message_store()
+                        .unwrap()
+                        .get_state_machine_version(),
+                );
+                self.persist();
+            }
+        }
+    }
+
+    pub fn create_topic_if_absent(
+        &mut self,
+        mut topic_config: TopicConfig,
+        register: bool,
+    ) -> Option<ArcMut<TopicConfig>> {
+        if topic_config.topic_name.is_none() {
+            error!("createTopicIfAbsent: TopicName cannot be None");
+            return None;
+        }
+
+        let topic_name = topic_config.topic_name.as_ref().unwrap().clone();
+
+        let (result, create_new) = if let Some(_lock) = self
+            .topic_config_table_lock
+            .try_lock_for(Duration::from_secs(3))
+        {
+            if let Some(existed_topic_config) = self.get_topic_config(&topic_name) {
+                return Some(existed_topic_config);
+            }
+
+            info!(
+                "Create new topic [{}] config:[{:?}]",
+                topic_name, topic_config
+            );
+
+            // Ensure topic_name is set
+            topic_config.topic_name = Some(topic_name.clone());
+
+            let config = ArcMut::new(topic_config);
+            self.put_topic_config(config.clone());
+            self.data_version.mut_from_ref().next_version_with(
+                self.broker_runtime_inner
+                    .message_store()
+                    .unwrap()
+                    .get_state_machine_version(),
+            );
+            self.persist();
+
+            (Some(config), true)
+        } else {
+            error!("createTopicIfAbsent: Failed to acquire lock");
+            (None, false)
+        };
+
+        if create_new && register {
+            if let Some(ref config) = result {
+                self.register_broker_data(config.clone());
+            }
+        }
+
+        result
+    }
+
+    pub fn update_topic_unit_flag(&mut self, topic: &str, unit: bool) {
+        if let Some(mut topic_config) = self.get_topic_config(topic) {
+            let old_topic_sys_flag = topic_config.topic_sys_flag;
+
+            topic_config.topic_sys_flag = if unit {
+                TopicSysFlag::set_unit_flag(old_topic_sys_flag)
+            } else {
+                TopicSysFlag::clear_unit_flag(old_topic_sys_flag)
+            };
+
+            info!(
+                "update topic sys flag. oldTopicSysFlag={}, newTopicSysFlag={}",
+                old_topic_sys_flag, topic_config.topic_sys_flag
+            );
+
+            self.put_topic_config(topic_config.clone());
+            self.data_version.mut_from_ref().next_version_with(
+                self.broker_runtime_inner
+                    .message_store()
+                    .unwrap()
+                    .get_state_machine_version(),
+            );
+            self.persist();
+            self.register_broker_data(topic_config);
+        }
+    }
+
+    pub fn update_topic_unit_sub_flag(&mut self, topic: &str, has_unit_sub: bool) {
+        if let Some(mut topic_config) = self.get_topic_config(topic) {
+            let old_topic_sys_flag = topic_config.topic_sys_flag;
+
+            topic_config.topic_sys_flag = if has_unit_sub {
+                TopicSysFlag::set_unit_sub_flag(old_topic_sys_flag)
+            } else {
+                TopicSysFlag::clear_unit_sub_flag(old_topic_sys_flag)
+            };
+
+            info!(
+                "update topic sys flag. oldTopicSysFlag={}, newTopicSysFlag={}",
+                old_topic_sys_flag, topic_config.topic_sys_flag
+            );
+
+            self.put_topic_config(topic_config.clone());
+            self.data_version.mut_from_ref().next_version_with(
+                self.broker_runtime_inner
+                    .message_store()
+                    .unwrap()
+                    .get_state_machine_version(),
+            );
+            self.persist();
+            self.register_broker_data(topic_config);
+        }
+    }
+
+    pub fn load_data_version(&mut self) -> bool {
+        let file_path = self.config_file_path();
+        match std::fs::read_to_string(&file_path) {
+            Ok(json_string) => {
+                if let Ok(wrapper) =
+                    SerdeJsonUtils::from_json_str::<TopicConfigSerializeWrapper>(&json_string)
+                {
+                    if let Some(data_version) = wrapper.data_version() {
+                        self.data_version.mut_from_ref().assign_new_one(data_version);
+                        info!(
+                            "load topic metadata dataVersion success {}, {:?}",
+                            file_path, data_version
+                        );
+                        return true;
+                    }
+                }
+                false
+            }
+            Err(e) => {
+                error!(
+                    "load topic metadata dataVersion failed {}: {:?}",
+                    file_path, e
+                );
+                false
+            }
+        }
     }
 }
 
