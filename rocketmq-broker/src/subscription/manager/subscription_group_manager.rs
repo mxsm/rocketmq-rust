@@ -43,7 +43,7 @@ pub const TOPIC_MAX_LENGTH: usize = 127;
 
 pub(crate) struct SubscriptionGroupManager<MS: MessageStore> {
     /// Subscription group configuration table (group_name -> config)
-    subscription_group_table: Arc<DashMap<CheetahString, SubscriptionGroupConfig>>,
+    subscription_group_table: Arc<DashMap<CheetahString, Arc<SubscriptionGroupConfig>>>,
 
     /// Forbidden table (group -> topic -> forbidden_bitmap)
     forbidden_table: Arc<DashMap<CheetahString, DashMap<CheetahString, i32>>>,
@@ -93,7 +93,7 @@ where
                 config.set_consume_broadcast_enable(true);
             }
             self.subscription_group_table
-                .insert(CheetahString::from_static_str(group_name), config);
+                .insert(CheetahString::from_static_str(group_name), Arc::new(config));
         }
 
         info!("Initialized {} system consumer groups", system_groups.len());
@@ -102,7 +102,7 @@ where
     /// Get the subscription group table
     pub fn subscription_group_table(
         &self,
-    ) -> &Arc<DashMap<CheetahString, SubscriptionGroupConfig>> {
+    ) -> &Arc<DashMap<CheetahString, Arc<SubscriptionGroupConfig>>> {
         &self.subscription_group_table
     }
 
@@ -239,7 +239,7 @@ where
 
         let old = self
             .subscription_group_table
-            .insert(config.group_name().clone(), config.clone());
+            .insert(config.group_name().clone(), Arc::new(config.clone()));
 
         match old {
             Some(old_config) => {
@@ -265,7 +265,7 @@ where
     fn current(&self, group_name: &str) -> HashMap<CheetahString, CheetahString> {
         self.subscription_group_table
             .get(group_name)
-            .map(|entry| entry.attributes().clone())
+            .map(|entry| entry.value().attributes().clone())
             .unwrap_or_default()
     }
 
@@ -303,7 +303,7 @@ impl<MS: MessageStore> ConfigManager for SubscriptionGroupManager<MS> {
             subscription_group_table: self
                 .subscription_group_table
                 .iter()
-                .map(|entry| (entry.key().clone(), entry.value().clone()))
+                .map(|entry| (entry.key().clone(), (**entry.value()).clone()))
                 .collect(),
             forbidden_table: self
                 .forbidden_table
@@ -338,7 +338,7 @@ impl<MS: MessageStore> ConfigManager for SubscriptionGroupManager<MS> {
 
         // Load subscription group table
         for (key, config) in wrapper.subscription_group_table {
-            self.subscription_group_table.insert(key, config);
+            self.subscription_group_table.insert(key, Arc::new(config));
         }
 
         // Load forbidden table
@@ -371,7 +371,7 @@ where
     pub fn find_subscription_group_config(
         &self,
         group: &CheetahString,
-    ) -> Option<SubscriptionGroupConfig> {
+    ) -> Option<Arc<SubscriptionGroupConfig>> {
         let mut subscription_group_config = self.find_subscription_group_config_inner(group);
         if subscription_group_config.is_none()
             && (self
@@ -387,9 +387,10 @@ where
             }
             let mut subscription_group_config_new = SubscriptionGroupConfig::default();
             subscription_group_config_new.set_group_name(group.clone());
+            let arc_config = Arc::new(subscription_group_config_new.clone());
             let pre_config = self
                 .subscription_group_table
-                .insert(group.clone(), subscription_group_config_new.clone());
+                .insert(group.clone(), Arc::clone(&arc_config));
             if pre_config.is_none() {
                 info!(
                     "auto create a subscription group, {:?}",
@@ -398,7 +399,7 @@ where
             }
             self.update_data_version();
             self.persist();
-            subscription_group_config = Some(subscription_group_config_new);
+            subscription_group_config = Some(arc_config);
         }
         subscription_group_config
     }
@@ -406,10 +407,10 @@ where
     fn find_subscription_group_config_inner(
         &self,
         group: &CheetahString,
-    ) -> Option<SubscriptionGroupConfig> {
+    ) -> Option<Arc<SubscriptionGroupConfig>> {
         self.subscription_group_table
             .get(group)
-            .map(|entry| entry.value().clone())
+            .map(|entry| Arc::clone(entry.value()))
     }
 
     pub fn get_forbidden(
@@ -439,17 +440,20 @@ where
     /// * `group_name` - The name of the consumer group to disable
     ///
     /// # Returns
-    /// Returns the old config if the group exists, None otherwise
+    /// Returns the updated config if the group exists, None otherwise
     pub fn disable_consume(
         &mut self,
         group_name: &CheetahString,
-    ) -> Option<SubscriptionGroupConfig> {
+    ) -> Option<Arc<SubscriptionGroupConfig>> {
         let result = self
             .subscription_group_table
             .get_mut(group_name)
-            .map(|mut config| {
-                config.set_consume_enable(false);
-                config.clone()
+            .map(|mut entry| {
+                let mut new_config = (**entry.value()).clone();
+                new_config.set_consume_enable(false);
+                let arc_config = Arc::new(new_config);
+                *entry.value_mut() = Arc::clone(&arc_config);
+                arc_config
             });
 
         if result.is_some() {
@@ -468,14 +472,17 @@ where
     /// * `group_name` - The name of the consumer group to enable
     ///
     /// # Returns
-    /// Returns the old config if the group exists, None otherwise
-    pub fn enable_consume(&mut self, group_name: &str) -> Option<SubscriptionGroupConfig> {
+    /// Returns the updated config if the group exists, None otherwise
+    pub fn enable_consume(&mut self, group_name: &str) -> Option<Arc<SubscriptionGroupConfig>> {
         let result = self
             .subscription_group_table
             .get_mut(group_name)
-            .map(|mut config| {
-                config.set_consume_enable(true);
-                config.clone()
+            .map(|mut entry| {
+                let mut new_config = (**entry.value()).clone();
+                new_config.set_consume_enable(true);
+                let arc_config = Arc::new(new_config);
+                *entry.value_mut() = Arc::clone(&arc_config);
+                arc_config
             });
 
         if result.is_some() {
@@ -513,7 +520,7 @@ where
     pub fn delete_subscription_group_config(
         &mut self,
         group_name: &str,
-    ) -> Option<SubscriptionGroupConfig> {
+    ) -> Option<Arc<SubscriptionGroupConfig>> {
         let old = self
             .subscription_group_table
             .remove(group_name)
@@ -729,7 +736,7 @@ where
         data_version: &DataVersion,
         group_seq: usize,
         max_group_num: usize,
-    ) -> HashMap<CheetahString, SubscriptionGroupConfig> {
+    ) -> HashMap<CheetahString, Arc<SubscriptionGroupConfig>> {
         // Check data version consistency
         let current_version = self.data_version.read();
         let mut begin_index = group_seq;
@@ -763,7 +770,7 @@ where
                 .take(end_index - begin_index)
             {
                 if let Some(config) = self.subscription_group_table.get(key) {
-                    result.insert(key.clone(), config.value().clone());
+                    result.insert(key.clone(), Arc::clone(config.value()));
                 }
             }
         }
@@ -937,10 +944,10 @@ where
     }
 
     /// Get configuration for a specific group (read-only)
-    pub fn get_group_config(&self, group_name: &str) -> Option<SubscriptionGroupConfig> {
+    pub fn get_group_config(&self, group_name: &str) -> Option<Arc<SubscriptionGroupConfig>> {
         self.subscription_group_table
             .get(group_name)
-            .map(|entry| entry.value().clone())
+            .map(|entry| Arc::clone(entry.value()))
     }
 }
 
@@ -1115,13 +1122,14 @@ mod tests {
     #[test]
     fn test_dashmap_concurrent_access_pattern() {
         // Simulate concurrent access pattern using DashMap
-        let table: Arc<DashMap<CheetahString, SubscriptionGroupConfig>> = Arc::new(DashMap::new());
+        let table: Arc<DashMap<CheetahString, Arc<SubscriptionGroupConfig>>> =
+            Arc::new(DashMap::new());
 
         let group_name = CheetahString::from_static_str("TEST_GROUP");
         let config = SubscriptionGroupConfig::new(group_name.clone());
 
         // Insert
-        table.insert(group_name.clone(), config);
+        table.insert(group_name.clone(), Arc::new(config));
 
         // Concurrent read (lock-free)
         let exists = table.contains_key(&group_name);
@@ -1131,26 +1139,28 @@ mod tests {
         let read_config = table.get(&group_name).map(|v| v.clone());
         assert!(read_config.is_some());
 
-        // Get mutable for write (fine-grained lock)
-        if let Some(mut config) = table.get_mut(&group_name) {
-            config.set_consume_enable(false);
+        // Get mutable for write (fine-grained lock) - using Copy-on-Write
+        if let Some(mut entry) = table.get_mut(&group_name) {
+            let mut new_config = (**entry.value()).clone();
+            new_config.set_consume_enable(false);
+            *entry.value_mut() = Arc::new(new_config);
         }
 
         // Verify modification
         let updated = table.get(&group_name).unwrap();
-        assert!(!updated.consume_enable());
+        assert!(!updated.value().consume_enable());
     }
 
     #[test]
     fn test_sub_group_table_pagination() {
         // Test pagination using DashMap directly
-        let table: DashMap<CheetahString, SubscriptionGroupConfig> = DashMap::new();
+        let table: DashMap<CheetahString, Arc<SubscriptionGroupConfig>> = DashMap::new();
 
         // Create 10 groups
         for i in 0..10 {
             let group_name = CheetahString::from_string(format!("GROUP_{}", i));
             let config = SubscriptionGroupConfig::new(group_name.clone());
-            table.insert(group_name, config);
+            table.insert(group_name, Arc::new(config));
         }
 
         // Test pagination logic
@@ -1235,7 +1245,7 @@ mod tests {
     #[test]
     fn test_statistics_calculation() {
         // Test statistics using DashMap
-        let table: DashMap<CheetahString, SubscriptionGroupConfig> = DashMap::new();
+        let table: DashMap<CheetahString, Arc<SubscriptionGroupConfig>> = DashMap::new();
 
         // Create mixed groups
         for i in 0..10 {
@@ -1247,7 +1257,7 @@ mod tests {
                 config.set_consume_enable(false);
             }
 
-            table.insert(group_name, config);
+            table.insert(group_name, Arc::new(config));
         }
 
         let total = table.len();
@@ -1308,7 +1318,8 @@ mod tests {
         use std::time::Instant;
 
         // High concurrency stress test: 10k+ operations
-        let table: Arc<DashMap<CheetahString, SubscriptionGroupConfig>> = Arc::new(DashMap::new());
+        let table: Arc<DashMap<CheetahString, Arc<SubscriptionGroupConfig>>> =
+            Arc::new(DashMap::new());
         let operations = Arc::new(AtomicUsize::new(0));
         let num_threads = 20;
         let ops_per_thread = 500;
@@ -1325,16 +1336,18 @@ mod tests {
 
                         // Insert
                         let config = SubscriptionGroupConfig::new(key.clone());
-                        table.insert(key.clone(), config);
+                        table.insert(key.clone(), Arc::new(config));
                         ops.fetch_add(1, Ordering::Relaxed);
 
                         // Read
                         let _ = table.get(&key);
                         ops.fetch_add(1, Ordering::Relaxed);
 
-                        // Update
+                        // Update - using Copy-on-Write
                         if let Some(mut entry) = table.get_mut(&key) {
-                            entry.set_consume_enable(i % 2 == 0);
+                            let mut new_config = (**entry.value()).clone();
+                            new_config.set_consume_enable(i % 2 == 0);
+                            *entry.value_mut() = Arc::new(new_config);
                             ops.fetch_add(1, Ordering::Relaxed);
                         }
 
@@ -1411,13 +1424,13 @@ mod tests {
     #[test]
     fn test_memory_stability_large_dataset() {
         // Test with large dataset to detect memory leaks
-        let table: DashMap<CheetahString, SubscriptionGroupConfig> = DashMap::new();
+        let table: DashMap<CheetahString, Arc<SubscriptionGroupConfig>> = DashMap::new();
 
         // Insert 10k entries
         for i in 0..10000 {
             let key = CheetahString::from_string(format!("MEM_TEST_GROUP_{}", i));
             let config = SubscriptionGroupConfig::new(key.clone());
-            table.insert(key, config);
+            table.insert(key, Arc::new(config));
         }
 
         assert_eq!(table.len(), 10000);
@@ -1434,7 +1447,7 @@ mod tests {
         for i in 0..5000 {
             let key = CheetahString::from_string(format!("MEM_TEST_GROUP_NEW_{}", i));
             let config = SubscriptionGroupConfig::new(key.clone());
-            table.insert(key, config);
+            table.insert(key, Arc::new(config));
         }
 
         assert_eq!(table.len(), 10000);
@@ -1443,25 +1456,25 @@ mod tests {
     #[test]
     fn test_fault_injection_invalid_inputs() {
         // Test robustness against invalid inputs
-        let table: DashMap<CheetahString, SubscriptionGroupConfig> = DashMap::new();
+        let table: DashMap<CheetahString, Arc<SubscriptionGroupConfig>> = DashMap::new();
 
         // Empty key
         let empty_key = CheetahString::from_static_str("");
         let config = SubscriptionGroupConfig::new(empty_key.clone());
-        table.insert(empty_key.clone(), config);
+        table.insert(empty_key.clone(), Arc::new(config));
         assert!(table.contains_key(""));
 
         // Very long key
         let long_key = CheetahString::from_string("A".repeat(300));
         let config = SubscriptionGroupConfig::new(long_key.clone());
-        table.insert(long_key.clone(), config);
+        table.insert(long_key.clone(), Arc::new(config));
         let long_key_str = "A".repeat(300);
         assert!(table.contains_key(long_key_str.as_str()));
 
         // Special characters
         let special_key = CheetahString::from_static_str("GROUP_!@#$%^&*()");
         let config = SubscriptionGroupConfig::new(special_key.clone());
-        table.insert(special_key.clone(), config);
+        table.insert(special_key.clone(), Arc::new(config));
         assert!(table.contains_key("GROUP_!@#$%^&*()"));
     }
 
@@ -1493,13 +1506,14 @@ mod tests {
         use std::thread;
 
         // Test for potential data races with concurrent read/write
-        let table: Arc<DashMap<CheetahString, SubscriptionGroupConfig>> = Arc::new(DashMap::new());
+        let table: Arc<DashMap<CheetahString, Arc<SubscriptionGroupConfig>>> =
+            Arc::new(DashMap::new());
 
         // Pre-populate
         for i in 0..100 {
             let key = CheetahString::from_string(format!("RACE_GROUP_{}", i));
             let config = SubscriptionGroupConfig::new(key.clone());
-            table.insert(key, config);
+            table.insert(key, Arc::new(config));
         }
 
         // Concurrent readers and writers
@@ -1512,7 +1526,9 @@ mod tests {
                 for i in 0..100 {
                     let key = format!("RACE_GROUP_{}", i);
                     if let Some(mut entry) = table.get_mut(key.as_str()) {
-                        entry.set_consume_enable(thread_id % 2 == 0);
+                        let mut new_config = (**entry.value()).clone();
+                        new_config.set_consume_enable(thread_id % 2 == 0);
+                        *entry.value_mut() = Arc::new(new_config);
                     }
                 }
             }));
@@ -1545,13 +1561,14 @@ mod tests {
     fn test_pagination_consistency_under_concurrent_modifications() {
         use std::thread;
 
-        let table: Arc<DashMap<CheetahString, SubscriptionGroupConfig>> = Arc::new(DashMap::new());
+        let table: Arc<DashMap<CheetahString, Arc<SubscriptionGroupConfig>>> =
+            Arc::new(DashMap::new());
 
         // Initial data
         for i in 0..1000 {
             let key = CheetahString::from_string(format!("PAGE_GROUP_{}", i));
             let config = SubscriptionGroupConfig::new(key.clone());
-            table.insert(key, config);
+            table.insert(key, Arc::new(config));
         }
 
         let table_clone = table.clone();
@@ -1561,7 +1578,7 @@ mod tests {
             for i in 1000..1100 {
                 let key = CheetahString::from_string(format!("PAGE_GROUP_{}", i));
                 let config = SubscriptionGroupConfig::new(key.clone());
-                table_clone.insert(key, config);
+                table_clone.insert(key, Arc::new(config));
             }
         });
 
@@ -1599,13 +1616,13 @@ mod tests {
     fn test_performance_regression_detection() {
         use std::time::Instant;
 
-        let table: DashMap<CheetahString, SubscriptionGroupConfig> = DashMap::new();
+        let table: DashMap<CheetahString, Arc<SubscriptionGroupConfig>> = DashMap::new();
 
         // Warm up
         for i in 0..1000 {
             let key = CheetahString::from_string(format!("PERF_GROUP_{}", i));
             let config = SubscriptionGroupConfig::new(key.clone());
-            table.insert(key, config);
+            table.insert(key, Arc::new(config));
         }
 
         // Test read performance
@@ -1625,7 +1642,7 @@ mod tests {
                 let key =
                     CheetahString::from_string(format!("PERF_GROUP_WRITE_{}_{}", iteration, i));
                 let config = SubscriptionGroupConfig::new(key.clone());
-                table.insert(key, config);
+                table.insert(key, Arc::new(config));
             }
         }
         let write_duration = start.elapsed();

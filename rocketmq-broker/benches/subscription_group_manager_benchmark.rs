@@ -68,7 +68,7 @@ impl MutexBasedManager {
 
 // New DashMap-based approach
 struct DashMapBasedManager {
-    table: Arc<DashMap<CheetahString, SubscriptionGroupConfig>>,
+    table: Arc<DashMap<CheetahString, Arc<SubscriptionGroupConfig>>>,
 }
 
 impl DashMapBasedManager {
@@ -79,11 +79,11 @@ impl DashMapBasedManager {
     }
 
     fn insert(&self, key: CheetahString, value: SubscriptionGroupConfig) {
-        self.table.insert(key, value);
+        self.table.insert(key, Arc::new(value));
     }
 
     fn get(&self, key: &str) -> Option<SubscriptionGroupConfig> {
-        self.table.get(key).map(|entry| entry.value().clone())
+        self.table.get(key).map(|entry| (**entry.value()).clone())
     }
 
     fn contains_key(&self, key: &str) -> bool {
