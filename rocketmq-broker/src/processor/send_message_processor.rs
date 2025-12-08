@@ -1168,7 +1168,10 @@ where
         }
     }
 
-    pub(crate) fn execute_consume_message_hook_after(&self, context: &mut ConsumeMessageContext) {
+    pub(crate) fn execute_consume_message_hook_after<'a>(
+        &self,
+        context: &mut ConsumeMessageContext<'a>,
+    ) {
         for hook in self.consume_message_hook_vec.iter() {
             hook.consume_message_after(context);
         }
@@ -1440,35 +1443,52 @@ where
                 .origin_msg_id
                 .is_some_and(|ref id| !id.is_empty())
         {
-            let mut context = ConsumeMessageContext::default();
-            let namespace =
-                NamespaceUtil::get_namespace_from_resource(request_header.group.as_str());
-            context.namespace = CheetahString::from_string(namespace);
-            if let Some(ref topic) = request_header.origin_topic {
-                context.topic = topic.clone();
-            }
-            context.consumer_group = request_header.group.clone();
-            context.commercial_rcv_stats = StatsType::SendBack;
-            context.commercial_rcv_times = 1;
-            context.commercial_owner = commercial_owner;
-            context.account_auth_type = request
+            let namespace = CheetahString::from_string(NamespaceUtil::get_namespace_from_resource(
+                request_header.group.as_str(),
+            ));
+            let origin_topic = request_header
+                .origin_topic
+                .as_ref()
+                .unwrap_or(&request_header.group);
+
+            let account_auth_type = request
                 .get_ext_fields()
-                .and_then(|value| value.get(BrokerStatsManager::ACCOUNT_AUTH_TYPE).cloned());
-            context.account_owner_parent = request
+                .and_then(|value| value.get(BrokerStatsManager::ACCOUNT_AUTH_TYPE));
+            let account_owner_parent = request
                 .get_ext_fields()
-                .and_then(|value| value.get(BrokerStatsManager::ACCOUNT_OWNER_PARENT).cloned());
-            context.account_owner_self = request
+                .and_then(|value| value.get(BrokerStatsManager::ACCOUNT_OWNER_PARENT));
+            let account_owner_self = request
                 .get_ext_fields()
-                .and_then(|value| value.get(BrokerStatsManager::ACCOUNT_OWNER_SELF).cloned());
-            context.rcv_stat = if is_dlq {
-                StatsType::SendBackToDlq
-            } else {
-                StatsType::SendBack
+                .and_then(|value| value.get(BrokerStatsManager::ACCOUNT_OWNER_SELF));
+
+            let mut context = ConsumeMessageContext {
+                namespace: &namespace,
+                topic: origin_topic,
+                consumer_group: &request_header.group,
+                queue_id: None,
+                client_host: None,
+                store_host: None,
+                message_ids: None,
+                body_length: 0,
+                success: succeeded,
+                status: None,
+                topic_config: None,
+                account_auth_type,
+                account_owner_parent,
+                account_owner_self,
+                rcv_msg_num: 1,
+                rcv_msg_size: 0,
+                rcv_stat: if is_dlq {
+                    StatsType::SendBackToDlq
+                } else {
+                    StatsType::SendBack
+                },
+                commercial_rcv_msg_num: if succeeded { 1 } else { 0 },
+                commercial_owner: commercial_owner.as_ref(),
+                commercial_rcv_stats: StatsType::SendBack,
+                commercial_rcv_times: 1,
+                commercial_rcv_size: 0,
             };
-            context.success = succeeded;
-            context.rcv_msg_num = 1;
-            context.rcv_msg_size = 0;
-            context.commercial_rcv_msg_num = if succeeded { 1 } else { 0 };
             self.execute_consume_message_hook_after(&mut context);
         }
 
