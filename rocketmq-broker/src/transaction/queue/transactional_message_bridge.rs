@@ -175,7 +175,7 @@ where
             )
             .await;
 
-        if let Some(mut get_message_result) = get_message_result {
+        if let Some(get_message_result) = get_message_result {
             let (pull_status, msg_found_list) = match get_message_result.status().unwrap() {
                 GetMessageStatus::Found => {
                     let msg_list = Self::decode_msg_list(&get_message_result);
@@ -193,7 +193,6 @@ where
 
                 GetMessageStatus::OffsetReset => (PullStatus::NoNewMsg, None),
             };
-            get_message_result.release();
             Some(PullResult::new(
                 pull_status,
                 get_message_result.next_begin_offset() as u64,
