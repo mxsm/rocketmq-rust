@@ -467,6 +467,32 @@ pub trait RemotingDeserializable {
     /// A `Result` containing either the deserialized object of type `Output` or an `Error` if
     /// deserialization fails.
     fn decode(bytes: &[u8]) -> rocketmq_error::RocketMQResult<Self::Output>;
+
+    /// Decodes a string slice (`&str`) into the output type defined by the implementor of the
+    /// `RemotingDeserializable` trait.
+    ///
+    /// # Arguments
+    /// * `s` - A string slice containing the serialized data to be decoded.
+    ///
+    /// # Returns
+    /// A `RocketMQResult` containing the decoded object of type `Self::Output` if successful, or an
+    /// error if decoding fails.
+    fn decode_str(s: &str) -> rocketmq_error::RocketMQResult<Self::Output> {
+        Self::decode(s.as_bytes())
+    }
+
+    /// Decodes an owned `String` into the output type defined by the implementor of the
+    /// `RemotingDeserializable` trait.
+    ///
+    /// # Arguments
+    /// * `s` - An owned `String` containing the serialized data to be decoded.
+    ///
+    /// # Returns
+    /// A `RocketMQResult` containing the decoded object of type `Self::Output` if successful, or an
+    /// error if decoding fails.
+    fn decode_string(s: String) -> rocketmq_error::RocketMQResult<Self::Output> {
+        Self::decode_str(&s)
+    }
 }
 
 pub trait JsonSerializable: Serialize + RemotingSerializable {}
