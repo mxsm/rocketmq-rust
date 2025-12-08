@@ -43,7 +43,7 @@ pub trait ConsumeMessageHook: Sync + Send + 'static {
     /// # Arguments
     /// * `context` - A mutable reference to the `ConsumeMessageContext`, providing access to the
     ///   message and its metadata for possible inspection or modification.
-    fn consume_message_before(&self, context: &mut ConsumeMessageContext);
+    fn consume_message_before<'a>(&self, context: &mut ConsumeMessageContext<'a>);
 
     /// Hook method called after a message is consumed.
     ///
@@ -54,5 +54,5 @@ pub trait ConsumeMessageHook: Sync + Send + 'static {
     /// # Arguments
     /// * `context` - A mutable reference to the `ConsumeMessageContext`, providing access to the
     ///   message and its metadata for possible inspection or modification.
-    fn consume_message_after(&self, context: &mut ConsumeMessageContext);
+    fn consume_message_after<'a>(&self, context: &mut ConsumeMessageContext<'a>);
 }
