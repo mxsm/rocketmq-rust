@@ -58,9 +58,10 @@ where
         match request_code {
             RequestCode::GetConsumerListByGroup
             | RequestCode::UpdateConsumerOffset
-            | RequestCode::QueryConsumerOffset => Ok(self
-                .process_request_inner(channel, ctx, request_code, request)
-                .await),
+            | RequestCode::QueryConsumerOffset => {
+                self.process_request_inner(channel, ctx, request_code, request)
+                    .await
+            }
             _ => {
                 warn!(
                     "ConsumerManageProcessor received unknown request code: {:?}",
@@ -101,7 +102,7 @@ where
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match request_code {
             RequestCode::GetConsumerListByGroup => {
                 self.get_consumer_list_by_group(channel, ctx, request).await
@@ -112,7 +113,7 @@ where
             RequestCode::QueryConsumerOffset => {
                 self.query_consumer_offset(channel, ctx, request).await
             }
-            _ => None,
+            _ => Ok(None),
         }
     }
 
@@ -121,7 +122,7 @@ where
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_response_command();
         let request_header = request
             .decode_command_custom_header::<GetConsumerListByGroupRequestHeader>()
@@ -145,14 +146,14 @@ where
                     let body = GetConsumerListByGroupResponseBody {
                         consumer_id_list: client_ids,
                     };
-                    return Some(
+                    return Ok(Some(
                         response
                             .set_body(
                                 body.encode()
                                     .expect("GetConsumerListByGroupResponseBody encode error"),
                             )
                             .set_code(ResponseCode::Success),
-                    );
+                    ));
                 } else {
                     warn!(
                         "getAllClientId failed, {} {}",
@@ -162,14 +163,14 @@ where
                 }
             }
         }
-        Some(
+        Ok(Some(
             response
                 .set_remark(format!(
                     "no consumer for this group, {}",
                     request_header.consumer_group
                 ))
                 .set_code(ResponseCode::SystemError),
-        )
+        ))
     }
 
     async fn update_consumer_offset(
@@ -177,7 +178,7 @@ where
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut request_header = request
             .decode_command_custom_header::<UpdateConsumerOffsetRequestHeader>()
             .unwrap();
@@ -191,7 +192,7 @@ where
             &mut mapping_context,
         );
         if let Some(result) = rewrite_result {
-            return Some(result);
+            return Ok(Some(result));
         }
         let topic = request_header.topic.as_ref();
         let group = request_header.consumer_group.as_ref();
@@ -203,11 +204,11 @@ where
             .subscription_group_manager()
             .contains_subscription_group(group)
         {
-            return Some(
+            return Ok(Some(
                 response
                     .set_code(ResponseCode::SubscriptionGroupNotExist)
                     .set_remark(format!("subscription group not exist, {group}")),
-            );
+            ));
         }
 
         if !self
@@ -215,11 +216,11 @@ where
             .topic_config_manager()
             .contains_topic(topic)
         {
-            return Some(
+            return Ok(Some(
                 response
                     .set_code(ResponseCode::TopicNotExist)
                     .set_remark(format!("topic not exist, {topic}")),
-            );
+            ));
         }
 
         // if queue_id.is_none() {
@@ -250,7 +251,9 @@ where
                  Group={},Topic={}, QueueId={}, Offset={}",
                 topic, group, queue_id, offset
             );
-            return Some(response.set_remark("Offset has been previously reset"));
+            return Ok(Some(
+                response.set_remark("Offset has been previously reset"),
+            ));
         }
         self.broker_runtime_inner
             .consumer_offset_manager()
@@ -261,7 +264,7 @@ where
                 queue_id,
                 offset,
             );
-        Some(response)
+        Ok(Some(response))
     }
 
     async fn query_consumer_offset(
@@ -269,7 +272,7 @@ where
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut request_header = request
             .decode_command_custom_header::<QueryConsumerOffsetRequestHeader>()
             .unwrap();
@@ -280,7 +283,7 @@ where
         if let Some(result) =
             self.rewrite_request_for_static_topic(&mut request_header, &mut mapping_context)
         {
-            return Some(result);
+            return Ok(Some(result));
         }
         let offset = self
             .broker_runtime_inner
@@ -333,9 +336,9 @@ where
             &mapping_context,
             response.code(),
         ) {
-            return Some(result);
+            return Ok(Some(result));
         }
-        Some(response.set_command_custom_header(response_header))
+        Ok(Some(response.set_command_custom_header(response_header)))
     }
 
     fn rewrite_request_for_static_topic_for_consume_offset(
