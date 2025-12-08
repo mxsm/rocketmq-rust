@@ -16,29 +16,22 @@
 #
 
 
-name: Feature/Enhancement Request
+name: Feature Request
 title: "[Feature🚀] "
-description: Suggest a new feature or improvement
+description: Suggest a new feature
 labels: [ "feature🚀" ]
 body:
-  - type: dropdown
-    id: type
+  - type: textarea
     attributes:
-      label: Type
-      description: Choose the type of request
-      options:
-        - New Feature
-        - Enhancement (improvement to existing functionality)
-    validations:
-      required: true
+      label: Feature Description
+      description: What new feature would you like to see?
+      placeholder: Add support for...
 
   - type: textarea
     attributes:
       label: Problem/Motivation
       description: What problem does this solve? Why is it needed?
       placeholder: Currently, users cannot...
-    validations:
-      required: false
 
   - type: textarea
     attributes:
@@ -51,8 +44,6 @@ body:
         ```rust
         let producer = Producer::new();
         ```
-    validations:
-      required: false
 
   - type: textarea
     attributes:
