@@ -293,13 +293,6 @@ impl GetMessageResult {
     pub fn message_queue_offset(&self) -> &Vec<u64> {
         &self.message_queue_offset
     }
-
-    #[inline]
-    pub fn release(&mut self) {
-        // for mapped_buffer in &mut self.message_mapped_list {
-        //     mapped_buffer.release();
-        // }
-    }
 }
 
 #[cfg(test)]

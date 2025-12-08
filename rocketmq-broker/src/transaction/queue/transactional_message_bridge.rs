@@ -195,7 +195,6 @@ where
 
                 GetMessageStatus::OffsetReset => (PullStatus::NoNewMsg, None),
             };
-            get_message_result.release();
             Some(PullResult::new(
                 pull_status,
                 get_message_result.next_begin_offset() as u64,
