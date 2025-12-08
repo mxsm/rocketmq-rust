@@ -31,7 +31,7 @@ body:
         - Incorrect/Outdated information
         - Improvement suggestion
     validations:
-      required: true
+      required: false
 
   - type: textarea
     attributes:
@@ -41,7 +41,7 @@ body:
         File: README.md line 42
         Or: https://docs.rs/rocketmq-rust/...
     validations:
-      required: true
+      required: false
 
   - type: textarea
     attributes:
@@ -49,7 +49,7 @@ body:
       description: What needs to be fixed or improved?
       placeholder: The example code is outdated and doesn't compile
     validations:
-      required: true
+      required: false
 
   - type: textarea
     attributes:

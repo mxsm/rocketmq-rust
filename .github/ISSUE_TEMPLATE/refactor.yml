@@ -28,8 +28,6 @@ body:
       placeholder: |
         Module: rocketmq-broker/src/processor/
         Files: reply_message_processor.rs, query_message_processor.rs
-    validations:
-      required: true
 
   - type: textarea
     attributes:
@@ -39,8 +37,6 @@ body:
         - Code duplication in message handling
         - Complex nested conditions
         - Poor error handling
-    validations:
-      required: true
 
   - type: textarea
     attributes:
@@ -50,11 +46,3 @@ body:
         1. Extract common logic to shared function
         2. Use early returns for better readability
         3. Implement proper Result types
-    validations:
-      required: true
-
-  - type: textarea
-    attributes:
-      label: Related Issues/PRs
-      description: Links to related work
-      placeholder: "Fixes #123, Related to #456"

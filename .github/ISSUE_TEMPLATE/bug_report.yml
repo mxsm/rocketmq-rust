@@ -42,7 +42,7 @@ body:
         - RocketMQ Rust: 
         - Rust: 
     validations:
-      required: true
+      required: false
 
   - type: textarea
     attributes:
@@ -50,7 +50,7 @@ body:
       description: What happened?
       placeholder: Clear and concise description of the bug
     validations:
-      required: true
+      required: false
 
   - type: textarea
     attributes:
@@ -60,7 +60,7 @@ body:
         2. Send message with...
         3. Observe error...
     validations:
-      required: true
+      required: false
 
   - type: textarea
     attributes:
