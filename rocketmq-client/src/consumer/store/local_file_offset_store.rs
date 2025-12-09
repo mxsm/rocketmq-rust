@@ -80,7 +80,7 @@ impl LocalFileOffsetStore {
 
     fn read_local_offset(&self) -> rocketmq_error::RocketMQResult<Option<OffsetSerializeWrapper>> {
         let content =
-            file_utils::file_to_string(&self.store_path).map_or("".to_string(), |content| content);
+            file_utils::file_to_string(self.store_path).map_or("".to_string(), |content| content);
         if content.is_empty() {
             self.read_local_offset_bak()
         } else {
@@ -96,7 +96,7 @@ impl LocalFileOffsetStore {
     fn read_local_offset_bak(
         &self,
     ) -> rocketmq_error::RocketMQResult<Option<OffsetSerializeWrapper>> {
-        let content = file_utils::file_to_string(&format!("{}{}", self.store_path, ".bak"))
+        let content = file_utils::file_to_string(format!("{}{}", self.store_path, ".bak"))
             .map_or("".to_string(), |content| content);
         if content.is_empty() {
             Ok(None)
