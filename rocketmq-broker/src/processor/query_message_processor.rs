@@ -32,8 +32,6 @@ use tracing::warn;
 use crate::broker_runtime::BrokerRuntimeInner;
 
 pub struct QueryMessageProcessor<MS: MessageStore> {
-    /*message_store_config: Arc<MessageStoreConfig>,
-    message_store: ArcMut<MS>,*/
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
