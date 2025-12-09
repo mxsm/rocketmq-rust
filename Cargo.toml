@@ -15,7 +15,8 @@ members = [
     "rocketmq-runtime",
     "rocketmq-store",
     "rocketmq-tools",
-    "rocketmq-tui"]
+    "rocketmq-tui",
+]
 resolver = "2"
 
 [workspace.package]
@@ -25,8 +26,14 @@ edition = "2021"
 homepage = "https://github.com/mxsm/rocketmq-rust"
 repository = "https://github.com/mxsm/rocketmq-rust"
 license = "MIT OR Apache-2.0"
-keywords = ["apache-rocketmq", "rocketmq-rust", "rocketmq-rs", "rust", "rocketmq-client"]
-categories = ["asynchronous", "network-programming", "message-queue", "rocketmq"]
+keywords = [
+    "apache-rocketmq",
+    "rocketmq-rust",
+    "rocketmq-rs",
+    "rust",
+    "rocketmq-client",
+]
+categories = ["asynchronous", "network-programming", "development-tools"]
 readme = "README.md"
 description = """
 Unofficial Rust implementation of Apache RocketMQ
@@ -77,9 +84,11 @@ mockall = "0.14.0"
 cfg-if = "1.0.4"
 
 sysinfo = "0.37.2"
-uuid = { version = "1.19.0", features = ["v4", # Lets you generate random UUIDs
-    "fast-rng", # Use a faster (but still sufficiently random) RNG
-    "macro-diagnostics", ] }
+uuid = { version = "1.19.0", features = [
+    "v4",                # Lets you generate random UUIDs
+    "fast-rng",          # Use a faster (but still sufficiently random) RNG
+    "macro-diagnostics",
+] }
 
 
 futures = "0.3"
