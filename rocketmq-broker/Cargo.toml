@@ -77,3 +77,7 @@ harness = false
 [[bench]]
 name = "subscription_group_manager_benchmark"
 harness = false
+
+[[bench]]
+name = "schedule_message_service_performance"
+harness = false
