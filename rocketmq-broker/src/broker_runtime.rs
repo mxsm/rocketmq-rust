@@ -395,7 +395,7 @@ impl BrokerRuntime {
 
         if let Some(schedule_message_service) = self.inner.schedule_message_service.as_mut() {
             schedule_message_service.persist();
-            schedule_message_service.shutdown();
+            schedule_message_service.shutdown().await;
         }
         if let Some(transactional_message_check_service) =
             self.inner.transactional_message_check_service.as_mut()
