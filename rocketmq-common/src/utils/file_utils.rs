@@ -21,6 +21,8 @@ use std::io::{self};
 use std::path::Path;
 
 use parking_lot::Mutex;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
 #[cfg(feature = "async_fs")]
 use tokio::io::AsyncReadExt;
 #[cfg(feature = "async_fs")]
@@ -32,43 +34,44 @@ static LOCK: Mutex<()> = Mutex::new(());
 #[cfg(feature = "async_fs")]
 static ASYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-pub fn file_to_string(file_name: &str) -> Result<String, io::Error> {
-    let path = Path::new(file_name);
+pub fn file_to_string(file_name: impl AsRef<Path>) -> RocketMQResult<String> {
+    let path = file_name.as_ref();
     if !path.exists() {
-        warn!("file not exist: {}", file_name);
-        return Err(io::Error::new(
+        warn!("file not exist: {}", path.display());
+        return Err(RocketMQError::IO(io::Error::new(
             io::ErrorKind::NotFound,
-            format!("File not found: {}", file_name),
-        ));
+            format!("File not found: {}", path.display()),
+        )));
     }
-    std::fs::read_to_string(path)
+    std::fs::read_to_string(path).map_err(RocketMQError::IO)
 }
 
-pub fn string_to_file(str_content: &str, file_name: &str) -> io::Result<()> {
+pub fn string_to_file(str_content: &str, file_name: impl AsRef<Path>) -> RocketMQResult<()> {
     let _lock = LOCK.lock();
 
-    let file_path = Path::new(file_name);
-    let bak_file = format!("{file_name}.bak");
+    let file_path = file_name.as_ref();
+    let mut bak_file = file_path.as_os_str().to_os_string();
+    bak_file.push(".bak");
 
     // Create a backup if the file exists
     if file_path.exists() {
-        std::fs::copy(file_name, &bak_file)?;
+        std::fs::copy(file_path, &bak_file)?;
     }
 
     // Write new content to the file
-    string_to_file_not_safe(str_content, file_name)?;
+    string_to_file_not_safe(str_content, file_path)?;
     Ok(())
 }
 
-fn string_to_file_not_safe(str_content: &str, file_name: &str) -> io::Result<()> {
-    let path = Path::new(file_name);
+fn string_to_file_not_safe(str_content: &str, file_name: impl AsRef<Path>) -> RocketMQResult<()> {
+    let path = file_name.as_ref();
 
     // Create parent directories if they don't exist
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    let file = File::create(file_name)?;
+    let file = File::create(path)?;
     let mut writer = io::BufWriter::new(file);
     writer.write_all(str_content.as_bytes())?;
     writer.flush()?;
@@ -76,47 +79,62 @@ fn string_to_file_not_safe(str_content: &str, file_name: &str) -> io::Result<()>
 }
 
 #[cfg(feature = "async_fs")]
-pub async fn file_to_string_async(file_name: &str) -> Result<String, io::Error> {
-    let path = Path::new(file_name);
-    if !tokio::fs::try_exists(path).await.unwrap_or(false) {
-        warn!("file not exist: {}", file_name);
-        return Err(io::Error::new(
+pub async fn file_to_string_async(file_name: impl AsRef<Path>) -> RocketMQResult<String> {
+    let path = file_name.as_ref();
+    if !tokio::fs::try_exists(path).await? {
+        warn!("file not exist: {}", path.display());
+        return Err(RocketMQError::IO(io::Error::new(
             io::ErrorKind::NotFound,
-            format!("File not found: {}", file_name),
-        ));
+            format!("File not found: {}", path.display()),
+        )));
     }
-    tokio::fs::read_to_string(path).await
+    tokio::fs::read_to_string(path)
+        .await
+        .map_err(RocketMQError::IO)
 }
 
 #[cfg(feature = "async_fs")]
-pub async fn string_to_file_async(str_content: &str, file_name: &str) -> io::Result<()> {
+pub async fn string_to_file_async(
+    str_content: &str,
+    file_name: impl AsRef<Path>,
+) -> RocketMQResult<()> {
     let _lock = ASYNC_LOCK.lock().await;
 
-    let file_path = Path::new(file_name);
-    let bak_file = format!("{file_name}.bak");
+    let file_path = file_name.as_ref();
+    let mut bak_file = file_path.as_os_str().to_os_string();
+    bak_file.push(".bak");
 
     // Create a backup if the file exists
-    if tokio::fs::try_exists(file_path).await.unwrap_or(false) {
-        tokio::fs::copy(file_name, &bak_file).await?;
+    if tokio::fs::try_exists(file_path)
+        .await
+        .map_err(RocketMQError::IO)?
+    {
+        tokio::fs::copy(file_path, &bak_file)
+            .await
+            .map_err(RocketMQError::IO)?;
     }
 
     // Write new content to the file
-    string_to_file_not_safe_async(str_content, file_name).await?;
+    string_to_file_not_safe_async(str_content, file_path).await?;
     Ok(())
 }
 
 #[cfg(feature = "async_fs")]
-async fn string_to_file_not_safe_async(str_content: &str, file_name: &str) -> io::Result<()> {
-    let path = Path::new(file_name);
+async fn string_to_file_not_safe_async(
+    str_content: &str,
+    file_name: impl AsRef<Path>,
+) -> RocketMQResult<()> {
+    let path = file_name.as_ref();
 
     // Create parent directories if they don't exist
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
 
-    let mut file = tokio::fs::File::create(file_name).await?;
-    file.write_all(str_content.as_bytes()).await?;
-    file.flush().await?;
+    let file = tokio::fs::File::create(file_name).await?;
+    let mut writer = tokio::io::BufWriter::new(file);
+    writer.write_all(str_content.as_bytes()).await?;
+    writer.flush().await?;
     Ok(())
 }
 
@@ -190,5 +208,28 @@ mod tests {
         // Check if the result is Ok and the file was created with the expected content
         assert!(result.is_ok());
         assert_eq!(tokio::fs::read_to_string(file_path).await.unwrap(), content);
+    }
+
+    #[test]
+    fn test_file_to_string_not_found() {
+        let result = file_to_string("/nonexistent/path/file.txt");
+        assert!(result.is_err());
+        if let Err(RocketMQError::IO(io_err)) = result {
+            assert_eq!(io_err.kind(), io::ErrorKind::NotFound);
+        } else {
+            panic!("Expected RocketMQError::IO with NotFound");
+        }
+    }
+
+    #[cfg(feature = "async_fs")]
+    #[tokio::test]
+    async fn test_file_to_string_async_not_found() {
+        let result = file_to_string_async("/nonexistent/path/file.txt").await;
+        assert!(result.is_err());
+        if let Err(RocketMQError::IO(io_err)) = result {
+            assert_eq!(io_err.kind(), io::ErrorKind::NotFound);
+        } else {
+            panic!("Expected RocketMQError::IO with NotFound");
+        }
     }
 }
