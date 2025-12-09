@@ -16,11 +16,9 @@
  */
 
 use std::fs::File;
-use std::io::Read;
 use std::io::Write;
 use std::io::{self};
 use std::path::Path;
-use std::path::PathBuf;
 
 use parking_lot::Mutex;
 #[cfg(feature = "async_fs")]
@@ -35,122 +33,89 @@ static LOCK: Mutex<()> = Mutex::new(());
 static ASYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub fn file_to_string(file_name: &str) -> Result<String, io::Error> {
-    if !PathBuf::from(file_name).exists() {
-        warn!("file not exist:{}", file_name);
-        return Ok("".to_string());
+    let path = Path::new(file_name);
+    if !path.exists() {
+        warn!("file not exist: {}", file_name);
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("File not found: {}", file_name),
+        ));
     }
-    let file = File::open(file_name)?;
-    file_to_string_impl(&file)
-}
-
-fn file_to_string_impl(file: &File) -> Result<String, io::Error> {
-    let file_length = file.metadata()?.len() as usize;
-    let mut data = vec![0; file_length];
-    let result = file.take(file_length as u64).read_exact(&mut data);
-
-    match result {
-        Ok(_) => Ok(String::from_utf8_lossy(&data).to_string()),
-        Err(_) => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Failed to read file",
-        )),
-    }
+    std::fs::read_to_string(path)
 }
 
 pub fn string_to_file(str_content: &str, file_name: &str) -> io::Result<()> {
-    let lock = LOCK.lock(); //todo enhancement: not use global lock
+    let _lock = LOCK.lock();
 
+    let file_path = Path::new(file_name);
     let bak_file = format!("{file_name}.bak");
 
-    // Read previous content and create a backup
-    if let Ok(prev_content) = file_to_string(file_name) {
-        string_to_file_not_safe(&prev_content, &bak_file)?;
+    // Create a backup if the file exists
+    if file_path.exists() {
+        std::fs::copy(file_name, &bak_file)?;
     }
 
     // Write new content to the file
     string_to_file_not_safe(str_content, file_name)?;
-    drop(lock);
     Ok(())
 }
 
 fn string_to_file_not_safe(str_content: &str, file_name: &str) -> io::Result<()> {
+    let path = Path::new(file_name);
+
     // Create parent directories if they don't exist
-    if let Some(parent) = Path::new(file_name).parent() {
+    if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+
     let file = File::create(file_name)?;
-
-    write_string_to_file(&file, str_content, "UTF-8")
-}
-
-fn write_string_to_file(file: &File, data: &str, _encoding: &str) -> io::Result<()> {
-    let mut os = io::BufWriter::new(file);
-
-    os.write_all(data.as_bytes())?;
-
+    let mut writer = io::BufWriter::new(file);
+    writer.write_all(str_content.as_bytes())?;
+    writer.flush()?;
     Ok(())
 }
 
 #[cfg(feature = "async_fs")]
 pub async fn file_to_string_async(file_name: &str) -> Result<String, io::Error> {
-    if !tokio::fs::try_exists(file_name).await.unwrap_or(false) {
-        warn!("file not exist:{}", file_name);
-        return Ok("".to_string());
+    let path = Path::new(file_name);
+    if !tokio::fs::try_exists(path).await.unwrap_or(false) {
+        warn!("file not exist: {}", file_name);
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("File not found: {}", file_name),
+        ));
     }
-    let mut file = tokio::fs::File::open(file_name).await?;
-    file_to_string_impl_async(&mut file).await
-}
-
-#[cfg(feature = "async_fs")]
-async fn file_to_string_impl_async(file: &mut tokio::fs::File) -> Result<String, io::Error> {
-    let file_length = file.metadata().await?.len() as usize;
-    let mut data = vec![0; file_length];
-    let result = file.read_exact(&mut data).await;
-
-    match result {
-        Ok(_) => Ok(String::from_utf8_lossy(&data).to_string()),
-        Err(_) => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Failed to read file",
-        )),
-    }
+    tokio::fs::read_to_string(path).await
 }
 
 #[cfg(feature = "async_fs")]
 pub async fn string_to_file_async(str_content: &str, file_name: &str) -> io::Result<()> {
-    let lock = ASYNC_LOCK.lock().await;
+    let _lock = ASYNC_LOCK.lock().await;
 
+    let file_path = Path::new(file_name);
     let bak_file = format!("{file_name}.bak");
 
-    // Read previous content and create a backup
-    if let Ok(prev_content) = file_to_string_async(file_name).await {
-        string_to_file_not_safe_async(&prev_content, &bak_file).await?;
+    // Create a backup if the file exists
+    if tokio::fs::try_exists(file_path).await.unwrap_or(false) {
+        tokio::fs::copy(file_name, &bak_file).await?;
     }
 
     // Write new content to the file
     string_to_file_not_safe_async(str_content, file_name).await?;
-    drop(lock);
     Ok(())
 }
 
 #[cfg(feature = "async_fs")]
 async fn string_to_file_not_safe_async(str_content: &str, file_name: &str) -> io::Result<()> {
+    let path = Path::new(file_name);
+
     // Create parent directories if they don't exist
-    if let Some(parent) = Path::new(file_name).parent() {
+    if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
+
     let mut file = tokio::fs::File::create(file_name).await?;
-
-    write_string_to_file_async(&mut file, str_content, "UTF-8").await
-}
-
-#[cfg(feature = "async_fs")]
-async fn write_string_to_file_async(
-    file: &mut tokio::fs::File,
-    data: &str,
-    _encoding: &str,
-) -> io::Result<()> {
-    file.write_all(data.as_bytes()).await?;
+    file.write_all(str_content.as_bytes()).await?;
     file.flush().await?;
     Ok(())
 }
