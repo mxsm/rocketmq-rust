@@ -79,8 +79,8 @@ impl LocalFileOffsetStore {
     }
 
     fn read_local_offset(&self) -> rocketmq_error::RocketMQResult<Option<OffsetSerializeWrapper>> {
-        let content = file_utils::file_to_string(self.store_path.as_str())
-            .map_or("".to_string(), |content| content);
+        let content =
+            file_utils::file_to_string(self.store_path.as_str()).map_or("".to_string(), |content| content);
         if content.is_empty() {
             self.read_local_offset_bak()
         } else {
@@ -202,7 +202,7 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
             .serialize_json_pretty()
             .expect("persistAll failed");
         if !content.is_empty() {
-            if let Err(e) = file_utils::string_to_file(&content, &self.store_path) {
+            if let Err(e) = file_utils::string_to_file(&content, self.store_path.as_str()) {
                 error!(
                     "persistAll consumer offset Exception, {},{}",
                     self.store_path, e
@@ -228,7 +228,7 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
                 .serialize_json_pretty()
                 .expect("persist failed");
             if !content.is_empty() {
-                if let Err(e) = file_utils::string_to_file(&content, &self.store_path) {
+                if let Err(e) = file_utils::string_to_file(&content, self.store_path.as_str()) {
                     error!(
                         "persist consumer offset Exception, {},{}",
                         self.store_path, e
