@@ -239,7 +239,8 @@ where
         //TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC only one read and write queue
         let msg_queues = self
             .transactional_message_bridge
-            .fetch_message_queues(&topic);
+            .fetch_message_queues(&topic)
+            .await;
 
         if msg_queues.is_empty() {
             warn!("The queue of topic is empty: {}", topic);

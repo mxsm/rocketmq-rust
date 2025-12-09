@@ -92,9 +92,9 @@ where
         offset
     }
 
-    pub fn fetch_message_queues(&mut self, topic: &CheetahString) -> HashSet<MessageQueue> {
+    pub async fn fetch_message_queues(&mut self, topic: &CheetahString) -> HashSet<MessageQueue> {
         let mut message_queues = HashSet::new();
-        let topic_config = self.select_topic_config(topic);
+        let topic_config = self.select_topic_config(topic).await;
         let broker_name = self
             .broker_runtime_inner
             .broker_config()
@@ -224,7 +224,10 @@ where
         found_list
     }
 
-    pub fn select_topic_config(&mut self, topic: &CheetahString) -> Option<ArcMut<TopicConfig>> {
+    pub async fn select_topic_config(
+        &mut self,
+        topic: &CheetahString,
+    ) -> Option<ArcMut<TopicConfig>> {
         let mut topic_config = self
             .broker_runtime_inner
             .topic_config_manager()
@@ -239,7 +242,8 @@ where
                     PermName::PERM_WRITE | PermName::PERM_READ,
                     false,
                     0,
-                );
+                )
+                .await;
         }
         topic_config
     }

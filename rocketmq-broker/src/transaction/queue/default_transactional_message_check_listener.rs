@@ -84,6 +84,7 @@ where
                 TCMT_QUEUE_NUMS,
                 PermName::PERM_READ | PermName::PERM_WRITE,
             )
+            .await
             .expect("Create topic of tran check max time failed");
         let broker_inner = to_message_ext_broker_inner(&topic_config, &msg_ext);
         let put_message_result = self
