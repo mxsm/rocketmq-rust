@@ -177,7 +177,8 @@ where
         }
         response.set_code_mut(-1);
         self.inner
-            .msg_check(channel, ctx, request, &request_header, &mut response);
+            .msg_check(channel, ctx, request, &request_header, &mut response)
+            .await;
         if response.code() != -1 {
             return response;
         }

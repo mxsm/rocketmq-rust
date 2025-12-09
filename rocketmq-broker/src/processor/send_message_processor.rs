@@ -295,7 +295,7 @@ where
     where
         F: Fn(&mut SendMessageContext, &mut RemotingCommand),
     {
-        let mut response = self.pre_send(channel, ctx, request, &request_header);
+        let mut response = self.pre_send(channel, ctx, request, &request_header).await;
         if response.code() != -1 {
             return Ok(Some(response));
         }
@@ -481,7 +481,7 @@ where
     where
         F: Fn(&mut SendMessageContext, &mut RemotingCommand),
     {
-        let mut response = self.pre_send(channel, ctx, request, &request_header);
+        let mut response = self.pre_send(channel, ctx, request, &request_header).await;
         if response.code() != -1 {
             return Ok(Some(response));
         }
@@ -504,14 +504,17 @@ where
         message_ext.message_ext_inner.queue_id = queue_id;
         let mut ori_props =
             MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
-        if !self.handle_retry_and_dlq(
-            &request_header,
-            &mut response,
-            request,
-            &mut message_ext.message_ext_inner,
-            &mut topic_config,
-            &mut ori_props,
-        ) {
+        if !self
+            .handle_retry_and_dlq(
+                &request_header,
+                &mut response,
+                request,
+                &mut message_ext.message_ext_inner,
+                &mut topic_config,
+                &mut ori_props,
+            )
+            .await
+        {
             return Ok(Some(response));
         }
         message_ext.message_ext_inner.message.body = request.body().cloned();
@@ -985,7 +988,7 @@ where
         }
     }
 
-    pub fn pre_send(
+    pub async fn pre_send(
         &mut self,
         channel: &Channel,
         ctx: &ConnectionHandlerContext,
@@ -1033,11 +1036,12 @@ where
         }
         response = response.set_code(-1);
         self.inner
-            .msg_check(channel, ctx, request, request_header, &mut response);
+            .msg_check(channel, ctx, request, request_header, &mut response)
+            .await;
         response
     }
 
-    fn handle_retry_and_dlq(
+    async fn handle_retry_and_dlq(
         &mut self,
         request_header: &SendMessageRequestHeader,
         response: &mut RemotingCommand,
@@ -1111,7 +1115,8 @@ where
                         PermName::PERM_WRITE | PermName::PERM_READ,
                         false,
                         0,
-                    );
+                    )
+                    .await;
                 // can optimize
                 msg.message.topic = CheetahString::from_string(new_topic.to_string());
                 msg.queue_id = queue_id_int;
@@ -1284,7 +1289,8 @@ where
                 PermName::PERM_WRITE | PermName::PERM_READ,
                 false,
                 topic_sys_flag,
-            );
+            )
+            .await;
         if topic_config.is_none() {
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code_remark(
@@ -1356,7 +1362,8 @@ where
                     PermName::PERM_WRITE | PermName::PERM_READ,
                     false,
                     0,
-                );
+                )
+                .await;
             if topic_config_inner.is_none() {
                 return Ok(Some(
                     RemotingCommand::create_response_command_with_code_remark(
@@ -1567,7 +1574,7 @@ where
         send_message_context
     }
 
-    pub(crate) fn msg_check(
+    pub(crate) async fn msg_check(
         &mut self,
         channel: &Channel,
         _ctx: &ConnectionHandlerContext,
@@ -1631,12 +1638,13 @@ where
                 .broker_runtime_inner
                 .topic_config_manager_mut()
                 .create_topic_in_send_message_method(
-                    request_header.topic.as_str(),
-                    request_header.default_topic.as_str(),
+                    &request_header.topic,
+                    &request_header.default_topic,
                     channel.remote_address(),
                     request_header.default_topic_queue_nums,
                     topic_sys_flag,
-                );
+                )
+                .await;
 
             if topic_config.is_none() && request_header.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX)
             {
@@ -1649,7 +1657,8 @@ where
                         PermName::PERM_WRITE | PermName::PERM_READ,
                         false,
                         topic_sys_flag,
-                    );
+                    )
+                    .await;
             }
 
             if topic_config.is_none() {

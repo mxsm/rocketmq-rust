@@ -115,7 +115,7 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match request_code {
-            RequestCode::HeartBeat => self.heart_beat(channel, ctx, request),
+            RequestCode::HeartBeat => self.heart_beat(channel, ctx, request).await,
             RequestCode::UnregisterClient => self.unregister_client(channel, ctx, request),
             RequestCode::CheckClientConfig => {
                 unimplemented!("CheckClientConfig")
@@ -171,7 +171,7 @@ where
         Ok(Some(RemotingCommand::create_response_command()))
     }
 
-    fn heart_beat(
+    async fn heart_beat(
         &mut self,
         channel: Channel,
         ctx: ConnectionHandlerContext,
@@ -242,7 +242,8 @@ where
                     PermName::PERM_WRITE | PermName::PERM_READ,
                     has_order_topic_sub,
                     topic_sys_flag,
-                );
+                )
+                .await;
             let changed = self
                 .broker_runtime_inner
                 .consumer_manager()
