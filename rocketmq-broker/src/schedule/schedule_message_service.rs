@@ -115,12 +115,16 @@ pub struct ScheduleMessageService<MS: MessageStore> {
     delay_level_table: ArcMut<BTreeMap<i32 /* level */, i64 /* delay timeMillis */>>,
     offset_table: ArcMut<DashMap<i32, i64>>,
     started: AtomicBool,
+    /// Flag to signal graceful shutdown
+    shutdown_requested: Arc<AtomicBool>,
     max_delay_level: AtomicI32,
     data_version: ArcMut<DataVersion>,
     enable_async_deliver: bool,
     deliver_pending_table: DeliverPendingTable<MS>,
     broker_controller: ArcMut<BrokerRuntimeInner<MS>>,
     version_change_counter: AtomicI64,
+    /// Handles for all spawned tasks to support graceful shutdown
+    task_handles: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 }
 
 impl<MS: MessageStore> ScheduleMessageService<MS> {
@@ -133,12 +137,14 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
             delay_level_table: ArcMut::new(BTreeMap::new()),
             offset_table: ArcMut::new(DashMap::new()),
             started: AtomicBool::new(false),
+            shutdown_requested: Arc::new(AtomicBool::new(false)),
             max_delay_level: AtomicI32::new(0),
             data_version: ArcMut::new(DataVersion::new()),
             enable_async_deliver,
             deliver_pending_table: Arc::new(DashMap::new()),
             broker_controller,
             version_change_counter: AtomicI64::new(0),
+            task_handles: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -224,14 +230,24 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         }
     }
 
+    /// Starts the schedule message service.
+    ///
+    /// Initializes delay level tables, spawns delivery tasks for each level,
+    /// and starts the periodic offset persistence task.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` on successful start, error otherwise
     pub fn start(this: ArcMut<Self>) -> Result<(), Box<dyn std::error::Error>> {
         if this
             .started
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
             == Ok(false)
         {
-            // maybe need to optimize
+            info!("Starting ScheduleMessageService...");
             this.load();
+
+            let mut task_handles = Vec::new();
 
             for (level, _time_delay) in this.delay_level_table.iter() {
                 let offset = {
@@ -240,30 +256,44 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
                         .map_or(0, |key_value| *key_value.value())
                 };
 
+                // Spawn async delivery handler task
                 if this.enable_async_deliver {
                     let level_copy = *level;
                     let service = this.clone();
+                    let shutdown_flag = Arc::clone(&this.shutdown_requested);
 
-                    tokio::spawn(async move {
+                    let handle = tokio::spawn(async move {
                         tokio::time::sleep(Duration::from_millis(FIRST_DELAY_TIME)).await;
-                        let task = HandlePutResultTask::new(level_copy, service);
+                        let task = HandlePutResultTask::new(level_copy, service, shutdown_flag);
                         task.run().await;
                     });
+                    task_handles.push(handle);
                 }
 
+                // Spawn delivery timer task
                 let level_copy = *level;
                 let offset_copy = offset;
                 let service = this.clone();
+                let shutdown_flag = Arc::clone(&this.shutdown_requested);
 
-                tokio::spawn(async move {
-                    let task =
-                        DeliverDelayedMessageTimerTask::new(level_copy, offset_copy, service);
+                let handle = tokio::spawn(async move {
+                    let task = DeliverDelayedMessageTimerTask::new(
+                        level_copy,
+                        offset_copy,
+                        service,
+                        shutdown_flag,
+                    );
                     tokio::time::sleep(Duration::from_millis(FIRST_DELAY_TIME)).await;
                     task.run().await;
                 });
+                task_handles.push(handle);
             }
+
+            // Spawn periodic persist task
             let service = this.clone();
-            tokio::spawn(async move {
+            let shutdown_flag = Arc::clone(&this.shutdown_requested);
+
+            let persist_handle = tokio::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_millis(
                     service
                         .broker_controller
@@ -271,27 +301,84 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
                         .flush_delay_offset_interval,
                 ));
                 tokio::time::sleep(Duration::from_millis(10000)).await;
+
                 loop {
                     interval.tick().await;
+
+                    // Check shutdown flag
+                    if shutdown_flag.load(Ordering::Relaxed) {
+                        info!("Persist task received shutdown signal");
+                        service.persist();
+                        break;
+                    }
+
                     service.persist();
                 }
             });
+            task_handles.push(persist_handle);
+
+            // Store all task handles
+            {
+                let mut handles = this.task_handles.blocking_lock();
+                handles.extend(task_handles);
+            }
+
+            info!(
+                "ScheduleMessageService started successfully with {} delay levels",
+                this.delay_level_table.len()
+            );
         }
 
         Ok(())
     }
 
-    pub fn shutdown(&mut self) {
+    /// Gracefully shuts down the schedule message service.
+    ///
+    /// Signals all tasks to stop, waits for them to complete, and persists final state.
+    pub async fn shutdown(&self) {
+        info!("Shutting down ScheduleMessageService...");
+
+        // Signal shutdown
+        self.shutdown_requested.store(true, Ordering::SeqCst);
         self.stop();
+
+        // Wait for all tasks to complete
+        let mut handles = self.task_handles.lock().await;
+        let task_count = handles.len();
+
+        info!("Waiting for {} tasks to complete...", task_count);
+
+        for (idx, handle) in handles.drain(..).enumerate() {
+            match tokio::time::timeout(Duration::from_millis(WAIT_FOR_SHUTDOWN), handle).await {
+                Ok(Ok(())) => {
+                    info!("Task {}/{} completed successfully", idx + 1, task_count);
+                }
+                Ok(Err(e)) => {
+                    warn!("Task {}/{} panicked: {:?}", idx + 1, task_count, e);
+                }
+                Err(_) => {
+                    warn!(
+                        "Task {}/{} timed out after {}ms",
+                        idx + 1,
+                        task_count,
+                        WAIT_FOR_SHUTDOWN
+                    );
+                }
+            }
+        }
+
+        info!("ScheduleMessageService shutdown complete");
     }
 
-    pub fn stop(&mut self) -> bool {
+    pub fn stop(&self) -> bool {
         if self
             .started
             .compare_exchange(true, false, Ordering::SeqCst, Ordering::Relaxed)
             .is_ok()
         {
+            info!("Stopping ScheduleMessageService and persisting state...");
             self.persist();
+            info!("ScheduleMessageService stopped");
         }
 
         true
@@ -684,6 +771,9 @@ pub struct DeliverDelayedMessageTimerTask<MS: MessageStore> {
 
     /// Reference to the parent service
     schedule_service: ArcMut<ScheduleMessageService<MS>>,
+
+    /// Shutdown signal to gracefully stop the task
+    shutdown_flag: Arc<AtomicBool>,
 }
 
 impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
@@ -692,17 +782,24 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
         delay_level: i32,
         offset: i64,
         schedule_service: ArcMut<ScheduleMessageService<MS>>,
+        shutdown_flag: Arc<AtomicBool>,
     ) -> Self {
         Self {
             delay_level,
             offset,
             schedule_service,
+            shutdown_flag,
         }
     }
 
     /// Execute the task
     pub async fn run(&self) {
-        if !self.schedule_service.is_started() {
+        // Check shutdown flag first
+        if self.shutdown_flag.load(Ordering::Relaxed) || !self.schedule_service.is_started() {
+            info!(
+                "Delivery task for level {} received shutdown signal",
+                self.delay_level
+            );
             return;
         }
 
@@ -807,7 +904,7 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
         let mut next_offset = self.offset;
 
         // Process each message in the consume queue
-        while self.schedule_service.is_started() {
+        while self.schedule_service.is_started() && !self.shutdown_flag.load(Ordering::Relaxed) {
             let cq_unit = if let Some(unit) = buffer_cq.next() {
                 unit
             } else {
@@ -940,11 +1037,17 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
     fn schedule_next_timer_task(&self, offset: i64, delay: u64) {
         let schedule_service = self.schedule_service.clone();
         let delay_level = self.delay_level;
+        let shutdown_flag = Arc::clone(&self.shutdown_flag);
 
         // Schedule the next task after the specified delay
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(delay)).await;
-            let task = DeliverDelayedMessageTimerTask::new(delay_level, offset, schedule_service);
+            let task = DeliverDelayedMessageTimerTask::new(
+                delay_level,
+                offset,
+                schedule_service,
+                shutdown_flag,
+            );
             task.run().await;
         });
     }
@@ -1486,19 +1589,36 @@ pub struct HandlePutResultTask<MS: MessageStore> {
 
     /// Reference to the parent service
     schedule_service: ArcMut<ScheduleMessageService<MS>>,
+
+    /// Shutdown signal to gracefully stop the task
+    shutdown_flag: Arc<AtomicBool>,
 }
 
 impl<MS: MessageStore> HandlePutResultTask<MS> {
     /// Create a new task for handling put results at the specified delay level
-    pub fn new(delay_level: i32, schedule_service: ArcMut<ScheduleMessageService<MS>>) -> Self {
+    pub fn new(
+        delay_level: i32,
+        schedule_service: ArcMut<ScheduleMessageService<MS>>,
+        shutdown_flag: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             delay_level,
             schedule_service,
+            shutdown_flag,
         }
     }
 
     /// Execute the task to process pending results
     pub async fn run(&self) {
+        // Check shutdown flag
+        if self.shutdown_flag.load(Ordering::Relaxed) {
+            info!(
+                "HandlePutResultTask for level {} received shutdown signal",
+                self.delay_level
+            );
+            return;
+        }
+
         // Get the pending queue for this delay level
         let pending_queue_guard = match self
             .schedule_service
@@ -1553,15 +1673,16 @@ impl<MS: MessageStore> HandlePutResultTask<MS> {
 
     /// Schedule the next execution of the handler task
     fn schedule_next_task(&self) {
-        // Only schedule if the service is still running
-        if self.schedule_service.is_started() {
+        // Only schedule if the service is still running and not shutting down
+        if self.schedule_service.is_started() && !self.shutdown_flag.load(Ordering::Relaxed) {
             let delay_level = self.delay_level;
             let schedule_service = ArcMut::clone(&self.schedule_service);
+            let shutdown_flag = Arc::clone(&self.shutdown_flag);
 
             // Schedule after a short delay
             tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(DELAY_FOR_A_SLEEP)).await; // DELAY_FOR_A_SLEEP
-                let task = HandlePutResultTask::new(delay_level, schedule_service);
+                tokio::time::sleep(Duration::from_millis(DELAY_FOR_A_SLEEP)).await;
+                let task = HandlePutResultTask::new(delay_level, schedule_service, shutdown_flag);
                 task.run().await;
             });
         }
