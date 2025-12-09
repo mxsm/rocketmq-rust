@@ -31,17 +31,16 @@ use tracing::warn;
 
 static LOCK: Mutex<()> = Mutex::new(());
 
+const FILE_EMPTY: &str = "";
+
 #[cfg(feature = "async_fs")]
 static ASYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub fn file_to_string(file_name: impl AsRef<Path>) -> RocketMQResult<String> {
     let path = file_name.as_ref();
     if !path.exists() {
-        warn!("file not exist: {}", path.display());
-        return Err(RocketMQError::IO(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("File not found: {}", path.display()),
-        )));
+        warn!("file not exist file_to_string: {}", path.display());
+        return Ok(String::new());
     }
     std::fs::read_to_string(path).map_err(RocketMQError::IO)
 }
@@ -213,12 +212,8 @@ mod tests {
     #[test]
     fn test_file_to_string_not_found() {
         let result = file_to_string("/nonexistent/path/file.txt");
-        assert!(result.is_err());
-        if let Err(RocketMQError::IO(io_err)) = result {
-            assert_eq!(io_err.kind(), io::ErrorKind::NotFound);
-        } else {
-            panic!("Expected RocketMQError::IO with NotFound");
-        }
+        assert!(result.is_ok());
+        assert!(result.unwrap_or("".to_string()).is_empty())
     }
 
     #[cfg(feature = "async_fs")]
