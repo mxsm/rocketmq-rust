@@ -30,6 +30,7 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::common::TopicSysFlag;
+use rocketmq_common::utils::file_utils;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::TopicAttributes::TopicAttributes;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
@@ -37,6 +38,7 @@ use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper:
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
 use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
@@ -775,11 +777,9 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
 
     pub fn load_data_version(&mut self) -> bool {
         let file_path = self.config_file_path();
-        match std::fs::read_to_string(&file_path) {
+        match file_utils::file_to_string(&file_path) {
             Ok(json_string) => {
-                if let Ok(wrapper) =
-                    SerdeJsonUtils::from_json_str::<TopicConfigSerializeWrapper>(&json_string)
-                {
+                if let Ok(wrapper) = TopicConfigSerializeWrapper::decode_string(json_string) {
                     if let Some(data_version) = wrapper.data_version() {
                         self.data_version
                             .mut_from_ref()
