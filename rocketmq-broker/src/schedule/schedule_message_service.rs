@@ -167,8 +167,31 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         }
     }
 
+    /// Updates the offset for a specific delay level and manages data version.
+    ///
+    /// This method is called after successfully delivering a scheduled message.
+    /// It updates the offset table and periodically updates the data version for persistence.
+    ///
+    /// # Arguments
+    ///
+    /// * `delay_level` - The delay level whose offset is being updated
+    /// * `offset` - The new offset value
     fn update_offset(&self, delay_level: i32, offset: i64) {
+        let old_offset = self.offset_table.get(&delay_level).map(|v| *v.value());
         self.offset_table.insert(delay_level, offset);
+
+        // Log significant offset updates (every 100 messages)
+        if let Some(old) = old_offset {
+            if offset - old >= 100 {
+                info!(
+                    "Delay level {} offset updated: {} -> {} (delta: {})",
+                    delay_level,
+                    old,
+                    offset,
+                    offset - old
+                );
+            }
+        }
 
         let version_counter = self.version_change_counter.fetch_add(1, Ordering::SeqCst);
         if version_counter
@@ -185,6 +208,11 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
 
             let data_version = self.data_version.mut_from_ref();
             data_version.next_version_with(state_machine_version);
+
+            info!(
+                "Data version updated: version_counter={}, state_machine_version={}",
+                version_counter, state_machine_version
+            );
         }
     }
 
@@ -359,8 +387,22 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         true
     }
 
+    /// Parses the configured delay level string and initializes the delay level table.
+    ///
+    /// # Format
+    /// Delay levels are specified as space-separated values with time units:
+    /// - "s": seconds
+    /// - "m": minutes
+    /// - "h": hours
+    /// - "d": days
+    ///
+    /// # Example
+    /// "1s 5s 10s 30s 1m 2m" creates 6 delay levels
+    ///
+    /// # Returns
+    /// `true` if parsing succeeds, `false` otherwise
     pub fn parse_delay_level(&self) -> bool {
-        let mut time_unit_table = HashMap::new();
+        let mut time_unit_table = HashMap::with_capacity(4);
         time_unit_table.insert("s", 1000);
         time_unit_table.insert("m", 1000 * 60);
         time_unit_table.insert("h", 1000 * 60 * 60);
@@ -372,33 +414,77 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
             .message_delay_level
             .as_str();
 
-        let level_array: Vec<&str> = level_string.split(' ').collect();
+        info!("Parsing delay level configuration: {}", level_string);
+
+        let level_array: Vec<&str> = level_string.split(' ').filter(|s| !s.is_empty()).collect();
+        if level_array.is_empty() {
+            error!("Delay level configuration is empty");
+            return false;
+        }
 
         let delay_level_table = self.delay_level_table.mut_from_ref();
         let mut max_delay_level = 0;
 
         for (i, value) in level_array.iter().enumerate() {
-            let ch = value.chars().last().unwrap().to_string();
-            let tu = time_unit_table
-                .get(&ch.as_str())
-                .ok_or(format!("Unknown time unit: {ch}"));
-            if tu.is_err() {
-                return false;
+            if value.is_empty() {
+                warn!("Skipping empty delay level at index {}", i);
+                continue;
             }
-            let tu = *tu.unwrap();
+
+            // Safe extraction of time unit character
+            let ch = match value.chars().last() {
+                Some(c) => c.to_string(),
+                None => {
+                    error!("Empty delay level value at index {}", i);
+                    return false;
+                }
+            };
+
+            // Look up time unit multiplier
+            let tu = match time_unit_table.get(ch.as_str()) {
+                Some(unit) => *unit,
+                None => {
+                    error!(
+                        "Unknown time unit '{}' at index {}. Allowed units: s, m, h, d. \
+                         messageDelayLevel={}",
+                        ch, i, level_string
+                    );
+                    return false;
+                }
+            };
 
             let level = i as i32 + 1;
             if level > max_delay_level {
                 max_delay_level = level;
             }
 
+            // Parse numeric value
             let num_str = &value[0..value.len() - 1];
-            let num = num_str.parse::<i64>();
-            if num.is_err() {
-                return false;
-            }
-            let num = num.unwrap();
+            let num = match num_str.parse::<i64>() {
+                Ok(n) if n > 0 => n,
+                Ok(n) => {
+                    error!(
+                        "Delay level value must be positive, got {} at index {}. \
+                         messageDelayLevel={}",
+                        n, i, level_string
+                    );
+                    return false;
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to parse delay level number '{}' at index {}: {}. \
+                         messageDelayLevel={}",
+                        num_str, i, e, level_string
+                    );
+                    return false;
+                }
+            };
+
             let delay_time_millis = tu * num;
+            info!(
+                "Parsed delay level {}: {} -> {} ms",
+                level, value, delay_time_millis
+            );
 
             delay_level_table.insert(level, delay_time_millis);
 
@@ -410,6 +496,12 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
 
         self.max_delay_level
             .store(max_delay_level, Ordering::Relaxed);
+
+        info!(
+            "Successfully parsed {} delay levels, max level: {}",
+            delay_level_table.len(),
+            max_delay_level
+        );
         true
     }
 
@@ -452,8 +544,19 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         let queue_id = inner.get_property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_REAL_QUEUE_ID,
         ));
-        if let Some(queue_id) = queue_id {
-            inner.message_ext_inner.queue_id = queue_id.parse::<i32>().unwrap();
+        if let Some(queue_id_str) = queue_id {
+            match queue_id_str.parse::<i32>() {
+                Ok(qid) => {
+                    inner.message_ext_inner.queue_id = qid;
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to parse queue_id '{}': {}. Using default queue_id=0",
+                        queue_id_str, e
+                    );
+                    inner.message_ext_inner.queue_id = 0;
+                }
+            }
         }
 
         inner
@@ -518,32 +621,55 @@ impl<MS: MessageStore> ConfigManager for ScheduleMessageService<MS> {
             Some(self.get_offset_table()),
             Some(self.get_data_version()),
         );
-        if pretty_format {
-            delay_offset_serialize_wrapper
-                .serialize_json_pretty()
-                .expect("Failed to encode pretty")
+
+        let result = if pretty_format {
+            delay_offset_serialize_wrapper.serialize_json_pretty()
         } else {
-            delay_offset_serialize_wrapper
-                .serialize_json()
-                .expect("Failed to encode pretty")
+            delay_offset_serialize_wrapper.serialize_json()
+        };
+
+        match result {
+            Ok(json) => json,
+            Err(e) => {
+                error!("Failed to encode delay offset table to JSON: {}", e);
+                // Return empty JSON object as fallback
+                "{}".to_string()
+            }
         }
     }
 
     fn decode(&self, json_string: &str) {
         if json_string.is_empty() {
+            warn!("Decode called with empty json string");
             return;
         }
+
         let delay_offset_serialize_wrapper =
-            SerdeJsonUtils::from_json_str::<DelayOffsetSerializeWrapper>(json_string).unwrap();
+            match SerdeJsonUtils::from_json_str::<DelayOffsetSerializeWrapper>(json_string) {
+                Ok(wrapper) => wrapper,
+                Err(e) => {
+                    error!(
+                        "Failed to deserialize delay offset from json: {}. Json: {}",
+                        e, json_string
+                    );
+                    return;
+                }
+            };
 
         if let Some(offset_table_value) = delay_offset_serialize_wrapper.offset_table() {
             self.offset_table
                 .mut_from_ref()
                 .extend(offset_table_value.clone());
+            info!(
+                "Loaded {} delay offset entries from storage",
+                offset_table_value.len()
+            );
         }
+
         if let Some(data_version) = delay_offset_serialize_wrapper.data_version() {
             let current = self.data_version.mut_from_ref();
             current.assign_new_one(data_version);
+            info!("Loaded data version: {:?}", data_version);
         }
     }
 }
@@ -589,7 +715,29 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
         }
     }
 
-    /// Correct the delivery timestamp if it's too far in the future
+    /// Corrects the delivery timestamp to prevent messages from being delivered too early
+    /// due to system clock issues or invalid tags code.
+    ///
+    /// If the delivery timestamp is more than one full delay period in the future,
+    /// it's corrected to the current time to force immediate delivery.
+    ///
+    /// # Arguments
+    ///
+    /// * `now` - Current system time in milliseconds
+    /// * `deliver_timestamp` - Target delivery timestamp from tags code
+    ///
+    /// # Returns
+    ///
+    /// Corrected delivery timestamp that won't exceed `now + delay_time`
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // For a 10s delay level:
+    /// // If deliver_timestamp = now + 20s, returns now (force immediate delivery)
+    /// // If deliver_timestamp = now + 5s, returns deliver_timestamp (wait 5s)
+    /// let corrected = task.correct_deliver_timestamp(current_millis, tags_code);
+    /// ```
     fn correct_deliver_timestamp(&self, now: i64, deliver_timestamp: i64) -> i64 {
         let delay_time = *self
             .schedule_service
@@ -599,6 +747,11 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
         let max_timestamp = now + delay_time;
 
         if deliver_timestamp > max_timestamp {
+            warn!(
+                "Delivery timestamp {} exceeds max allowed {} (now + delay_time). Correcting to \
+                 now. DelayLevel: {}",
+                deliver_timestamp, max_timestamp, self.delay_level
+            );
             now
         } else {
             deliver_timestamp
@@ -660,16 +813,16 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
             } else {
                 break;
             };
-            let offset_py = cq_unit.pos;
-            let size_py = cq_unit.size;
+            let physical_offset = cq_unit.pos;
+            let physical_size = cq_unit.size;
             let mut tags_code = cq_unit.tags_code;
 
             // Handle invalid tags code
             if !cq_unit.is_tags_code_valid() {
                 error!(
-                    "[BUG] can't find consume queue extend file content! addr={}, offsetPy={}, \
-                     sizePy={}",
-                    tags_code, offset_py, size_py
+                    "[BUG] can't find consume queue extend file content! addr={}, \
+                     physical_offset={}, physical_size={}",
+                    tags_code, physical_offset, physical_size
                 );
 
                 let msg_store_time = self
@@ -677,7 +830,7 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
                     .broker_controller
                     .message_store_unchecked()
                     .get_commit_log()
-                    .pickup_store_timestamp(offset_py, size_py);
+                    .pickup_store_timestamp(physical_offset, physical_size);
 
                 tags_code = self
                     .schedule_service
@@ -692,12 +845,28 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
             assert_eq!(cq_unit.batch_num, 1);
             next_offset = curr_offset + cq_unit.batch_num as i64;
 
-            let countdown = deliver_timestamp - now;
-            if countdown > 0 {
-                self.schedule_next_timer_task(curr_offset, DELAY_FOR_A_WHILE);
-                self.schedule_service
-                    .update_offset(self.delay_level, curr_offset);
-                return Ok(());
+            // Detect clock skew/backwards
+            if deliver_timestamp < tags_code - (24 * 3600 * 1000) {
+                warn!(
+                    "Detected potential clock skew! deliverTimestamp={}, tagsCode={}, offset={}, \
+                     delayLevel={}. Forcing immediate delivery.",
+                    deliver_timestamp, tags_code, curr_offset, self.delay_level
+                );
+                // Force immediate delivery on clock issues
+            } else {
+                let countdown = deliver_timestamp - now;
+                if countdown > 0 {
+                    if countdown > (DELAY_FOR_A_PERIOD * 10) as i64 {
+                        info!(
+                            "Message countdown is very large ({}ms), offset={}, delayLevel={}",
+                            countdown, curr_offset, self.delay_level
+                        );
+                    }
+                    self.schedule_next_timer_task(curr_offset, DELAY_FOR_A_WHILE);
+                    self.schedule_service
+                        .update_offset(self.delay_level, curr_offset);
+                    return Ok(());
+                }
             }
 
             // Look up the actual message
@@ -705,10 +874,17 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
                 .schedule_service
                 .broker_controller
                 .message_store_unchecked()
-                .look_message_by_offset_with_size(offset_py, size_py)
+                .look_message_by_offset_with_size(physical_offset, physical_size)
             {
                 Some(msg) => msg,
-                None => continue,
+                None => {
+                    warn!(
+                        "Failed to look up message at physical_offset={}, physical_size={}, \
+                         delay_level={}",
+                        physical_offset, physical_size, self.delay_level
+                    );
+                    continue;
+                }
             };
             let msg_id = msg_ext.msg_id().clone();
             // Process the message for delivery
@@ -726,11 +902,23 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
 
             // Deliver the message
             let deliver_suc = if self.schedule_service.enable_async_deliver {
-                self.async_deliver(msg_inner, msg_id, curr_offset, offset_py, size_py)
-                    .await?
+                self.async_deliver(
+                    msg_inner,
+                    msg_id,
+                    curr_offset,
+                    physical_offset,
+                    physical_size,
+                )
+                .await?
             } else {
-                self.sync_deliver(msg_inner, msg_id, curr_offset, offset_py, size_py)
-                    .await?
+                self.sync_deliver(
+                    msg_inner,
+                    msg_id,
+                    curr_offset,
+                    physical_offset,
+                    physical_size,
+                )
+                .await?
             };
 
             if !deliver_suc {
