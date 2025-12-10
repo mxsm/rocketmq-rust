@@ -41,8 +41,8 @@ impl<MS: MessageStore> CheckBeforePutMessageHook<MS> {
 }
 
 impl<MS: MessageStore> PutMessageHook for CheckBeforePutMessageHook<MS> {
-    fn hook_name(&self) -> String {
-        "checkBeforePutMessage".to_string()
+    fn hook_name(&self) -> &'static str {
+        "checkBeforePutMessage"
     }
 
     fn execute_before_put_message(&self, msg: &mut dyn MessageTrait) -> Option<PutMessageResult> {

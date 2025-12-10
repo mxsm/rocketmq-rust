@@ -39,8 +39,8 @@ impl BatchCheckBeforePutMessageHook {
 }
 
 impl PutMessageHook for BatchCheckBeforePutMessageHook {
-    fn hook_name(&self) -> String {
-        "batchCheckBeforePutMessage".to_string()
+    fn hook_name(&self) -> &'static str {
+        "batchCheckBeforePutMessage"
     }
 
     fn execute_before_put_message(&self, msg: &mut dyn MessageTrait) -> Option<PutMessageResult> {

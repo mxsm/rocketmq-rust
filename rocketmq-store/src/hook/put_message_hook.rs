@@ -22,7 +22,7 @@ use crate::base::message_result::PutMessageResult;
 /// Trait for hook executed before putting a message.
 pub trait PutMessageHook {
     /// Returns the name of the hook.
-    fn hook_name(&self) -> String;
+    fn hook_name(&self) -> &'static str;
 
     /// Execute before putting a message.
     /// For example, message verification or special message transformation.
