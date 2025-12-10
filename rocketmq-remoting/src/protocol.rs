@@ -495,8 +495,6 @@ pub trait RemotingDeserializable {
     }
 }
 
-pub trait JsonSerializable: Serialize + RemotingSerializable {}
-
 impl<T: Serialize> RemotingSerializable for T {
     fn encode(&self) -> rocketmq_error::RocketMQResult<Vec<u8>> {
         SerdeJsonUtils::serialize_json_vec(self)
