@@ -1350,6 +1350,7 @@ where
             }
         }
 
+        //judge DLQ
         let is_dlq = if msg_ext.reconsume_times >= max_reconsume_times || delay_level < 0 {
             new_topic = CheetahString::from_string(mix_all::get_dlq_topic(&request_header.group));
             queue_id_int = 0;

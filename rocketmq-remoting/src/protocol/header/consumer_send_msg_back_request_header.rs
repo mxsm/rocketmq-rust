@@ -27,7 +27,7 @@ pub struct ConsumerSendMsgBackRequestHeader {
     #[required]
     pub offset: i64,
     #[required]
-    pub group: CheetahString,
+    pub group: CheetahString, //consumer group
     #[required]
     pub delay_level: i32,
     pub origin_msg_id: Option<CheetahString>,
