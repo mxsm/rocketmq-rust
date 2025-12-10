@@ -38,8 +38,8 @@ impl<MS: MessageStore> ScheduleMessageHook<MS> {
 }
 
 impl<MS: MessageStore> PutMessageHook for ScheduleMessageHook<MS> {
-    fn hook_name(&self) -> String {
-        "ScheduleMessageHook".to_string()
+    fn hook_name(&self) -> &'static str {
+        "ScheduleMessageHook"
     }
 
     fn execute_before_put_message(&self, msg: &mut dyn MessageTrait) -> Option<PutMessageResult> {
