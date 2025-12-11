@@ -48,6 +48,39 @@ use crate::mqtrace::send_message_context::SendMessageContext;
 use crate::processor::send_message_processor::Inner;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
 
+/// Processes reply messages in the Request-Reply pattern.
+///
+/// This processor handles the server-side logic of sending reply messages back to
+/// requesting clients. It validates the reply message, pushes it to the target client,
+/// and optionally stores it in the message store.
+///
+/// # Type Parameters
+///
+/// - `MS`: Message store implementation
+/// - `TS`: Transactional message service implementation
+///
+/// # Thread Safety
+///
+/// This processor is designed to be used in a multi-threaded async environment.
+/// All shared state access is properly synchronized through the broker runtime.
+///
+/// # Example Flow
+///
+/// ```text
+/// Producer (send request)
+///        ↓
+///  Broker (store request message → Consumer consumes)
+///        ↓
+///  Consumer (process & send reply message to Broker)
+///        ↓
+///  Broker → ReplyMessageProcessor.handle()
+///       ↓
+///  Broker  push reply message to original Producer ((Optional) Store)
+///        ↓
+///  Producer (receive reply in callback or future)
+///                                                      
+///                                              
+/// ```
 pub struct ReplyMessageProcessor<MS: MessageStore, TS> {
     inner: Inner<MS, TS>,
 }
@@ -222,14 +255,15 @@ where
 
         // Use cached config value
         if store_reply_message_enable {
-            let put_message_result = self
-                .inner
-                .broker_runtime_inner
-                .message_store_mut()
-                .as_mut()
-                .unwrap()
-                .put_message(msg_inner)
-                .await;
+            let Some(store) = self.inner.broker_runtime_inner.message_store_mut().as_mut() else {
+                const STORE_ERROR: &str = "message store not available";
+                warn!("process reply message, {}", STORE_ERROR);
+                return response
+                    .set_code(ResponseCode::SystemError)
+                    .set_remark(STORE_ERROR.to_string());
+            };
+
+            let put_message_result = store.put_message(msg_inner).await;
             self.handle_put_message_result(
                 put_message_result,
                 request,
@@ -425,9 +459,17 @@ where
             .producer_manager()
             .find_channel(sender_id.as_str())
         else {
-            let msg = format!("can not find channel by sender_id: {sender_id}");
-            warn!("{}", msg);
-            return PushReplyResult::failure(msg);
+            // Format once for both logging and error return
+            warn!(
+                "push reply message fail, channel of <{}> not found. Topic: {}, QueueId: {}",
+                sender_id,
+                request_header.topic(),
+                request_header.queue_id
+            );
+            return PushReplyResult::failure(format!(
+                "push reply message fail, channel of <{}> not found",
+                sender_id
+            ));
         };
 
         // Add PROPERTY_PUSH_REPLY_TIME to message properties BEFORE building header
@@ -457,29 +499,40 @@ where
                 PushReplyResult::success()
             }
             Ok(response) => {
+                let code = response.code();
                 let remark = response
                     .remark()
                     .map(|r| r.as_str())
                     .unwrap_or("unknown error");
                 warn!(
-                    "push reply message to <{}> return fail, code: {}, remark: {}",
+                    "push reply message to <{}> return fail, code: {}, remark: {}. Topic: {}, \
+                     QueueId: {}, CorrelationId: {:?}",
                     sender_id,
-                    response.code(),
-                    remark
+                    code,
+                    remark,
+                    request_header.topic(),
+                    request_header.queue_id,
+                    msg.get_property(&CheetahString::from_static_str(
+                        MessageConst::PROPERTY_CORRELATION_ID
+                    ))
                 );
+                // Reuse extracted values to avoid duplicate format
                 PushReplyResult::failure(format!(
                     "push reply message to {} failed, code: {}, remark: {}",
-                    sender_id,
-                    response.code(),
-                    remark
+                    sender_id, code, remark
                 ))
             }
             Err(error) => {
-                warn!("push reply message to <{}> failed: {}", sender_id, error);
-                PushReplyResult::failure(format!(
-                    "push reply message to {} failed, error: {}",
-                    sender_id, error
-                ))
+                warn!(
+                    "push reply message to <{}> failed: {}. Channel: {:?}, Topic: {}, QueueId: {}",
+                    sender_id,
+                    error,
+                    reply_channel.remote_address(),
+                    request_header.topic(),
+                    request_header.queue_id
+                );
+                // Use compact error message to reduce allocation
+                PushReplyResult::failure(format!("push reply message to {} failed", sender_id))
             }
         }
     }
@@ -491,14 +544,17 @@ where
         request_header: &SendMessageRequestHeader,
         msg: &M,
     ) -> ReplyMessageRequestHeader {
-        // Use message properties directly (PROPERTY_PUSH_REPLY_TIME will be added later)
+        // Use message properties directly (PROPERTY_PUSH_REPLY_TIME already added)
         let properties_string = MessageDecoder::message_properties_to_string(msg.get_properties());
 
+        // Cache addresses to avoid repeated .to_string() calls
+        let born_host = CheetahString::from_string(channel.remote_address().to_string());
+        let store_host =
+            CheetahString::from_string(self.inner.broker_runtime_inner.store_host().to_string());
+
         ReplyMessageRequestHeader {
-            born_host: CheetahString::from_string(channel.remote_address().to_string()),
-            store_host: CheetahString::from_string(
-                self.inner.broker_runtime_inner.store_host().to_string(),
-            ),
+            born_host,
+            store_host,
             store_timestamp: get_current_millis() as i64,
             producer_group: request_header.producer_group.clone(),
             topic: request_header.topic.clone(),
@@ -537,6 +593,28 @@ fn parse_request_header(
     }
 }
 
+/// Extracts correlation ID from message properties with backward compatibility.
+///
+/// Supports both new (`PROPERTY_CORRELATION_ID`) and legacy (`REPLY_CORRELATION_ID`)
+/// property names for compatibility with older clients.
+///
+/// # Arguments
+///
+/// * `msg` - Message containing properties to extract from
+///
+/// # Returns
+///
+/// Correlation ID if found, `None` otherwise
+fn get_correlation_id_with_fallback<M: MessageTrait>(msg: &M) -> Option<CheetahString> {
+    msg.get_property(&CheetahString::from_static_str(
+        MessageConst::PROPERTY_CORRELATION_ID,
+    ))
+    .or_else(|| {
+        // Fallback to old property name for backward compatibility
+        msg.get_property(&CheetahString::from_static_str("REPLY_CORRELATION_ID"))
+    })
+}
+
 #[derive(Debug, Clone)]
 struct PushReplyResult {
     success: bool,
@@ -556,5 +634,83 @@ impl PushReplyResult {
             success: false,
             remark: remark.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_correlation_id_with_fallback_new_property() {
+        let mut msg = MessageExtBrokerInner::default();
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID),
+            CheetahString::from_static_str("test-correlation-123"),
+        );
+
+        let result = get_correlation_id_with_fallback(&msg);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().as_str(), "test-correlation-123");
+    }
+
+    #[test]
+    fn test_get_correlation_id_with_fallback_legacy_property() {
+        let mut msg = MessageExtBrokerInner::default();
+        msg.put_property(
+            CheetahString::from_static_str("REPLY_CORRELATION_ID"),
+            CheetahString::from_static_str("legacy-correlation-456"),
+        );
+
+        let result = get_correlation_id_with_fallback(&msg);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().as_str(), "legacy-correlation-456");
+    }
+
+    #[test]
+    fn test_get_correlation_id_prefers_new_over_legacy() {
+        let mut msg = MessageExtBrokerInner::default();
+        msg.put_property(
+            CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID),
+            CheetahString::from_static_str("new-id-123"),
+        );
+        msg.put_property(
+            CheetahString::from_static_str("REPLY_CORRELATION_ID"),
+            CheetahString::from_static_str("old-id-456"),
+        );
+
+        let result = get_correlation_id_with_fallback(&msg);
+        assert!(result.is_some());
+        // Should prefer new property name
+        assert_eq!(result.unwrap().as_str(), "new-id-123");
+    }
+
+    #[test]
+    fn test_get_correlation_id_returns_none_when_missing() {
+        let msg = MessageExtBrokerInner::default();
+        let result = get_correlation_id_with_fallback(&msg);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_push_reply_result_success() {
+        let result = PushReplyResult::success();
+        assert!(result.success);
+        assert!(result.remark.is_empty());
+    }
+
+    #[test]
+    fn test_push_reply_result_failure() {
+        let result = PushReplyResult::failure("test error message");
+        assert!(!result.success);
+        assert_eq!(result.remark, "test error message");
+    }
+
+    #[test]
+    fn test_push_reply_result_failure_with_string() {
+        let error = String::from("dynamic error");
+        let result = PushReplyResult::failure(error);
+        assert!(!result.success);
+        assert_eq!(result.remark, "dynamic error");
     }
 }
