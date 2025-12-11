@@ -14,17 +14,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-use std::collections::HashMap;
-
 use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::command_custom_header::CommandCustomHeader;
-use crate::protocol::command_custom_header::FromMap;
 use crate::rpc::rpc_request_header::RpcRequestHeader;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
 pub struct TopicRequestHeader {
     #[serde(flatten)]
     pub rpc_request_header: Option<RpcRequestHeader>,
@@ -32,8 +29,6 @@ pub struct TopicRequestHeader {
 }
 
 impl TopicRequestHeader {
-    pub const LO: &'static str = "lo";
-
     pub fn get_lo(&self) -> Option<&bool> {
         self.lo.as_ref()
     }
@@ -49,35 +44,62 @@ impl TopicRequestHeader {
     }
 }
 
-impl FromMap for TopicRequestHeader {
-    type Error = rocketmq_error::RocketMQError;
+#[cfg(test)]
+mod tests {
+    use cheetah_string::CheetahString;
 
-    type Target = Self;
+    use super::*;
 
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(TopicRequestHeader {
-            lo: map
-                .get(&CheetahString::from_static_str(Self::LO))
-                .and_then(|v| v.parse().ok()),
-            rpc_request_header: Some(<RpcRequestHeader as FromMap>::from(map)?),
-        })
+    #[test]
+    fn get_lo_returns_none_when_lo_is_none() {
+        let header = TopicRequestHeader::default();
+        assert_eq!(header.get_lo(), None);
     }
-}
 
-impl CommandCustomHeader for TopicRequestHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        let mut map = HashMap::new();
-        if let Some(ref lo) = self.lo {
-            map.insert(
-                CheetahString::from_static_str(Self::LO),
-                CheetahString::from_string(lo.to_string()),
-            );
-        }
-        if let Some(value) = self.rpc_request_header.as_ref() {
-            if let Some(rpc_map) = value.to_map() {
-                map.extend(rpc_map);
-            }
-        }
-        Some(map)
+    #[test]
+    fn get_lo_returns_some_when_lo_is_set() {
+        let mut header = TopicRequestHeader::default();
+        header.set_lo(true);
+        assert_eq!(header.get_lo(), Some(&true));
+    }
+
+    #[test]
+    fn set_lo_updates_lo_value() {
+        let mut header = TopicRequestHeader::default();
+        header.set_lo(false);
+        assert_eq!(header.get_lo(), Some(&false));
+    }
+
+    #[test]
+    fn get_broker_name_returns_none_when_rpc_request_header_is_none() {
+        let header = TopicRequestHeader::default();
+        assert_eq!(header.get_broker_name(), None);
+    }
+
+    #[test]
+    fn get_broker_name_returns_none_when_broker_name_is_none() {
+        let rpc_header = RpcRequestHeader {
+            broker_name: None,
+            ..Default::default()
+        };
+        let header = TopicRequestHeader {
+            rpc_request_header: Some(rpc_header),
+            ..Default::default()
+        };
+        assert_eq!(header.get_broker_name(), None);
+    }
+
+    #[test]
+    fn get_broker_name_returns_some_when_broker_name_is_set() {
+        let broker_name = CheetahString::from("TestBroker");
+        let rpc_header = RpcRequestHeader {
+            broker_name: Some(broker_name.clone()),
+            ..Default::default()
+        };
+        let header = TopicRequestHeader {
+            rpc_request_header: Some(rpc_header),
+            ..Default::default()
+        };
+        assert_eq!(header.get_broker_name(), Some(&broker_name));
     }
 }
