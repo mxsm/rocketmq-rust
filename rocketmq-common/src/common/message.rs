@@ -592,6 +592,11 @@ impl MessageConst {
     pub const PROPERTY_TRANSIENT_TOPIC_CONFIG: &'static str = "__RMQ.TRANSIENT.TOPIC_SYS_FLAG";
     pub const PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX: &'static str = "UNIQ_KEY";
     pub const PROPERTY_WAIT_STORE_MSG_OK: &'static str = "WAIT";
+
+    // Index type constants
+    pub const INDEX_KEY_TYPE: &'static str = "K";
+    pub const INDEX_UNIQUE_TYPE: &'static str = "U";
+    pub const INDEX_TAG_TYPE: &'static str = "T";
 }
 
 pub static STRING_HASH_SET: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
