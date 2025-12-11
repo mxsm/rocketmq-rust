@@ -173,14 +173,21 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
-        let request_header = request
-            .decode_command_custom_header::<ViewMessageRequestHeader>()
-            .unwrap();
-        let select_mapped_buffer_result = self
-            .broker_runtime_inner
-            .message_store()
-            .unwrap()
-            .select_one_message_by_offset(request_header.offset);
+        let request_header = request.decode_command_custom_header::<ViewMessageRequestHeader>()?;
+
+        let message_store = match self.broker_runtime_inner.message_store() {
+            Some(store) => store,
+            None => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("Message store not available"),
+                ));
+            }
+        };
+
+        let select_mapped_buffer_result =
+            message_store.select_one_message_by_offset(request_header.offset);
         if let Some(result) = select_mapped_buffer_result {
             let message_data = result.get_bytes();
             if let Some(body) = message_data {
