@@ -53,6 +53,7 @@ use rocketmq_store::queue::consume_queue_store::ConsumeQueueStoreTrait;
 use rocketmq_store::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use rocketmq_store::store_path_config_helper::get_delay_offset_store_path;
 use tokio::sync::Mutex;
+use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -578,7 +579,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
             };
 
             let delay_time_millis = tu * num;
-            info!(
+            debug!(
                 "Parsed delay level {}: {} -> {} ms",
                 level, value, delay_time_millis
             );
