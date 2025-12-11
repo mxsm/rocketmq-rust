@@ -181,7 +181,7 @@ where
                 return Ok(Some(
                     response
                         .set_code(ResponseCode::SystemError)
-                        .set_remark("Message store not available"),
+                        .set_remark("message store is none"),
                 ));
             }
         };
