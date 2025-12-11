@@ -21,6 +21,35 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV2, Default)]
 pub struct ViewMessageRequestHeader {
-    pub topic: CheetahString,
+    pub topic: Option<CheetahString>,
     pub offset: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_view_message_request_header_with_none_topic() {
+        let header = ViewMessageRequestHeader {
+            topic: None,
+            offset: 100,
+        };
+
+        assert!(header.topic.is_none());
+        assert_eq!(header.offset, 100);
+    }
+
+    #[test]
+    fn test_view_message_request_header_with_topic_value() {
+        let topic_name = CheetahString::from("test_topic");
+        let header = ViewMessageRequestHeader {
+            topic: Some(topic_name.clone()),
+            offset: 200,
+        };
+
+        assert!(header.topic.is_some());
+        assert_eq!(header.topic.unwrap(), topic_name);
+        assert_eq!(header.offset, 200);
+    }
 }
