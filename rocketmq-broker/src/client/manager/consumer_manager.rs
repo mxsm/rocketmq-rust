@@ -310,7 +310,7 @@ impl ConsumerManager {
             )
         });
         let r1 = consumer_group_info.update_channel(
-            client_channel_info.clone(),
+            client_channel_info,
             consume_type,
             message_model,
             consume_from_where,

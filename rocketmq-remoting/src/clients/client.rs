@@ -95,7 +95,7 @@ where
             cmd_handler,
             ctx: ArcMut::new(ConnectionHandlerContextWrapper::new(
                 //connection,
-                channel.clone(),
+                channel,
             )),
             shutdown: Shutdown::new(notify),
         };

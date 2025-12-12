@@ -114,7 +114,7 @@ impl StatisticsManager {
     pub async fn inc(&self, kind: &str, key: &str, item_accumulates: Vec<i64>) -> bool {
         if let Some(item_map) = self.stats_table.write().get_mut(kind) {
             if let Some(item) = item_map.get(key) {
-                item.inc_items(item_accumulates.clone());
+                item.inc_items(item_accumulates);
                 return true;
             } else {
                 let kind_meta_map = self.kind_meta_map.read();

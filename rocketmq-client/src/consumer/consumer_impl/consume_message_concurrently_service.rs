@@ -287,7 +287,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
         let consume_batch_size = self.consumer_config.consume_message_batch_max_size;
         if msgs.len() <= consume_batch_size as usize {
             let mut consume_request = ConsumeRequest {
-                msgs: msgs.clone(),
+                msgs,
                 message_listener: self.message_listener.clone(),
                 process_queue,
                 message_queue,

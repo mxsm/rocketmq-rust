@@ -241,7 +241,7 @@ pub mod simple_scheduler {
             let task_fn = ArcMut::new(task_fn);
 
             let handle = tokio::spawn({
-                let mut task_fn = task_fn.clone();
+                let mut task_fn = task_fn;
                 async move {
                     match mode {
                         ScheduleMode::FixedRate => {
@@ -513,7 +513,7 @@ pub mod simple_scheduler {
             let task_fn = ArcMut::new(task_fn);
 
             let handle = tokio::spawn({
-                let mut task_fn = task_fn.clone();
+                let mut task_fn = task_fn;
                 async move {
                     match mode {
                         ScheduleMode::FixedRate => {

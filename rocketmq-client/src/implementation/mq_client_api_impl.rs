@@ -792,7 +792,7 @@ impl MQClientAPIImpl {
                         if let Ok(result) = send_result {
                             if context.is_some() {
                                 let inner = context.as_mut().unwrap();
-                                inner.send_result = Some(result.clone());
+                                inner.send_result = Some(result);
                                 producer.execute_send_message_hook_after(context);
                             }
                         }

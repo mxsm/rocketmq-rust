@@ -576,7 +576,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             .broker_runtime_inner
             .consumer_offset_manager()
             .which_group_by_topic(topic);
-        groups.extend(group_in_offset.clone());
+        groups.extend(group_in_offset);
         let group_list = GroupList { group_list: groups };
         response.set_body_mut_ref(group_list.encode().expect("encode GroupList failed"));
         Ok(Some(response))

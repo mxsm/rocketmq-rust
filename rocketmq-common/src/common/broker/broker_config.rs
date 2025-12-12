@@ -967,11 +967,7 @@ impl BrokerConfig {
         );
         properties.insert(
             "bindAddress".into(),
-            self.broker_server_config
-                .bind_address
-                .clone()
-                .to_string()
-                .into(),
+            self.broker_server_config.bind_address.clone().into(),
         );
         properties.insert(
             "brokerIp1".into(),

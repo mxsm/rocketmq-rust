@@ -180,8 +180,7 @@ impl BrokerRuntime {
         );
 
         let should_start_time = Arc::new(AtomicU64::new(0));
-        let pop_inflight_message_counter =
-            PopInflightMessageCounter::new(should_start_time.clone());
+        let pop_inflight_message_counter = PopInflightMessageCounter::new(should_start_time);
 
         let mut inner = ArcMut::new(BrokerRuntimeInner::<LocalFileMessageStore> {
             shutdown: Arc::new(AtomicBool::new(false)),

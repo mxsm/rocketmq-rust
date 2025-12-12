@@ -314,7 +314,7 @@ impl RouteInfoManagerV2 {
         // Step 1: Update cluster membership
         // This is safe because we hold the broker write lock
         self.cluster_addr_table
-            .add_broker(cluster_name_arc.clone(), broker_name_arc.clone());
+            .add_broker(cluster_name_arc, broker_name_arc.clone());
 
         debug!(
             "Cluster membership updated: cluster={}, broker={}",
@@ -1528,7 +1528,7 @@ impl RouteInfoManagerV2 {
 
         // Construct TopicRouteData
         let mut topic_route_data = TopicRouteData {
-            queue_datas: queue_data_vec.clone(),
+            queue_datas: queue_data_vec,
             broker_datas: broker_data_list.clone(),
             ..Default::default()
         };

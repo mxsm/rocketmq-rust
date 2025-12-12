@@ -424,7 +424,7 @@ where
                     let message_filter: Box<dyn MessageFilter> =
                         Box::new(ExpressionMessageFilter::new(
                             Some(subscription_data.clone()),
-                            Some(consumer_filter_data.clone()),
+                            Some(consumer_filter_data),
                             Arc::new(self.broker_runtime_inner.consumer_filter_manager().clone()),
                         ));
                     Some(message_filter)
