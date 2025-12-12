@@ -153,6 +153,7 @@ define_request_code! {
         GetConsumerStatusFromClient = 221,
         InvokeBrokerToResetOffset = 222,
         InvokeBrokerToGetConsumerStatus = 223,
+        UpdateAndCreateSubscriptionGroupList = 225,
 
         QueryTopicConsumeByWho = 300,
         GetTopicsByCluster = 224,
@@ -190,6 +191,8 @@ define_request_code! {
         GetTopicConfig = 351,
         GetSubscriptionGroupConfig = 352,
         UpdateAndGetGroupForbidden = 353,
+        CheckRocksdbCqWriteProgress = 354,
+
         LitePullMessage = 361,
 
         QueryAssignment = 400,
