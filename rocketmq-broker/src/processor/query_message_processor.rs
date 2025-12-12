@@ -113,21 +113,35 @@ where
         let mut response = RemotingCommand::create_response_command_with_header(
             QueryMessageResponseHeader::default(),
         );
-        let mut request_header = request
-            .decode_command_custom_header::<QueryMessageRequestHeader>()
-            .unwrap();
+        let mut request_header =
+            request.decode_command_custom_header::<QueryMessageRequestHeader>()?;
         response.set_opaque_mut(request.opaque());
-        let is_unique_key = request.ext_fields().unwrap().get(UNIQUE_MSG_QUERY_FLAG);
-        if is_unique_key.is_some() && is_unique_key.unwrap() == "true" {
+        let Some(ext_fields) = request.ext_fields() else {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::SystemError)
+                    .set_remark("ext fields is none"),
+            ));
+        };
+        let is_unique_key = ext_fields.get(UNIQUE_MSG_QUERY_FLAG);
+        if is_unique_key.is_some_and(|value| value == "true") {
             request_header.max_num = self
                 .broker_runtime_inner
                 .message_store_config()
                 .default_query_max_num as i32;
         }
-        let Some(query_message_result) = self
-            .broker_runtime_inner
-            .message_store()
-            .unwrap()
+        let message_store = match self.broker_runtime_inner.message_store() {
+            Some(store) => store,
+            None => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("message store is none"),
+                ));
+            }
+        };
+
+        let Some(query_message_result) = message_store
             .query_message(
                 request_header.topic.as_ref(),
                 request_header.key.as_ref(),
