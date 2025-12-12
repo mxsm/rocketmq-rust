@@ -121,8 +121,43 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Topic",
+                command: "remappingStaticTopic",
+                remark: "Remapping static topic.",
+            },
+            Command {
+                category: "Topic",
                 command: "topicClusterList",
                 remark: "Get cluster info for topic.",
+            },
+            Command {
+                category: "Topic",
+                command: "topicList",
+                remark: "Get topic list.",
+            },
+            Command {
+                category: "Topic",
+                command: "topicRoute",
+                remark: "Examine topic route info.",
+            },
+            Command {
+                category: "Topic",
+                command: "topicStatus",
+                remark: "Examine topic status info.",
+            },
+            Command {
+                category: "Topic",
+                command: "updateOrderConf",
+                remark: "Create or update order conf.",
+            },
+            Command {
+                category: "Topic",
+                command: "updateStaticTopic",
+                remark: "Update or create static topic.",
+            },
+            Command {
+                category: "Topic",
+                command: "updateTopicPerm",
+                remark: "Update topic perm.",
             },
             Command {
                 category: "Topic",

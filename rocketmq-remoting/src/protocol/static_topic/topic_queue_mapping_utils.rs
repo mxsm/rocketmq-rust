@@ -734,3 +734,232 @@ impl MappingAllocator {
         &self.id_to_broker
     }
 }
+
+impl TopicQueueMappingUtils {
+    pub fn check_leader_in_target_brokers(
+        mapping_ones: &[TopicQueueMappingOne],
+        target_brokers: &HashSet<CheetahString>,
+    ) -> RocketMQResult<()> {
+        for mapping_one in mapping_ones {
+            if !target_brokers.contains(&CheetahString::from(mapping_one.bname())) {
+                return Err(RocketMQError::Internal(
+                    "The leader broker is not in target brokers".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn block_seq_round_up(offset: i64, block_seq_size: i64) -> i64 {
+        let num = offset / block_seq_size;
+        let left = offset % block_seq_size;
+        if left < block_seq_size / 2 {
+            (num + 1) * block_seq_size
+        } else {
+            (num + 2) * block_seq_size
+        }
+    }
+
+    pub fn remapping_static_topic(
+        topic: &str,
+        broker_config_map: &mut HashMap<CheetahString, TopicConfigAndQueueMapping>,
+        target_brokers: &HashSet<CheetahString>,
+    ) -> RocketMQResult<TopicRemappingDetailWrapper> {
+        let max_epoch_and_num = TopicQueueMappingUtils::check_name_epoch_num_consistence(
+            &CheetahString::from(topic),
+            broker_config_map,
+        )?;
+
+        let mut global_id_map = TopicQueueMappingUtils::check_and_build_mapping_items(
+            TopicQueueMappingUtils::get_mapping_detail_from_config(
+                broker_config_map.values().cloned().collect(),
+            )?,
+            false,
+            true,
+        )?;
+
+        TopicQueueMappingUtils::check_physical_queue_consistence(broker_config_map)?;
+        TopicQueueMappingUtils::check_if_reuse_physical_queue(
+            &global_id_map.values().cloned().collect(),
+        )?;
+
+        let max_num = max_epoch_and_num.1;
+        let mut broker_num_map: HashMap<CheetahString, i32> = HashMap::new();
+        for broker in target_brokers {
+            broker_num_map.insert(broker.clone(), 0);
+        }
+
+        let mut broker_num_map_before_remapping: HashMap<CheetahString, i32> = HashMap::new();
+        for mapping_one in global_id_map.values() {
+            let bname = CheetahString::from(mapping_one.bname());
+            if broker_num_map_before_remapping.contains_key(&bname) {
+                broker_num_map_before_remapping
+                    .insert(bname.clone(), broker_num_map_before_remapping[&bname] + 1);
+            } else {
+                broker_num_map_before_remapping.insert(bname, 1);
+            }
+        }
+
+        let mut allocator = MappingAllocator::new(
+            HashMap::new(),
+            broker_num_map.clone(),
+            broker_num_map_before_remapping,
+        );
+        allocator.up_to_num(max_num);
+        let expected_broker_num_map = allocator.broker_num_map().clone();
+
+        let mut wait_assign_queues = std::collections::VecDeque::new();
+        let mut expected_id_to_broker: HashMap<i32, CheetahString> = HashMap::new();
+        let mut expected_broker_num_map_mut = expected_broker_num_map.clone();
+        for (queue_id, mapping_one) in &global_id_map {
+            let leader_broker = CheetahString::from(mapping_one.bname());
+            if expected_broker_num_map_mut.contains_key(&leader_broker) {
+                if expected_broker_num_map_mut[&leader_broker] > 0 {
+                    expected_id_to_broker.insert(*queue_id, leader_broker.clone());
+                    expected_broker_num_map_mut.insert(
+                        leader_broker.clone(),
+                        expected_broker_num_map_mut[&leader_broker] - 1,
+                    );
+                } else {
+                    wait_assign_queues.push_back(*queue_id);
+                    expected_broker_num_map_mut.remove(&leader_broker);
+                }
+            } else {
+                wait_assign_queues.push_back(*queue_id);
+            }
+        }
+
+        for (broker, queue_num) in &expected_broker_num_map_mut {
+            for _ in 0..*queue_num {
+                if let Some(queue_id) = wait_assign_queues.pop_front() {
+                    expected_id_to_broker.insert(queue_id, broker.clone());
+                }
+            }
+        }
+
+        let new_epoch = ((max_epoch_and_num.0 as u64 + 1000).max(get_current_millis())) as i64;
+
+        // construct the remapping info
+        let mut brokers_to_map_out: HashSet<CheetahString> = HashSet::new();
+        let mut brokers_to_map_in: HashSet<CheetahString> = HashSet::new();
+
+        for (queue_id, broker) in &expected_id_to_broker {
+            let topic_queue_mapping_one = global_id_map.get(queue_id);
+            if topic_queue_mapping_one.is_none() {
+                continue;
+            }
+            let topic_queue_mapping_one = topic_queue_mapping_one.unwrap();
+            if topic_queue_mapping_one.bname() == broker.as_str() {
+                continue;
+            }
+
+            // remapping
+            let map_in_broker = broker.clone();
+            let map_out_broker = CheetahString::from(topic_queue_mapping_one.bname());
+            brokers_to_map_in.insert(map_in_broker.clone());
+            brokers_to_map_out.insert(map_out_broker.clone());
+
+            let map_in_config = broker_config_map.get_mut(&map_in_broker);
+            if map_in_config.is_none() {
+                let new_config = TopicConfigAndQueueMapping::new(
+                    TopicConfig::with_queues(topic, 0, 0),
+                    Some(ArcMut::new(TopicQueueMappingDetail {
+                        topic_queue_mapping_info: TopicQueueMappingInfo::new(
+                            topic.into(),
+                            max_num,
+                            map_in_broker.clone(),
+                            new_epoch,
+                        ),
+                        hosted_queues: Some(HashMap::new()),
+                    })),
+                );
+                broker_config_map.insert(map_in_broker.clone(), new_config);
+            }
+
+            let map_in_config = broker_config_map.get_mut(&map_in_broker).unwrap();
+            map_in_config.topic_config.write_queue_nums += 1;
+            map_in_config.topic_config.read_queue_nums += 1;
+
+            let mut items: Vec<LogicQueueMappingItem> = topic_queue_mapping_one.items().clone();
+            let last = items.last().cloned();
+            if let Some(last) = last {
+                items.push(LogicQueueMappingItem {
+                    gen: last.gen + 1,
+                    queue_id: map_in_config.topic_config.write_queue_nums as i32 - 1,
+                    bname: Some(map_in_broker.clone()),
+                    logic_offset: -1,
+                    start_offset: 0,
+                    end_offset: -1,
+                    time_of_start: -1,
+                    time_of_end: -1,
+                });
+            }
+
+            // use the same object
+            if let Some(detail) = &mut map_in_config.topic_queue_mapping_detail {
+                if detail.hosted_queues.is_none() {
+                    detail.hosted_queues = Some(HashMap::new());
+                }
+                if let Some(queues) = &mut detail.hosted_queues {
+                    queues.insert(*queue_id, items.clone());
+                }
+            }
+
+            let map_out_config = broker_config_map.get_mut(&map_out_broker);
+            if let Some(map_out_config) = map_out_config {
+                if let Some(detail) = &mut map_out_config.topic_queue_mapping_detail {
+                    if detail.hosted_queues.is_none() {
+                        detail.hosted_queues = Some(HashMap::new());
+                    }
+                    if let Some(queues) = &mut detail.hosted_queues {
+                        queues.insert(*queue_id, items);
+                    }
+                }
+            }
+        }
+
+        for config_mapping in broker_config_map.values_mut() {
+            if let Some(detail) = &mut config_mapping.topic_queue_mapping_detail {
+                detail.topic_queue_mapping_info.epoch = new_epoch;
+                detail.topic_queue_mapping_info.total_queues = max_num;
+            }
+        }
+
+        // double check
+        TopicQueueMappingUtils::check_name_epoch_num_consistence(
+            &CheetahString::from(topic),
+            broker_config_map,
+        )?;
+        global_id_map = TopicQueueMappingUtils::check_and_build_mapping_items(
+            TopicQueueMappingUtils::get_mapping_detail_from_config(
+                broker_config_map.values().cloned().collect(),
+            )?,
+            false,
+            true,
+        )?;
+        TopicQueueMappingUtils::check_physical_queue_consistence(broker_config_map)?;
+        TopicQueueMappingUtils::check_if_reuse_physical_queue(
+            &global_id_map.values().cloned().collect(),
+        )?;
+        TopicQueueMappingUtils::check_leader_in_target_brokers(
+            &global_id_map.values().cloned().collect::<Vec<_>>(),
+            target_brokers,
+        )?;
+
+        let map = broker_config_map
+            .iter()
+            .map(|(k, v)| (CheetahString::from_string(k.to_string()), v.clone()))
+            .collect();
+
+        Ok(TopicRemappingDetailWrapper::new(
+            topic.to_string().into(),
+            topic_remapping_detail_wrapper::TYPE_REMAPPING
+                .to_string()
+                .into(),
+            new_epoch as u64,
+            map,
+            brokers_to_map_in,
+            brokers_to_map_out,
+        ))
+    }
+}
