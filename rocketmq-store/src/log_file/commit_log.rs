@@ -1098,7 +1098,7 @@ impl CommitLog {
         let mut recovery_ctx = RecoveryContext::new(
             check_crc_on_recover,
             check_dup_info,
-            message_store_config.clone(),
+            message_store_config,
             self.local_file_message_store
                 .as_ref()
                 .unwrap()

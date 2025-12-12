@@ -56,7 +56,7 @@ pub struct TaskContext {
 impl TaskContext {
     pub fn new(task_id: String, scheduled_time: SystemTime) -> Self {
         Self {
-            task_id: task_id.clone(),
+            task_id,
             execution_id: Uuid::new_v4().to_string(),
             scheduled_time,
             actual_start_time: None,

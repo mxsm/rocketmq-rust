@@ -136,7 +136,7 @@ where
             request.decode_command_custom_header::<UnregisterClientRequestHeader>()?;
 
         let client_channel_info = ClientChannelInfo::new(
-            channel.clone(),
+            channel,
             request_header.client_id.clone(),
             request.language(),
             request.version(),

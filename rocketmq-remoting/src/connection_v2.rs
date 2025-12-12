@@ -572,8 +572,7 @@ impl ConcurrentConnection {
         let (state_tx, state_rx) = watch::channel(ConnectionState::Healthy);
 
         // Spawn dedicated writer task
-        let writer_handle =
-            tokio::spawn(Self::writer_task(framed_writer, write_rx, state_tx.clone()));
+        let writer_handle = tokio::spawn(Self::writer_task(framed_writer, write_rx, state_tx));
 
         Self {
             framed_reader,

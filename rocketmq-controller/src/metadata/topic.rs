@@ -149,7 +149,7 @@ impl TopicManager {
         // Check if topic exists
         if !self.topics.contains_key(&config.topic_name) {
             return Err(ControllerError::MetadataNotFound {
-                key: config.topic_name.clone(),
+                key: config.topic_name,
             });
         }
 

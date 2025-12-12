@@ -72,7 +72,7 @@ impl RequestFutureHolder {
     }
 
     pub async fn start_scheduled_task(self: Arc<Self>) {
-        let holder = self.clone();
+        let holder = self;
         task::spawn(async move {
             let mut interval = interval(Duration::from_millis(1000));
             loop {

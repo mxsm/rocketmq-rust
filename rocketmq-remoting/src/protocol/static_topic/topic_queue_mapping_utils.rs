@@ -810,7 +810,7 @@ impl TopicQueueMappingUtils {
 
         let mut wait_assign_queues = std::collections::VecDeque::new();
         let mut expected_id_to_broker: HashMap<i32, CheetahString> = HashMap::new();
-        let mut expected_broker_num_map_mut = expected_broker_num_map.clone();
+        let mut expected_broker_num_map_mut = expected_broker_num_map;
         for (queue_id, mapping_one) in &global_id_map {
             let leader_broker = CheetahString::from(mapping_one.bname());
             if expected_broker_num_map_mut.contains_key(&leader_broker) {

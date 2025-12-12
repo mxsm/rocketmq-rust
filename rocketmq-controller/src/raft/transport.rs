@@ -261,7 +261,7 @@ impl RaftTransport {
         });
 
         // Start message sending loop
-        let self_clone = self.clone();
+        let self_clone = self;
         tokio::spawn(async move {
             if let Err(e) = self_clone.send_loop().await {
                 error!("Send loop error: {}", e);

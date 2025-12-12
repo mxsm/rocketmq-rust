@@ -44,7 +44,7 @@ impl MomentStatsItem {
     }
 
     pub fn init(self: Arc<Self>) {
-        let self_clone = self.clone();
+        let self_clone = self;
         tokio::spawn(async move {
             let initial_delay = Duration::from_millis(
                 (compute_next_minutes_time_millis() as i64 - get_current_millis() as i64)

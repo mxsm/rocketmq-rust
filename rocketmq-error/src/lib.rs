@@ -483,7 +483,7 @@ impl From<RocketmqError> for unified::RocketMQError {
             }
             RocketmqError::RemotingTimeoutError(addr, timeout) => {
                 Self::Network(unified::NetworkError::RequestTimeout {
-                    addr: addr.to_string(),
+                    addr,
                     timeout_ms: timeout,
                 })
             }

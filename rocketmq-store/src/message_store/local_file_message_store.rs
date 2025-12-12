@@ -2126,7 +2126,7 @@ impl ReputMessageService {
         let mut inner = ReputMessageServiceInner {
             reput_from_offset: self.reput_from_offset.clone().unwrap(),
             commit_log,
-            message_store_config: message_store_config.clone(),
+            message_store_config,
             dispatcher: dispatcher.clone(),
             notify_message_arrive_in_batch,
             message_store: message_store.clone(),
@@ -2203,7 +2203,7 @@ impl ReputMessageService {
         });
 
         // Task 2: Receive from channel and dispatch
-        let shutdown_dispatcher = shutdown.clone();
+        let shutdown_dispatcher = shutdown;
         let dispatcher_handle = tokio::spawn(async move {
             loop {
                 tokio::select! {

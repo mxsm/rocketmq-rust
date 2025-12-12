@@ -420,7 +420,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
         let expired = request_header.get_born_time() + request_header.get_poll_time();
         let request = Arc::new(PopRequest::new(
             remoting_command.clone(),
-            ctx.clone(),
+            ctx,
             expired as u64,
             subscription_data,
             message_filter,

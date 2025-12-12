@@ -306,8 +306,7 @@ impl BrokerOuterAPI {
                             .ha_server_addr
                             .clone()
                             .unwrap_or(CheetahString::empty());
-                        result.master_addr =
-                            header.master_addr.clone().unwrap_or(CheetahString::empty());
+                        result.master_addr = header.master_addr.unwrap_or(CheetahString::empty());
                     }
                     if let Some(body) = response.body() {
                         result.kv_table =

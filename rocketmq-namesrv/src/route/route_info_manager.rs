@@ -179,7 +179,7 @@ impl RouteInfoManager {
             self.broker_addr_table.mut_from_ref().get_mut(&broker_name)
         {
             broker_data.set_enable_acting_master(enable_acting_master_inner);
-            broker_data.set_zone_name(zone_name.clone());
+            broker_data.set_zone_name(zone_name);
             false
         } else {
             let mut broker_data = BrokerData::new(
@@ -237,7 +237,7 @@ impl RouteInfoManager {
                             new_state_version
                         );
                         self.broker_live_table.mut_from_ref().remove(
-                            BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone()).as_ref(),
+                            BrokerAddrInfo::new(cluster_name, broker_addr.clone()).as_ref(),
                         );
                         return Some(result);
                     }

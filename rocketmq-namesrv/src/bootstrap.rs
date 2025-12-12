@@ -665,8 +665,8 @@ impl Builder {
         // Create inner with empty components first
         let mut inner = ArcMut::new(NameServerRuntimeInner {
             name_server_config: name_server_config.clone(),
-            tokio_client_config: tokio_client_config.clone(),
-            server_config: server_config.clone(),
+            tokio_client_config,
+            server_config,
             route_info_manager: None,
             kvconfig_manager: None,
             remoting_client,

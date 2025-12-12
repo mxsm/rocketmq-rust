@@ -69,7 +69,7 @@ impl MQClientManager {
         }
 
         let instance = MQClientInstance::new_arc(
-            client_config.clone(),
+            client_config,
             self.factory_index_generator.fetch_add(1, Ordering::SeqCst),
             client_id.clone(),
             rpc_hook,

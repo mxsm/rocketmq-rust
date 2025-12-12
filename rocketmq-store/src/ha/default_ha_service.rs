@@ -136,9 +136,7 @@ impl DefaultHAService {
 
         let arc_mut = this.clone();
         this.accept_socket_service = Some(AcceptSocketService::new(
-            this.default_message_store
-                .get_message_store_config()
-                .clone(),
+            this.default_message_store.get_message_store_config(),
             arc_mut,
             false,
         ));
