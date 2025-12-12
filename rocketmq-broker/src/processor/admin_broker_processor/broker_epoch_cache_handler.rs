@@ -45,7 +45,7 @@ impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let broker_runtime_inner = self.broker_runtime_inner.as_mut();
 
         let replicas_manage = if let Some(replicas_manage) = broker_runtime_inner.replicas_manager()
@@ -59,11 +59,11 @@ impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
         let response = RemotingCommand::create_response_command();
 
         if !broker_config.enable_controller_mode {
-            return Some(
+            return Ok(Some(
                 response
                     .set_code(ResponseCode::SystemError)
                     .set_remark("this request only for controllerMode"),
-            );
+            ));
         }
 
         let broker_identity = &broker_config.broker_identity;
@@ -79,6 +79,8 @@ impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
         );
 
         let cache = entry_code.encode().unwrap_or_default();
-        Some(response.set_body(cache).set_code(ResponseCode::Success))
+        Ok(Some(
+            response.set_body(cache).set_code(ResponseCode::Success),
+        ))
     }
 }

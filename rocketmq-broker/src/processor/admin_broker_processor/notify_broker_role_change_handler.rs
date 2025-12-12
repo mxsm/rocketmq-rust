@@ -47,7 +47,7 @@ impl<MS: MessageStore> NotifyBrokerRoleChangeHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header =
             request.decode_command_custom_header::<NotifyBrokerRoleChangedRequestHeader>();
 
@@ -81,6 +81,6 @@ impl<MS: MessageStore> NotifyBrokerRoleChangeHandler<MS> {
             }
         }
 
-        Some(response.set_code(ResponseCode::Success))
+        Ok(Some(response.set_code(ResponseCode::Success)))
     }
 }

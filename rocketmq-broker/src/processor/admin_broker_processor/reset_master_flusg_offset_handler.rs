@@ -45,7 +45,7 @@ impl<MS: MessageStore> ResetMasterFlushOffsetHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_response_command();
 
         let broker_id = self
@@ -65,6 +65,6 @@ impl<MS: MessageStore> ResetMasterFlushOffsetHandler<MS> {
             }
         }
 
-        Some(response.set_code(ResponseCode::Success))
+        Ok(Some(response.set_code(ResponseCode::Success)))
     }
 }

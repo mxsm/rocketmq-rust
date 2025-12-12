@@ -50,7 +50,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         todo!()
     }
 
@@ -60,7 +60,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
         // broker config => broker config
         // default message store config => message store config
@@ -84,7 +84,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         if !body.is_empty() {
             response.set_body_mut_ref(body);
         }
-        Some(response)
+        Ok(Some(response))
     }
 
     pub async fn get_broker_runtime_info(
@@ -93,14 +93,14 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
         let runtime_info = self.prepare_runtime_info();
         let key_value_table = KVTable {
             table: runtime_info,
         };
         response.set_body_mut_ref(serde_json::to_string(&key_value_table).unwrap());
-        Some(response)
+        Ok(Some(response))
     }
 
     fn prepare_runtime_info(&self) -> HashMap<CheetahString, CheetahString> {

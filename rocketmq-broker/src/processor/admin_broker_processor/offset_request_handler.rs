@@ -55,7 +55,7 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request
             .decode_command_custom_header::<GetMaxOffsetRequestHeader>()
             .unwrap(); //need to optimize
@@ -67,9 +67,9 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         let queue_id = request_header.queue_id;
         let rewrite_result = self
             .rewrite_request_for_static_topic(request_header, mapping_context)
-            .await;
+            .await?;
         if rewrite_result.is_some() {
-            return rewrite_result;
+            return Ok(rewrite_result);
         }
 
         let offset = self
@@ -78,9 +78,9 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
             .unwrap()
             .get_max_offset_in_queue(topic.as_ref(), queue_id);
         let response_header = GetMaxOffsetResponseHeader { offset };
-        Some(RemotingCommand::create_response_command_with_header(
+        Ok(Some(RemotingCommand::create_response_command_with_header(
             response_header,
-        ))
+        )))
     }
 
     pub async fn get_min_offset(
@@ -89,7 +89,7 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request
             .decode_command_custom_header::<GetMinOffsetRequestHeader>()
             .unwrap(); //need to optimize
@@ -102,9 +102,9 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         let queue_id = request_header.queue_id;
         let rewrite_result = self
             .handle_get_min_offset_for_static_topic(request_header, mapping_context)
-            .await;
+            .await?;
         if rewrite_result.is_some() {
-            return rewrite_result;
+            return Ok(rewrite_result);
         }
 
         let offset = self
@@ -113,15 +113,15 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
             .unwrap()
             .get_min_offset_in_queue(topic.as_ref(), queue_id);
         let response_header = GetMinOffsetResponseHeader { offset };
-        Some(RemotingCommand::create_response_command_with_header(
+        Ok(Some(RemotingCommand::create_response_command_with_header(
             response_header,
-        ))
+        )))
     }
     /*
     async fn handle_get_min_offset(
         &mut self,
         mut request_header: GetMinOffsetRequestHeader,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
 
     }*/
 
@@ -129,10 +129,15 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         &mut self,
         mut request_header: GetMinOffsetRequestHeader,
         mapping_context: TopicQueueMappingContext,
-    ) -> Option<RemotingCommand> {
-        let mapping_detail = mapping_context.mapping_detail.as_ref()?;
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let mapping_detail = mapping_context.mapping_detail.as_ref().ok_or(
+            rocketmq_error::RocketMQError::Internal(
+                "TopicQueueMappingDetail is None in static topic min offset request handling"
+                    .to_string(),
+            ),
+        )?;
         if !mapping_context.is_leader() {
-            return Some(
+            return Ok(Some(
                 RemotingCommand::create_response_command_with_code(ResponseCode::NotLeaderForQueue)
                     .set_remark(format!(
                         "{}-{:?} does not exit in request process of current broker {:?}",
@@ -140,15 +145,28 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
                         mapping_context.global_id,
                         mapping_detail.topic_queue_mapping_info.bname
                     )),
-            );
+            ));
         }
 
         let max_item = TopicQueueMappingUtils::find_logic_queue_mapping_item(
             &mapping_context.mapping_item_list,
             0,
             true,
-        )?;
-        request_header.set_broker_name(max_item.bname.clone()?);
+        )
+        .ok_or(rocketmq_error::RocketMQError::Internal(
+            "Cannot find logic queue mapping item in static topic min offset request handling"
+                .to_string(),
+        ))?;
+        request_header.set_broker_name(
+            max_item
+                .bname
+                .clone()
+                .ok_or(rocketmq_error::RocketMQError::Internal(
+                    "Broker name is None in logic queue mapping item in static topic min offset \
+                     request handling"
+                        .to_string(),
+                ))?,
+        );
         request_header.set_lo(Some(false));
         request_header.queue_id = max_item.queue_id;
         let max_physical_offset = if max_item.bname == mapping_detail.topic_queue_mapping_info.bname
@@ -170,42 +188,47 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
                 )
                 .await;
             if let Err(e) = rpc_response {
-                return Some(
+                return Ok(Some(
                     RemotingCommand::create_response_command_with_code(ResponseCode::SystemError)
                         .set_remark(format!("{e}")),
-                );
+                ));
             } else {
                 match rpc_response
                     .unwrap()
                     .get_header::<GetMinOffsetResponseHeader>()
                 {
                     None => {
-                        return Some(
+                        return Ok(Some(
                             RemotingCommand::create_response_command_with_code(
                                 ResponseCode::SystemError,
                             )
                             .set_remark("Rpc response header is None"),
-                        );
+                        ));
                     }
                     Some(offset_response_header) => offset_response_header.offset,
                 }
             }
         };
-        Some(RemotingCommand::create_response_command_with_header(
+        Ok(Some(RemotingCommand::create_response_command_with_header(
             GetMinOffsetResponseHeader {
                 offset: max_item.compute_static_queue_offset_loosely(max_physical_offset),
             },
-        ))
+        )))
     }
 
     async fn rewrite_request_for_static_topic(
         &mut self,
         mut request_header: GetMaxOffsetRequestHeader,
         mapping_context: TopicQueueMappingContext,
-    ) -> Option<RemotingCommand> {
-        let mapping_detail = mapping_context.mapping_detail.as_ref()?;
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let mapping_detail = mapping_context.mapping_detail.as_ref().ok_or(
+            rocketmq_error::RocketMQError::Internal(
+                "TopicQueueMappingDetail is None in static topic max offset request handling"
+                    .to_string(),
+            ),
+        )?;
         if !mapping_context.is_leader() {
-            return Some(
+            return Ok(Some(
                 RemotingCommand::create_response_command_with_code(ResponseCode::NotLeaderForQueue)
                     .set_remark(format!(
                         "{}-{:?} does not exit in request process of current broker {:?}",
@@ -213,15 +236,28 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
                         mapping_context.global_id,
                         mapping_detail.topic_queue_mapping_info.bname
                     )),
-            );
+            ));
         }
 
         let max_item = TopicQueueMappingUtils::find_logic_queue_mapping_item(
             &mapping_context.mapping_item_list,
             i64::MAX,
             true,
-        )?;
-        request_header.set_broker_name(max_item.bname.clone()?);
+        )
+        .ok_or(rocketmq_error::RocketMQError::Internal(
+            "Cannot find logic queue mapping item in static topic max offset request handling"
+                .to_string(),
+        ))?;
+        request_header.set_broker_name(
+            max_item
+                .bname
+                .clone()
+                .ok_or(rocketmq_error::RocketMQError::Internal(
+                    "Broker name is None in logic queue mapping item in static topic max offset \
+                     request handling"
+                        .to_string(),
+                ))?,
+        );
         request_header.set_lo(Some(false));
         request_header.queue_id = max_item.queue_id;
         let max_physical_offset = if max_item.bname == mapping_detail.topic_queue_mapping_info.bname
@@ -246,32 +282,32 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
                 )
                 .await;
             if let Err(e) = rpc_response {
-                return Some(
+                return Ok(Some(
                     RemotingCommand::create_response_command_with_code(ResponseCode::SystemError)
                         .set_remark(format!("{e}")),
-                );
+                ));
             } else {
                 match rpc_response
                     .unwrap()
                     .get_header::<GetMaxOffsetResponseHeader>()
                 {
                     None => {
-                        return Some(
+                        return Ok(Some(
                             RemotingCommand::create_response_command_with_code(
                                 ResponseCode::SystemError,
                             )
                             .set_remark("Rpc response header is None"),
-                        );
+                        ));
                     }
                     Some(offset_response_header) => offset_response_header.offset,
                 }
             }
         };
-        Some(RemotingCommand::create_response_command_with_header(
+        Ok(Some(RemotingCommand::create_response_command_with_header(
             GetMaxOffsetResponseHeader {
                 offset: max_item.compute_static_queue_offset_strictly(max_physical_offset),
             },
-        ))
+        )))
     }
 
     pub async fn get_all_delay_offset(
@@ -280,21 +316,21 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response_command = RemotingCommand::create_response_command();
         let content = self
             .broker_runtime_inner
             .schedule_message_service()
             .encode_pretty(false);
         if content.is_empty() {
-            return Some(
+            return Ok(Some(
                 response_command
                     .set_code(ResponseCode::SystemError)
                     .set_remark("No delay offset in this broker"),
-            );
+            ));
         }
         response_command.set_body_mut_ref(content.into_bytes());
-        Some(response_command)
+        Ok(Some(response_command))
     }
 
     pub async fn get_all_subscription_group_config(
@@ -303,7 +339,7 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response_command = RemotingCommand::create_response_command();
         let content = self
             .broker_runtime_inner
@@ -314,13 +350,13 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
                 "No subscription group config in this broker,client:{}",
                 channel.remote_address()
             );
-            return Some(
+            return Ok(Some(
                 response_command
                     .set_code(ResponseCode::SystemError)
                     .set_remark("No subscription group config in this broker"),
-            );
+            ));
         }
         response_command.set_body_mut_ref(content.into_bytes());
-        Some(response_command)
+        Ok(Some(response_command))
     }
 }
