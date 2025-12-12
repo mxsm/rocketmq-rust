@@ -135,7 +135,6 @@ impl IndexService {
     }
 
     pub fn delete_expired_file(&self, offset: u64) {
-        // Phase 1: Read lock to check and collect files to delete
         let files = {
             let index_file_list = self.index_file_list.read();
 
@@ -157,7 +156,6 @@ impl IndexService {
                 .collect::<Vec<_>>()
         };
 
-        // Phase 2: Write lock to actually delete files
         if !files.is_empty() {
             self.delete_expired_file_list(files);
         }
@@ -183,7 +181,6 @@ impl IndexService {
             }
         }
 
-        // Remove all destroyed files in one pass - O(n) instead of O(n²)
         if !destroyed_files.is_empty() {
             let mut index_file_list = self.index_file_list.write();
             index_file_list.retain(|f| !destroyed_files.contains(f.get_file_name()));
@@ -417,7 +414,6 @@ impl IndexService {
         let mut last_update_end_phy_offset = 0;
         let mut last_update_index_timestamp = 0;
 
-        // Phase 1: Read lock to check existing files
         {
             let read = self.index_file_list.read();
             if !read.is_empty() {
@@ -432,7 +428,6 @@ impl IndexService {
             }
         } // Read lock released here
 
-        // Phase 2: Write lock to create new file if needed
         if index_file.is_none() {
             let file_name = format!(
                 "{}{}{}",
