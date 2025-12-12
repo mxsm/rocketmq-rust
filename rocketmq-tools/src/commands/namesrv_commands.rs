@@ -38,11 +38,11 @@ use crate::commands::CommandExecute;
 #[derive(Subcommand)]
 pub enum NameServerCommands {
     #[command(
-        name = "getNamesrvConfig",
-        about = "Get configs of name server.",
+        name = "addWritePerm",
+        about = "Add write perm of broker in all name server you defined in the -n param.",
         long_about = None,
     )]
-    GetNamesrvConfig(GetNamesrvConfigCommand),
+    AddWritePermSubCommand(AddWritePermSubCommand),
 
     #[command(
         name = "deleteKvConfig",
@@ -50,6 +50,13 @@ pub enum NameServerCommands {
         long_about = None,
     )]
     DeleteKvConfig(DeleteKvConfigCommand),
+
+    #[command(
+        name = "getNamesrvConfig",
+        about = "Get configs of name server.",
+        long_about = None,
+    )]
+    GetNamesrvConfig(GetNamesrvConfigCommand),
 
     #[command(
         name = "updateKvConfig",
@@ -64,12 +71,6 @@ pub enum NameServerCommands {
         long_about = None,
     )]
     UpdateNamesrvConfig(UpdateNamesrvConfig),
-    #[command(
-        name = "addWritePerm",
-        about = "Add write perm of broker in all name server you defined in the -n param.",
-        long_about = None,
-    )]
-    AddWritePermSubCommand(AddWritePermSubCommand),
 
     #[command(
         name = "wipeWritePerm",
@@ -82,11 +83,11 @@ pub enum NameServerCommands {
 impl CommandExecute for NameServerCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
-            NameServerCommands::GetNamesrvConfig(value) => value.execute(rpc_hook).await,
+            NameServerCommands::AddWritePermSubCommand(value) => value.execute(rpc_hook).await,
             NameServerCommands::DeleteKvConfig(value) => value.execute(rpc_hook).await,
+            NameServerCommands::GetNamesrvConfig(value) => value.execute(rpc_hook).await,
             NameServerCommands::UpdateKvConfigCommand(value) => value.execute(rpc_hook).await,
             NameServerCommands::UpdateNamesrvConfig(value) => value.execute(rpc_hook).await,
-            NameServerCommands::AddWritePermSubCommand(value) => value.execute(rpc_hook).await,
             NameServerCommands::WipeWritePermSubCommand(value) => value.execute(rpc_hook).await,
         }
     }
