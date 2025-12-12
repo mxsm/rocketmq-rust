@@ -42,11 +42,11 @@ use rocketmq_remoting::protocol::{RemotingDeserializable, RemotingSerializable};
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
 
+use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_store::base::message_store::MessageStore;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tracing::{info, warn};
-use rocketmq_remoting::runtime::processor::RequestProcessor;
 
 /// A processor for handling query assignments in the RocketMQ broker.
 ///
@@ -154,6 +154,20 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         }
     }
 
+    /// Processes query assignment requests from consumers.
+    ///
+    /// This method corresponds to Java's `QueryAssignmentProcessor.queryAssignment()`.
+    /// It validates the request, performs load balancing, and returns assigned message queues.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel` - The network channel
+    /// * `_ctx` - Connection handler context (unused)
+    /// * `request` - The remoting command containing QueryAssignmentRequestBody
+    ///
+    /// # Returns
+    ///
+    /// A RemotingCommand response containing QueryAssignmentResponseBody with assigned queues
     async fn query_assignment(
         &mut self,
         channel: Channel,
@@ -168,7 +182,34 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
                 ),
             ));
         }
+        // Safe to unwrap: already checked is_none() above
         let request_body = QueryAssignmentRequestBody::decode(request.get_body().unwrap())?;
+
+        // Validate required fields
+        if request_body.topic.is_empty() {
+            return Ok(Some(
+                RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    "topic is empty",
+                ),
+            ));
+        }
+        if request_body.consumer_group.is_empty() {
+            return Ok(Some(
+                RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    "consumerGroup is empty",
+                ),
+            ));
+        }
+        if request_body.client_id.is_empty() {
+            return Ok(Some(
+                RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    "clientId is empty",
+                ),
+            ));
+        }
 
         let set_message_request_mode_request_body = self
             .message_request_mode_manager
@@ -204,7 +245,16 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
             };
         let mode = set_message_request_mode_request_body.mode;
 
-        //do load balance, get message queues
+        // Perform load balancing to get assigned message queues
+        info!(
+            "QueryAssignment: topic={}, group={}, clientId={}, model={:?}, strategy={}",
+            request_body.topic,
+            request_body.consumer_group,
+            request_body.client_id,
+            request_body.message_model,
+            request_body.strategy_name
+        );
+
         let message_queues = self
             .do_load_balance(
                 &request_body.topic,
@@ -217,15 +267,26 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
             )
             .await;
         let assignments = if let Some(message_queues) = message_queues {
-            message_queues
+            let assignment_count = message_queues.len();
+            let assignments: HashSet<MessageQueueAssignment> = message_queues
                 .into_iter()
                 .map(|mq| MessageQueueAssignment {
                     message_queue: Some(mq),
                     mode,
                     attachments: None,
                 })
-                .collect()
+                .collect();
+
+            info!(
+                "QueryAssignment: allocated {} queues for group={}, clientId={}",
+                assignment_count, request_body.consumer_group, request_body.client_id
+            );
+            assignments
         } else {
+            info!(
+                "QueryAssignment: no queues allocated for group={}, clientId={}",
+                request_body.consumer_group, request_body.client_id
+            );
             HashSet::with_capacity(0)
         };
         let body = QueryAssignmentResponseBody {
@@ -339,6 +400,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
                     );
                     return None;
                 }
+                // Safe to unwrap here: already checked mq_set.is_none() above
                 let mut mq_all = mq_set.unwrap().into_iter().collect::<Vec<MessageQueue>>();
                 // sort message queues and consumer ids
                 mq_all.sort();
@@ -353,6 +415,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
                     );
                     return None;
                 }
+                // Safe to unwrap here: already checked strategy.is_none() above
                 let strategy = strategy.unwrap();
                 let result =
                     if set_message_request_mode_request_body.mode == MessageRequestMode::Pop {
@@ -412,12 +475,11 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
                 strategy.allocate(consumer_group, current_cid, mq_all, cid_all)?;
             let index = cid_all.iter().position(|cid| cid == current_cid);
             if let Some(mut index) = index {
-                for _i in 1..pop_share_queue_num {
+                for _i in 1..=pop_share_queue_num {
                     index += 1;
                     index %= cid_all.len();
-                    let result = strategy
-                        .allocate(consumer_group, &cid_all[index], mq_all, cid_all)
-                        .unwrap();
+                    let result =
+                        strategy.allocate(consumer_group, &cid_all[index], mq_all, cid_all)?;
                     allocate_result.extend(result);
                 }
             }
@@ -444,6 +506,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
                 ),
             ));
         }
+        // Safe to unwrap: already checked is_none() above
         let request_body = SetMessageRequestModeRequestBody::decode(request.get_body().unwrap())?;
         if request_body.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
             return Ok(Some(
@@ -580,5 +643,74 @@ mod tests {
         let result = allocate(&consumer_group, &current_cid, &mq_all, &cid_all).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result.iter().next().unwrap().get_queue_id(), 1);
+    }
+
+    #[test]
+    fn allocate_for_pop_validates_empty_mq_list() {
+        let consumer_group = CheetahString::from("test_group");
+        let current_cid = CheetahString::from("consumer1");
+        let mq_all: Vec<MessageQueue> = vec![];
+        let cid_all = vec![CheetahString::from("consumer1")];
+        let strategy = Arc::new(AllocateMessageQueueAveragely);
+
+        let result = strategy.allocate(&consumer_group, &current_cid, &mq_all, &cid_all);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn allocate_for_pop_validates_empty_consumer_list() {
+        let consumer_group = CheetahString::from("test_group");
+        let current_cid = CheetahString::from("consumer1");
+        let mq_all = vec![MessageQueue::from_parts("topic", "broker", 0)];
+        let cid_all: Vec<CheetahString> = vec![];
+        let strategy = Arc::new(AllocateMessageQueueAveragely);
+
+        let result = strategy.allocate(&consumer_group, &current_cid, &mq_all, &cid_all);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn allocate_averagely_distributes_queues_evenly() {
+        let consumer_group = CheetahString::from("test_group");
+        let current_cid = CheetahString::from("consumer2");
+        let mq_all = vec![
+            MessageQueue::from_parts("topic", "broker", 0),
+            MessageQueue::from_parts("topic", "broker", 1),
+            MessageQueue::from_parts("topic", "broker", 2),
+            MessageQueue::from_parts("topic", "broker", 3),
+        ];
+        let cid_all = vec![
+            CheetahString::from("consumer1"),
+            CheetahString::from("consumer2"),
+        ];
+        let strategy = Arc::new(AllocateMessageQueueAveragely);
+
+        let result = strategy
+            .allocate(&consumer_group, &current_cid, &mq_all, &cid_all)
+            .unwrap();
+        // With 4 queues and 2 consumers, consumer2 should get 2 queues (2,3)
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn allocate_by_circle_distributes_round_robin() {
+        let consumer_group = CheetahString::from("test_group");
+        let current_cid = CheetahString::from("consumer1");
+        let mq_all = vec![
+            MessageQueue::from_parts("topic", "broker", 0),
+            MessageQueue::from_parts("topic", "broker", 1),
+            MessageQueue::from_parts("topic", "broker", 2),
+        ];
+        let cid_all = vec![
+            CheetahString::from("consumer1"),
+            CheetahString::from("consumer2"),
+        ];
+        let strategy = Arc::new(AllocateMessageQueueAveragelyByCircle);
+
+        let result = strategy
+            .allocate(&consumer_group, &current_cid, &mq_all, &cid_all)
+            .unwrap();
+        // With round-robin, consumer1 should get queue 0 and 2
+        assert_eq!(result.len(), 2);
     }
 }
