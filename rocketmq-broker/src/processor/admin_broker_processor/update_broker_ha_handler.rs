@@ -47,7 +47,7 @@ impl<MS: MessageStore> UpdateBrokerHaHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let exchange_request_header = request
             .decode_command_custom_header::<ExchangeHAInfoRequestHeader>()
             .unwrap();
@@ -105,6 +105,6 @@ impl<MS: MessageStore> UpdateBrokerHaHandler<MS> {
         }
 
         response.set_code_ref(ResponseCode::Success);
-        Some(response)
+        Ok(Some(response))
     }
 }

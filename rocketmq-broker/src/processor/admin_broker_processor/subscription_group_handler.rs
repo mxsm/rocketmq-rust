@@ -51,7 +51,7 @@ impl<MS: MessageStore> SubscriptionGroupHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let start_time = get_current_millis() as i64;
 
         let mut response = RemotingCommand::create_response_command();
@@ -84,7 +84,7 @@ impl<MS: MessageStore> SubscriptionGroupHandler<MS> {
         // BrokerMetricsManager.newAttributesBuilder()     .put(LABEL_INVOCATION_STATUS,
         // status.getName())     .build();
         // BrokerMetricsManager.consumerGroupCreateExecuteTime.record(executionTime, attributes);
-        Some(response)
+        Ok(Some(response))
     }
 
     pub async fn unlock_batch_mq(
@@ -93,7 +93,7 @@ impl<MS: MessageStore> SubscriptionGroupHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut request_body = UnlockBatchRequestBody::decode(request.get_body().unwrap()).unwrap();
         if request_body.only_this_broker
             || !self
@@ -131,6 +131,6 @@ impl<MS: MessageStore> SubscriptionGroupHandler<MS> {
                 }
             }
         }
-        Some(RemotingCommand::create_response_command())
+        Ok(Some(RemotingCommand::create_response_command()))
     }
 }

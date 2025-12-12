@@ -72,7 +72,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let change_header = request
             .decode_command_custom_header::<NotifyMinBrokerIdChangeRequestHeader>()
             .unwrap();
@@ -91,7 +91,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         self.update_min_broker(change_header).await;
 
         let response = RemotingCommand::create_response_command();
-        Some(response.set_code(ResponseCode::Success))
+        Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
     async fn update_min_broker(&mut self, change_header: NotifyMinBrokerIdChangeRequestHeader) {

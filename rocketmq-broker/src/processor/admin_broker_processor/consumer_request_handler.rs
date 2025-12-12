@@ -57,7 +57,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request
             .decode_command_custom_header::<GetConsumerConnectionListRequestHeader>()
@@ -91,16 +91,16 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                     .encode()
                     .expect("consumer connection list encode failed");
                 response.set_body_mut_ref(body);
-                Some(response)
+                Ok(Some(response))
             }
-            None => Some(
+            None => Ok(Some(
                 response
                     .set_code(ResponseCode::ConsumerNotOnline)
                     .set_remark(format!(
                         "the consumer group[{}] not online",
                         request_header.get_consumer_group()
                     )),
-            ),
+            )),
         }
     }
 
@@ -110,7 +110,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request
             .decode_command_custom_header::<GetConsumeStatsRequestHeader>()
@@ -229,7 +229,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         }
         let body = consume_stats.encode().expect("consume stats encode failed");
         response.set_body_mut_ref(body);
-        Some(response)
+        Ok(Some(response))
     }
 
     pub async fn get_all_consumer_offset(
@@ -238,7 +238,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
         let content = self
             .broker_runtime_inner
@@ -246,13 +246,13 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
             .encode();
         if !content.is_empty() {
             response.set_body_mut_ref(content);
-            Some(response)
+            Ok(Some(response))
         } else {
-            Some(
+            Ok(Some(
                 response
                     .set_code(ResponseCode::SystemError)
                     .set_remark("No consumer offset in this broker"),
-            )
+            ))
         }
     }
 }
