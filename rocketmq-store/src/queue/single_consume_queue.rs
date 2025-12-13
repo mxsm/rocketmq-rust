@@ -352,6 +352,108 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
     fn multi_dispatch_lmq_queue(&self, request: &DispatchRequest, max_retries: i32) {
         error!(" multi_dispatch_lmq_queue is not implemented yet ");
     }
+
+    /// Binary search within a mapped file to find the offset by timestamp.
+    ///
+    /// # Arguments
+    ///
+    /// * `mapped_file` - The mapped file to search in
+    /// * `timestamp` - The timestamp to search for
+    /// * `boundary_type` - The boundary type (Lower or Upper)
+    ///
+    /// # Returns
+    ///
+    /// The queue offset that matches the criteria, or -1 if not found
+    fn binary_search_in_queue_by_time(
+        &self,
+        mapped_file: &Arc<DefaultMappedFile>,
+        timestamp: i64,
+        boundary_type: BoundaryType,
+    ) -> i64 {
+        let select_result = mapped_file.select_mapped_buffer_with_position(0);
+        if select_result.is_none() {
+            return -1;
+        }
+        let select_result = select_result.unwrap();
+        let commit_log = self.message_store.get_commit_log();
+        let read_position = mapped_file.get_read_position();
+        if read_position < CQ_STORE_UNIT_SIZE {
+            return -1;
+        }
+
+        let mut low = 0;
+        let mut high = read_position - CQ_STORE_UNIT_SIZE;
+        let mut target_offset = -1i64;
+        let mut left_offset = -1i64;
+        let mut right_offset = -1i64;
+
+        // Binary search for the timestamp
+        while high >= low {
+            let mid = (low + high) / 2 / CQ_STORE_UNIT_SIZE * CQ_STORE_UNIT_SIZE;
+            if let Some(bytes) = mapped_file.get_bytes(mid as usize, CQ_STORE_UNIT_SIZE as usize) {
+                let physical_offset = i64::from_be_bytes(bytes[0..8].try_into().unwrap());
+                let message_size = i32::from_be_bytes(bytes[8..12].try_into().unwrap());
+                let store_time = commit_log.pickup_store_timestamp(physical_offset, message_size);
+
+                if store_time < 0 {
+                    // Invalid message, skip
+                    return -1;
+                }
+
+                match store_time.cmp(&timestamp) {
+                    std::cmp::Ordering::Equal => {
+                        target_offset = mid as i64;
+                        break;
+                    }
+                    std::cmp::Ordering::Less => {
+                        low = mid + CQ_STORE_UNIT_SIZE;
+                        left_offset = mid as i64;
+                    }
+                    std::cmp::Ordering::Greater => {
+                        high = mid - CQ_STORE_UNIT_SIZE;
+                        right_offset = mid as i64;
+                    }
+                }
+            } else {
+                return -1;
+            }
+        }
+
+        // Determine the result based on boundary type
+        let mid_offset = if target_offset != -1 {
+            target_offset
+        } else {
+            match boundary_type {
+                BoundaryType::Lower => {
+                    if right_offset != -1 {
+                        right_offset
+                    } else if left_offset != -1 {
+                        left_offset
+                    } else {
+                        -1
+                    }
+                }
+                BoundaryType::Upper => {
+                    if left_offset != -1 {
+                        left_offset
+                    } else if right_offset != -1 {
+                        right_offset
+                    } else {
+                        -1
+                    }
+                }
+            }
+        };
+
+        if mid_offset == -1 {
+            return -1;
+        }
+
+        // Convert the byte offset to queue offset
+        let queue_offset =
+            (mapped_file.get_file_from_offset() as i64 + mid_offset) / CQ_STORE_UNIT_SIZE as i64;
+        queue_offset
+    }
 }
 
 impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
@@ -882,7 +984,20 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
         timestamp: i64,
         boundary_type: BoundaryType,
     ) -> i64 {
-        todo!()
+        let commit_log = self.message_store.get_commit_log();
+        let mapped_file = self.mapped_file_queue.get_consume_queue_mapped_file_by_time(
+            timestamp,
+            commit_log,
+            boundary_type,
+        );
+        if let Some(mapped_file) = mapped_file {
+            return self.binary_search_in_queue_by_time(
+                &mapped_file,
+                timestamp,
+                boundary_type,
+            );
+        }
+        -1
     }
 }
 
