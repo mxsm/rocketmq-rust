@@ -150,8 +150,7 @@ where
                     topic_request_header: request_header.topic_request_header.clone(),
                 };
                 remote_request_header.set_lo(Some(false));
-                remote_request_header
-                    .set_broker_name(item.bname.clone().unwrap_or_default());
+                remote_request_header.set_broker_name(item.bname.clone().unwrap_or_default());
 
                 let rpc_request = RpcRequest::new(
                     RequestCode::SearchOffsetByTimestamp.to_i32(),
@@ -195,8 +194,7 @@ where
                                 {
                                     continue;
                                 }
-                                offset =
-                                    item.compute_static_queue_offset_strictly(remote_offset);
+                                offset = item.compute_static_queue_offset_strictly(remote_offset);
                                 break;
                             }
                         }
