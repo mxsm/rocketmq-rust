@@ -1235,7 +1235,12 @@ impl MessageStore for LocalFileMessageStore {
         timestamp: i64,
         boundary_type: BoundaryType,
     ) -> i64 {
-        todo!()
+        self.consume_queue_store.get_offset_in_queue_by_time(
+            topic,
+            queue_id,
+            timestamp,
+            boundary_type,
+        )
     }
 
     fn look_message_by_offset(&self, commit_log_offset: i64) -> Option<MessageExt> {
