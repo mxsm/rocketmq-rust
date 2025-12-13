@@ -706,7 +706,7 @@ where
                     );
                     return Ok(Some(
                         response
-                            .set_code(ResponseCode::FilterDataNotExist)
+                            .set_code(ResponseCode::FilterDataNotLatest)
                             .set_remark("the consumer's consumer filter data not latest"),
                     ));
                 }
