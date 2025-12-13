@@ -60,6 +60,7 @@ use tracing::warn;
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::client::consumer_group_info::ConsumerGroupInfo;
 use crate::coldctr::cold_data_cg_ctr_service::ColdDataCgCtrService;
+use crate::coldctr::cold_data_pull_request_hold_service::ColdDataPullRequest;
 use crate::coldctr::cold_data_pull_request_hold_service::NO_SUSPEND_KEY;
 use crate::filter::expression_for_retry_message_filter::ExpressionForRetryMessageFilter;
 use crate::filter::expression_message_filter::ExpressionMessageFilter;
@@ -748,12 +749,67 @@ where
             )))
         };
 
-        //ColdDataFlow not implement
-
+        // ColdDataFlow control
         cfg_if::cfg_if! {
             if #[cfg(feature = "local_file_store")] {
-                if self.cold_data_cg_ctr_service.is_cg_need_cold_data_flow_ctr(request_header.consumer_group.as_str()) {
-                    unimplemented!("ColdDataFlow not implement")
+                if let Some(cold_data_cg_ctr_service) = self.broker_runtime_inner.cold_data_cg_ctr_service() {
+                    if cold_data_cg_ctr_service.is_cg_need_cold_data_flow_ctr(request_header.consumer_group.as_str()) {
+                        // Check if message is in cold data area
+                        if let Some(message_store) = self.broker_runtime_inner.message_store() {
+                            let is_msg_logic_cold = message_store
+                                .get_commit_log()
+                                .get_cold_data_check_service()
+                                .is_msg_in_cold_area(
+                                    &request_header.consumer_group,
+                                    &request_header.topic,
+                                    request_header.queue_id,
+                                    request_header.queue_offset,
+                                );
+
+                            if is_msg_logic_cold {
+                                // Get consumer type
+                                let consumer_group_info = self
+                                    .broker_runtime_inner
+                                    .consumer_manager()
+                                    .get_consumer_group_info(request_header.consumer_group.as_ref());
+
+                                if let Some(ref cg_info) = consumer_group_info {
+                                    match cg_info.get_consume_type() {
+                                        ConsumeType::ConsumePassively => {
+                                            // PUSH consumer: return SYSTEM_BUSY immediately
+                                            return Ok(Some(
+                                                response
+                                                    .set_code(ResponseCode::SystemBusy)
+                                                    .set_remark("This consumer group is reading cold data. It has been flow control"),
+                                            ));
+                                        }
+                                        ConsumeType::ConsumeActively => {
+                                            // PULL consumer: suspend request if allowed
+                                            if broker_allow_flow_ctr_suspend {
+                                                if let Some(cold_data_hold_service) = self.broker_runtime_inner.cold_data_pull_request_hold_service() {
+                                                    let now = self.broker_runtime_inner.message_store().unwrap().now();
+                                                    let pull_request = ColdDataPullRequest::new(
+                                                        request.clone(),
+                                                        channel.clone(),
+                                                        1000, // timeout millis
+                                                        now,
+                                                        request_header.queue_offset,
+                                                        subscription_data.clone(),
+                                                        message_filter.clone(),
+                                                    );
+                                                    cold_data_hold_service.suspend_cold_data_read_request(pull_request);
+                                                    return Ok(None);
+                                                }
+                                            }
+                                            // If not suspended, limit to 1 message
+                                            request_header.max_msg_nums = 1;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -769,63 +825,72 @@ where
             .broker_runtime_inner
             .consumer_offset_manager()
             .query_then_erase_reset_offset(topic, group, queue_id);
-        let get_message_result =
-            if let (true, Some(reset_offset)) = (use_reset_offset_feature, reset_offset) {
+        let get_message_result = if let (true, Some(reset_offset)) =
+            (use_reset_offset_feature, reset_offset)
+        {
+            let mut get_message_result = GetMessageResult::new();
+            get_message_result.set_status(Some(GetMessageStatus::OffsetReset));
+            get_message_result.set_next_begin_offset(reset_offset);
+            get_message_result.set_min_offset(
+                self.broker_runtime_inner
+                    .message_store()
+                    .unwrap()
+                    .get_min_offset_in_queue(topic, queue_id),
+            );
+            get_message_result.set_max_offset(
+                self.broker_runtime_inner
+                    .message_store()
+                    .unwrap()
+                    .get_max_offset_in_queue(topic, queue_id),
+            );
+            get_message_result.set_suggest_pulling_from_slave(false);
+            Some(get_message_result)
+        } else {
+            let broadcast_init_offset = self.query_broadcast_pull_init_offset(
+                topic,
+                group,
+                queue_id,
+                &request_header,
+                &channel,
+            );
+            if broadcast_init_offset >= 0 {
                 let mut get_message_result = GetMessageResult::new();
                 get_message_result.set_status(Some(GetMessageStatus::OffsetReset));
-                get_message_result.set_next_begin_offset(reset_offset);
-                get_message_result.set_min_offset(
-                    self.broker_runtime_inner
-                        .message_store()
-                        .unwrap()
-                        .get_min_offset_in_queue(topic, queue_id),
-                );
-                get_message_result.set_max_offset(
-                    self.broker_runtime_inner
-                        .message_store()
-                        .unwrap()
-                        .get_max_offset_in_queue(topic, queue_id),
-                );
-                get_message_result.set_suggest_pulling_from_slave(false);
+                get_message_result.set_next_begin_offset(broadcast_init_offset);
                 Some(get_message_result)
             } else {
-                let broadcast_init_offset = self.query_broadcast_pull_init_offset(
-                    topic,
-                    group,
-                    queue_id,
-                    &request_header,
-                    &channel,
-                );
-                if broadcast_init_offset >= 0 {
-                    let mut get_message_result = GetMessageResult::new();
-                    get_message_result.set_status(Some(GetMessageStatus::OffsetReset));
-                    get_message_result.set_next_begin_offset(broadcast_init_offset);
-                    Some(get_message_result)
-                } else {
-                    let result = self
-                        .broker_runtime_inner
-                        .message_store()
-                        .unwrap()
-                        .get_message(
-                            group,
-                            topic,
-                            queue_id,
-                            request_header.queue_offset,
-                            request_header.max_msg_nums,
-                            //   MAX_PULL_MSG_SIZE,
-                            Some(message_filter.clone()),
-                        )
-                        .await;
-                    if result.is_none() {
-                        return Ok(Some(
-                            response
-                                .set_code(ResponseCode::SystemError)
-                                .set_remark("store getMessage return None"),
-                        ));
-                    }
-                    result
+                let result = self
+                    .broker_runtime_inner
+                    .message_store()
+                    .unwrap()
+                    .get_message(
+                        group,
+                        topic,
+                        queue_id,
+                        request_header.queue_offset,
+                        request_header.max_msg_nums,
+                        //   MAX_PULL_MSG_SIZE,
+                        Some(message_filter.clone()),
+                    )
+                    .await;
+                if result.is_none() {
+                    return Ok(Some(
+                        response
+                            .set_code(ResponseCode::SystemError)
+                            .set_remark("store getMessage return None"),
+                    ));
                 }
-            };
+                // Accumulate cold data read bytes for flow control
+                if let Some(ref result) = result {
+                    if let Some(cold_data_cg_ctr_service) =
+                        self.broker_runtime_inner.cold_data_cg_ctr_service()
+                    {
+                        cold_data_cg_ctr_service.cold_acc(group.as_str(), result.cold_data_sum());
+                    }
+                }
+                result
+            }
+        };
         if let Some(get_message_result) = get_message_result {
             return Ok(self
                 .pull_message_result_handler
