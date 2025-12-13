@@ -58,6 +58,15 @@ use tracing::warn;
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 
+/// Maximum number of concurrent in-flight revive requests
+const MAX_INFLIGHT_REVIVE_REQUESTS: usize = 3;
+
+/// Timeout for in-flight revive requests (30 seconds)
+const INFLIGHT_REVIVE_TIMEOUT_MS: u64 = 30_000;
+
+/// Sleep interval when waiting for in-flight requests (100ms)
+const INFLIGHT_WAIT_INTERVAL_MS: u64 = 100;
+
 pub struct PopReviveService<MS: MessageStore> {
     ck_rewrite_intervals_in_seconds: [i32; 17],
     queue_id: i32,
@@ -148,6 +157,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         msg_inner.properties_string =
             message_decoder::message_properties_to_string(msg_inner.get_properties());
         self.add_retry_topic_if_not_exist(msg_inner.get_topic(), &pop_check_point.cid);
+        let retry_topic = msg_inner.get_topic().clone();
         let put_message_result = self
             .broker_runtime_inner
             .escape_bridge_mut()
@@ -157,8 +167,30 @@ impl<MS: MessageStore> PopReviveService<MS> {
             || put_message_result.append_message_result().unwrap().status
                 != AppendMessageStatus::PutOk
         {
+            error!(
+                "reviveQueueId={}, revive error, put message failed, ck={:?}",
+                self.queue_id, pop_check_point
+            );
             return false;
         }
+
+        // Update statistics after successful put
+        self.broker_runtime_inner
+            .pop_inflight_message_counter()
+            .decrement_in_flight_message_num_checkpoint(pop_check_point);
+
+        self.broker_runtime_inner
+            .broker_stats_manager()
+            .inc_broker_put_nums(&pop_check_point.topic, 1);
+        self.broker_runtime_inner
+            .broker_stats_manager()
+            .inc_topic_put_nums(&retry_topic, 1, 1);
+        if let Some(append_result) = put_message_result.append_message_result() {
+            self.broker_runtime_inner
+                .broker_stats_manager()
+                .inc_topic_put_size(&retry_topic, append_result.wrote_bytes);
+        }
+
         true
     }
 
@@ -243,10 +275,8 @@ impl<MS: MessageStore> PopReviveService<MS> {
         nums: i32,
         de_compress_body: bool,
     ) -> Option<PullResult> {
-        let get_message_result = self
-            .broker_runtime_inner
-            .message_store()
-            .unwrap()
+        let message_store = self.broker_runtime_inner.message_store()?;
+        let get_message_result = message_store
             .get_message(
                 group, topic, queue_id, offset, nums, //    128 * 1024 * 1024,
                 None,
@@ -282,17 +312,15 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 pull_status.1,
             ))
         } else {
-            let max_queue_offset = self
-                .broker_runtime_inner
-                .message_store()
-                .unwrap()
-                .get_max_offset_in_queue(topic, queue_id);
-            if max_queue_offset > offset {
-                error!(
-                    "get message from store return null. topic={}, groupId={}, requestOffset={}, \
-                     maxQueueOffset={}",
-                    topic, group, offset, max_queue_offset
-                );
+            if let Some(store) = self.broker_runtime_inner.message_store() {
+                let max_queue_offset = store.get_max_offset_in_queue(topic, queue_id);
+                if max_queue_offset > offset {
+                    error!(
+                        "get message from store return null. topic={}, groupId={}, \
+                         requestOffset={}, maxQueueOffset={}",
+                        topic, group, offset, max_queue_offset
+                    );
+                }
             }
             None
         }
@@ -436,20 +464,18 @@ impl<MS: MessageStore> PopReviveService<MS> {
             let message_exts = self.get_revive_message(offset, self.queue_id).await;
             if message_exts.is_none() || message_exts.as_ref().unwrap().is_empty() {
                 let old = end_time;
-                let timer_delay = self
+                // Safely get timer message store delays
+                let (timer_delay, commit_log_delay) = self
                     .broker_runtime_inner
                     .message_store()
-                    .unwrap()
-                    .get_timer_message_store()
-                    .unwrap() // may be need to unwrap
-                    .get_dequeue_behind();
-                let commit_log_delay = self
-                    .broker_runtime_inner
-                    .message_store()
-                    .unwrap()
-                    .get_timer_message_store()
-                    .unwrap() // may be need to unwrap
-                    .get_enqueue_behind();
+                    .and_then(|s| s.get_timer_message_store())
+                    .map(|timer_store| {
+                        (
+                            timer_store.get_dequeue_behind(),
+                            timer_store.get_enqueue_behind(),
+                        )
+                    })
+                    .unwrap_or((0, 0));
                 if end_time != 0
                     && get_current_millis() - end_time > (3 * PopAckConstants::SECOND) as u64
                     && timer_delay <= 0
@@ -496,11 +522,34 @@ impl<MS: MessageStore> PopReviveService<MS> {
                         );
                     }
 
-                    let mut point: PopCheckPoint =
-                        SerdeJsonUtils::from_json_bytes(message_ext.get_body().unwrap()).unwrap();
+                    // Safely decode CK message body
+                    let body = match message_ext.get_body() {
+                        Some(body) => body,
+                        None => {
+                            error!(
+                                "reviveQueueId={}, ck message body is null, offset:{}",
+                                message_ext.queue_id, message_ext.queue_offset
+                            );
+                            continue;
+                        }
+                    };
+                    let mut point: PopCheckPoint = match SerdeJsonUtils::from_json_bytes(body) {
+                        Ok(point) => point,
+                        Err(e) => {
+                            error!(
+                                "reviveQueueId={}, decode ck failed, offset:{}, error:{}",
+                                message_ext.queue_id, message_ext.queue_offset, e
+                            );
+                            continue;
+                        }
+                    };
                     if point.topic.is_empty() || point.cid.is_empty() {
                         continue;
                     }
+                    // Set revive_offset BEFORE inserting into map
+                    // since Rust clone creates a deep copy (unlike Java reference)
+                    point.revive_offset = message_ext.queue_offset;
+
                     map.insert(
                         format!(
                             "{}{}{}{}{}{}",
@@ -515,13 +564,31 @@ impl<MS: MessageStore> PopReviveService<MS> {
                         point.clone(),
                     );
                     //  PopMetricsManager::inc_pop_revive_ck_get_count(&point, self.queue_id);
-                    point.revive_offset = message_ext.queue_offset;
                     if first_rt == 0 {
                         first_rt = point.get_revive_time() as u64;
                     }
                 } else if PopAckConstants::ACK_TAG == message_ext.get_tags().unwrap_or_default() {
-                    let ack_msg: AckMsg =
-                        SerdeJsonUtils::from_json_bytes(message_ext.get_body().unwrap()).unwrap();
+                    // Safely decode ACK message body
+                    let body = match message_ext.get_body() {
+                        Some(body) => body,
+                        None => {
+                            error!(
+                                "reviveQueueId={}, ack message body is null, offset:{}",
+                                message_ext.queue_id, message_ext.queue_offset
+                            );
+                            continue;
+                        }
+                    };
+                    let ack_msg: AckMsg = match SerdeJsonUtils::from_json_bytes(body) {
+                        Ok(msg) => msg,
+                        Err(e) => {
+                            error!(
+                                "reviveQueueId={}, decode ack failed, offset:{}, error:{}",
+                                message_ext.queue_id, message_ext.queue_offset, e
+                            );
+                            continue;
+                        }
+                    };
                     // PopMetricsManager::inc_pop_revive_ack_get_count(&ack_msg, self.queue_id);
                     let merge_key = CheetahString::from_string(format!(
                         "{}{}{}{}{}{}",
@@ -569,8 +636,27 @@ impl<MS: MessageStore> PopReviveService<MS> {
                             message_ext.queue_id, message_ext.queue_offset,
                         );
                     }
-                    let b_ack_msg: BatchAckMsg =
-                        SerdeJsonUtils::from_json_bytes(message_ext.get_body().unwrap()).unwrap();
+                    // Safely decode BatchAck message body
+                    let body = match message_ext.get_body() {
+                        Some(body) => body,
+                        None => {
+                            error!(
+                                "reviveQueueId={}, batch ack message body is null, offset:{}",
+                                message_ext.queue_id, message_ext.queue_offset
+                            );
+                            continue;
+                        }
+                    };
+                    let b_ack_msg: BatchAckMsg = match SerdeJsonUtils::from_json_bytes(body) {
+                        Ok(msg) => msg,
+                        Err(e) => {
+                            error!(
+                                "reviveQueueId={}, decode batch ack failed, offset:{}, error:{}",
+                                message_ext.queue_id, message_ext.queue_offset, e
+                            );
+                            continue;
+                        }
+                    };
                     // PopMetricsManager::inc_pop_revive_ack_get_count(&b_ack_msg, self.queue_id);
                     let merge_key = CheetahString::from_string(format!(
                         "{}{}{}{}{}{}",
@@ -742,13 +828,19 @@ impl<MS: MessageStore> PopReviveService<MS> {
             // may be need to optimize
             let mut remove = vec![];
             let length = this.inflight_revive_request_map.lock().await.len();
-            while length - remove.len() > 3 {
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            while length - remove.len() > MAX_INFLIGHT_REVIVE_REQUESTS {
+                tokio::time::sleep(tokio::time::Duration::from_millis(
+                    INFLIGHT_WAIT_INTERVAL_MS,
+                ))
+                .await;
                 let mut inflight_map = this.inflight_revive_request_map.lock().await;
-                let entry = inflight_map.first_entry().unwrap();
+                let entry = match inflight_map.first_entry() {
+                    Some(e) => e,
+                    None => break,
+                };
                 let pair = entry.get();
                 let old_ck = entry.key();
-                if !pair.1 && (get_current_millis() - pair.0 as u64 > 30 * 1000) {
+                if !pair.1 && (get_current_millis() - pair.0 as u64 > INFLIGHT_REVIVE_TIMEOUT_MS) {
                     this.re_put_ck(old_ck, pair).await;
                     remove.push(old_ck.clone());
                     info!(
@@ -999,14 +1091,29 @@ fn decode_msg_list(
     de_compress_body: bool,
 ) -> Vec<ArcMut<MessageExt>> {
     let mut found_list = Vec::new();
-    for bb in get_message_result.message_mapped_list() {
-        let data = &bb.mapped_file.as_ref().unwrap().get_mapped_file()
+    for (index, bb) in get_message_result.message_mapped_list().iter().enumerate() {
+        let mapped_file = match bb.mapped_file.as_ref() {
+            Some(mf) => mf,
+            None => {
+                error!("decode_msg_list: mapped_file is null at index={}", index);
+                continue;
+            }
+        };
+        let data = &mapped_file.get_mapped_file()
             [bb.start_offset as usize..(bb.start_offset + bb.size as u64) as usize];
         let mut bytes = Bytes::copy_from_slice(data);
         let msg_ext =
             message_decoder::decode(&mut bytes, true, de_compress_body, false, false, false);
-        if let Some(msg_ext) = msg_ext {
-            found_list.push(ArcMut::new(msg_ext));
+        match msg_ext {
+            Some(msg_ext) => {
+                found_list.push(ArcMut::new(msg_ext));
+            }
+            None => {
+                error!(
+                    "decode_msg_list: decode msgExt is null, index={}, start_offset={}, size={}",
+                    index, bb.start_offset, bb.size
+                );
+            }
         }
     }
     found_list
