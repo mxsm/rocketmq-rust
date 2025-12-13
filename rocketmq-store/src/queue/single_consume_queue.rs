@@ -449,10 +449,7 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
             return -1;
         }
 
-        // Convert the byte offset to queue offset
-        let queue_offset =
-            (mapped_file.get_file_from_offset() as i64 + mid_offset) / CQ_STORE_UNIT_SIZE as i64;
-        queue_offset
+        (mapped_file.get_file_from_offset() as i64 + mid_offset) / CQ_STORE_UNIT_SIZE as i64
     }
 }
 
