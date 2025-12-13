@@ -410,16 +410,22 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
 
         // Handle case 1: ceiling store time < timestamp
         if ceiling >= 0 && (ceiling as usize + CQ_STORE_UNIT_SIZE as usize) <= buffer.len() {
-            let phy_offset =
-                i64::from_be_bytes(buffer[ceiling as usize..ceiling as usize + 8].try_into().unwrap());
+            let phy_offset = i64::from_be_bytes(
+                buffer[ceiling as usize..ceiling as usize + 8]
+                    .try_into()
+                    .unwrap(),
+            );
             let size = i32::from_be_bytes(
-                buffer[ceiling as usize + 8..ceiling as usize + 12].try_into().unwrap(),
+                buffer[ceiling as usize + 8..ceiling as usize + 12]
+                    .try_into()
+                    .unwrap(),
             );
             let store_time = commit_log.pickup_store_timestamp(phy_offset, size);
             if store_time < timestamp {
                 return match boundary_type {
                     BoundaryType::Lower => {
-                        (mapped_file.get_file_from_offset() as i64 + ceiling as i64
+                        (mapped_file.get_file_from_offset() as i64
+                            + ceiling as i64
                             + CQ_STORE_UNIT_SIZE as i64)
                             / CQ_STORE_UNIT_SIZE as i64
                     }
@@ -433,10 +439,15 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
 
         // Handle case 2: floor store time > timestamp
         if floor >= 0 && (floor as usize + 12) <= buffer.len() {
-            let phy_offset =
-                i64::from_be_bytes(buffer[floor as usize..floor as usize + 8].try_into().unwrap());
+            let phy_offset = i64::from_be_bytes(
+                buffer[floor as usize..floor as usize + 8]
+                    .try_into()
+                    .unwrap(),
+            );
             let size = i32::from_be_bytes(
-                buffer[floor as usize + 8..floor as usize + 12].try_into().unwrap(),
+                buffer[floor as usize + 8..floor as usize + 12]
+                    .try_into()
+                    .unwrap(),
             );
             let store_time = commit_log.pickup_store_timestamp(phy_offset, size);
             if store_time > timestamp {
@@ -457,10 +468,14 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
             }
 
             let phy_offset = i64::from_be_bytes(
-                buffer[mid_offset as usize..mid_offset as usize + 8].try_into().unwrap(),
+                buffer[mid_offset as usize..mid_offset as usize + 8]
+                    .try_into()
+                    .unwrap(),
             );
             let size = i32::from_be_bytes(
-                buffer[mid_offset as usize + 8..mid_offset as usize + 12].try_into().unwrap(),
+                buffer[mid_offset as usize + 8..mid_offset as usize + 12]
+                    .try_into()
+                    .unwrap(),
             );
 
             // Skip invalid physical offsets
@@ -511,7 +526,9 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
                             break;
                         }
                         let physical_offset = i64::from_be_bytes(
-                            buffer[attempt as usize..attempt as usize + 8].try_into().unwrap(),
+                            buffer[attempt as usize..attempt as usize + 8]
+                                .try_into()
+                                .unwrap(),
                         );
                         let message_size = i32::from_be_bytes(
                             buffer[attempt as usize + 8..attempt as usize + 12]
@@ -540,7 +557,9 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
                             break;
                         }
                         let physical_offset = i64::from_be_bytes(
-                            buffer[attempt as usize..attempt as usize + 8].try_into().unwrap(),
+                            buffer[attempt as usize..attempt as usize + 8]
+                                .try_into()
+                                .unwrap(),
                         );
                         let message_size = i32::from_be_bytes(
                             buffer[attempt as usize + 8..attempt as usize + 12]
