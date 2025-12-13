@@ -2072,6 +2072,16 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
+    pub fn cold_data_cg_ctr_service(&self) -> Option<&ColdDataCgCtrService> {
+        self.cold_data_cg_ctr_service.as_ref()
+    }
+
+    #[inline]
+    pub fn cold_data_pull_request_hold_service(&self) -> Option<&ColdDataPullRequestHoldService> {
+        self.cold_data_pull_request_hold_service.as_ref()
+    }
+
+    #[inline]
     pub fn slave_synchronize(&self) -> Option<&SlaveSynchronize<MS>> {
         self.slave_synchronize.as_ref()
     }

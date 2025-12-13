@@ -1770,6 +1770,12 @@ impl CommitLog {
         }
     }
 
+    /// Get the cold data check service for checking if message data is in cold storage area
+    #[inline]
+    pub fn get_cold_data_check_service(&self) -> &ColdDataCheckService {
+        &self.cold_data_check_service
+    }
+
     pub async fn append_data(
         &mut self,
         start_offset: i64,
