@@ -16,7 +16,6 @@
 //  under the License.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
@@ -59,7 +58,6 @@ use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::client::consumer_group_info::ConsumerGroupInfo;
-use crate::coldctr::cold_data_cg_ctr_service::ColdDataCgCtrService;
 use crate::coldctr::cold_data_pull_request_hold_service::ColdDataPullRequest;
 use crate::coldctr::cold_data_pull_request_hold_service::NO_SUSPEND_KEY;
 use crate::filter::expression_for_retry_message_filter::ExpressionForRetryMessageFilter;
@@ -70,10 +68,11 @@ use crate::processor::pull_message_result_handler::PullMessageResultHandler;
 
 pub struct PullMessageProcessor<MS: MessageStore> {
     pull_message_result_handler: ArcMut<DefaultPullMessageResultHandler<MS>>,
-    // write message to consume client runtime
-    cold_data_cg_ctr_service: Arc<ColdDataCgCtrService>,
     write_message_runtime: Arc<RocketMQRuntime>,
-    // write message to consume client lock
+    /// Lock to serialize writes to channels when waking up suspended requests.
+    ///
+    /// This is a global lock which may become a bottleneck under high concurrency.
+    /// Future optimization: consider per-channel locks for better parallelism.
     write_message_lock: Arc<Mutex<()>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
@@ -142,7 +141,6 @@ where
         let cpus = num_cpus::get();
         Self {
             pull_message_result_handler,
-            cold_data_cg_ctr_service: Arc::new(Default::default()),
             write_message_runtime: Arc::new(RocketMQRuntime::new_multi(
                 cpus,
                 "write_consumer_message_runtime",
@@ -742,10 +740,14 @@ where
         {
             Arc::new(Box::new(ExpressionForRetryMessageFilter))
         } else {
+            // TODO: Optimize by storing ConsumerFilterManager in Arc within BrokerRuntimeInner
+            // to avoid cloning the entire manager on each request. This would require:
+            // 1. Change BrokerRuntimeInner::consumer_filter_manager from Option<T> to Arc<T>
+            // 2. Use interior mutability (RwLock) for filter manager's mutable state
             Arc::new(Box::new(ExpressionMessageFilter::new(
                 Some(subscription_data.clone()),
                 consumer_filter_data,
-                Arc::new(self.broker_runtime_inner.consumer_filter_manager().clone()), /* need optimize */
+                Arc::new(self.broker_runtime_inner.consumer_filter_manager().clone()),
             )))
         };
 
@@ -977,7 +979,6 @@ where
             let broker_allow_flow_ctr_suspend = !(request.ext_fields().is_some()
                 && request.ext_fields().unwrap().contains_key(NO_SUSPEND_KEY));
             let opaque = request.opaque();
-            let instant = Instant::now();
             let response = pull_message_processor
                 .process_request_inner(
                     RequestCode::from(request.code()),
