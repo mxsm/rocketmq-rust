@@ -409,7 +409,12 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         timestamp: i64,
         boundary_type: BoundaryType,
     ) -> i64 {
-        todo!()
+        let logic = self.find_or_create_consume_queue(topic, queue_id);
+        let result_offset =
+            logic.get_offset_in_queue_by_time_with_boundary(timestamp, boundary_type);
+        result_offset
+            .max(logic.get_min_offset_in_queue())
+            .min(logic.get_max_offset_in_queue())
     }
 
     fn find_or_create_consume_queue(
