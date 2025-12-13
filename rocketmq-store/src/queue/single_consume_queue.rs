@@ -985,17 +985,11 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
         boundary_type: BoundaryType,
     ) -> i64 {
         let commit_log = self.message_store.get_commit_log();
-        let mapped_file = self.mapped_file_queue.get_consume_queue_mapped_file_by_time(
-            timestamp,
-            commit_log,
-            boundary_type,
-        );
+        let mapped_file = self
+            .mapped_file_queue
+            .get_consume_queue_mapped_file_by_time(timestamp, commit_log, boundary_type);
         if let Some(mapped_file) = mapped_file {
-            return self.binary_search_in_queue_by_time(
-                &mapped_file,
-                timestamp,
-                boundary_type,
-            );
+            return self.binary_search_in_queue_by_time(&mapped_file, timestamp, boundary_type);
         }
         -1
     }

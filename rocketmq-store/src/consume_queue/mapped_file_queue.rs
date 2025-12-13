@@ -551,8 +551,7 @@ impl MappedFileQueue {
             let mapped_file = &mfs[i];
 
             if mapped_file.get_start_timestamp() < 0 {
-                if let Some(select_result) =
-                    mapped_file.select_mapped_buffer(0, CQ_STORE_UNIT_SIZE)
+                if let Some(select_result) = mapped_file.select_mapped_buffer(0, CQ_STORE_UNIT_SIZE)
                 {
                     if let Some(ref buffer) = select_result.bytes {
                         if buffer.len() >= 12 {
