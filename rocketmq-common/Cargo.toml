@@ -72,6 +72,8 @@ form_urlencoded = "1.2.2"
 uuid = { workspace = true }
 cheetah-string = { workspace = true }
 
+opentelemetry = { workspace = true }
+
 [dev-dependencies]
 mockall = "0.14.0"
 criterion = { version = "0.8", features = ["html_reports"] }

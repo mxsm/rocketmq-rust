@@ -15,4 +15,5 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-mod metrics_exporter_type;
+pub mod metrics_exporter_type;
+pub mod nop_long_counter;
