@@ -18,3 +18,4 @@
 pub mod metrics_exporter_type;
 pub mod nop_long_counter;
 pub mod nop_long_histogram;
+pub mod nop_observable_long_gauge;
