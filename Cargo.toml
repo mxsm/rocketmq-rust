@@ -98,3 +98,6 @@ cheetah-string = { version = "0.1.7", features = ["serde", "bytes"] }
 flate2 = "1.1.7"
 dashmap = "6.1.0"
 strum = { version = "0.27.2", features = ["derive"] }
+
+opentelemetry = { version = "0.31", features = ["metrics"] }
+opentelemetry_sdk = { version = "0.31", features = ["metrics", "rt-tokio"] }
