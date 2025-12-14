@@ -17,3 +17,4 @@
 
 pub mod metrics_exporter_type;
 pub mod nop_long_counter;
+pub mod nop_long_histogram;
