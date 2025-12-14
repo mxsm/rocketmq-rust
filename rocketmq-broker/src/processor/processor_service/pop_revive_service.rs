@@ -56,6 +56,7 @@ use tracing::info;
 use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
+use crate::metrics::pop_metrics_manager;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 
 /// Maximum number of concurrent in-flight revive requests
@@ -178,6 +179,12 @@ impl<MS: MessageStore> PopReviveService<MS> {
         self.broker_runtime_inner
             .pop_inflight_message_counter()
             .decrement_in_flight_message_num_checkpoint(pop_check_point);
+
+        // Record observability metrics
+        pop_metrics_manager::inc_pop_revive_retry_message_count(
+            pop_check_point,
+            put_message_result.put_message_status(),
+        );
 
         self.broker_runtime_inner
             .broker_stats_manager()
@@ -563,7 +570,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                         .into(),
                         point.clone(),
                     );
-                    //  PopMetricsManager::inc_pop_revive_ck_get_count(&point, self.queue_id);
+                    pop_metrics_manager::inc_pop_revive_ck_get_count(&point, self.queue_id);
                     if first_rt == 0 {
                         first_rt = point.get_revive_time() as u64;
                     }
@@ -589,7 +596,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                             continue;
                         }
                     };
-                    // PopMetricsManager::inc_pop_revive_ack_get_count(&ack_msg, self.queue_id);
+                    pop_metrics_manager::inc_pop_revive_ack_get_count(&ack_msg, self.queue_id);
                     let merge_key = CheetahString::from_string(format!(
                         "{}{}{}{}{}{}",
                         ack_msg.topic,
@@ -657,7 +664,10 @@ impl<MS: MessageStore> PopReviveService<MS> {
                             continue;
                         }
                     };
-                    // PopMetricsManager::inc_pop_revive_ack_get_count(&b_ack_msg, self.queue_id);
+                    pop_metrics_manager::inc_pop_revive_ack_get_count(
+                        &b_ack_msg.ack_msg,
+                        self.queue_id,
+                    );
                     let merge_key = CheetahString::from_string(format!(
                         "{}{}{}{}{}{}",
                         b_ack_msg.ack_msg.topic,
