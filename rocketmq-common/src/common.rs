@@ -55,6 +55,7 @@ pub mod statistics;
 pub mod stats;
 pub mod sys_flag;
 
+pub mod metrics;
 pub mod system_clock;
 pub mod thread;
 pub mod topic;
