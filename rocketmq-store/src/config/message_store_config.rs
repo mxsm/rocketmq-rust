@@ -278,6 +278,9 @@ mod defaults {
     pub fn ha_listen_port() -> usize {
         10912
     }
+    pub fn default_query_max_num() -> usize {
+        32
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -571,7 +574,7 @@ pub struct MessageStoreConfig {
     #[serde(default = "defaults::os_page_cache_busy_timeout_mills")]
     pub os_page_cache_busy_timeout_mills: u64,
 
-    #[serde(default)]
+    #[serde(default = "defaults::default_query_max_num")]
     pub default_query_max_num: usize,
 
     #[serde(default)]
@@ -921,7 +924,7 @@ impl Default for MessageStoreConfig {
             duplication_enable: false,
             disk_fall_recorded: false,
             os_page_cache_busy_timeout_mills: 1000,
-            default_query_max_num: 0,
+            default_query_max_num: 32,
             transient_store_pool_enable: false,
             transient_store_pool_size: 0,
             fast_fail_if_no_buffer_in_store_pool: false,
