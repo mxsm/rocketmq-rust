@@ -17,6 +17,7 @@
 
 pub(crate) mod broker_metrics_constant;
 pub(crate) mod consumer_attr;
+pub(crate) mod invocation_status;
 pub(crate) mod pop_metrics_constant;
 pub(crate) mod pop_revive_message_type;
 pub(crate) mod producer_attr;
