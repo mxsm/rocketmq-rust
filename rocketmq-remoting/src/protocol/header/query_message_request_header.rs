@@ -22,7 +22,7 @@ use serde::Serialize;
 
 use crate::rpc::topic_request_header::TopicRequestHeader;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryMessageRequestHeader {
     #[required]
