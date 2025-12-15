@@ -491,9 +491,10 @@ where
         let revive_qid = if request_header.order.unwrap_or(false) {
             POP_ORDER_REVIVE_QUEUE
         } else {
-            (self.ck_message_number.fetch_add(1, Ordering::AcqRel)
-                % self.broker_runtime_inner.broker_config().revive_queue_num as i64)
-                .abs() as i32
+            let revive_queue_num =
+                self.broker_runtime_inner.broker_config().revive_queue_num as i64;
+            let ck_num = self.ck_message_number.fetch_add(1, Ordering::AcqRel);
+            ((ck_num % revive_queue_num + revive_queue_num) % revive_queue_num) as i32
         };
         let mut get_message_result = ArcMut::new(GetMessageResult::new_result_size(
             request_header.max_msg_nums as usize,
@@ -898,22 +899,30 @@ where
             .try_lock_with_key(lock_key.clone())
             .await
         {
-            return self
-                .broker_runtime_inner
-                .message_store()
-                .unwrap()
-                .get_max_offset_in_queue(topic, queue_id)
-                - offset
-                + rest_num;
+            let message_store = match self.broker_runtime_inner.message_store() {
+                Some(store) => store,
+                None => {
+                    warn!(
+                        "Message store not initialized, topic={}, group={}",
+                        topic, request_header.consumer_group
+                    );
+                    return rest_num;
+                }
+            };
+            return message_store.get_max_offset_in_queue(topic, queue_id) - offset + rest_num;
         }
         if self.is_pop_should_stop(topic, &request_header.consumer_group, queue_id) {
-            let result = self
-                .broker_runtime_inner
-                .message_store()
-                .unwrap()
-                .get_max_offset_in_queue(topic, queue_id)
-                - offset
-                + rest_num;
+            let message_store = match self.broker_runtime_inner.message_store() {
+                Some(store) => store,
+                None => {
+                    warn!(
+                        "Message store not initialized, topic={}, group={}",
+                        topic, request_header.consumer_group
+                    );
+                    return rest_num;
+                }
+            };
+            let result = message_store.get_max_offset_in_queue(topic, queue_id) - offset + rest_num;
             self.queue_lock_manager()
                 .unlock_with_key(lock_key.clone())
                 .await;
@@ -954,22 +963,39 @@ where
         }
 
         if get_message_result.message_mapped_list().len() >= request_header.max_msg_nums as usize {
-            let result = self
-                .broker_runtime_inner
-                .message_store()
-                .unwrap()
-                .get_max_offset_in_queue(topic, queue_id)
-                - offset
-                + rest_num;
+            let message_store = match self.broker_runtime_inner.message_store() {
+                Some(store) => store,
+                None => {
+                    warn!(
+                        "Message store not initialized, topic={}, group={}",
+                        topic, request_header.consumer_group
+                    );
+                    self.queue_lock_manager()
+                        .unlock_with_key(lock_key.clone())
+                        .await;
+                    return rest_num;
+                }
+            };
+            let result = message_store.get_max_offset_in_queue(topic, queue_id) - offset + rest_num;
             self.queue_lock_manager()
                 .unlock_with_key(lock_key.clone())
                 .await;
             return result;
         }
-        let get_message_result_inner = self
-            .broker_runtime_inner
-            .message_store()
-            .unwrap()
+        let message_store = match self.broker_runtime_inner.message_store() {
+            Some(store) => store,
+            None => {
+                warn!(
+                    "Message store not initialized, topic={}, group={}",
+                    topic, request_header.consumer_group
+                );
+                self.queue_lock_manager()
+                    .unlock_with_key(lock_key.clone())
+                    .await;
+                return rest_num;
+            }
+        };
+        let get_message_result_inner = message_store
             .get_message(
                 &request_header.consumer_group,
                 topic,
@@ -1004,19 +1030,30 @@ where
                                     value.next_begin_offset(),
                                 );
                             atomic_offset.store(value.next_begin_offset(), Ordering::Release);
-                            self.broker_runtime_inner
-                                .message_store()
-                                .unwrap()
-                                .get_message(
-                                    &request_header.consumer_group,
-                                    topic,
-                                    queue_id,
-                                    offset,
-                                    request_header.max_msg_nums as i32
-                                        - get_message_result.message_mapped_list().len() as i32,
-                                    message_filter,
-                                )
-                                .await
+                            match self.broker_runtime_inner.message_store() {
+                                Some(store) => {
+                                    store
+                                        .get_message(
+                                            &request_header.consumer_group,
+                                            topic,
+                                            queue_id,
+                                            offset,
+                                            request_header.max_msg_nums as i32
+                                                - get_message_result.message_mapped_list().len()
+                                                    as i32,
+                                            message_filter,
+                                        )
+                                        .await
+                                }
+                                None => {
+                                    warn!(
+                                        "Message store not initialized during offset adjustment, \
+                                         topic={}, group={}",
+                                        topic, request_header.consumer_group
+                                    );
+                                    Some(value)
+                                }
+                            }
                         }
                         _ => Some(value),
                     }
@@ -1025,11 +1062,17 @@ where
         };
         match result {
             None => {
-                let num = self
-                    .broker_runtime_inner
-                    .message_store()
-                    .unwrap()
-                    .get_max_offset_in_queue(topic, queue_id)
+                let message_store = match self.broker_runtime_inner.message_store() {
+                    Some(store) => store,
+                    None => {
+                        warn!(
+                            "Message store not initialized, topic={}, group={}",
+                            topic, request_header.consumer_group
+                        );
+                        return atomic_rest_num.load(Ordering::Acquire);
+                    }
+                };
+                let num = message_store.get_max_offset_in_queue(topic, queue_id)
                     - atomic_offset.load(Ordering::Acquire)
                     + atomic_rest_num.load(Ordering::Acquire);
                 atomic_rest_num.store(num, Ordering::Release);
@@ -1067,7 +1110,7 @@ where
                             queue_id,
                             final_offset,
                             &result_inner,
-                            pop_time as i64,
+                            pop_time,
                             self.broker_runtime_inner
                                 .broker_config()
                                 .broker_name
@@ -1091,6 +1134,16 @@ where
                         queue_id,
                         result_inner.message_queue_offset().as_slice(),
                     );
+                    if self.broker_runtime_inner.broker_config().enable_pop_log {
+                        info!(
+                            topic = %topic,
+                            group = %request_header.consumer_group,
+                            queue_id = queue_id,
+                            msg_count = result_inner.message_count(),
+                            start_offset = final_offset,
+                            "PopMessage succeeded"
+                        );
+                    }
                 } else if let Some(status) = result_inner.status() {
                     if matches!(
                         status,
@@ -1228,12 +1281,12 @@ where
         queue_id: i32,
         offset: i64,
         get_message_tmp_result: &GetMessageResult,
-        pop_time: i64,
+        pop_time: u64,
         broker_name: &str,
     ) -> bool {
         let mut ck = PopCheckPoint {
             start_offset: offset,
-            pop_time,
+            pop_time: pop_time as i64,
             invisible_time: request_header.invisible_time as i64,
             bit_map: 0,
             num: get_message_tmp_result.message_mapped_list().len() as u8,
