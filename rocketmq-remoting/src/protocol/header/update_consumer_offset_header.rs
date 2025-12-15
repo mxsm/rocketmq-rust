@@ -211,6 +211,7 @@ mod tests {
     use super::*;
     use crate::protocol::command_custom_header::CommandCustomHeader;
     use crate::protocol::command_custom_header::FromMap;
+    use crate::rpc::rpc_request_header::RpcRequestHeader;
 
     #[test]
     fn update_consumer_offset_request_header_serializes_correctly() {
@@ -319,5 +320,176 @@ mod tests {
 
         let result = <UpdateConsumerOffsetRequestHeader as FromMap>::from(&map);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn topic_request_header_trait_set_and_get_lo() {
+        let mut header = UpdateConsumerOffsetRequestHeader {
+            consumer_group: CheetahString::from_static_str("test_group"),
+            topic: CheetahString::from_static_str("test_topic"),
+            queue_id: 0,
+            commit_offset: 0,
+            topic_request_header: Some(TopicRequestHeader::default()),
+        };
+
+        header.set_lo(Some(true));
+        assert_eq!(header.lo(), Some(true));
+
+        header.set_lo(Some(false));
+        assert_eq!(header.lo(), Some(false));
+
+        header.set_lo(None);
+        assert_eq!(header.lo(), None);
+
+        let mut header = UpdateConsumerOffsetRequestHeader {
+            consumer_group: CheetahString::from_static_str("test_group"),
+            topic: CheetahString::from_static_str("test_topic"),
+            queue_id: 0,
+            commit_offset: 0,
+            topic_request_header: None,
+        };
+
+        header.set_lo(Some(true));
+        assert_eq!(header.lo(), None);
+    }
+
+    #[test]
+    fn topic_request_header_trait_set_and_get_topic() {
+        let mut header = UpdateConsumerOffsetRequestHeader::default();
+
+        header.set_topic(CheetahString::from_static_str("new_topic"));
+        assert_eq!(header.topic(), "new_topic");
+    }
+
+    #[test]
+    fn topic_request_header_trait_set_and_get_broker_name() {
+        let mut header = UpdateConsumerOffsetRequestHeader {
+            consumer_group: CheetahString::from_static_str("test_group"),
+            topic: CheetahString::from_static_str("test_topic"),
+            queue_id: 0,
+            commit_offset: 0,
+            topic_request_header: Some(TopicRequestHeader {
+                lo: None,
+                rpc: Some(RpcRequestHeader::default()),
+            }),
+        };
+
+        header.set_broker_name(CheetahString::from_static_str("new_broker"));
+        assert_eq!(
+            header.broker_name(),
+            Some(&CheetahString::from_static_str("new_broker"))
+        );
+
+        let mut header = UpdateConsumerOffsetRequestHeader {
+            consumer_group: CheetahString::from_static_str("test_group"),
+            topic: CheetahString::from_static_str("test_topic"),
+            queue_id: 0,
+            commit_offset: 0,
+            topic_request_header: None,
+        };
+
+        header.set_broker_name(CheetahString::from_static_str("new_broker"));
+        assert_eq!(header.broker_name(), None);
+    }
+
+    #[test]
+    fn topic_request_header_trait_set_and_get_namespace() {
+        let mut header = UpdateConsumerOffsetRequestHeader {
+            consumer_group: CheetahString::from_static_str("test_group"),
+            topic: CheetahString::from_static_str("test_topic"),
+            queue_id: 0,
+            commit_offset: 0,
+            topic_request_header: Some(TopicRequestHeader {
+                lo: None,
+                rpc: Some(RpcRequestHeader::default()),
+            }),
+        };
+
+        header.set_namespace(CheetahString::from_static_str("new_namespace"));
+        assert_eq!(header.namespace(), Some("new_namespace"));
+
+        let mut header = UpdateConsumerOffsetRequestHeader {
+            consumer_group: CheetahString::from_static_str("test_group"),
+            topic: CheetahString::from_static_str("test_topic"),
+            queue_id: 0,
+            commit_offset: 0,
+            topic_request_header: None,
+        };
+
+        header.set_namespace(CheetahString::from_static_str("new_namespace"));
+        assert_eq!(header.namespace(), None);
+    }
+
+    #[test]
+    fn topic_request_header_trait_set_and_get_namespaced() {
+        let mut header = UpdateConsumerOffsetRequestHeader {
+            consumer_group: CheetahString::from_static_str("test_group"),
+            topic: CheetahString::from_static_str("test_topic"),
+            queue_id: 0,
+            commit_offset: 0,
+            topic_request_header: Some(TopicRequestHeader {
+                lo: None,
+                rpc: Some(RpcRequestHeader::default()),
+            }),
+        };
+
+        header.set_namespaced(true);
+        assert_eq!(header.namespaced(), Some(true));
+
+        header.set_namespaced(false);
+        assert_eq!(header.namespaced(), Some(false));
+
+        let mut header = UpdateConsumerOffsetRequestHeader {
+            consumer_group: CheetahString::from_static_str("test_group"),
+            topic: CheetahString::from_static_str("test_topic"),
+            queue_id: 0,
+            commit_offset: 0,
+            topic_request_header: None,
+        };
+
+        header.set_namespaced(true);
+        assert_eq!(header.namespaced(), None);
+    }
+
+    #[test]
+    fn topic_request_header_trait_set_and_get_oneway() {
+        let mut header = UpdateConsumerOffsetRequestHeader {
+            consumer_group: CheetahString::from_static_str("test_group"),
+            topic: CheetahString::from_static_str("test_topic"),
+            queue_id: 0,
+            commit_offset: 0,
+            topic_request_header: Some(TopicRequestHeader {
+                lo: None,
+                rpc: Some(RpcRequestHeader::default()),
+            }),
+        };
+
+        header.set_oneway(true);
+        assert_eq!(header.oneway(), Some(true));
+
+        header.set_oneway(false);
+        assert_eq!(header.oneway(), Some(false));
+
+        let mut header = UpdateConsumerOffsetRequestHeader {
+            consumer_group: CheetahString::from_static_str("test_group"),
+            topic: CheetahString::from_static_str("test_topic"),
+            queue_id: 0,
+            commit_offset: 0,
+            topic_request_header: None,
+        };
+
+        header.set_oneway(true);
+        assert_eq!(header.oneway(), None);
+    }
+
+    #[test]
+    fn topic_request_header_trait_set_and_get_queue_id() {
+        let mut header = UpdateConsumerOffsetRequestHeader::default();
+
+        header.set_queue_id(10);
+        assert_eq!(header.queue_id(), 10);
+
+        header.set_queue_id(-1);
+        assert_eq!(header.queue_id(), -1);
     }
 }
