@@ -121,90 +121,32 @@ impl StatsItem {
         Self::compute_stats_data(Arc::clone(&self.cs_list_day))
     }
 
-    pub fn init(&self) {
-        let cs_list_minute = Arc::clone(&self.cs_list_minute);
-        let cs_list_minute_clone = Arc::clone(&self.cs_list_minute);
-        let cs_list_hour = Arc::clone(&self.cs_list_hour);
-        let cs_list_hour_clone = Arc::clone(&self.cs_list_hour);
-        let cs_list_day = Arc::clone(&self.cs_list_day);
-        let cs_list_day_clone = Arc::clone(&self.cs_list_day);
-        let stats_name = self.stats_name.clone();
-        let stats_key = self.stats_key.clone();
-
-        // Clone Arc references to value and times for sampling threads
-        let value_for_seconds = Arc::clone(&self.value);
-        let times_for_seconds = Arc::clone(&self.times);
-        let value_for_minutes = Arc::clone(&self.value);
-        let times_for_minutes = Arc::clone(&self.times);
-        let value_for_hour = Arc::clone(&self.value);
-        let times_for_hour = Arc::clone(&self.times);
-
-        thread::spawn(move || loop {
-            thread::sleep(Duration::from_secs(10));
-            let current_value = value_for_seconds.load(Ordering::Relaxed);
-            let current_times = times_for_seconds.load(Ordering::Relaxed);
-            Self::sampling_in_seconds(cs_list_minute.clone(), current_value, current_times);
-        });
-
-        thread::spawn(move || loop {
-            thread::sleep(Duration::from_secs(600));
-            let current_value = value_for_minutes.load(Ordering::Relaxed);
-            let current_times = times_for_minutes.load(Ordering::Relaxed);
-            Self::sampling_in_minutes(cs_list_hour.clone(), current_value, current_times);
-        });
-
-        thread::spawn(move || loop {
-            thread::sleep(Duration::from_secs(3600));
-            let current_value = value_for_hour.load(Ordering::Relaxed);
-            let current_times = times_for_hour.load(Ordering::Relaxed);
-            Self::sampling_in_hour(cs_list_day.clone(), current_value, current_times);
-        });
-
-        let stats_name_clone = stats_name.clone();
-        let stats_key_clone = stats_key.clone();
-        thread::spawn(move || loop {
-            let sleep_time = Self::compute_next_minutes_time_millis()
-                - SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64;
-            thread::sleep(Duration::from_millis(sleep_time));
-            Self::print_at_minutes(
-                &stats_name_clone,
-                &stats_key_clone,
-                cs_list_minute_clone.clone(),
-            );
-        });
-
-        let stats_name_clone = stats_name.clone();
-        let stats_key_clone = stats_key.clone();
-        thread::spawn(move || loop {
-            let sleep_time = Self::compute_next_hour_time_millis()
-                - SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64;
-            thread::sleep(Duration::from_millis(sleep_time));
-            Self::print_at_hour(
-                &stats_name_clone,
-                &stats_key_clone,
-                cs_list_hour_clone.clone(),
-            );
-        });
-
-        thread::spawn(move || loop {
-            let sleep_time = Self::compute_next_morning_time_millis()
-                - SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64
-                - 2000;
-            thread::sleep(Duration::from_millis(sleep_time));
-            Self::print_at_day(&stats_name, &stats_key, cs_list_day_clone.clone());
-        });
+    /// Perform second-level sampling
+    pub fn sampling_in_seconds(&self) {
+        let current_value = self.value.load(Ordering::Relaxed);
+        let current_times = self.times.load(Ordering::Relaxed);
+        Self::sampling_in_seconds_internal(
+            Arc::clone(&self.cs_list_minute),
+            current_value,
+            current_times,
+        );
     }
 
-    pub fn sampling_in_seconds(
+    /// Perform minute-level sampling
+    pub fn sampling_in_minutes_level(&self) {
+        let current_value = self.value.load(Ordering::Relaxed);
+        let current_times = self.times.load(Ordering::Relaxed);
+        Self::sampling_in_minutes(Arc::clone(&self.cs_list_hour), current_value, current_times);
+    }
+
+    /// Perform hour-level sampling
+    pub fn sampling_in_hour_level(&self) {
+        let current_value = self.value.load(Ordering::Relaxed);
+        let current_times = self.times.load(Ordering::Relaxed);
+        Self::sampling_in_hour(Arc::clone(&self.cs_list_day), current_value, current_times);
+    }
+
+    pub fn sampling_in_seconds_internal(
         cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>,
         current_value: u64,
         current_times: u64,
@@ -494,14 +436,7 @@ mod tests {
         stats.increment(300);
 
         // Perform manual sampling
-        let current_value = stats.get_value();
-        let current_times = stats.get_times();
-
-        StatsItem::sampling_in_seconds(
-            Arc::clone(&stats.cs_list_minute),
-            current_value,
-            current_times,
-        );
+        stats.sampling_in_seconds();
 
         // Verify snapshot contains non-zero values
         let snapshot = stats.get_stats_data_in_minute();
