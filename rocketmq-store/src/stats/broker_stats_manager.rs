@@ -15,10 +15,13 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
+use parking_lot::Mutex;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::statistics::state_getter::StateGetter;
 use rocketmq_common::common::statistics::statistics_item::StatisticsItem;
@@ -31,10 +34,16 @@ use rocketmq_common::common::statistics::statistics_manager::StatisticsManager;
 use rocketmq_common::common::stats::moment_stats_item_set::MomentStatsItemSet;
 use rocketmq_common::common::stats::stats_item_set::StatsItemSet;
 use rocketmq_common::common::stats::Stats;
+use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
+use tokio::time::Duration;
+use tracing::info;
 use tracing::warn;
 
+type TaskId = u64;
+
 pub struct BrokerStatsManager {
-    stats_table: Arc<parking_lot::RwLock<HashMap<String, StatsItemSet>>>,
+    stats_table: Arc<DashMap<String, StatsItemSet>>,
     cluster_name: String,
     enable_queue_stat: bool,
     moment_stats_item_set_fall_size: Option<Arc<MomentStatsItemSet>>,
@@ -43,6 +52,8 @@ pub struct BrokerStatsManager {
     producer_state_getter: Option<Arc<dyn StateGetter>>,
     consumer_state_getter: Option<Arc<dyn StateGetter>>,
     broker_config: Option<Arc<BrokerConfig>>,
+    scheduler: Option<Arc<ScheduledTaskManager>>,
+    task_ids: Arc<Mutex<Vec<TaskId>>>,
 }
 
 impl BrokerStatsManager {
@@ -101,12 +112,95 @@ impl BrokerStatsManager {
 impl BrokerStatsManager {
     #[inline]
     pub fn start(&self) {
-        //nothing to do
+        if let Some(scheduler) = &self.scheduler {
+            self.start_sampling_tasks(scheduler);
+            info!("BrokerStatsManager started with scheduled tasks");
+        } else {
+            warn!("ScheduledTaskManager not provided, sampling tasks not started");
+        }
+    }
+
+    /// Start all periodic sampling tasks
+    fn start_sampling_tasks(&self, scheduler: &Arc<ScheduledTaskManager>) {
+        // Task 1: Sample every 10 seconds for minute-level statistics
+        let stats_table = Arc::clone(&self.stats_table);
+        let task_id = scheduler.add_fixed_rate_task(
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+            move |_cancel| {
+                let stats_table = Arc::clone(&stats_table);
+                async move {
+                    for entry in stats_table.iter() {
+                        entry.value().sampling_in_minutes();
+                    }
+                    Ok(())
+                }
+            },
+        );
+        self.task_ids.lock().push(task_id);
+
+        // Task 2: Sample every minute (aligned to minute boundary)
+        let stats_table = Arc::clone(&self.stats_table);
+        let initial_delay = Self::compute_initial_delay_to_next_minute();
+        let task_id =
+            scheduler.add_fixed_rate_task(initial_delay, Duration::from_secs(60), move |_cancel| {
+                let stats_table = Arc::clone(&stats_table);
+                async move {
+                    info!("Executing minute-level sampling for all stats");
+                    for entry in stats_table.iter() {
+                        entry.value().sampling_in_minutes();
+                    }
+                    Ok(())
+                }
+            });
+        self.task_ids.lock().push(task_id);
+
+        // Task 3: Clean up expired stats every 10 minutes
+        let stats_table = Arc::clone(&self.stats_table);
+        let task_id = scheduler.add_fixed_rate_task(
+            Duration::from_secs(600),
+            Duration::from_secs(600),
+            move |_cancel| {
+                let stats_table = Arc::clone(&stats_table);
+                async move {
+                    info!("Cleaning expired statistics items");
+                    // TODO: Implement cleanup logic based on last access time
+                    Ok(())
+                }
+            },
+        );
+        self.task_ids.lock().push(task_id);
+
+        info!(
+            "Started {} scheduled tasks for BrokerStatsManager",
+            self.task_ids.lock().len()
+        );
+    }
+
+    /// Compute delay to next minute boundary
+    fn compute_initial_delay_to_next_minute() -> Duration {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        let next_minute = ((now / 60000) + 1) * 60000;
+        let delay_ms = next_minute - now;
+
+        Duration::from_millis(delay_ms)
     }
 
     #[inline]
     pub fn new(broker_config: Arc<BrokerConfig>) -> Self {
-        let stats_table = Arc::new(parking_lot::RwLock::new(HashMap::new()));
+        Self::new_with_scheduler(broker_config, None)
+    }
+
+    #[inline]
+    pub fn new_with_scheduler(
+        broker_config: Arc<BrokerConfig>,
+        scheduler: Option<Arc<ScheduledTaskManager>>,
+    ) -> Self {
+        let stats_table = Arc::new(DashMap::new());
         let enable_queue_stat = broker_config.enable_detail_stat;
         let cluster_name = broker_config
             .broker_identity
@@ -122,6 +216,8 @@ impl BrokerStatsManager {
             producer_state_getter: None,
             consumer_state_getter: None,
             broker_config: Some(broker_config),
+            scheduler,
+            task_ids: Arc::new(Mutex::new(Vec::new())),
         };
         broker_stats_manager.init();
         broker_stats_manager
@@ -133,11 +229,7 @@ impl BrokerStatsManager {
         cluster_name: String,
         enable_queue_stat: bool,
     ) -> Self {
-        let stats_table = Arc::new(parking_lot::RwLock::new(HashMap::new()));
-        let moment_stats_item_set_fall_size =
-            MomentStatsItemSet::new(Stats::GROUP_GET_FALL_SIZE.to_string());
-        let moment_stats_item_set_fall_time =
-            MomentStatsItemSet::new(Stats::GROUP_GET_FALL_TIME.to_string());
+        let stats_table = Arc::new(DashMap::new());
         let mut broker_stats_manager = BrokerStatsManager {
             stats_table,
             cluster_name,
@@ -148,6 +240,8 @@ impl BrokerStatsManager {
             producer_state_getter: None,
             consumer_state_getter: None,
             broker_config: Some(broker_config),
+            scheduler: None,
+            task_ids: Arc::new(Mutex::new(Vec::new())),
         };
         broker_stats_manager.init();
         broker_stats_manager
@@ -163,148 +257,148 @@ impl BrokerStatsManager {
             Stats::GROUP_GET_FALL_TIME.to_string(),
         )));
 
-        let enable_queue_stat = true; // replace with actual condition
+        let enable_queue_stat = self.enable_queue_stat;
 
         if enable_queue_stat {
-            self.stats_table.write().insert(
+            self.stats_table.insert(
                 Stats::QUEUE_PUT_NUMS.to_string(),
                 StatsItemSet::new(Stats::QUEUE_PUT_NUMS.to_string()),
             );
-            self.stats_table.write().insert(
+            self.stats_table.insert(
                 Stats::QUEUE_PUT_SIZE.to_string(),
                 StatsItemSet::new(Stats::QUEUE_PUT_SIZE.to_string()),
             );
-            self.stats_table.write().insert(
+            self.stats_table.insert(
                 Stats::QUEUE_GET_NUMS.to_string(),
                 StatsItemSet::new(Stats::QUEUE_GET_NUMS.to_string()),
             );
-            self.stats_table.write().insert(
+            self.stats_table.insert(
                 Stats::QUEUE_GET_SIZE.to_string(),
                 StatsItemSet::new(Stats::QUEUE_GET_SIZE.to_string()),
             );
         }
 
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Stats::TOPIC_PUT_NUMS.to_string(),
             StatsItemSet::new(Stats::TOPIC_PUT_NUMS.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Stats::TOPIC_PUT_SIZE.to_string(),
             StatsItemSet::new(Stats::TOPIC_PUT_SIZE.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Stats::GROUP_GET_NUMS.to_string(),
             StatsItemSet::new(Stats::GROUP_GET_NUMS.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Stats::GROUP_GET_SIZE.to_string(),
             StatsItemSet::new(Stats::GROUP_GET_SIZE.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Self::GROUP_ACK_NUMS.to_string(),
             StatsItemSet::new(Self::GROUP_ACK_NUMS.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Self::GROUP_CK_NUMS.to_string(),
             StatsItemSet::new(Self::GROUP_CK_NUMS.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Stats::GROUP_GET_LATENCY.to_string(),
             StatsItemSet::new(Stats::GROUP_GET_LATENCY.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Self::TOPIC_PUT_LATENCY.to_string(),
             StatsItemSet::new(Self::TOPIC_PUT_LATENCY.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Stats::SNDBCK_PUT_NUMS.to_string(),
             StatsItemSet::new(Stats::SNDBCK_PUT_NUMS.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Self::DLQ_PUT_NUMS.to_string(),
             StatsItemSet::new(Self::DLQ_PUT_NUMS.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Stats::BROKER_PUT_NUMS.to_string(),
             StatsItemSet::new(Stats::BROKER_PUT_NUMS.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Stats::BROKER_GET_NUMS.to_string(),
             StatsItemSet::new(Stats::BROKER_GET_NUMS.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Self::BROKER_ACK_NUMS.to_string(),
             StatsItemSet::new(Self::BROKER_ACK_NUMS.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Self::BROKER_CK_NUMS.to_string(),
             StatsItemSet::new(Self::BROKER_CK_NUMS.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Self::BROKER_GET_NUMS_WITHOUT_SYSTEM_TOPIC.to_string(),
             StatsItemSet::new(Self::BROKER_GET_NUMS_WITHOUT_SYSTEM_TOPIC.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Self::BROKER_PUT_NUMS_WITHOUT_SYSTEM_TOPIC.to_string(),
             StatsItemSet::new(Self::BROKER_PUT_NUMS_WITHOUT_SYSTEM_TOPIC.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Stats::GROUP_GET_FROM_DISK_NUMS.to_string(),
             StatsItemSet::new(Stats::GROUP_GET_FROM_DISK_NUMS.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Stats::GROUP_GET_FROM_DISK_SIZE.to_string(),
             StatsItemSet::new(Stats::GROUP_GET_FROM_DISK_SIZE.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Stats::BROKER_GET_FROM_DISK_NUMS.to_string(),
             StatsItemSet::new(Stats::BROKER_GET_FROM_DISK_NUMS.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Stats::BROKER_GET_FROM_DISK_SIZE.to_string(),
             StatsItemSet::new(Stats::BROKER_GET_FROM_DISK_SIZE.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Self::SNDBCK2DLQ_TIMES.to_string(),
             StatsItemSet::new(Self::SNDBCK2DLQ_TIMES.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Stats::COMMERCIAL_SEND_TIMES.to_string(),
             StatsItemSet::new(Stats::COMMERCIAL_SEND_TIMES.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Stats::COMMERCIAL_RCV_TIMES.to_string(),
             StatsItemSet::new(Stats::COMMERCIAL_RCV_TIMES.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Stats::COMMERCIAL_SEND_SIZE.to_string(),
             StatsItemSet::new(Stats::COMMERCIAL_SEND_SIZE.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Stats::COMMERCIAL_RCV_SIZE.to_string(),
             StatsItemSet::new(Stats::COMMERCIAL_RCV_SIZE.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Stats::COMMERCIAL_RCV_EPOLLS.to_string(),
             StatsItemSet::new(Stats::COMMERCIAL_RCV_EPOLLS.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Stats::COMMERCIAL_SNDBCK_TIMES.to_string(),
             StatsItemSet::new(Stats::COMMERCIAL_SNDBCK_TIMES.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Stats::COMMERCIAL_PERM_FAILURES.to_string(),
             StatsItemSet::new(Stats::COMMERCIAL_PERM_FAILURES.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Self::CONSUMER_REGISTER_TIME.to_string(),
             StatsItemSet::new(Self::CONSUMER_REGISTER_TIME.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Self::PRODUCER_REGISTER_TIME.to_string(),
             StatsItemSet::new(Self::PRODUCER_REGISTER_TIME.to_string()),
         );
-        self.stats_table.write().insert(
+        self.stats_table.insert(
             Self::CHANNEL_ACTIVITY.to_string(),
             StatsItemSet::new(Self::CHANNEL_ACTIVITY.to_string()),
         );
@@ -454,7 +548,7 @@ impl BrokerStatsManager {
     }
 
     #[inline]
-    pub fn get_stats_table(&self) -> Arc<parking_lot::RwLock<HashMap<String, StatsItemSet>>> {
+    pub fn get_stats_table(&self) -> Arc<DashMap<String, StatsItemSet>> {
         Arc::clone(&self.stats_table)
     }
 
@@ -496,64 +590,236 @@ impl BrokerStatsManager {
         queue_id: i32,
         fall_behind: i64,
     ) {
+        if let Some(fall_size_set) = &self.moment_stats_item_set_fall_size {
+            let stats_key = format!("{}@{}@{}", queue_id, topic, group);
+            let item = fall_size_set.get_and_create_stats_item(stats_key);
+            item.get_value()
+                .store(fall_behind, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     #[inline]
-    pub fn inc_topic_put_nums(&self, topic: &str, num: i32, times: i32) {}
+    pub fn inc_topic_put_nums(&self, topic: &str, num: i32, times: i32) {
+        if let Some(stats) = self.stats_table.get(Stats::TOPIC_PUT_NUMS) {
+            stats.add_value(topic, num, times);
+        }
+    }
 
     #[inline]
-    pub fn inc_topic_put_size(&self, topic: &str, size: i32) {}
+    pub fn inc_topic_put_size(&self, topic: &str, size: i32) {
+        if let Some(stats) = self.stats_table.get(Stats::TOPIC_PUT_SIZE) {
+            stats.add_value(topic, size, 1);
+        }
+    }
 
     #[inline]
-    pub fn inc_group_get_nums(&self, group: &str, topic: &str, inc_value: i32) {}
-    #[inline]
-    pub fn inc_group_get_size(&self, group: &str, topic: &str, inc_value: i32) {}
+    pub fn inc_group_get_nums(&self, group: &str, topic: &str, inc_value: i32) {
+        let stats_key = build_stats_key(Some(topic), Some(group));
+        if let Some(stats) = self.stats_table.get(Stats::GROUP_GET_NUMS) {
+            stats.add_value(&stats_key, inc_value, 1);
+        }
+    }
 
     #[inline]
-    pub fn inc_group_ck_nums(&self, group: &str, topic: &str, inc_value: i32) {}
+    pub fn inc_group_get_size(&self, group: &str, topic: &str, inc_value: i32) {
+        let stats_key = build_stats_key(Some(topic), Some(group));
+        if let Some(stats) = self.stats_table.get(Stats::GROUP_GET_SIZE) {
+            stats.add_value(&stats_key, inc_value, 1);
+        }
+    }
 
     #[inline]
-    pub fn inc_group_ack_nums(&self, group: &str, topic: &str, inc_value: i32) {}
-    #[inline]
-    pub fn inc_broker_get_nums(&self, group: &str, inc_value: i32) {}
-    #[inline]
-    pub fn inc_broker_put_nums(&self, group: &str, inc_value: i32) {}
+    pub fn inc_group_ck_nums(&self, group: &str, topic: &str, inc_value: i32) {
+        let stats_key = build_stats_key(Some(topic), Some(group));
+        if let Some(stats) = self.stats_table.get(Self::GROUP_CK_NUMS) {
+            stats.add_value(&stats_key, inc_value, 1);
+        }
+    }
 
     #[inline]
-    pub fn on_topic_deleted(&self, topic: &CheetahString) {}
+    pub fn inc_group_ack_nums(&self, group: &str, topic: &str, inc_value: i32) {
+        let stats_key = build_stats_key(Some(topic), Some(group));
+        if let Some(stats) = self.stats_table.get(Self::GROUP_ACK_NUMS) {
+            stats.add_value(&stats_key, inc_value, 1);
+        }
+    }
 
     #[inline]
-    pub fn inc_queue_put_nums(&self, topic: &str, queue_id: i32, num: i32, times: i32) {}
+    pub fn inc_broker_get_nums(&self, topic: &str, inc_value: i32) {
+        if let Some(stats) = self.stats_table.get(Stats::BROKER_GET_NUMS) {
+            stats.add_value(&self.cluster_name, inc_value, 1);
+        }
+
+        if !TopicValidator::is_system_topic(topic) {
+            if let Some(stats) = self
+                .stats_table
+                .get(Self::BROKER_GET_NUMS_WITHOUT_SYSTEM_TOPIC)
+            {
+                stats.add_value(&self.cluster_name, inc_value, 1);
+            }
+        }
+    }
+
     #[inline]
-    pub fn inc_queue_put_size(&self, topic: &str, queue_id: i32, size: i32) {}
+    pub fn inc_broker_put_nums(&self, topic: &str, inc_value: i32) {
+        if let Some(stats) = self.stats_table.get(Stats::BROKER_PUT_NUMS) {
+            stats.add_value(&self.cluster_name, inc_value, 1);
+        }
+
+        if !TopicValidator::is_system_topic(topic) {
+            if let Some(stats) = self
+                .stats_table
+                .get(Self::BROKER_PUT_NUMS_WITHOUT_SYSTEM_TOPIC)
+            {
+                stats.add_value(&self.cluster_name, inc_value, 1);
+            }
+        }
+    }
+
     #[inline]
-    pub fn inc_topic_put_latency(&self, topic: &str, queue_id: i32, inc_value: i32) {}
+    pub fn on_topic_deleted(&self, topic: &CheetahString) {
+        let topic_str = topic.as_str();
+
+        if let Some(stats) = self.stats_table.get(Stats::TOPIC_PUT_NUMS) {
+            stats.del_value(topic_str);
+        }
+        if let Some(stats) = self.stats_table.get(Stats::TOPIC_PUT_SIZE) {
+            stats.del_value(topic_str);
+        }
+
+        if self.enable_queue_stat {
+            if let Some(stats) = self.stats_table.get(Stats::QUEUE_PUT_NUMS) {
+                stats.del_value_by_prefix_key(topic_str, "@");
+            }
+            if let Some(stats) = self.stats_table.get(Stats::QUEUE_PUT_SIZE) {
+                stats.del_value_by_prefix_key(topic_str, "@");
+            }
+            if let Some(stats) = self.stats_table.get(Stats::QUEUE_GET_NUMS) {
+                stats.del_value_by_prefix_key(topic_str, "@");
+            }
+            if let Some(stats) = self.stats_table.get(Stats::QUEUE_GET_SIZE) {
+                stats.del_value_by_prefix_key(topic_str, "@");
+            }
+        }
+
+        if let Some(stats) = self.stats_table.get(Stats::GROUP_GET_NUMS) {
+            stats.del_value_by_prefix_key(topic_str, "@");
+        }
+        if let Some(stats) = self.stats_table.get(Stats::GROUP_GET_SIZE) {
+            stats.del_value_by_prefix_key(topic_str, "@");
+        }
+        if let Some(stats) = self.stats_table.get(Self::GROUP_ACK_NUMS) {
+            stats.del_value_by_prefix_key(topic_str, "@");
+        }
+        if let Some(stats) = self.stats_table.get(Self::GROUP_CK_NUMS) {
+            stats.del_value_by_prefix_key(topic_str, "@");
+        }
+        if let Some(stats) = self.stats_table.get(Stats::SNDBCK_PUT_NUMS) {
+            stats.del_value_by_prefix_key(topic_str, "@");
+        }
+        if let Some(stats) = self.stats_table.get(Stats::GROUP_GET_LATENCY) {
+            stats.del_value_by_infix_key(topic_str, "@");
+        }
+        if let Some(stats) = self.stats_table.get(Self::TOPIC_PUT_LATENCY) {
+            stats.del_value_by_suffix_key(topic_str, "@");
+        }
+
+        if let Some(fall_size) = &self.moment_stats_item_set_fall_size {
+            fall_size.del_value_by_infix_key(topic_str, "@");
+        }
+        if let Some(fall_time) = &self.moment_stats_item_set_fall_time {
+            fall_time.del_value_by_infix_key(topic_str, "@");
+        }
+
+        info!("Deleted all stats for topic: {}", topic_str);
+    }
+
+    #[inline]
+    pub fn inc_queue_put_nums(&self, topic: &str, queue_id: i32, num: i32, times: i32) {
+        if self.enable_queue_stat {
+            let stats_key = format!("{}@{}", topic, queue_id);
+            if let Some(stats) = self.stats_table.get(Stats::QUEUE_PUT_NUMS) {
+                stats.add_value(&stats_key, num, times);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn inc_queue_put_size(&self, topic: &str, queue_id: i32, size: i32) {
+        if self.enable_queue_stat {
+            let stats_key = format!("{}@{}", topic, queue_id);
+            if let Some(stats) = self.stats_table.get(Stats::QUEUE_PUT_SIZE) {
+                stats.add_value(&stats_key, size, 1);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn inc_topic_put_latency(&self, topic: &str, queue_id: i32, inc_value: i32) {
+        let stats_key = format!("{}@{}", queue_id, topic);
+        if let Some(stats) = self.stats_table.get(Self::TOPIC_PUT_LATENCY) {
+            stats.add_value(&stats_key, inc_value, 1);
+        }
+    }
 
     #[inline]
     pub fn tps_group_get_nums(&self, group: &str, topic: &str) -> f64 {
         let stats_key = build_stats_key(Some(topic), Some(group));
-        match self.stats_table.read().get(Stats::GROUP_GET_NUMS) {
+        match self.stats_table.get(Stats::GROUP_GET_NUMS) {
             Some(stats) => stats.get_stats_data_in_minute(&stats_key).get_tps(),
             None => 0.0,
         }
     }
 
     #[inline]
-    pub fn inc_broker_ack_nums(&self, inc_value: i32) {}
-
-    pub fn shutdown(&self) {
-        warn!("BrokerStatsManager shutdown unimplemented");
+    pub fn inc_broker_ack_nums(&self, inc_value: i32) {
+        if let Some(stats) = self.stats_table.get(Self::BROKER_ACK_NUMS) {
+            stats.add_value(&self.cluster_name, inc_value, 1);
+        }
     }
 
-    pub fn inc_consumer_register_time(&self, inc_value: i32) {}
+    pub fn shutdown(&self) {
+        info!("Shutting down BrokerStatsManager...");
 
-    pub fn inc_channel_idle_num(&self) {}
+        if let Some(scheduler) = &self.scheduler {
+            for task_id in self.task_ids.lock().drain(..) {
+                scheduler.cancel_task(task_id);
+                info!("Cancelled task {}", task_id);
+            }
+        }
 
-    pub fn inc_channel_exception_num(&self) {}
+        info!("BrokerStatsManager shutdown complete");
+    }
 
-    pub fn inc_channel_close_num(&self) {}
+    pub fn inc_consumer_register_time(&self, inc_value: i32) {
+        if let Some(stats) = self.stats_table.get(Self::CONSUMER_REGISTER_TIME) {
+            stats.add_value(&self.cluster_name, inc_value, 1);
+        }
+    }
 
-    pub fn inc_channel_connect_num(&self) {}
+    pub fn inc_channel_idle_num(&self) {
+        if let Some(stats) = self.stats_table.get(Self::CHANNEL_ACTIVITY) {
+            stats.add_value(Self::CHANNEL_ACTIVITY_IDLE, 1, 1);
+        }
+    }
+
+    pub fn inc_channel_exception_num(&self) {
+        if let Some(stats) = self.stats_table.get(Self::CHANNEL_ACTIVITY) {
+            stats.add_value(Self::CHANNEL_ACTIVITY_EXCEPTION, 1, 1);
+        }
+    }
+
+    pub fn inc_channel_close_num(&self) {
+        if let Some(stats) = self.stats_table.get(Self::CHANNEL_ACTIVITY) {
+            stats.add_value(Self::CHANNEL_ACTIVITY_CLOSE, 1, 1);
+        }
+    }
+
+    pub fn inc_channel_connect_num(&self) {
+        if let Some(stats) = self.stats_table.get(Self::CHANNEL_ACTIVITY) {
+            stats.add_value(Self::CHANNEL_ACTIVITY_CONNECT, 1, 1);
+        }
+    }
 }
 
 #[inline]
