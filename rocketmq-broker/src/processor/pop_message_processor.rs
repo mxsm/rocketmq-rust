@@ -1244,12 +1244,10 @@ where
             ..Default::default()
         };
         for msg_queue_offset in get_message_tmp_result.message_queue_offset() {
-            // Add the difference between the offset of all pulled messages and the start offset
             ck.add_diff(((*msg_queue_offset) as i64 - offset) as i32);
         }
         let pop_buffer_merge_service_ref_mut = self.pop_buffer_merge_service.mut_from_ref();
 
-        // put check point into memory
         match pop_buffer_merge_service_ref_mut
             .add_ck(
                 &ck,
@@ -1259,19 +1257,16 @@ where
             )
             .await
         {
-            true => true,
-            false => {
-                // The in-memory matching fails (in-memory matching is not enabled),
-                // so put the Offset into both the memory and the disk.
-                pop_buffer_merge_service_ref_mut
-                    .add_ck_just_offset(
-                        ck,
-                        revive_qid,
-                        -1,
-                        get_message_tmp_result.next_begin_offset(),
-                    )
-                    .await
-            }
+            Ok(_) => true,
+            Err(_) => pop_buffer_merge_service_ref_mut
+                .add_ck_just_offset(
+                    ck,
+                    revive_qid,
+                    -1,
+                    get_message_tmp_result.next_begin_offset(),
+                )
+                .await
+                .is_ok(),
         }
     }
 
