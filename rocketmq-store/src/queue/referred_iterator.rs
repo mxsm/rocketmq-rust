@@ -15,9 +15,10 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-pub trait ReferredIterator<T>: Iterator<Item = T> + Send {
+/*pub trait ReferredIterator<T>: Iterator<Item = T> + Send {
     /// Release resources associated with this iterator
     fn release(&mut self);
 
     fn next_and_release(&mut self) -> Option<Self::Item>;
 }
+*/

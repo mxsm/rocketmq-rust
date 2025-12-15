@@ -34,7 +34,6 @@ use crate::filter::MessageFilter;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
-use crate::queue::referred_iterator::ReferredIterator;
 use crate::queue::CqUnit;
 use crate::queue::FileQueueLifeCycle;
 
@@ -331,15 +330,18 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
     }
 
     #[inline]
-    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn ReferredIterator<CqUnit>>> {
+    fn iterate_from(
+        &self,
+        start_index: i64,
+    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
         todo!()
     }
 
     fn iterate_from_with_count(
         &self,
         start_index: i64,
-        count: i32,
-    ) -> Option<Box<dyn ReferredIterator<CqUnit>>> {
+        _count: i32,
+    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
         todo!()
     }
 

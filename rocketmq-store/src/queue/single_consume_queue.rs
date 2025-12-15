@@ -48,7 +48,6 @@ use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::consume_queue_ext::ConsumeQueueExt;
 use crate::queue::multi_dispatch_utils::check_multi_dispatch_queue;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
-use crate::queue::referred_iterator::ReferredIterator;
 use crate::queue::CqUnit;
 use crate::queue::FileQueueLifeCycle;
 use crate::store_path_config_helper::get_store_path_consume_queue_ext;
@@ -1120,7 +1119,10 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
     }
 
     #[inline]
-    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn ReferredIterator<CqUnit>>> {
+    fn iterate_from(
+        &self,
+        start_index: i64,
+    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
         match self.get_index_buffer(start_index) {
             None => None,
             Some(value) => Some(Box::new(ConsumeQueueIterator {
@@ -1136,7 +1138,7 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
         &self,
         start_index: i64,
         _count: i32,
-    ) -> Option<Box<dyn ReferredIterator<CqUnit>>> {
+    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
         self.iterate_from(start_index)
     }
 
@@ -1169,20 +1171,6 @@ impl ConsumeQueueIterator {
             None => false,
             Some(value) => value.get(offset, cq_ext_unit),
         }
-    }
-}
-
-impl ReferredIterator<CqUnit> for ConsumeQueueIterator {
-    fn release(&mut self) {
-        // if let Some(mapped_file) = &mut self.smbr {
-        //     mapped_file.release();
-        // }
-    }
-
-    fn next_and_release(&mut self) -> Option<Self::Item> {
-        let cq_unit = self.next();
-        self.release();
-        cq_unit
     }
 }
 

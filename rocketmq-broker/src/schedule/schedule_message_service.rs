@@ -1034,9 +1034,6 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
             }
         }
 
-        // Release the iterator
-        buffer_cq.release();
-
         // Schedule the next task
         self.schedule_next_timer_task(next_offset, DELAY_FOR_A_WHILE);
 
