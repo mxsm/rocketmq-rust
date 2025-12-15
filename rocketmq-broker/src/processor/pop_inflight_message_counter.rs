@@ -163,18 +163,33 @@ impl PopInflightMessageCounter {
     ) {
         let key = Self::build_key(topic, group);
 
-        if let Some(queue_map) = self.topic_in_flight_message_num.get(&key) {
-            if let Some(counter_ref) = queue_map.get(&queue_id) {
-                let old_value = counter_ref.fetch_sub(delta, Ordering::SeqCst);
-
-                // Remove entry if count drops to 0 or below (matches Java behavior)
-                if old_value - delta <= 0 {
-                    queue_map.remove(&queue_id);
+        // Step 1: Decrement and check if should remove
+        let should_remove_queue = {
+            if let Some(queue_map) = self.topic_in_flight_message_num.get(&key) {
+                if let Some(counter_ref) = queue_map.get(&queue_id) {
+                    let old_value = counter_ref.fetch_sub(delta, Ordering::SeqCst);
+                    old_value - delta <= 0
+                } else {
+                    false
                 }
+            } else {
+                return; // Key doesn't exist, nothing to do
             }
+        };
 
-            // Remove topic@group entry if no queues remain (matches Java behavior)
-            if queue_map.is_empty() {
+        // Step 2: Remove queue entry if count <= 0 (no locks held)
+        if should_remove_queue {
+            let is_empty = {
+                if let Some(queue_map) = self.topic_in_flight_message_num.get(&key) {
+                    queue_map.remove(&queue_id);
+                    queue_map.is_empty()
+                } else {
+                    false
+                }
+            };
+
+            // Step 3: Remove topic@group entry if no queues remain
+            if is_empty {
                 self.topic_in_flight_message_num.remove(&key);
             }
         }
@@ -259,14 +274,17 @@ impl PopInflightMessageCounter {
     ) {
         let key = Self::build_key(topic, group);
 
-        if let Some(queue_map) = self.topic_in_flight_message_num.get(&key) {
-            queue_map.remove(&queue_id);
-
-            // Remove topic@group entry if no queues remain
-            if queue_map.is_empty() {
-                drop(queue_map); // Release read lock before write
-                self.topic_in_flight_message_num.remove(&key);
+        let should_remove_key = {
+            if let Some(queue_map) = self.topic_in_flight_message_num.get(&key) {
+                queue_map.remove(&queue_id);
+                queue_map.is_empty()
+            } else {
+                false
             }
+        };
+
+        if should_remove_key {
+            self.topic_in_flight_message_num.remove(&key);
         }
     }
 
