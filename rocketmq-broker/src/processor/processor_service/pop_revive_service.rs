@@ -161,8 +161,8 @@ impl<MS: MessageStore> PopReviveService<MS> {
         }
         msg_inner.properties_string =
             message_decoder::message_properties_to_string(msg_inner.get_properties());
-        self.add_retry_topic_if_not_exist(msg_inner.get_topic(), &pop_check_point.cid);
         let retry_topic = msg_inner.get_topic().clone();
+        self.add_retry_topic_if_not_exist(&retry_topic, &pop_check_point.cid);
         let put_message_result = self
             .broker_runtime_inner
             .escape_bridge_mut()
@@ -217,7 +217,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         {
             return;
         }
-        let mut topic_config = ArcMut::new(TopicConfig::new(topic.clone()));
+        let mut topic_config = TopicConfig::new(topic.clone());
         topic_config.read_queue_nums = PopAckConstants::RETRY_QUEUE_NUM as u32;
         topic_config.write_queue_nums = PopAckConstants::RETRY_QUEUE_NUM as u32;
         topic_config.topic_filter_type = TopicFilterType::SingleTag;
@@ -225,7 +225,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         topic_config.topic_sys_flag = 0;
         self.broker_runtime_inner
             .topic_config_manager_mut()
-            .update_topic_config(topic_config.clone());
+            .update_topic_config(ArcMut::new(topic_config));
         self.init_pop_retry_offset(topic, consumer_group);
     }
 
@@ -760,12 +760,12 @@ impl<MS: MessageStore> PopReviveService<MS> {
         point.set_start_offset(ack_msg.start_offset());
         point.set_pop_time(ack_msg.pop_time());
         point.set_queue_id(ack_msg.queue_id());
-        point.set_cid(ack_msg.consumer_group().clone());
-        point.set_topic(ack_msg.topic().clone());
+        point.cid = ack_msg.consumer_group().clone();
+        point.topic = ack_msg.topic().clone();
         point.set_num(0);
         point.set_bit_map(0);
         point.set_revive_offset(revive_offset);
-        point.set_broker_name(Some(ack_msg.broker_name().clone()));
+        point.broker_name = Some(ack_msg.broker_name().clone());
         point
     }
 
@@ -936,8 +936,8 @@ impl<MS: MessageStore> PopReviveService<MS> {
         new_ck.set_pop_time(old_ck.get_pop_time());
         new_ck.set_invisible_time(old_ck.get_invisible_time());
         new_ck.set_start_offset(pair.0);
-        new_ck.set_cid(old_ck.get_cid().clone());
-        new_ck.set_topic(old_ck.get_topic().clone());
+        new_ck.cid = old_ck.cid.clone();
+        new_ck.topic = old_ck.topic.clone();
         new_ck.set_queue_id(old_ck.get_queue_id());
         new_ck.set_broker_name(old_ck.get_broker_name().cloned());
         new_ck.add_diff(0);
