@@ -841,24 +841,31 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 continue;
             }
 
-            // may be need to optimize
-            let mut remove = vec![];
-            let length = this.inflight_revive_request_map.lock().await.len();
-            while length - remove.len() > MAX_INFLIGHT_REVIVE_REQUESTS {
-                tokio::time::sleep(tokio::time::Duration::from_millis(
-                    INFLIGHT_WAIT_INTERVAL_MS,
-                ))
-                .await;
-                let mut inflight_map = this.inflight_revive_request_map.lock().await;
-                let entry = match inflight_map.first_entry() {
-                    Some(e) => e,
-                    None => break,
-                };
-                let pair = entry.get();
-                let old_ck = entry.key();
-                if !pair.1 && (get_current_millis() - pair.0 as u64 > INFLIGHT_REVIVE_TIMEOUT_MS) {
-                    this.re_put_ck(old_ck, pair).await;
-                    remove.push(old_ck.clone());
+            // Wait for inflight requests to complete if limit exceeded
+            loop {
+                let (current_length, timeout_ck) = {
+                    let inflight_map = this.inflight_revive_request_map.lock().await;
+                    let len = inflight_map.len();
+
+                    // Find first timeout request
+                    let now = get_current_millis();
+                    let timeout = inflight_map
+                        .iter()
+                        .find(|(_, (timestamp, completed))| {
+                            !completed && (now - *timestamp as u64 > INFLIGHT_REVIVE_TIMEOUT_MS)
+                        })
+                        .map(|(ck, pair)| (ck.clone(), *pair));
+
+                    (len, timeout)
+                }; // Lock released here
+
+                if current_length <= MAX_INFLIGHT_REVIVE_REQUESTS {
+                    break;
+                }
+
+                if let Some((ck, pair)) = timeout_ck {
+                    this.re_put_ck(&ck, &pair).await;
+                    this.inflight_revive_request_map.lock().await.remove(&ck);
                     info!(
                         "stay too long, remove from reviveRequestMap, {}, {:?}, {}, {}",
                         pop_check_point.topic,
@@ -867,12 +874,13 @@ impl<MS: MessageStore> PopReviveService<MS> {
                         pop_check_point.start_offset
                     );
                 }
+
+                tokio::time::sleep(tokio::time::Duration::from_millis(
+                    INFLIGHT_WAIT_INTERVAL_MS,
+                ))
+                .await;
             }
-            let mut inflight_revive_request_map = this.inflight_revive_request_map.lock().await;
-            for ck in remove {
-                inflight_revive_request_map.remove(&ck);
-            }
-            // may be need to optimize
+
             Self::revive_msg_from_ck(this.clone(), pop_check_point).await;
 
             new_offset = pop_check_point.revive_offset;
@@ -1023,29 +1031,46 @@ impl<MS: MessageStore> PopReviveService<MS> {
             }
         }
 
+        // Mark request as completed
         {
             let mut inflight = this.inflight_revive_request_map.lock().await;
             if let Some(entry) = inflight.get_mut(pop_check_point) {
                 entry.1 = true;
             }
-            let keys: Vec<_> = inflight.keys().cloned().collect();
-            for old_ck in keys {
-                if let Some(pair) = inflight.get(&old_ck) {
-                    if pair.1 {
-                        this.broker_runtime_inner
-                            .consumer_offset_manager()
-                            .commit_offset(
-                                CheetahString::from_static_str(PopAckConstants::LOCAL_HOST),
-                                &CheetahString::from_static_str(PopAckConstants::REVIVE_GROUP),
-                                &this.revive_topic,
-                                this.queue_id,
-                                old_ck.get_revive_offset(),
-                            );
-                        inflight.remove(&old_ck);
+        } // Lock released
+
+        // Clean up completed requests and commit offsets
+        // CRITICAL: Must process in order (BTreeMap), stop at first incomplete
+        loop {
+            let ck_to_remove = {
+                let inflight = this.inflight_revive_request_map.lock().await;
+                // BTreeMap iterates in sorted order (by PopCheckPoint.start_offset)
+                if let Some((ck, (_timestamp, completed))) = inflight.iter().next() {
+                    if *completed {
+                        Some(ck.clone())
                     } else {
-                        break;
+                        None // Stop at first incomplete
                     }
+                } else {
+                    None
                 }
+            }; // Lock released
+
+            match ck_to_remove {
+                Some(ck) => {
+                    // Commit offset and remove
+                    this.broker_runtime_inner
+                        .consumer_offset_manager()
+                        .commit_offset(
+                            CheetahString::from_static_str(PopAckConstants::LOCAL_HOST),
+                            &CheetahString::from_static_str(PopAckConstants::REVIVE_GROUP),
+                            &this.revive_topic,
+                            this.queue_id,
+                            ck.get_revive_offset(),
+                        );
+                    this.inflight_revive_request_map.lock().await.remove(&ck);
+                }
+                None => break, // Stop when no more completed or hit incomplete
             }
         }
     }
