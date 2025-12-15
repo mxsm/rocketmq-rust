@@ -21,5 +21,46 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 pub struct GetEarliestMsgStoretimeResponseHeader {
+    #[required]
     pub timestamp: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json;
+
+    use super::*;
+
+    #[test]
+    fn get_earliest_msg_storetime_response_header_display_format() {
+        let header = GetEarliestMsgStoretimeResponseHeader {
+            timestamp: 1234567890,
+        };
+        assert_eq!(
+            format!("{:?}", header),
+            "GetEarliestMsgStoretimeResponseHeader { timestamp: 1234567890 }"
+        );
+    }
+
+    #[test]
+    fn get_earliest_msg_storetime_response_header_serialize() {
+        let header = GetEarliestMsgStoretimeResponseHeader {
+            timestamp: 1234567890,
+        };
+        let serialized = serde_json::to_string(&header).unwrap();
+        assert_eq!(serialized, r#"{"timestamp":1234567890}"#);
+    }
+
+    #[test]
+    fn get_earliest_msg_storetime_response_header_deserialize() {
+        let json = r#"{"timestamp":1234567890}"#;
+        let header: GetEarliestMsgStoretimeResponseHeader = serde_json::from_str(json).unwrap();
+        assert_eq!(header.timestamp, 1234567890);
+    }
+
+    #[test]
+    fn get_earliest_msg_storetime_response_header_default() {
+        let header = GetEarliestMsgStoretimeResponseHeader::default();
+        assert_eq!(header.timestamp, 0);
+    }
 }
