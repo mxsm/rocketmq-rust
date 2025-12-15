@@ -15,5 +15,5 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-pub mod consume_queue_ext;
+pub mod cq_ext_unit;
 pub mod mapped_file_queue;

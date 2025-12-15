@@ -21,7 +21,7 @@ use cheetah_string::CheetahString;
 use rocketmq_rust::ArcMut;
 use tracing::info;
 
-use crate::consume_queue::consume_queue_ext::CqExtUnit;
+use crate::consume_queue::cq_ext_unit::CqExtUnit;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 
 const END_BLANK_DATA_LENGTH: usize = 4;

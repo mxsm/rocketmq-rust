@@ -22,7 +22,7 @@ use cheetah_string::CheetahString;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::consume_queue::consume_queue_ext::CqExtUnit;
+use rocketmq_store::consume_queue::cq_ext_unit::CqExtUnit;
 use tokio::sync::Notify;
 use tokio::time::Instant;
 use tracing::info;

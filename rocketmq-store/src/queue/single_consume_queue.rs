@@ -39,7 +39,7 @@ use crate::base::dispatch_request::DispatchRequest;
 use crate::base::message_store::MessageStore;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::swappable::Swappable;
-use crate::consume_queue::consume_queue_ext::CqExtUnit;
+use crate::consume_queue::cq_ext_unit::CqExtUnit;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::filter::MessageFilter;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
