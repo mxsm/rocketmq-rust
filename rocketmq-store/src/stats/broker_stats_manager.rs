@@ -32,6 +32,7 @@ use rocketmq_common::common::statistics::statistics_item_state_getter::Statistic
 use rocketmq_common::common::statistics::statistics_kind_meta::StatisticsKindMeta;
 use rocketmq_common::common::statistics::statistics_manager::StatisticsManager;
 use rocketmq_common::common::stats::moment_stats_item_set::MomentStatsItemSet;
+use rocketmq_common::common::stats::stats_item::StatsItem;
 use rocketmq_common::common::stats::stats_item_set::StatsItemSet;
 use rocketmq_common::common::stats::Stats;
 use rocketmq_common::common::topic::TopicValidator;
@@ -574,12 +575,51 @@ impl BrokerStatsManager {
 
     #[inline]
     pub fn get_broker_puts_num_without_system_topic(&self) -> u64 {
-        0
+        if let Some(stats) = self
+            .stats_table
+            .get(Self::BROKER_PUT_NUMS_WITHOUT_SYSTEM_TOPIC)
+        {
+            stats.get_stats_data_in_minute(&self.cluster_name).get_sum()
+        } else {
+            0
+        }
     }
 
     #[inline]
     pub fn get_broker_gets_num_without_system_topic(&self) -> u64 {
-        0
+        if let Some(stats) = self
+            .stats_table
+            .get(Self::BROKER_GET_NUMS_WITHOUT_SYSTEM_TOPIC)
+        {
+            stats.get_stats_data_in_minute(&self.cluster_name).get_sum()
+        } else {
+            0
+        }
+    }
+
+    #[inline]
+    pub fn get_broker_put_nums(&self) -> u64 {
+        if let Some(stats) = self.stats_table.get(Stats::BROKER_PUT_NUMS) {
+            stats.get_stats_data_in_minute(&self.cluster_name).get_sum()
+        } else {
+            0
+        }
+    }
+
+    #[inline]
+    pub fn get_broker_get_nums(&self) -> u64 {
+        if let Some(stats) = self.stats_table.get(Stats::BROKER_GET_NUMS) {
+            stats.get_stats_data_in_minute(&self.cluster_name).get_sum()
+        } else {
+            0
+        }
+    }
+
+    #[inline]
+    pub fn get_stats_item(&self, stats_name: &str, stats_key: &str) -> Option<Arc<StatsItem>> {
+        self.stats_table
+            .get(stats_name)
+            .and_then(|stats_set| stats_set.get_stats_item(stats_key))
     }
 
     #[inline]
@@ -640,6 +680,22 @@ impl BrokerStatsManager {
     pub fn inc_group_ack_nums(&self, group: &str, topic: &str, inc_value: i32) {
         let stats_key = build_stats_key(Some(topic), Some(group));
         if let Some(stats) = self.stats_table.get(Self::GROUP_ACK_NUMS) {
+            stats.add_value(&stats_key, inc_value, 1);
+        }
+    }
+
+    #[inline]
+    pub fn inc_group_get_from_disk_nums(&self, group: &str, topic: &str, inc_value: i32) {
+        let stats_key = build_stats_key(Some(topic), Some(group));
+        if let Some(stats) = self.stats_table.get(Stats::GROUP_GET_FROM_DISK_NUMS) {
+            stats.add_value(&stats_key, inc_value, 1);
+        }
+    }
+
+    #[inline]
+    pub fn inc_group_get_from_disk_size(&self, group: &str, topic: &str, inc_value: i32) {
+        let stats_key = build_stats_key(Some(topic), Some(group));
+        if let Some(stats) = self.stats_table.get(Stats::GROUP_GET_FROM_DISK_SIZE) {
             stats.add_value(&stats_key, inc_value, 1);
         }
     }
@@ -735,6 +791,39 @@ impl BrokerStatsManager {
     }
 
     #[inline]
+    pub fn on_group_deleted(&self, group: &CheetahString) {
+        let group_str = group.as_str();
+
+        if let Some(stats) = self.stats_table.get(Stats::GROUP_GET_NUMS) {
+            stats.del_value_by_suffix_key(group_str, "@");
+        }
+        if let Some(stats) = self.stats_table.get(Stats::GROUP_GET_SIZE) {
+            stats.del_value_by_suffix_key(group_str, "@");
+        }
+        if let Some(stats) = self.stats_table.get(Self::GROUP_ACK_NUMS) {
+            stats.del_value_by_suffix_key(group_str, "@");
+        }
+        if let Some(stats) = self.stats_table.get(Self::GROUP_CK_NUMS) {
+            stats.del_value_by_suffix_key(group_str, "@");
+        }
+        if let Some(stats) = self.stats_table.get(Stats::SNDBCK_PUT_NUMS) {
+            stats.del_value_by_suffix_key(group_str, "@");
+        }
+        if let Some(stats) = self.stats_table.get(Stats::GROUP_GET_LATENCY) {
+            stats.del_value_by_suffix_key(group_str, "@");
+        }
+
+        if let Some(fall_size) = &self.moment_stats_item_set_fall_size {
+            fall_size.del_value_by_suffix_key(group_str, "@");
+        }
+        if let Some(fall_time) = &self.moment_stats_item_set_fall_time {
+            fall_time.del_value_by_suffix_key(group_str, "@");
+        }
+
+        info!("Deleted all stats for group: {}", group_str);
+    }
+
+    #[inline]
     pub fn inc_queue_put_nums(&self, topic: &str, queue_id: i32, num: i32, times: i32) {
         if self.enable_queue_stat {
             let stats_key = format!("{}@{}", topic, queue_id);
@@ -755,10 +844,54 @@ impl BrokerStatsManager {
     }
 
     #[inline]
+    pub fn inc_queue_get_nums(&self, topic: &str, queue_id: i32, num: i32, times: i32) {
+        if self.enable_queue_stat {
+            let stats_key = format!("{}@{}", topic, queue_id);
+            if let Some(stats) = self.stats_table.get(Stats::QUEUE_GET_NUMS) {
+                stats.add_value(&stats_key, num, times);
+            }
+        }
+    }
+
+    #[inline]
+    pub fn inc_queue_get_size(&self, topic: &str, queue_id: i32, size: i32) {
+        if self.enable_queue_stat {
+            let stats_key = format!("{}@{}", topic, queue_id);
+            if let Some(stats) = self.stats_table.get(Stats::QUEUE_GET_SIZE) {
+                stats.add_value(&stats_key, size, 1);
+            }
+        }
+    }
+
+    #[inline]
     pub fn inc_topic_put_latency(&self, topic: &str, queue_id: i32, inc_value: i32) {
         let stats_key = format!("{}@{}", queue_id, topic);
         if let Some(stats) = self.stats_table.get(Self::TOPIC_PUT_LATENCY) {
             stats.add_value(&stats_key, inc_value, 1);
+        }
+    }
+
+    #[inline]
+    pub fn inc_group_get_latency(&self, group: &str, topic: &str, queue_id: i32, inc_value: i32) {
+        let stats_key = format!("{}@{}@{}", queue_id, topic, group);
+        if let Some(stats) = self.stats_table.get(Stats::GROUP_GET_LATENCY) {
+            stats.add_rt_value(&stats_key, inc_value, 1);
+        }
+    }
+
+    #[inline]
+    pub fn record_disk_fall_behind_time(
+        &self,
+        group: &str,
+        topic: &str,
+        queue_id: i32,
+        fall_behind: i64,
+    ) {
+        if let Some(fall_time_set) = &self.moment_stats_item_set_fall_time {
+            let stats_key = format!("{}@{}@{}", queue_id, topic, group);
+            let item = fall_time_set.get_and_create_stats_item(stats_key);
+            item.get_value()
+                .store(fall_behind, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
@@ -778,6 +911,112 @@ impl BrokerStatsManager {
         }
     }
 
+    #[inline]
+    pub fn inc_broker_get_from_disk_nums(&self, inc_value: i32) {
+        if let Some(stats) = self.stats_table.get(Stats::BROKER_GET_FROM_DISK_NUMS) {
+            stats.add_value(&self.cluster_name, inc_value, 1);
+        }
+    }
+
+    #[inline]
+    pub fn inc_broker_get_from_disk_size(&self, inc_value: i32) {
+        if let Some(stats) = self.stats_table.get(Stats::BROKER_GET_FROM_DISK_SIZE) {
+            stats.add_value(&self.cluster_name, inc_value, 1);
+        }
+    }
+
+    #[inline]
+    pub fn inc_send_back_nums(&self, group: &str, topic: &str) {
+        let stats_key = build_stats_key(Some(topic), Some(group));
+        if let Some(stats) = self.stats_table.get(Stats::SNDBCK_PUT_NUMS) {
+            stats.add_value(&stats_key, 1, 1);
+        }
+    }
+
+    #[inline]
+    pub fn inc_dlq_stat_value(
+        &self,
+        key: &str,
+        owner: &str,
+        group: &str,
+        topic: &str,
+        msg_type: &str,
+        inc_value: i32,
+    ) {
+        let stats_key = build_commercial_stats_key(owner, topic, group, msg_type);
+        if let Some(stats) = self.stats_table.get(key) {
+            stats.add_value(&stats_key, inc_value, 1);
+        }
+    }
+
+    #[inline]
+    pub fn inc_commercial_value(
+        &self,
+        key: &str,
+        owner: &str,
+        group: &str,
+        topic: &str,
+        msg_type: &str,
+        inc_value: i32,
+    ) {
+        let stats_key = build_commercial_stats_key(owner, topic, group, msg_type);
+        if let Some(stats) = self.stats_table.get(key) {
+            stats.add_value(&stats_key, inc_value, 1);
+        }
+    }
+
+    #[inline]
+    pub fn inc_account_value(
+        &self,
+        key: &str,
+        account_owner_parent: &str,
+        account_owner_self: &str,
+        instance_id: &str,
+        topic: &str,
+        group: &str,
+        msg_type: &str,
+        inc_value: i32,
+    ) {
+        let stats_key = build_account_stats_key(
+            account_owner_parent,
+            account_owner_self,
+            instance_id,
+            topic,
+            group,
+            msg_type,
+        );
+        if let Some(stats) = self.stats_table.get(key) {
+            stats.add_value(&stats_key, inc_value, 1);
+        }
+    }
+
+    #[inline]
+    pub fn inc_account_value_with_flow_limit(
+        &self,
+        key: &str,
+        account_owner_parent: &str,
+        account_owner_self: &str,
+        instance_id: &str,
+        topic: &str,
+        group: &str,
+        msg_type: &str,
+        flow_limit_threshold: &str,
+        inc_value: i32,
+    ) {
+        let stats_key = build_account_stats_key_with_flowlimit(
+            account_owner_parent,
+            account_owner_self,
+            instance_id,
+            topic,
+            group,
+            msg_type,
+            flow_limit_threshold,
+        );
+        if let Some(stats) = self.stats_table.get(key) {
+            stats.add_value(&stats_key, inc_value, 1);
+        }
+    }
+
     pub fn shutdown(&self) {
         info!("Shutting down BrokerStatsManager...");
 
@@ -793,6 +1032,12 @@ impl BrokerStatsManager {
 
     pub fn inc_consumer_register_time(&self, inc_value: i32) {
         if let Some(stats) = self.stats_table.get(Self::CONSUMER_REGISTER_TIME) {
+            stats.add_value(&self.cluster_name, inc_value, 1);
+        }
+    }
+
+    pub fn inc_producer_register_time(&self, inc_value: i32) {
+        if let Some(stats) = self.stats_table.get(Self::PRODUCER_REGISTER_TIME) {
             stats.add_value(&self.cluster_name, inc_value, 1);
         }
     }
@@ -956,5 +1201,325 @@ mod tests {
     fn split_account_stat_key_splits_correctly() {
         let parts = split_account_stat_key("part1|part2|part3|part4|part5");
         assert_eq!(parts, vec!["part1", "part2", "part3", "part4", "part5"]);
+    }
+
+    #[tokio::test]
+    async fn test_broker_stats_manager_initialization() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = BrokerStatsManager::new(broker_config);
+
+        assert_eq!(manager.get_cluster_name(), "DefaultCluster");
+        assert!(!manager.get_stats_table().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_inc_topic_put_nums() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = BrokerStatsManager::new(broker_config);
+
+        manager.inc_topic_put_nums("TestTopic", 100, 1);
+        manager.inc_topic_put_nums("TestTopic", 200, 1);
+
+        if let Some(stats) = manager.stats_table.get(Stats::TOPIC_PUT_NUMS) {
+            if let Some(item) = stats.get_stats_item("TestTopic") {
+                assert_eq!(item.get_value(), 300);
+            } else {
+                panic!("TestTopic stats item not found");
+            }
+        } else {
+            panic!("TOPIC_PUT_NUMS stats not found");
+        };
+    }
+
+    #[tokio::test]
+    async fn test_inc_group_get_nums() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = BrokerStatsManager::new(broker_config);
+
+        manager.inc_group_get_nums("TestGroup", "TestTopic", 50);
+        manager.inc_group_get_nums("TestGroup", "TestTopic", 30);
+
+        let stats_key = build_stats_key(Some("TestTopic"), Some("TestGroup"));
+        if let Some(stats) = manager.stats_table.get(Stats::GROUP_GET_NUMS) {
+            if let Some(item) = stats.get_stats_item(&stats_key) {
+                assert_eq!(item.get_value(), 80);
+            } else {
+                panic!("Stats item not found");
+            }
+        } else {
+            panic!("GROUP_GET_NUMS stats not found");
+        };
+    }
+
+    #[tokio::test]
+    async fn test_inc_broker_put_nums_excludes_system_topic() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = BrokerStatsManager::new(broker_config);
+
+        manager.inc_broker_put_nums("UserTopic", 100);
+        manager.inc_broker_put_nums("SCHEDULE_TOPIC_XXXX", 50);
+
+        if let Some(stats) = manager
+            .stats_table
+            .get(BrokerStatsManager::BROKER_PUT_NUMS_WITHOUT_SYSTEM_TOPIC)
+        {
+            if let Some(item) = stats.get_stats_item(&manager.cluster_name) {
+                assert_eq!(item.get_value(), 100);
+            }
+        };
+    }
+
+    #[tokio::test]
+    async fn test_inc_send_back_nums() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = BrokerStatsManager::new(broker_config);
+
+        manager.inc_send_back_nums("TestGroup", "TestTopic");
+        manager.inc_send_back_nums("TestGroup", "TestTopic");
+
+        let stats_key = build_stats_key(Some("TestTopic"), Some("TestGroup"));
+        if let Some(stats) = manager.stats_table.get(Stats::SNDBCK_PUT_NUMS) {
+            if let Some(item) = stats.get_stats_item(&stats_key) {
+                assert_eq!(item.get_value(), 2);
+            }
+        };
+    }
+
+    #[tokio::test]
+    async fn test_inc_commercial_value() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = BrokerStatsManager::new(broker_config);
+
+        manager.inc_commercial_value(
+            BrokerStatsManager::COMMERCIAL_MSG_NUM,
+            "owner1",
+            "group1",
+            "topic1",
+            "SEND",
+            1000,
+        );
+
+        let stats_key = build_commercial_stats_key("owner1", "topic1", "group1", "SEND");
+        if let Some(stats) = manager
+            .stats_table
+            .get(BrokerStatsManager::COMMERCIAL_MSG_NUM)
+        {
+            let snapshot = stats.get_stats_data_in_minute(&stats_key);
+            assert_eq!(snapshot.get_sum(), 1000);
+        };
+    }
+
+    #[tokio::test]
+    async fn test_inc_disk_stats() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = BrokerStatsManager::new(broker_config);
+
+        manager.inc_group_get_from_disk_nums("TestGroup", "TestTopic", 10);
+        manager.inc_group_get_from_disk_size("TestGroup", "TestTopic", 1024);
+
+        let stats_key = build_stats_key(Some("TestTopic"), Some("TestGroup"));
+
+        if let Some(stats) = manager.stats_table.get(Stats::GROUP_GET_FROM_DISK_NUMS) {
+            if let Some(item) = stats.get_stats_item(&stats_key) {
+                assert_eq!(item.get_value(), 10);
+            }
+        }
+
+        if let Some(stats) = manager.stats_table.get(Stats::GROUP_GET_FROM_DISK_SIZE) {
+            if let Some(item) = stats.get_stats_item(&stats_key) {
+                assert_eq!(item.get_value(), 1024);
+            }
+        };
+    }
+
+    #[tokio::test]
+    async fn test_query_interfaces() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = BrokerStatsManager::new(broker_config);
+
+        manager.inc_broker_put_nums("UserTopic", 500);
+        manager.inc_broker_get_nums("UserTopic", 300);
+
+        if let Some(stats) = manager.stats_table.get(Stats::BROKER_PUT_NUMS) {
+            if let Some(item) = stats.get_stats_item(&manager.cluster_name) {
+                assert_eq!(item.get_value(), 500);
+            }
+        }
+
+        if let Some(stats) = manager.stats_table.get(Stats::BROKER_GET_NUMS) {
+            if let Some(item) = stats.get_stats_item(&manager.cluster_name) {
+                assert_eq!(item.get_value(), 300);
+            }
+        };
+    }
+
+    #[tokio::test]
+    async fn test_get_stats_item() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = BrokerStatsManager::new(broker_config);
+
+        manager.inc_topic_put_nums("TestTopic", 100, 1);
+
+        let item = manager.get_stats_item(Stats::TOPIC_PUT_NUMS, "TestTopic");
+        assert!(item.is_some());
+
+        let item = manager.get_stats_item(Stats::TOPIC_PUT_NUMS, "NonExistentTopic");
+        assert!(item.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_inc_producer_consumer_register_time() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = BrokerStatsManager::new(broker_config);
+
+        manager.inc_producer_register_time(100);
+        manager.inc_consumer_register_time(200);
+
+        if let Some(stats) = manager
+            .stats_table
+            .get(BrokerStatsManager::PRODUCER_REGISTER_TIME)
+        {
+            if let Some(item) = stats.get_stats_item(&manager.cluster_name) {
+                assert_eq!(item.get_value(), 100);
+            }
+        }
+
+        if let Some(stats) = manager
+            .stats_table
+            .get(BrokerStatsManager::CONSUMER_REGISTER_TIME)
+        {
+            if let Some(item) = stats.get_stats_item(&manager.cluster_name) {
+                assert_eq!(item.get_value(), 200);
+            }
+        };
+    }
+    #[tokio::test]
+    async fn test_concurrent_increments() {
+        use std::thread;
+
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = Arc::new(BrokerStatsManager::new(broker_config));
+
+        let mut handles = vec![];
+
+        for _i in 0..10 {
+            let manager_clone = Arc::clone(&manager);
+            let handle = thread::spawn(move || {
+                for _ in 0..100 {
+                    manager_clone.inc_topic_put_nums("ConcurrentTopic", 1, 1);
+                }
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        if let Some(stats) = manager.stats_table.get(Stats::TOPIC_PUT_NUMS) {
+            if let Some(item) = stats.get_stats_item("ConcurrentTopic") {
+                assert_eq!(item.get_value(), 1000);
+            }
+        };
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_different_topics() {
+        use std::thread;
+
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = Arc::new(BrokerStatsManager::new(broker_config));
+
+        let mut handles = vec![];
+
+        for i in 0..5 {
+            let manager_clone = Arc::clone(&manager);
+            let topic = format!("Topic{}", i);
+            let handle = thread::spawn(move || {
+                for _ in 0..50 {
+                    manager_clone.inc_topic_put_nums(&topic, 2, 1);
+                }
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        for i in 0..5 {
+            let topic = format!("Topic{}", i);
+            if let Some(stats) = manager.stats_table.get(Stats::TOPIC_PUT_NUMS) {
+                if let Some(item) = stats.get_stats_item(&topic) {
+                    assert_eq!(item.get_value(), 100);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_start_with_scheduler() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let scheduler = Arc::new(ScheduledTaskManager::new());
+        let manager = BrokerStatsManager::new_with_scheduler(broker_config, Some(scheduler));
+
+        manager.start();
+
+        assert_eq!(manager.task_ids.lock().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_cancels_tasks() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let scheduler = Arc::new(ScheduledTaskManager::new());
+        let manager = BrokerStatsManager::new_with_scheduler(broker_config, Some(scheduler));
+
+        manager.start();
+        let task_count_before = manager.task_ids.lock().len();
+        assert_eq!(task_count_before, 3);
+
+        manager.shutdown();
+        let task_count_after = manager.task_ids.lock().len();
+        assert_eq!(task_count_after, 0);
+    }
+
+    #[tokio::test]
+    async fn test_on_topic_deleted() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = BrokerStatsManager::new(broker_config);
+
+        manager.inc_topic_put_nums("DeletedTopic", 100, 1);
+        manager.inc_topic_put_size("DeletedTopic", 1024);
+        manager.inc_group_get_nums("TestGroup", "DeletedTopic", 50);
+
+        assert!(manager
+            .get_stats_item(Stats::TOPIC_PUT_NUMS, "DeletedTopic")
+            .is_some());
+
+        manager.on_topic_deleted(&CheetahString::from("DeletedTopic"));
+
+        assert!(manager
+            .get_stats_item(Stats::TOPIC_PUT_NUMS, "DeletedTopic")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn test_on_group_deleted() {
+        let broker_config = Arc::new(BrokerConfig::default());
+        let manager = BrokerStatsManager::new(broker_config);
+
+        manager.inc_group_get_nums("DeletedGroup", "TestTopic", 50);
+        manager.inc_group_get_size("DeletedGroup", "TestTopic", 1024);
+
+        let stats_key = build_stats_key(Some("TestTopic"), Some("DeletedGroup"));
+        assert!(manager
+            .get_stats_item(Stats::GROUP_GET_NUMS, &stats_key)
+            .is_some());
+
+        manager.on_group_deleted(&CheetahString::from("DeletedGroup"));
+
+        assert!(manager
+            .get_stats_item(Stats::GROUP_GET_NUMS, &stats_key)
+            .is_none());
     }
 }
