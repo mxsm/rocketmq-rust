@@ -24,7 +24,6 @@ use crate::base::dispatch_request::DispatchRequest;
 use crate::filter::MessageFilter;
 use crate::queue::file_queue_life_cycle::FileQueueLifeCycle;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
-use crate::queue::referred_iterator::ReferredIterator;
 use crate::queue::CqUnit;
 
 pub trait ConsumeQueueTrait: FileQueueLifeCycle {
@@ -47,7 +46,7 @@ pub trait ConsumeQueueTrait: FileQueueLifeCycle {
     ///
     /// # Returns
     /// An iterator over CqUnits
-    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn ReferredIterator<CqUnit>>>;
+    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>>;
 
     /// Get the units from the start offset with count limit
     ///
@@ -61,7 +60,7 @@ pub trait ConsumeQueueTrait: FileQueueLifeCycle {
         &self,
         start_index: i64,
         count: i32,
-    ) -> Option<Box<dyn ReferredIterator<CqUnit>>>;
+    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>>;
 
     /// Get a CqUnit at a specified index
     ///
