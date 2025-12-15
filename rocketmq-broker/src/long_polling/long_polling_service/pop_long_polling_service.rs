@@ -34,7 +34,7 @@ use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerCon
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::consume_queue::consume_queue_ext::CqExtUnit;
+use rocketmq_store::consume_queue::cq_ext_unit::CqExtUnit;
 use rocketmq_store::filter::MessageFilter;
 use tokio::select;
 use tokio::sync::Notify;

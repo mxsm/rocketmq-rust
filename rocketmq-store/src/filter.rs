@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 
-use crate::consume_queue::consume_queue_ext::CqExtUnit;
+use crate::consume_queue::cq_ext_unit::CqExtUnit;
 
 /// A trait for filtering messages.
 pub trait MessageFilter: Send + Sync {

@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use cheetah_string::CheetahString;
 use rocketmq_rust::ArcMut;
 
-use crate::consume_queue::consume_queue_ext::CqExtUnit;
+use crate::consume_queue::cq_ext_unit::CqExtUnit;
 use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::consume_queue_ext::ConsumeQueueExt;
 use crate::queue::file_queue_life_cycle::FileQueueLifeCycle;

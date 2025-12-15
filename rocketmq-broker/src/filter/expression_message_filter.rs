@@ -23,7 +23,7 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::message::message_decoder;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_store::consume_queue::consume_queue_ext::CqExtUnit;
+use rocketmq_store::consume_queue::cq_ext_unit::CqExtUnit;
 use rocketmq_store::filter::MessageFilter;
 
 use crate::filter::consumer_filter_data::ConsumerFilterData;
