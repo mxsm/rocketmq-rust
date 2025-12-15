@@ -21,6 +21,7 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
+use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
@@ -553,30 +554,46 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
     fn scan_garbage(&mut self) {
         self.commit_offsets.retain(|key, value| {
             let key_array: Vec<&str> = key.split(PopAckConstants::SPLIT).collect();
-            if key_array.is_empty() || key_array.len() != 3 {
-                return true;
+            if key_array.len() != 3 {
+                warn!("[PopBuffer]invalid lock key format: {}, removing", key);
+                return false;
             }
             let topic = key_array[0];
             let cid = key_array[1];
+
             if self
                 .broker_runtime_inner
                 .topic_config_manager()
                 .select_topic_config(&topic.into())
                 .is_none()
             {
+                info!("[PopBuffer]remove nonexistent topic {} in buffer", topic);
                 return false;
             }
 
-            if self
+            if !self
                 .broker_runtime_inner
                 .subscription_group_manager()
                 .contains_subscription_group(&cid.into())
             {
+                info!(
+                    "[PopBuffer]remove nonexistent subscription group {} of topic {} in buffer",
+                    cid, topic
+                );
                 return false;
             }
-            if get_current_millis() - value.get_time() > self.minute5 {
+
+            let current_millis = get_current_millis();
+            let time_diff = current_millis.saturating_sub(value.get_time());
+            if time_diff > self.minute5 {
+                info!(
+                    "[PopBuffer]remove long time not used sub {} of topic {} in buffer, \
+                     unused_time_ms={}",
+                    cid, topic, time_diff
+                );
                 return false;
             }
+
             true
         });
     }
@@ -937,7 +954,7 @@ impl<T> QueueWithTime<T> {
 pub struct PopCheckPointWrapper {
     revive_queue_id: i32,
     // -1: not stored, >=0: stored, Long.MAX: storing.
-    revive_queue_offset: AtomicI32,
+    revive_queue_offset: AtomicI64,
     ck: Arc<PopCheckPoint>,
     // bit for concurrent
     bits: AtomicI32,
@@ -1012,7 +1029,7 @@ impl PopCheckPointWrapper {
         );
         Self {
             revive_queue_id,
-            revive_queue_offset: AtomicI32::new(revive_queue_offset as i32),
+            revive_queue_offset: AtomicI64::new(revive_queue_offset),
             ck,
             bits: AtomicI32::new(0),
             to_store_bits: AtomicI32::new(0),
@@ -1050,7 +1067,7 @@ impl PopCheckPointWrapper {
         );
         Self {
             revive_queue_id,
-            revive_queue_offset: AtomicI32::new(revive_queue_offset as i32),
+            revive_queue_offset: AtomicI64::new(revive_queue_offset),
             ck,
             bits: AtomicI32::new(0),
             to_store_bits: AtomicI32::new(0),
@@ -1069,7 +1086,7 @@ impl PopCheckPointWrapper {
 
     #[inline]
     pub fn get_revive_queue_offset(&self) -> i64 {
-        self.revive_queue_offset.load(Ordering::SeqCst) as i64
+        self.revive_queue_offset.load(Ordering::Acquire)
     }
 
     #[inline]
@@ -1080,7 +1097,7 @@ impl PopCheckPointWrapper {
     #[inline]
     pub fn set_revive_queue_offset(&self, revive_queue_offset: i64) {
         self.revive_queue_offset
-            .store(revive_queue_offset as i32, Ordering::SeqCst);
+            .store(revive_queue_offset, Ordering::Release);
     }
 
     #[inline]
