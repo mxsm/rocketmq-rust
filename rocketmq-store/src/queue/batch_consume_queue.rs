@@ -330,11 +330,18 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
     }
 
     #[inline]
-    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
+    fn iterate_from(
+        &self,
+        start_index: i64,
+    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
         todo!()
     }
 
-    fn iterate_from_with_count(&self, start_index: i64, _count: i32) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
+    fn iterate_from_with_count(
+        &self,
+        start_index: i64,
+        _count: i32,
+    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
         todo!()
     }
 

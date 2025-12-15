@@ -1119,7 +1119,10 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
     }
 
     #[inline]
-    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
+    fn iterate_from(
+        &self,
+        start_index: i64,
+    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
         match self.get_index_buffer(start_index) {
             None => None,
             Some(value) => Some(Box::new(ConsumeQueueIterator {
@@ -1131,7 +1134,11 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
         }
     }
 
-    fn iterate_from_with_count(&self, start_index: i64, _count: i32) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
+    fn iterate_from_with_count(
+        &self,
+        start_index: i64,
+        _count: i32,
+    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
         self.iterate_from(start_index)
     }
 

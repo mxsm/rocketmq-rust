@@ -46,7 +46,10 @@ pub trait ConsumeQueueTrait: FileQueueLifeCycle {
     ///
     /// # Returns
     /// An iterator over CqUnits
-    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>>;
+    fn iterate_from(
+        &self,
+        start_index: i64,
+    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>>;
 
     /// Get the units from the start offset with count limit
     ///
