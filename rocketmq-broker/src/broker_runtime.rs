@@ -1503,11 +1503,11 @@ impl<MS: MessageStore> StateGetter for ProducerStateGetter<MS> {
         {
             self.broker_runtime_inner
                 .producer_manager
-                .group_online(NamespaceUtil::wrap_namespace(instance_id, group))
+                .group_online(&NamespaceUtil::wrap_namespace(instance_id, group))
         } else {
             self.broker_runtime_inner
                 .producer_manager
-                .group_online(group.to_string())
+                .group_online(group)
         }
     }
 }
