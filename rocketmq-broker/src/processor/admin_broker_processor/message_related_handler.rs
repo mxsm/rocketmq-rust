@@ -31,7 +31,7 @@ use rocketmq_store::base::message_store::MessageStore;
 
 use crate::broker_runtime::BrokerRuntimeInner;
 
-pub struct MessageRelatedHandler<MS: MessageStore> {
+pub(super) struct MessageRelatedHandler<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
