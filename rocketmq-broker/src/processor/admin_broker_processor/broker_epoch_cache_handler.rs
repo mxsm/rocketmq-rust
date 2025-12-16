@@ -1,19 +1,19 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
 
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -45,7 +45,7 @@ impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let broker_runtime_inner = self.broker_runtime_inner.as_mut();
 
         let replicas_manage = if let Some(replicas_manage) = broker_runtime_inner.replicas_manager()
@@ -59,16 +59,16 @@ impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
         let response = RemotingCommand::create_response_command();
 
         if !broker_config.enable_controller_mode {
-            return Some(
+            return Ok(Some(
                 response
                     .set_code(ResponseCode::SystemError)
                     .set_remark("this request only for controllerMode"),
-            );
+            ));
         }
 
         let broker_identity = &broker_config.broker_identity;
 
-        let message_store = broker_runtime_inner.message_store().as_ref().unwrap();
+        let message_store = broker_runtime_inner.message_store().unwrap();
 
         let entry_code = EpochEntryCache::new(
             &broker_identity.broker_cluster_name,
@@ -79,6 +79,8 @@ impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
         );
 
         let cache = entry_code.encode().unwrap_or_default();
-        Some(response.set_body(cache).set_code(ResponseCode::Success))
+        Ok(Some(
+            response.set_body(cache).set_code(ResponseCode::Success),
+        ))
     }
 }

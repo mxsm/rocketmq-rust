@@ -1,19 +1,20 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
+
 use rocketmq_common::common::mix_all::UNIQUE_MSG_QUERY_FLAG;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -32,8 +33,6 @@ use tracing::warn;
 use crate::broker_runtime::BrokerRuntimeInner;
 
 pub struct QueryMessageProcessor<MS: MessageStore> {
-    /*message_store_config: Arc<MessageStoreConfig>,
-    message_store: ArcMut<MS>,*/
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
@@ -53,9 +52,10 @@ where
             request_code
         );
         match request_code {
-            RequestCode::QueryMessage | RequestCode::ViewMessageById => Ok(self
-                .process_request_inner(channel, ctx, request_code, request)
-                .await),
+            RequestCode::QueryMessage | RequestCode::ViewMessageById => {
+                self.process_request_inner(channel, ctx, request_code, request)
+                    .await
+            }
             _ => {
                 warn!(
                     "QueryMessageProcessor received unknown request code: {:?}",
@@ -97,11 +97,11 @@ where
         ctx: ConnectionHandlerContext,
         request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match request_code {
             RequestCode::QueryMessage => self.query_message(channel, ctx, request).await,
             RequestCode::ViewMessageById => self.view_message_by_id(channel, ctx, request).await,
-            _ => None,
+            _ => Ok(None),
         }
     }
 
@@ -110,26 +110,39 @@ where
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command_with_header(
             QueryMessageResponseHeader::default(),
         );
-        let mut request_header = request
-            .decode_command_custom_header::<QueryMessageRequestHeader>()
-            .unwrap();
+        let mut request_header =
+            request.decode_command_custom_header::<QueryMessageRequestHeader>()?;
         response.set_opaque_mut(request.opaque());
-        let is_unique_key = request.ext_fields().unwrap().get(UNIQUE_MSG_QUERY_FLAG);
-        if is_unique_key.is_some() && is_unique_key.unwrap() == "true" {
+        let Some(ext_fields) = request.ext_fields() else {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::SystemError)
+                    .set_remark("ext fields is none"),
+            ));
+        };
+        let is_unique_key = ext_fields.get(UNIQUE_MSG_QUERY_FLAG);
+        if is_unique_key.is_some_and(|value| value == "true") {
             request_header.max_num = self
                 .broker_runtime_inner
                 .message_store_config()
                 .default_query_max_num as i32;
         }
-        let query_message_result = self
-            .broker_runtime_inner
-            .message_store()
-            .as_ref()
-            .unwrap()
+        let message_store = match self.broker_runtime_inner.message_store() {
+            Some(store) => store,
+            None => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("message store is none"),
+                ));
+            }
+        };
+
+        let Some(query_message_result) = message_store
             .query_message(
                 request_header.topic.as_ref(),
                 request_header.key.as_ref(),
@@ -137,7 +150,14 @@ where
                 request_header.begin_timestamp,
                 request_header.end_timestamp,
             )
-            .await?;
+            .await
+        else {
+            return Ok(Some(
+                response
+                    .set_code(ResponseCode::QueryNotFound)
+                    .set_remark("query message failed, no result returned"),
+            ));
+        };
 
         let response_header = response
             .read_custom_header_mut::<QueryMessageResponseHeader>()
@@ -152,13 +172,13 @@ where
             if let Some(body) = message_data {
                 response.set_body_mut_ref(body);
             }
-            return Some(response);
+            return Ok(Some(response));
         }
-        Some(
+        Ok(Some(
             response
                 .set_code(ResponseCode::QueryNotFound)
                 .set_remark("can not find message, maybe time range not correct"),
-        )
+        ))
     }
 
     async fn view_message_by_id(
@@ -166,31 +186,37 @@ where
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
-        let request_header = request
-            .decode_command_custom_header::<ViewMessageRequestHeader>()
-            .unwrap();
-        let select_mapped_buffer_result = self
-            .broker_runtime_inner
-            .message_store()
-            .as_ref()
-            .unwrap()
-            .select_one_message_by_offset(request_header.offset);
+        let request_header = request.decode_command_custom_header::<ViewMessageRequestHeader>()?;
+
+        let message_store = match self.broker_runtime_inner.message_store() {
+            Some(store) => store,
+            None => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("message store is none"),
+                ));
+            }
+        };
+
+        let select_mapped_buffer_result =
+            message_store.select_one_message_by_offset(request_header.offset);
         if let Some(result) = select_mapped_buffer_result {
             let message_data = result.get_bytes();
             if let Some(body) = message_data {
                 response.set_body_mut_ref(body)
             }
-            return Some(response);
+            return Ok(Some(response));
         }
-        Some(
+        Ok(Some(
             response
                 .set_code(ResponseCode::SystemError)
                 .set_remark(format!(
                     "can not find message by offset: {}",
                     request_header.offset
                 )),
-        )
+        ))
     }
 }

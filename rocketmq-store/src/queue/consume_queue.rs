@@ -1,19 +1,20 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
+
 use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::boundary_type::BoundaryType;
@@ -23,7 +24,6 @@ use crate::base::dispatch_request::DispatchRequest;
 use crate::filter::MessageFilter;
 use crate::queue::file_queue_life_cycle::FileQueueLifeCycle;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
-use crate::queue::referred_iterator::ReferredIterator;
 use crate::queue::CqUnit;
 
 pub trait ConsumeQueueTrait: FileQueueLifeCycle {
@@ -46,7 +46,10 @@ pub trait ConsumeQueueTrait: FileQueueLifeCycle {
     ///
     /// # Returns
     /// An iterator over CqUnits
-    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn ReferredIterator<CqUnit>>>;
+    fn iterate_from(
+        &self,
+        start_index: i64,
+    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>>;
 
     /// Get the units from the start offset with count limit
     ///
@@ -60,7 +63,7 @@ pub trait ConsumeQueueTrait: FileQueueLifeCycle {
         &self,
         start_index: i64,
         count: i32,
-    ) -> Option<Box<dyn ReferredIterator<CqUnit>>>;
+    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>>;
 
     /// Get a CqUnit at a specified index
     ///

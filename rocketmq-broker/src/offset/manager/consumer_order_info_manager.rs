@@ -1,19 +1,20 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
+
 #![allow(unused_variables)]
 
 use std::collections::HashMap;
@@ -135,14 +136,12 @@ impl<MS: MessageStore> ConsumerOrderInfoManager<MS> {
                 keys_to_remove.push(topic_at_group.clone());
                 continue;
             }
-            let subscription_group_wrapper = self
+            let subscription_group_table = self
                 .broker_runtime_inner
                 .subscription_group_manager()
-                .subscription_group_wrapper()
-                .lock();
-            let subscription_group_config = subscription_group_wrapper
-                .subscription_group_table()
-                .get(&CheetahString::from(group));
+                .subscription_group_table();
+            let subscription_group_config =
+                subscription_group_table.get(&CheetahString::from(group));
             if subscription_group_config.is_none() {
                 info!(
                     "Group not exist, Clean order info, {}:{:?}",

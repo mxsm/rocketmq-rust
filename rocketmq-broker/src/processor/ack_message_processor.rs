@@ -1,19 +1,20 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
+
 use std::cmp::Ordering;
 
 use cheetah_string::CheetahString;
@@ -232,7 +233,7 @@ where
                 ),
             ));
         }
-        let message_store_inner = self.broker_runtime_inner.message_store().as_ref().unwrap();
+        let message_store_inner = self.broker_runtime_inner.message_store().unwrap();
         let min_offset = message_store_inner
             .get_min_offset_in_queue(&request_header.topic, request_header.queue_id);
         let max_offset = message_store_inner
@@ -361,7 +362,7 @@ where
             let akc_offset = -1;
             let pop_time = batch_ack.pop_time;
             let invisible_time = batch_ack.invisible_time;
-            let message_store = self.broker_runtime_inner.message_store().as_ref().unwrap();
+            let message_store = self.broker_runtime_inner.message_store().unwrap();
             let min_offset = message_store.get_min_offset_in_queue(&topic, qid);
             let max_offset = message_store.get_max_offset_in_queue(&topic, qid);
             if min_offset == -1 || max_offset == -1 {

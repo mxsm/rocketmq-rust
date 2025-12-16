@@ -1,19 +1,19 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -34,7 +34,6 @@ use crate::filter::MessageFilter;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
-use crate::queue::referred_iterator::ReferredIterator;
 use crate::queue::CqUnit;
 use crate::queue::FileQueueLifeCycle;
 
@@ -331,15 +330,18 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
     }
 
     #[inline]
-    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn ReferredIterator<CqUnit>>> {
+    fn iterate_from(
+        &self,
+        start_index: i64,
+    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
         todo!()
     }
 
     fn iterate_from_with_count(
         &self,
         start_index: i64,
-        count: i32,
-    ) -> Option<Box<dyn ReferredIterator<CqUnit>>> {
+        _count: i32,
+    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
         todo!()
     }
 

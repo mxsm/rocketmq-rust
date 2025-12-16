@@ -1,19 +1,20 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
@@ -180,8 +181,7 @@ impl BrokerRuntime {
         );
 
         let should_start_time = Arc::new(AtomicU64::new(0));
-        let pop_inflight_message_counter =
-            PopInflightMessageCounter::new(should_start_time.clone());
+        let pop_inflight_message_counter = PopInflightMessageCounter::new(should_start_time);
 
         let mut inner = ArcMut::new(BrokerRuntimeInner::<LocalFileMessageStore> {
             shutdown: Arc::new(AtomicBool::new(false)),
@@ -395,7 +395,7 @@ impl BrokerRuntime {
 
         if let Some(schedule_message_service) = self.inner.schedule_message_service.as_mut() {
             schedule_message_service.persist();
-            schedule_message_service.shutdown();
+            schedule_message_service.shutdown().await;
         }
         if let Some(transactional_message_check_service) =
             self.inner.transactional_message_check_service.as_mut()
@@ -1474,7 +1474,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             }
             if check_order_config {
                 if let Some(topic_config_manager) = &mut self.topic_config_manager {
-                    topic_config_manager.update_order_topic_config(result.kv_table);
+                    topic_config_manager.update_order_topic_config(&result.kv_table);
                 }
             }
         }
@@ -1503,11 +1503,11 @@ impl<MS: MessageStore> StateGetter for ProducerStateGetter<MS> {
         {
             self.broker_runtime_inner
                 .producer_manager
-                .group_online(NamespaceUtil::wrap_namespace(instance_id, group))
+                .group_online(&NamespaceUtil::wrap_namespace(instance_id, group))
         } else {
             self.broker_runtime_inner
                 .producer_manager
-                .group_online(group.to_string())
+                .group_online(group)
         }
     }
 }
@@ -1919,8 +1919,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn message_store(&self) -> &Option<ArcMut<MS>> {
-        &self.message_store
+    pub fn message_store(&self) -> Option<&ArcMut<MS>> {
+        self.message_store.as_ref()
     }
 
     #[inline]
@@ -2069,6 +2069,16 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     #[inline]
     pub fn pop_inflight_message_counter(&self) -> &PopInflightMessageCounter {
         &self.pop_inflight_message_counter
+    }
+
+    #[inline]
+    pub fn cold_data_cg_ctr_service(&self) -> Option<&ColdDataCgCtrService> {
+        self.cold_data_cg_ctr_service.as_ref()
+    }
+
+    #[inline]
+    pub fn cold_data_pull_request_hold_service(&self) -> Option<&ColdDataPullRequestHoldService> {
+        self.cold_data_pull_request_hold_service.as_ref()
     }
 
     #[inline]

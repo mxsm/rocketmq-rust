@@ -61,6 +61,9 @@ crossbeam-skiplist = "0.1"
 
 futures = "0.3.31"
 
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+
 [dev-dependencies]
 mockall = "0.14.0"
 static_assertions = { version = "1" }
@@ -72,4 +75,12 @@ path = "src/bin/broker_bootstrap_server.rs"
 
 [[bench]]
 name = "syncunsafecell_mut"
+harness = false
+
+[[bench]]
+name = "subscription_group_manager_benchmark"
+harness = false
+
+[[bench]]
+name = "schedule_message_service_performance"
 harness = false

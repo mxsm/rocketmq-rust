@@ -51,7 +51,7 @@ parking_lot.workspace = true
 
 # High-performance channel alternative to tokio::mpsc
 # flume provides 40-60% better throughput with lock-free design
-flume = "0.11"
+flume = "0.12"
 trait-variant.workspace = true
 uuid = { workspace = true }
 cheetah-string = { workspace = true }
@@ -78,4 +78,8 @@ harness = false
 
 [[bench]]
 name = "simd_json_bench"
+harness = false
+
+[[bench]]
+name = "encode_buffer_bench"
 harness = false

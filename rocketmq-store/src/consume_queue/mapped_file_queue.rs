@@ -1,19 +1,19 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
 
 use std::fs;
 use std::path::Path;
@@ -24,14 +24,17 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use parking_lot::RwLock;
+use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::UtilAll::offset_to_file_name;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
+use crate::log_file::commit_log::CommitLog;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
+use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
 
 #[derive(Default)]
 pub struct MappedFileQueue {
@@ -511,6 +514,105 @@ impl MappedFileQueue {
             None => 0,
             Some(file) => file.get_file_from_offset() as i64 + file.get_wrote_position() as i64,
         }
+    }
+
+    /// Gets a consume queue mapped file by timestamp.
+    ///
+    /// This method finds the appropriate mapped file based on the given timestamp
+    /// and boundary type. It ensures each mapped file in the consume queue has
+    /// accurate start and stop timestamps based on the commit log.
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The timestamp to search for
+    /// * `commit_log` - Reference to the commit log for looking up message store times
+    /// * `boundary_type` - The boundary type (Lower or Upper)
+    ///
+    /// # Returns
+    ///
+    /// The mapped file that matches the criteria, or None if not found
+    pub fn get_consume_queue_mapped_file_by_time(
+        &self,
+        timestamp: i64,
+        commit_log: &CommitLog,
+        boundary_type: BoundaryType,
+    ) -> Option<Arc<DefaultMappedFile>> {
+        let mapped_files = self.mapped_files.read();
+        if mapped_files.is_empty() {
+            return None;
+        }
+
+        let mfs: Vec<Arc<DefaultMappedFile>> = mapped_files.iter().cloned().collect();
+        drop(mapped_files);
+
+        let mfs_len = mfs.len();
+
+        for i in (0..mfs_len).rev() {
+            let mapped_file = &mfs[i];
+
+            if mapped_file.get_start_timestamp() < 0 {
+                if let Some(select_result) = mapped_file.select_mapped_buffer(0, CQ_STORE_UNIT_SIZE)
+                {
+                    if let Some(ref buffer) = select_result.bytes {
+                        if buffer.len() >= 12 {
+                            let physical_offset =
+                                i64::from_be_bytes(buffer[0..8].try_into().unwrap());
+                            let message_size =
+                                i32::from_be_bytes(buffer[8..12].try_into().unwrap());
+                            let message_store_time =
+                                commit_log.pickup_store_timestamp(physical_offset, message_size);
+                            if message_store_time > 0 {
+                                mapped_file.set_start_timestamp(message_store_time);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if i < mfs_len - 1 && mapped_file.get_stop_timestamp() < 0 {
+                let last_unit_offset = self.mapped_file_size as i32 - CQ_STORE_UNIT_SIZE;
+                if let Some(select_result) =
+                    mapped_file.select_mapped_buffer(last_unit_offset, CQ_STORE_UNIT_SIZE)
+                {
+                    if let Some(ref buffer) = select_result.bytes {
+                        if buffer.len() >= 12 {
+                            let physical_offset =
+                                i64::from_be_bytes(buffer[0..8].try_into().unwrap());
+                            let message_size =
+                                i32::from_be_bytes(buffer[8..12].try_into().unwrap());
+                            let message_store_time =
+                                commit_log.pickup_store_timestamp(physical_offset, message_size);
+                            if message_store_time > 0 {
+                                mapped_file.set_stop_timestamp(message_store_time);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        match boundary_type {
+            BoundaryType::Lower => {
+                for (i, mapped_file) in mfs.iter().enumerate() {
+                    if i < mfs_len - 1 {
+                        if mapped_file.get_stop_timestamp() >= timestamp {
+                            return Some(mapped_file.clone());
+                        }
+                    } else {
+                        return Some(mapped_file.clone());
+                    }
+                }
+            }
+            BoundaryType::Upper => {
+                for mapped_file in mfs.iter().rev() {
+                    if mapped_file.get_start_timestamp() <= timestamp {
+                        return Some(mapped_file.clone());
+                    }
+                }
+            }
+        }
+
+        None
     }
 }
 

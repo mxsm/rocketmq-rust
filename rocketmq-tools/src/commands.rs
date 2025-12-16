@@ -1,19 +1,20 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
+
 pub mod command_util;
 mod namesrv_commands;
 mod topic_commands;
@@ -121,8 +122,43 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Topic",
+                command: "remappingStaticTopic",
+                remark: "Remapping static topic.",
+            },
+            Command {
+                category: "Topic",
                 command: "topicClusterList",
                 remark: "Get cluster info for topic.",
+            },
+            Command {
+                category: "Topic",
+                command: "topicList",
+                remark: "Get topic list.",
+            },
+            Command {
+                category: "Topic",
+                command: "topicRoute",
+                remark: "Examine topic route info.",
+            },
+            Command {
+                category: "Topic",
+                command: "topicStatus",
+                remark: "Examine topic status info.",
+            },
+            Command {
+                category: "Topic",
+                command: "updateOrderConf",
+                remark: "Create or update order conf.",
+            },
+            Command {
+                category: "Topic",
+                command: "updateStaticTopic",
+                remark: "Update or create static topic.",
+            },
+            Command {
+                category: "Topic",
+                command: "updateTopicPerm",
+                remark: "Update topic perm.",
             },
             Command {
                 category: "Topic",

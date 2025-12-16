@@ -1,19 +1,19 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
 
 use std::collections::LinkedList;
 use std::fmt;
@@ -31,8 +31,8 @@ use crate::common::stats::call_snapshot::CallSnapshot;
 use crate::common::stats::stats_snapshot::StatsSnapshot;
 
 pub struct StatsItem {
-    value: AtomicU64,
-    times: AtomicU64,
+    value: Arc<AtomicU64>,
+    times: Arc<AtomicU64>,
     cs_list_minute: Arc<Mutex<LinkedList<CallSnapshot>>>,
     cs_list_hour: Arc<Mutex<LinkedList<CallSnapshot>>>,
     cs_list_day: Arc<Mutex<LinkedList<CallSnapshot>>>,
@@ -43,14 +43,48 @@ pub struct StatsItem {
 impl StatsItem {
     pub fn new(stats_name: &str, stats_key: &str) -> Self {
         StatsItem {
-            value: AtomicU64::new(0),
-            times: AtomicU64::new(0),
+            value: Arc::new(AtomicU64::new(0)),
+            times: Arc::new(AtomicU64::new(0)),
             cs_list_minute: Arc::new(Mutex::new(LinkedList::new())),
             cs_list_hour: Arc::new(Mutex::new(LinkedList::new())),
             cs_list_day: Arc::new(Mutex::new(LinkedList::new())),
             stats_name: stats_name.to_string(),
             stats_key: stats_key.to_string(),
         }
+    }
+
+    /// Atomically increments the value by delta and increments times by 1.
+    ///
+    /// # Arguments
+    /// * `delta` - The amount to add to the value counter
+    ///
+    /// # Thread Safety
+    /// This method is lock-free and safe to call from multiple threads concurrently.
+    /// Uses `Ordering::Relaxed` as no synchronization with other variables is required.
+    #[inline]
+    pub fn increment(&self, delta: u64) {
+        self.value.fetch_add(delta, Ordering::Relaxed);
+        self.times.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Returns the current accumulated value.
+    ///
+    /// # Thread Safety
+    /// This method uses `Ordering::Relaxed` for optimal performance.
+    /// The returned value is a snapshot at the time of the call.
+    #[inline]
+    pub fn get_value(&self) -> u64 {
+        self.value.load(Ordering::Relaxed)
+    }
+
+    /// Returns the current accumulated times (call count).
+    ///
+    /// # Thread Safety
+    /// This method uses `Ordering::Relaxed` for optimal performance.
+    /// The returned value is a snapshot at the time of the call.
+    #[inline]
+    pub fn get_times(&self) -> u64 {
+        self.times.load(Ordering::Relaxed)
     }
 
     pub fn compute_stats_data(cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>) -> StatsSnapshot {
@@ -87,76 +121,36 @@ impl StatsItem {
         Self::compute_stats_data(Arc::clone(&self.cs_list_day))
     }
 
-    pub fn init(&self) {
-        let cs_list_minute = Arc::clone(&self.cs_list_minute);
-        let cs_list_minute_clone = Arc::clone(&self.cs_list_minute);
-        let cs_list_hour = Arc::clone(&self.cs_list_hour);
-        let cs_list_hour_clone = Arc::clone(&self.cs_list_hour);
-        let cs_list_day = Arc::clone(&self.cs_list_day);
-        let cs_list_day_clone = Arc::clone(&self.cs_list_day);
-        let stats_name = self.stats_name.clone();
-        let stats_key = self.stats_key.clone();
-
-        thread::spawn(move || loop {
-            thread::sleep(Duration::from_secs(10));
-            Self::sampling_in_seconds(cs_list_minute.clone());
-        });
-
-        thread::spawn(move || loop {
-            thread::sleep(Duration::from_secs(600));
-            Self::sampling_in_minutes(cs_list_hour.clone());
-        });
-
-        thread::spawn(move || loop {
-            thread::sleep(Duration::from_secs(3600));
-            Self::sampling_in_hour(cs_list_day.clone());
-        });
-
-        let stats_name_clone = stats_name.clone();
-        let stats_key_clone = stats_key.clone();
-        thread::spawn(move || loop {
-            let sleep_time = Self::compute_next_minutes_time_millis()
-                - SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64;
-            thread::sleep(Duration::from_millis(sleep_time));
-            Self::print_at_minutes(
-                &stats_name_clone,
-                &stats_key_clone,
-                cs_list_minute_clone.clone(),
-            );
-        });
-
-        let stats_name_clone = stats_name.clone();
-        let stats_key_clone = stats_key.clone();
-        thread::spawn(move || loop {
-            let sleep_time = Self::compute_next_hour_time_millis()
-                - SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64;
-            thread::sleep(Duration::from_millis(sleep_time));
-            Self::print_at_hour(
-                &stats_name_clone,
-                &stats_key_clone,
-                cs_list_hour_clone.clone(),
-            );
-        });
-
-        thread::spawn(move || loop {
-            let sleep_time = Self::compute_next_morning_time_millis()
-                - SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64
-                - 2000;
-            thread::sleep(Duration::from_millis(sleep_time));
-            Self::print_at_day(&stats_name, &stats_key, cs_list_day_clone.clone());
-        });
+    /// Perform second-level sampling
+    pub fn sampling_in_seconds(&self) {
+        let current_value = self.value.load(Ordering::Relaxed);
+        let current_times = self.times.load(Ordering::Relaxed);
+        Self::sampling_in_seconds_internal(
+            Arc::clone(&self.cs_list_minute),
+            current_value,
+            current_times,
+        );
     }
 
-    pub fn sampling_in_seconds(cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>) {
+    /// Perform minute-level sampling
+    pub fn sampling_in_minutes_level(&self) {
+        let current_value = self.value.load(Ordering::Relaxed);
+        let current_times = self.times.load(Ordering::Relaxed);
+        Self::sampling_in_minutes(Arc::clone(&self.cs_list_hour), current_value, current_times);
+    }
+
+    /// Perform hour-level sampling
+    pub fn sampling_in_hour_level(&self) {
+        let current_value = self.value.load(Ordering::Relaxed);
+        let current_times = self.times.load(Ordering::Relaxed);
+        Self::sampling_in_hour(Arc::clone(&self.cs_list_day), current_value, current_times);
+    }
+
+    pub fn sampling_in_seconds_internal(
+        cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>,
+        current_value: u64,
+        current_times: u64,
+    ) {
         let mut cs_list = cs_list.lock();
         if cs_list.is_empty() {
             cs_list.push_back(CallSnapshot::new(
@@ -174,15 +168,19 @@ impl StatsItem {
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as u64,
-            0,
-            0,
+            current_times,
+            current_value,
         ));
         if cs_list.len() > 7 {
             cs_list.pop_front();
         }
     }
 
-    pub fn sampling_in_minutes(cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>) {
+    pub fn sampling_in_minutes(
+        cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>,
+        current_value: u64,
+        current_times: u64,
+    ) {
         let mut cs_list = cs_list.lock();
         if cs_list.is_empty() {
             cs_list.push_back(CallSnapshot::new(
@@ -200,15 +198,19 @@ impl StatsItem {
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as u64,
-            0,
-            0,
+            current_times,
+            current_value,
         ));
         if cs_list.len() > 7 {
             cs_list.pop_front();
         }
     }
 
-    pub fn sampling_in_hour(cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>) {
+    pub fn sampling_in_hour(
+        cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>,
+        current_value: u64,
+        current_times: u64,
+    ) {
         let mut cs_list = cs_list.lock();
         if cs_list.is_empty() {
             cs_list.push_back(CallSnapshot::new(
@@ -226,8 +228,8 @@ impl StatsItem {
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as u64,
-            0,
-            0,
+            current_times,
+            current_value,
         ));
         if cs_list.len() > 25 {
             cs_list.pop_front();
@@ -382,6 +384,151 @@ mod tests {
         assert_eq!(snapshot.get_sum(), 0);
         assert_eq!(snapshot.get_tps(), 0.0);
         assert_eq!(snapshot.get_times(), 0);
+        assert_eq!(snapshot.get_avgpt(), 0.0);
+    }
+
+    #[test]
+    fn test_increment_updates_value_and_times() {
+        let stats = StatsItem::new("test", "key");
+        stats.increment(100);
+        assert_eq!(stats.get_value(), 100);
+        assert_eq!(stats.get_times(), 1);
+
+        stats.increment(50);
+        assert_eq!(stats.get_value(), 150);
+        assert_eq!(stats.get_times(), 2);
+    }
+
+    #[test]
+    fn test_multi_threaded_increment_atomicity() {
+        use std::thread;
+        let stats = Arc::new(StatsItem::new("test", "key"));
+        let mut handles = vec![];
+
+        // Spawn 10 threads, each incrementing 1000 times
+        for _ in 0..10 {
+            let stats_clone = Arc::clone(&stats);
+            let handle = thread::spawn(move || {
+                for _ in 0..1000 {
+                    stats_clone.increment(1);
+                }
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all threads
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Verify atomicity: 10 threads * 1000 increments = 10000
+        assert_eq!(stats.get_value(), 10_000);
+        assert_eq!(stats.get_times(), 10_000);
+    }
+
+    #[test]
+    fn test_sampling_captures_current_values() {
+        let stats = StatsItem::new("test", "key");
+
+        // Increment some values
+        stats.increment(100);
+        stats.increment(200);
+        stats.increment(300);
+
+        // Perform manual sampling
+        stats.sampling_in_seconds();
+
+        // Verify snapshot contains non-zero values
+        let snapshot = stats.get_stats_data_in_minute();
+        assert!(
+            snapshot.get_sum() > 0,
+            "Snapshot should capture incremented value"
+        );
+        assert!(snapshot.get_times() > 0, "Snapshot should capture times");
+    }
+
+    #[test]
+    fn test_tps_and_avgpt_calculation() {
+        let cs_list = Arc::new(Mutex::new(LinkedList::new()));
+
+        // Add snapshots with known values
+        // t=0ms: 0 calls, value=0
+        // t=1000ms: 10 calls, value=500
+        {
+            let mut list = cs_list.lock();
+            list.push_back(CallSnapshot::new(0, 0, 0));
+            list.push_back(CallSnapshot::new(1000, 10, 500));
+        }
+
+        let snapshot = StatsItem::compute_stats_data(Arc::clone(&cs_list));
+
+        // TPS = (500 - 0) * 1000 / (1000 - 0) = 500
+        assert_eq!(snapshot.get_tps(), 500.0);
+
+        // AVGPT = (500 - 0) / (10 - 0) = 50
+        assert_eq!(snapshot.get_avgpt(), 50.0);
+
+        // Sum = 500 - 0 = 500
+        assert_eq!(snapshot.get_sum(), 500);
+
+        // Times = 10 - 0 = 10
+        assert_eq!(snapshot.get_times(), 10);
+    }
+
+    #[test]
+    fn test_concurrent_read_write() {
+        use std::thread;
+        use std::time::Duration;
+
+        let stats = Arc::new(StatsItem::new("concurrent", "test"));
+        let stats_writer = Arc::clone(&stats);
+        let stats_reader = Arc::clone(&stats);
+
+        // Writer thread: continuously increment
+        let writer = thread::spawn(move || {
+            for _ in 0..1000 {
+                stats_writer.increment(1);
+                thread::sleep(Duration::from_micros(10));
+            }
+        });
+
+        // Reader thread: continuously read values
+        let reader = thread::spawn(move || {
+            let mut last_value = 0;
+            for _ in 0..1000 {
+                let current = stats_reader.get_value();
+                // Value should monotonically increase or stay same
+                assert!(
+                    current >= last_value,
+                    "Value decreased! Was {}, now {}",
+                    last_value,
+                    current
+                );
+                last_value = current;
+                thread::sleep(Duration::from_micros(10));
+            }
+        });
+
+        writer.join().unwrap();
+        reader.join().unwrap();
+
+        assert_eq!(stats.get_value(), 1000);
+    }
+
+    #[test]
+    fn test_zero_times_avgpt_calculation() {
+        let cs_list = Arc::new(Mutex::new(LinkedList::new()));
+
+        // Add snapshots with same times (delta = 0)
+        {
+            let mut list = cs_list.lock();
+            list.push_back(CallSnapshot::new(0, 5, 100));
+            list.push_back(CallSnapshot::new(1000, 5, 200));
+        }
+
+        let snapshot = StatsItem::compute_stats_data(Arc::clone(&cs_list));
+
+        // When times_diff is 0, avgpt should be 0.0 (not division by zero)
         assert_eq!(snapshot.get_avgpt(), 0.0);
     }
 }

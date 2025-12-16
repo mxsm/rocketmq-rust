@@ -1,19 +1,19 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -1098,7 +1098,7 @@ impl CommitLog {
         let mut recovery_ctx = RecoveryContext::new(
             check_crc_on_recover,
             check_dup_info,
-            message_store_config.clone(),
+            message_store_config,
             self.local_file_message_store
                 .as_ref()
                 .unwrap()
@@ -1757,17 +1757,24 @@ impl CommitLog {
                 let buffer = result.get_buffer();
                 let sys_flag = (&buffer[MessageDecoder::SYSFLAG_POSITION..]).get_i32();
                 let born_host_length = if sys_flag & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
-                    4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8 + 8
+                    8
                 } else {
-                    4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8 + 20
+                    20
                 };
-                (&buffer[born_host_length..]).get_i64()
+                let msg_store_time_pos = born_host_length + 4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8;
+                (&buffer[msg_store_time_pos..]).get_i64()
             } else {
                 -1
             }
         } else {
             -1
         }
+    }
+
+    /// Get the cold data check service for checking if message data is in cold storage area
+    #[inline]
+    pub fn get_cold_data_check_service(&self) -> &ColdDataCheckService {
+        &self.cold_data_check_service
     }
 
     pub async fn append_data(

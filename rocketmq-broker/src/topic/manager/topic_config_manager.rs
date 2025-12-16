@@ -1,24 +1,23 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
@@ -29,6 +28,8 @@ use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_common::common::TopicSysFlag;
+use rocketmq_common::utils::file_utils;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::TopicAttributes::TopicAttributes;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
@@ -36,6 +37,7 @@ use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper:
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
 use rocketmq_remoting::protocol::DataVersion;
+use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
@@ -50,7 +52,7 @@ use crate::broker_runtime::BrokerRuntimeInner;
 pub(crate) struct TopicConfigManager<MS: MessageStore> {
     topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
     data_version: ArcMut<DataVersion>,
-    topic_config_table_lock: Arc<parking_lot::ReentrantMutex<()>>,
+    persist_lock: Arc<parking_lot::Mutex<()>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
@@ -61,7 +63,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         let mut manager = Self {
             topic_config_table: Arc::new(DashMap::with_capacity(1024)),
             data_version: ArcMut::new(DataVersion::default()),
-            topic_config_table_lock: Default::default(),
+            persist_lock: Arc::new(parking_lot::Mutex::new(())),
             broker_runtime_inner,
         };
         if init {
@@ -314,34 +316,61 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         )
     }
 
-    pub fn create_topic_in_send_message_method(
+    pub async fn create_topic_in_send_message_method(
         &mut self,
-        topic: &str,
-        default_topic: &str,
+        topic: &CheetahString,
+        default_topic: &CheetahString,
         remote_address: SocketAddr,
         client_default_topic_queue_nums: i32,
         topic_sys_flag: u32,
     ) -> Option<ArcMut<TopicConfig>> {
-        let (topic_config, create_new) = if let Some(_lock) = self
-            .topic_config_table_lock
-            .try_lock_for(Duration::from_secs(3))
-        {
-            let topic_config = self.get_topic_config(topic);
-            if topic_config.is_some() {
-                return topic_config;
-            }
+        // Fast path: lock-free read
+        if let Some(config) = self.topic_config_table.get(topic) {
+            return Some(config.value().clone());
+        }
 
-            if let Some(mut default_topic_config) = self.get_topic_config(default_topic) {
-                if default_topic == TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC
-                    && !self
-                        .broker_runtime_inner
-                        .broker_config()
-                        .auto_create_topic_enable
-                {
-                    default_topic_config.perm = PermName::PERM_READ | PermName::PERM_WRITE;
+        // Use DashMap entry API for atomic check-and-insert
+        let (topic_config, create_new) = {
+            let topic_key = topic.clone();
+            let entry = self.topic_config_table.entry(topic_key);
+
+            match entry {
+                dashmap::mapref::entry::Entry::Occupied(e) => {
+                    // Another thread created it
+                    (Some(e.get().clone()), false)
                 }
+                dashmap::mapref::entry::Entry::Vacant(e) => {
+                    // We need to create it
+                    let mut default_topic_config = match self.get_topic_config(default_topic) {
+                        Some(config) => config,
+                        None => {
+                            warn!(
+                                "Create new topic failed, because the default topic[{}] not \
+                                 exist. producer:[{}]",
+                                default_topic, remote_address
+                            );
+                            return None;
+                        }
+                    };
 
-                if PermName::is_inherited(default_topic_config.perm) {
+                    if default_topic == TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC
+                        && !self
+                            .broker_runtime_inner
+                            .broker_config()
+                            .auto_create_topic_enable
+                    {
+                        default_topic_config.perm = PermName::PERM_READ | PermName::PERM_WRITE;
+                    }
+
+                    if !PermName::is_inherited(default_topic_config.perm) {
+                        warn!(
+                            "Create new topic failed, because the default topic[{}] has no perm \
+                             [{}] producer:[{}]",
+                            default_topic, default_topic_config.perm, remote_address
+                        );
+                        return None;
+                    }
+
                     let mut topic_config = TopicConfig::new(topic);
                     let queue_nums = client_default_topic_queue_nums
                         .min(default_topic_config.write_queue_nums as i32)
@@ -351,43 +380,39 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                     topic_config.perm = default_topic_config.perm & !PermName::PERM_INHERIT;
                     topic_config.topic_sys_flag = topic_sys_flag;
                     topic_config.topic_filter_type = default_topic_config.topic_filter_type;
+
                     info!(
                         "Create new topic by default topic:[{}] config:[{:?}] producer:[{}]",
                         default_topic, topic_config, remote_address
                     );
-                    let topic_config = ArcMut::new(topic_config);
-                    self.put_topic_config(topic_config.clone());
-                    self.data_version.mut_from_ref().next_version_with(
-                        self.broker_runtime_inner
-                            .message_store()
-                            .as_ref()
-                            .unwrap()
-                            .get_state_machine_version(),
-                    );
-                    self.persist();
-                    (Some(topic_config), true)
-                } else {
-                    warn!(
-                        "Create new topic failed, because the default topic[{}] has no perm [{}] \
-                         producer:[{}]",
-                        default_topic, default_topic_config.perm, remote_address
-                    );
-                    (None, false)
-                }
-            } else {
-                (None, false)
-            }
-        } else {
-            (None, false)
-        };
 
+                    let topic_config_arc = ArcMut::new(topic_config);
+                    e.insert(topic_config_arc.clone());
+                    (Some(topic_config_arc), true)
+                }
+            }
+        }; // Entry is dropped here
+
+        // Persist operation only needs lock to prevent concurrent file writes
         if create_new {
-            self.register_broker_data(topic_config.clone().unwrap());
+            let config_for_register = topic_config.clone().unwrap();
+
+            let _lock = self.persist_lock.lock();
+            self.data_version.mut_from_ref().next_version_with(
+                self.broker_runtime_inner
+                    .message_store()
+                    .unwrap()
+                    .get_state_machine_version(),
+            );
+            self.persist();
+            drop(_lock);
+
+            self.register_broker_data(config_for_register).await;
         }
         topic_config
     }
 
-    pub fn create_topic_in_send_message_back_method(
+    pub async fn create_topic_in_send_message_back_method(
         &mut self,
         topic: &CheetahString,
         client_default_topic_queue_nums: i32,
@@ -395,6 +420,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         is_order: bool,
         topic_sys_flag: u32,
     ) -> Option<ArcMut<TopicConfig>> {
+        // Fast path: check existing config
         if let Some(mut config) = self.get_topic_config(topic) {
             if is_order != config.order {
                 config.order = is_order;
@@ -403,60 +429,62 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             return Some(config);
         }
 
-        let (topic_config, create_new) = if let Some(_lock) = self
-            .topic_config_table_lock
-            .try_lock_for(Duration::from_secs(3))
-        {
-            if let Some(config) = self.get_topic_config(topic) {
-                return Some(config);
+        // Use DashMap entry API for atomic check-and-insert
+        let (topic_config, create_new) = {
+            let entry = self.topic_config_table.entry(topic.clone());
+
+            match entry {
+                dashmap::mapref::entry::Entry::Occupied(e) => (Some(e.get().clone()), false),
+                dashmap::mapref::entry::Entry::Vacant(e) => {
+                    let mut config = ArcMut::new(TopicConfig::new(topic));
+                    config.read_queue_nums = client_default_topic_queue_nums as u32;
+                    config.write_queue_nums = client_default_topic_queue_nums as u32;
+                    config.perm = perm;
+                    config.topic_sys_flag = topic_sys_flag;
+                    config.order = is_order;
+
+                    e.insert(config.clone());
+                    (Some(config), true)
+                }
             }
+        }; // Entry is dropped here
 
-            let mut config = ArcMut::new(TopicConfig::new(topic));
-            config.read_queue_nums = client_default_topic_queue_nums as u32;
-            config.write_queue_nums = client_default_topic_queue_nums as u32;
-            config.perm = perm;
-            config.topic_sys_flag = topic_sys_flag;
-            config.order = is_order;
+        // Persist operation only needs lock
+        if create_new {
+            let config_for_register = topic_config.clone().unwrap();
 
-            let current_ref = self.put_topic_config(config);
+            let _lock = self.persist_lock.lock();
             self.data_version.mut_from_ref().next_version_with(
                 self.broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_state_machine_version(),
             );
             self.persist();
-            (current_ref, true)
-        } else {
-            (None, false)
-        };
+            drop(_lock);
 
-        if create_new {
-            self.register_broker_data(topic_config.clone().unwrap());
+            self.register_broker_data(config_for_register).await;
         }
         topic_config
     }
 
-    fn register_broker_data(&mut self, topic_config: ArcMut<TopicConfig>) {
+    async fn register_broker_data(&mut self, topic_config: ArcMut<TopicConfig>) {
         let broker_config = self.broker_runtime_inner.broker_config().clone();
         let broker_runtime_inner = self.broker_runtime_inner.clone();
-        let topic_config_clone = topic_config.clone();
         let data_version = self.data_version.as_ref().clone();
-        tokio::spawn(async move {
-            if broker_config.enable_single_topic_register {
-                broker_runtime_inner
-                    .register_single_topic_all(topic_config_clone)
-                    .await;
-            } else {
-                BrokerRuntimeInner::register_increment_broker_data(
-                    broker_runtime_inner,
-                    vec![topic_config_clone],
-                    data_version,
-                )
+
+        if broker_config.enable_single_topic_register {
+            broker_runtime_inner
+                .register_single_topic_all(topic_config)
                 .await;
-            }
-        });
+        } else {
+            BrokerRuntimeInner::register_increment_broker_data(
+                broker_runtime_inner,
+                vec![topic_config],
+                data_version,
+            )
+            .await;
+        }
     }
 
     pub fn update_topic_config_list(&mut self, topic_config_list: &mut [ArcMut<TopicConfig>]) {
@@ -479,7 +507,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         if let Some(old) = old {
             info!("delete topic config OK, topic: {:?}", old);
             let state_machine_version =
-                if let Some(message_store) = self.broker_runtime_inner.message_store().as_ref() {
+                if let Some(message_store) = self.broker_runtime_inner.message_store() {
                     message_store.get_state_machine_version()
                 } else {
                     0
@@ -532,7 +560,6 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         self.data_version.mut_from_ref().next_version_with(
             self.broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_state_machine_version(),
         );
@@ -572,51 +599,57 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         self.topic_config_table = topic_config_table;
     }
 
-    pub fn create_topic_of_tran_check_max_time(
+    pub async fn create_topic_of_tran_check_max_time(
         &mut self,
         client_default_topic_queue_nums: i32,
         perm: u32,
     ) -> Option<ArcMut<TopicConfig>> {
-        if let Some(ref mut config) =
-            self.get_topic_config(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC)
+        // Fast path: lock-free read
+        if let Some(config) = self
+            .topic_config_table
+            .get(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC)
         {
-            return Some(config.clone());
+            return Some(config.value().clone());
         }
 
-        let (topic_config, create_new) = if let Some(_lock) = self
-            .topic_config_table_lock
-            .try_lock_for(Duration::from_secs(3))
-        {
-            if let Some(config) =
-                self.get_topic_config(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC)
-            {
-                return Some(config.clone());
-            }
+        // Use DashMap entry API for atomic check-and-insert
+        let (topic_config, create_new) = {
+            let topic_key =
+                CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC);
+            let entry = self.topic_config_table.entry(topic_key);
 
-            let mut config = ArcMut::new(TopicConfig::new(
-                TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC,
-            ));
-            config.read_queue_nums = client_default_topic_queue_nums as u32;
-            config.write_queue_nums = client_default_topic_queue_nums as u32;
-            config.perm = perm;
-            config.topic_sys_flag = 0;
-            info!("create new topic {:?}", config);
-            self.put_topic_config(config.clone());
+            match entry {
+                dashmap::mapref::entry::Entry::Occupied(e) => (Some(e.get().clone()), false),
+                dashmap::mapref::entry::Entry::Vacant(e) => {
+                    let mut config = ArcMut::new(TopicConfig::new(
+                        TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC,
+                    ));
+                    config.read_queue_nums = client_default_topic_queue_nums as u32;
+                    config.write_queue_nums = client_default_topic_queue_nums as u32;
+                    config.perm = perm;
+                    config.topic_sys_flag = 0;
+                    info!("create new topic {:?}", config);
+                    e.insert(config.clone());
+                    (Some(config), true)
+                }
+            }
+        }; // Entry is dropped here
+
+        // Persist operation only needs lock
+        if create_new {
+            let config_for_register = topic_config.clone().unwrap();
+
+            let _lock = self.persist_lock.lock();
             self.data_version.mut_from_ref().next_version_with(
                 self.broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_state_machine_version(),
             );
             self.persist();
-            (Some(config), true)
-        } else {
-            (None, false)
-        };
+            drop(_lock);
 
-        if create_new {
-            self.register_broker_data(topic_config.clone().unwrap());
+            self.register_broker_data(config_for_register).await;
         }
         topic_config
     }
@@ -642,8 +675,174 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         &self.broker_runtime_inner
     }
 
-    pub fn update_order_topic_config(&mut self, _order_kv_table_from_ns: KVTable) {
-        error!("update_order_topic_config unimplemented ");
+    pub fn update_order_topic_config(&mut self, order_kv_table_from_ns: &KVTable) {
+        if !order_kv_table_from_ns.table.is_empty() {
+            let mut is_change = false;
+
+            for topic in order_kv_table_from_ns.table.keys() {
+                if let Some(mut topic_config) = self.get_topic_config(topic) {
+                    if !topic_config.order {
+                        topic_config.order = true;
+                        self.put_topic_config(topic_config);
+                        is_change = true;
+                        info!("update order topic config, topic={}, order=true", topic);
+                    }
+                }
+            }
+
+            if is_change {
+                self.data_version.mut_from_ref().next_version_with(
+                    self.broker_runtime_inner
+                        .message_store()
+                        .unwrap()
+                        .get_state_machine_version(),
+                );
+                self.persist();
+            }
+        }
+    }
+
+    pub async fn create_topic_if_absent(
+        &mut self,
+        mut topic_config: TopicConfig,
+        register: bool,
+    ) -> Option<ArcMut<TopicConfig>> {
+        if topic_config.topic_name.is_none() {
+            error!("createTopicIfAbsent: TopicName cannot be None");
+            return None;
+        }
+
+        let topic_name = topic_config.topic_name.as_ref().unwrap().clone();
+
+        // Fast path: lock-free read
+        if let Some(config) = self.topic_config_table.get(&topic_name) {
+            return Some(config.value().clone());
+        }
+
+        // Use DashMap entry API for atomic check-and-insert
+        let (result, create_new) = {
+            let entry = self.topic_config_table.entry(topic_name.clone());
+
+            match entry {
+                dashmap::mapref::entry::Entry::Occupied(e) => (Some(e.get().clone()), false),
+                dashmap::mapref::entry::Entry::Vacant(e) => {
+                    info!(
+                        "Create new topic [{}] config:[{:?}]",
+                        topic_name, topic_config
+                    );
+
+                    // Ensure topic_name is set
+                    topic_config.topic_name = Some(topic_name.clone());
+
+                    let config = ArcMut::new(topic_config);
+                    e.insert(config.clone());
+                    (Some(config), true)
+                }
+            }
+        }; // Entry is dropped here
+
+        // Persist operation only needs lock
+        if create_new {
+            let config_for_register = if register { result.clone() } else { None };
+
+            let _lock = self.persist_lock.lock();
+            self.data_version.mut_from_ref().next_version_with(
+                self.broker_runtime_inner
+                    .message_store()
+                    .unwrap()
+                    .get_state_machine_version(),
+            );
+            self.persist();
+            drop(_lock);
+
+            if let Some(config) = config_for_register {
+                self.register_broker_data(config).await;
+            }
+        }
+
+        result
+    }
+
+    pub async fn update_topic_unit_flag(&mut self, topic: &str, unit: bool) {
+        if let Some(mut topic_config) = self.get_topic_config(topic) {
+            let old_topic_sys_flag = topic_config.topic_sys_flag;
+
+            topic_config.topic_sys_flag = if unit {
+                TopicSysFlag::set_unit_flag(old_topic_sys_flag)
+            } else {
+                TopicSysFlag::clear_unit_flag(old_topic_sys_flag)
+            };
+
+            info!(
+                "update topic sys flag. oldTopicSysFlag={}, newTopicSysFlag={}",
+                old_topic_sys_flag, topic_config.topic_sys_flag
+            );
+
+            self.put_topic_config(topic_config.clone());
+            self.data_version.mut_from_ref().next_version_with(
+                self.broker_runtime_inner
+                    .message_store()
+                    .unwrap()
+                    .get_state_machine_version(),
+            );
+            self.persist();
+            self.register_broker_data(topic_config).await;
+        }
+    }
+
+    pub async fn update_topic_unit_sub_flag(&mut self, topic: &str, has_unit_sub: bool) {
+        if let Some(mut topic_config) = self.get_topic_config(topic) {
+            let old_topic_sys_flag = topic_config.topic_sys_flag;
+
+            topic_config.topic_sys_flag = if has_unit_sub {
+                TopicSysFlag::set_unit_sub_flag(old_topic_sys_flag)
+            } else {
+                TopicSysFlag::clear_unit_sub_flag(old_topic_sys_flag)
+            };
+
+            info!(
+                "update topic sys flag. oldTopicSysFlag={}, newTopicSysFlag={}",
+                old_topic_sys_flag, topic_config.topic_sys_flag
+            );
+
+            self.put_topic_config(topic_config.clone());
+            self.data_version.mut_from_ref().next_version_with(
+                self.broker_runtime_inner
+                    .message_store()
+                    .unwrap()
+                    .get_state_machine_version(),
+            );
+            self.persist();
+            self.register_broker_data(topic_config).await;
+        }
+    }
+
+    pub fn load_data_version(&mut self) -> bool {
+        let file_path = self.config_file_path();
+        match file_utils::file_to_string(&file_path) {
+            Ok(json_string) => {
+                if let Ok(wrapper) = TopicConfigSerializeWrapper::decode_string(json_string) {
+                    if let Some(data_version) = wrapper.data_version() {
+                        self.data_version
+                            .mut_from_ref()
+                            .assign_new_one(data_version);
+                        info!(
+                            "load topic metadata dataVersion success {}, {:?}",
+                            file_path, data_version
+                        );
+                        return true;
+                    }
+                }
+                false
+            }
+            Err(e) => {
+                error!(
+                    "load topic metadata dataVersion failed {}: {:?}",
+                    file_path, e
+                );
+                false
+            }
+        }
     }
 }
 

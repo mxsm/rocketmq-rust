@@ -1,25 +1,27 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
+
 #![allow(unused_variables)]
 
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
+use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
@@ -36,6 +38,8 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::utils::data_converter::DataConverter;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
@@ -73,6 +77,7 @@ pub(crate) struct PopBufferMergeService<MS: MessageStore> {
     batch_ack_index_list: Vec<u8>,
     master: AtomicBool,
     shutdown: Arc<Notify>,
+    start_time: Instant,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
@@ -99,6 +104,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             batch_ack_index_list: Vec::with_capacity(32),
             master: AtomicBool::new(false),
             shutdown: Arc::new(Notify::new()),
+            start_time: Instant::now(),
             broker_runtime_inner,
         }
     }
@@ -112,39 +118,50 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         revive_queue_id: i32,
         revive_queue_offset: i64,
         next_begin_offset: i64,
-    ) -> bool {
-        // Check if buffer merge is enabled
+    ) -> RocketMQResult<()> {
         let broker_config = self.broker_runtime_inner.broker_config();
+
         if !broker_config.enable_pop_buffer_merge {
-            return false;
+            return Err(RocketMQError::ClientInvalidState {
+                expected: "buffer enabled",
+                actual: "buffer disabled".to_string(),
+            });
         }
 
-        // Check if service is active
         if !self.serving.load(Ordering::Acquire) {
-            return false;
+            return Err(RocketMQError::ClientInvalidState {
+                expected: "serving",
+                actual: "not serving".to_string(),
+            });
         }
 
-        // Check timeout condition
-        let now = get_current_millis() as i64;
-
-        if point.get_revive_time() - now < broker_config.pop_ck_stay_buffer_time_out as i64 + 1500 {
+        let now = get_current_millis();
+        if point.get_revive_time() - (now as i64)
+            < broker_config.pop_ck_stay_buffer_time_out as i64 + 1500
+        {
             if broker_config.enable_pop_log {
                 warn!("[PopBuffer]add ck, timeout, {:?}, {}", point, now);
             }
-            return false;
+            return Err(RocketMQError::Timeout {
+                operation: "add_checkpoint",
+                timeout_ms: broker_config.pop_ck_stay_buffer_time_out,
+            });
         }
 
-        // Check buffer size
-        if self.counter.load(Ordering::Acquire) as i64 > broker_config.pop_ck_max_buffer_size {
+        let current_counter = self.counter.load(Ordering::Acquire);
+        if current_counter as i64 > broker_config.pop_ck_max_buffer_size {
             warn!(
                 "[PopBuffer]add ck, max size, {:?}, {}",
-                point,
-                self.counter.load(Ordering::Acquire)
+                point, current_counter
             );
-            return false;
+            return Err(RocketMQError::StorageOutOfSpace {
+                path: format!(
+                    "PopBuffer(current={}, max={})",
+                    current_counter, broker_config.pop_ck_max_buffer_size
+                ),
+            });
         }
 
-        // Create wrapper
         let point_wrapper = ArcMut::new(PopCheckPointWrapper::new(
             revive_queue_id,
             revive_queue_offset,
@@ -152,32 +169,47 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             next_begin_offset,
         ));
 
-        // Check if queue is valid
         if !self.check_queue_ok(&point_wrapper).await {
-            return false;
+            let queue = self.commit_offsets.get(point_wrapper.get_lock_key());
+            let queue_size = match queue {
+                Some(ref q) => q.get().lock().await.len(),
+                None => 0,
+            };
+            return Err(RocketMQError::BrokerOperationFailed {
+                operation: "add_checkpoint",
+                code: -1,
+                message: format!(
+                    "Queue full: size={}, max={}",
+                    queue_size, broker_config.pop_ck_offset_max_queue_size
+                ),
+                broker_addr: None,
+            });
         }
 
-        // Check for merge key conflict
         let merge_key = point_wrapper.get_merge_key();
         if self.buffer.contains_key(merge_key) {
             warn!(
                 "[PopBuffer]mergeKey conflict when add ck. ck:{:?}, mergeKey:{}",
                 point_wrapper, merge_key
             );
-            return false;
+            return Err(RocketMQError::BrokerOperationFailed {
+                operation: "add_checkpoint",
+                code: -1,
+                message: format!("Merge key conflict: {}", merge_key),
+                broker_addr: None,
+            });
         }
 
-        // Add to offset queue
-        self.put_offset_queue(point_wrapper.clone()).await;
+        self.put_offset_queue(point_wrapper.clone()).await?;
 
         if broker_config.enable_pop_log {
             info!("[PopBuffer]add ck, {:?}", point_wrapper);
         }
-        // Add to buffer
+
         self.buffer.insert(merge_key.clone(), point_wrapper);
         self.counter.fetch_add(1, Ordering::AcqRel);
 
-        true
+        Ok(())
     }
 
     // Helper methods
@@ -201,8 +233,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         revive_queue_id: i32,
         revive_queue_offset: i64,
         next_begin_offset: i64,
-    ) -> bool {
-        // Create a new wrapper with justOffset flag set to true
+    ) -> RocketMQResult<()> {
         let point_wrapper = ArcMut::new(PopCheckPointWrapper::new_with_offset(
             revive_queue_id,
             revive_queue_offset,
@@ -211,32 +242,34 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             true,
         ));
 
-        // Check for merge key conflict in the buffer
         let merge_key = point_wrapper.get_merge_key();
         if self.buffer.contains_key(merge_key) {
-            // Log warning about merge key conflict
             warn!(
                 "[PopBuffer]mergeKey conflict when add ckJustOffset. ck:{:?}, mergeKey:{}",
                 point_wrapper, merge_key
             );
-            return false;
+            return Err(RocketMQError::BrokerOperationFailed {
+                operation: "add_checkpoint_just_offset",
+                code: -1,
+                message: format!("Merge key conflict: {}", merge_key),
+                broker_addr: None,
+            });
         }
 
-        // Put checkpoint to store with condition: !checkQueueOk
         let should_run_in_current = !self.check_queue_ok(&point_wrapper).await;
         self.put_ck_to_store(point_wrapper.as_ref(), should_run_in_current)
             .await;
 
-        // Add to offset queue
-        self.put_offset_queue(point_wrapper.clone()).await;
-        // Log if enabled
+        self.put_offset_queue(point_wrapper.clone()).await?;
+
         if self.broker_runtime_inner.broker_config().enable_pop_log {
             info!("[PopBuffer]add ck just offset, {:?}", point_wrapper);
         }
-        // Add to buffer and increment counter
+
         self.buffer.insert(merge_key.clone(), point_wrapper);
         self.counter.fetch_add(1, Ordering::AcqRel);
-        true
+
+        Ok(())
     }
 
     pub fn add_ack(&mut self, revive_qid: i32, ack_msg: &dyn AckMessage) -> bool {
@@ -275,12 +308,16 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         }
         let point = point_wrapper.get_ck();
         let now = get_current_millis();
-        if (point.get_revive_time() as u64 - now)
-            < self
-                .broker_runtime_inner
-                .broker_config()
-                .pop_ck_stay_buffer_time_out
-                + 1500
+        let revive_time = point.get_revive_time() as u64;
+        let pop_time = point.pop_time as u64;
+
+        if revive_time > now
+            && (revive_time - now)
+                < self
+                    .broker_runtime_inner
+                    .broker_config()
+                    .pop_ck_stay_buffer_time_out
+                    + 1500
         {
             if self.broker_runtime_inner.broker_config().enable_pop_log {
                 warn!(
@@ -293,12 +330,13 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             }
             return false;
         }
-        if now - point.pop_time as u64
-            > self
-                .broker_runtime_inner
-                .broker_config()
-                .pop_ck_stay_buffer_time_out
-                - 1500
+        if now > pop_time
+            && (now - pop_time)
+                > self
+                    .broker_runtime_inner
+                    .broker_config()
+                    .pop_ck_stay_buffer_time_out
+                    - 1500
         {
             if self.broker_runtime_inner.broker_config().enable_pop_log {
                 warn!(
@@ -333,7 +371,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                     "[PopBuffer]Invalid index of ack, reviveQid={}, {}, {}",
                     revive_qid, ack_msg, point
                 );
-                return true;
+                return false;
             }
         }
         true
@@ -406,15 +444,15 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         let start_time = Instant::now();
         let mut count = 0;
         let mut count_ck = 0;
-        let pop_ck_stay_buffer_time_out = self
-            .broker_runtime_inner
-            .broker_config()
-            .pop_ck_stay_buffer_time_out as i64;
-        let pop_ck_stay_buffer_time = self
-            .broker_runtime_inner
-            .broker_config()
-            .pop_ck_stay_buffer_time as i64;
-        let mut remove_keys = HashSet::new();
+
+        let broker_config = self.broker_runtime_inner.broker_config();
+        let pop_ck_stay_buffer_time_out = broker_config.pop_ck_stay_buffer_time_out as i64;
+        let pop_ck_stay_buffer_time = broker_config.pop_ck_stay_buffer_time as i64;
+        let enable_pop_log = broker_config.enable_pop_log;
+
+        let now = get_current_millis() as i64;
+        let mut remove_keys = HashSet::with_capacity(256);
+
         for entry in self.buffer.iter() {
             let point_wrapper = entry.value();
 
@@ -424,21 +462,16 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                 || is_ck_done(point_wrapper)
                 || is_ck_done_for_finish(point_wrapper) && point_wrapper.is_ck_stored()
             {
-                self.counter.fetch_sub(1, Ordering::AcqRel);
                 remove_keys.insert(entry.key().clone());
                 continue;
             }
             let point = point_wrapper.get_ck();
-            let now = get_current_millis();
 
-            // remove CheckPoint or not
             let mut remove_ck = !self.serving.load(Ordering::Acquire);
-            // ck will be timeout
-            if (point.get_revive_time() - now as i64) < pop_ck_stay_buffer_time_out {
+            if (point.get_revive_time() - now) < pop_ck_stay_buffer_time_out {
                 remove_ck = true;
             }
-            // the time stayed is too long
-            if (now as i64 - point.get_revive_time()) > pop_ck_stay_buffer_time {
+            if (now - point.get_revive_time()) > pop_ck_stay_buffer_time {
                 remove_ck = true;
             }
 
@@ -510,16 +543,31 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                 }
                 if is_ck_done_for_finish(point_wrapper) && point_wrapper.is_ck_stored() {
                     remove_keys.insert(entry.key().clone());
-                    self.counter.fetch_sub(1, Ordering::AcqRel);
                 }
             }
         }
-        // Remove keys
+
         for key in remove_keys {
-            self.buffer.remove(&key);
+            if let Some((_, point_wrapper)) = self.buffer.remove(&key) {
+                let _ = self
+                    .commit_offsets
+                    .remove(point_wrapper.as_ref().get_lock_key());
+                self.counter.fetch_sub(1, Ordering::AcqRel);
+            }
         }
-        //Scan the completed CheckPoints and submit message consumption progress for them.
+
         let offset_buffer_size = self.scan_commit_offset().await;
+
+        if count > 0 && enable_pop_log {
+            info!(
+                "[PopBuffer]scan finished, cost={}ms, count={}, countCk={}, offset_size={}",
+                start_time.elapsed().as_millis(),
+                count,
+                count_ck,
+                offset_buffer_size
+            );
+        }
+
         let eclipse = start_time.elapsed().as_millis() as i64;
         if eclipse
             > self
@@ -550,32 +598,50 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         }
     }
     fn scan_garbage(&mut self) {
+        let current_millis = get_current_millis();
+        let timeout_threshold = self.minute5;
+
         self.commit_offsets.retain(|key, value| {
             let key_array: Vec<&str> = key.split(PopAckConstants::SPLIT).collect();
-            if key_array.is_empty() || key_array.len() != 3 {
-                return true;
+            if key_array.len() != 3 {
+                warn!("[PopBuffer]invalid lock key format: {}, removing", key);
+                return false;
             }
             let topic = key_array[0];
             let cid = key_array[1];
+
             if self
                 .broker_runtime_inner
                 .topic_config_manager()
                 .select_topic_config(&topic.into())
                 .is_none()
             {
+                info!("[PopBuffer]remove nonexistent topic {} in buffer", topic);
                 return false;
             }
 
-            if self
+            if !self
                 .broker_runtime_inner
                 .subscription_group_manager()
                 .contains_subscription_group(&cid.into())
             {
+                info!(
+                    "[PopBuffer]remove nonexistent subscription group {} of topic {} in buffer",
+                    cid, topic
+                );
                 return false;
             }
-            if get_current_millis() - value.get_time() > self.minute5 {
+
+            let time_diff = current_millis.saturating_sub(value.get_time());
+            if time_diff > timeout_threshold {
+                info!(
+                    "[PopBuffer]remove long time not used sub {} of topic {} in buffer, \
+                     unused_time_ms={}",
+                    cid, topic, time_diff
+                );
                 return false;
             }
+
             true
         });
     }
@@ -597,6 +663,14 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             loop {
                 select! {
                     _ = this.shutdown.notified() => {
+                        info!("[PopBuffer]Shutdown signal received, processing remaining data");
+
+                        while !this.buffer.is_empty() || this.get_offset_total_size().await > 0 {
+                            this.mut_from_ref().scan().await;
+                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                        }
+
+                        info!("[PopBuffer]All data processed, shutting down");
                         break;
                     }
                     _ = async {
@@ -736,17 +810,52 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         );
         point_wrapper.set_ck_stored(true);
 
-        self.put_offset_queue(ArcMut::new(point_wrapper)).await;
+        let _ = self.put_offset_queue(ArcMut::new(point_wrapper)).await;
     }
-    async fn put_offset_queue(&self, point_wrapper: ArcMut<PopCheckPointWrapper>) -> bool {
-        let mut queue = self
-            .commit_offsets
-            .entry(point_wrapper.lock_key.clone())
-            .or_insert(QueueWithTime::new());
-        queue.set_time(point_wrapper.get_ck().pop_time as u64);
-        let mut guard = queue.get().lock().await;
+    async fn put_offset_queue(
+        &self,
+        point_wrapper: ArcMut<PopCheckPointWrapper>,
+    ) -> RocketMQResult<()> {
+        let lock_key = point_wrapper.lock_key.clone();
+        let pop_time = point_wrapper.get_ck().pop_time as u64;
+
+        self.commit_offsets
+            .entry(lock_key.clone())
+            .and_modify(|queue| {
+                queue.set_time(pop_time);
+            })
+            .or_insert_with(|| {
+                let mut queue = QueueWithTime::new();
+                queue.set_time(pop_time);
+                queue
+            });
+
+        let queue_ref =
+            self.commit_offsets
+                .get(&lock_key)
+                .ok_or_else(|| RocketMQError::StorageReadFailed {
+                    path: "commit_offsets".to_string(),
+                    reason: "Queue not found after insert".to_string(),
+                })?;
+
+        let mut guard = queue_ref.get().lock().await;
+
+        let max_size = self
+            .broker_runtime_inner
+            .broker_config()
+            .pop_ck_offset_max_queue_size as usize;
+
+        if guard.len() >= max_size {
+            return Err(RocketMQError::BrokerOperationFailed {
+                operation: "put_offset_queue",
+                code: -1,
+                message: format!("Queue full: size={}, max={}", guard.len(), max_size),
+                broker_addr: None,
+            });
+        }
+
         guard.push_back(point_wrapper);
-        true
+        Ok(())
     }
 
     async fn put_ck_to_store(&self, point_wrapper: &PopCheckPointWrapper, flag: bool) {
@@ -785,6 +894,44 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                     .logics_offset,
             );
         }
+    }
+
+    pub fn shutdown(&self) {
+        info!("[PopBuffer]Initiating graceful shutdown");
+        self.shutdown.notify_waiters();
+    }
+
+    pub async fn wait_for_shutdown(&self, timeout: std::time::Duration) -> RocketMQResult<()> {
+        use std::time::Instant;
+
+        let start = Instant::now();
+
+        info!(
+            "[PopBuffer]Waiting for shutdown, buffer_size={}, offset_size={}",
+            self.buffer.len(),
+            self.get_offset_total_size().await
+        );
+
+        while !self.buffer.is_empty() || self.get_offset_total_size().await > 0 {
+            if start.elapsed() > timeout {
+                warn!(
+                    "[PopBuffer]Shutdown timeout after {:?}, buffer_size={}, offset_size={}, \
+                     forcing exit",
+                    timeout,
+                    self.buffer.len(),
+                    self.get_offset_total_size().await
+                );
+                return Err(RocketMQError::Timeout {
+                    operation: "shutdown",
+                    timeout_ms: timeout.as_millis() as u64,
+                });
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+
+        info!("[PopBuffer]Shutdown completed, all buffers cleared");
+        Ok(())
     }
 
     async fn put_batch_ack_to_store(
@@ -898,7 +1045,7 @@ fn is_ck_done(point_wrapper: &PopCheckPointWrapper) -> bool {
 fn is_ck_done_for_finish(point_wrapper: &PopCheckPointWrapper) -> bool {
     let num = point_wrapper.ck.num;
     let bits = point_wrapper.bits.load(Ordering::Acquire)
-        ^ point_wrapper.to_store_bits.load(Ordering::Acquire);
+        | point_wrapper.to_store_bits.load(Ordering::Acquire);
     for i in 0..num {
         if !DataConverter::get_bit(bits, i as usize) {
             return false;
@@ -936,7 +1083,7 @@ impl<T> QueueWithTime<T> {
 pub struct PopCheckPointWrapper {
     revive_queue_id: i32,
     // -1: not stored, >=0: stored, Long.MAX: storing.
-    revive_queue_offset: AtomicI32,
+    revive_queue_offset: AtomicI64,
     ck: Arc<PopCheckPoint>,
     // bit for concurrent
     bits: AtomicI32,
@@ -1011,7 +1158,7 @@ impl PopCheckPointWrapper {
         );
         Self {
             revive_queue_id,
-            revive_queue_offset: AtomicI32::new(revive_queue_offset as i32),
+            revive_queue_offset: AtomicI64::new(revive_queue_offset),
             ck,
             bits: AtomicI32::new(0),
             to_store_bits: AtomicI32::new(0),
@@ -1049,7 +1196,7 @@ impl PopCheckPointWrapper {
         );
         Self {
             revive_queue_id,
-            revive_queue_offset: AtomicI32::new(revive_queue_offset as i32),
+            revive_queue_offset: AtomicI64::new(revive_queue_offset),
             ck,
             bits: AtomicI32::new(0),
             to_store_bits: AtomicI32::new(0),
@@ -1068,7 +1215,7 @@ impl PopCheckPointWrapper {
 
     #[inline]
     pub fn get_revive_queue_offset(&self) -> i64 {
-        self.revive_queue_offset.load(Ordering::SeqCst) as i64
+        self.revive_queue_offset.load(Ordering::Acquire)
     }
 
     #[inline]
@@ -1079,7 +1226,7 @@ impl PopCheckPointWrapper {
     #[inline]
     pub fn set_revive_queue_offset(&self, revive_queue_offset: i64) {
         self.revive_queue_offset
-            .store(revive_queue_offset as i32, Ordering::SeqCst);
+            .store(revive_queue_offset, Ordering::Release);
     }
 
     #[inline]

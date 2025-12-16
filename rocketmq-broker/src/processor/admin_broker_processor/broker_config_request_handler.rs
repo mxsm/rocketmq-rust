@@ -1,19 +1,19 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
 
 use std::collections::HashMap;
 
@@ -50,7 +50,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         todo!()
     }
 
@@ -60,7 +60,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
         // broker config => broker config
         // default message store config => message store config
@@ -68,7 +68,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         let message_store_config = self
             .broker_runtime_inner
             .message_store()
-            .as_ref()
             .unwrap()
             .get_message_store_config()
             .clone();
@@ -85,7 +84,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         if !body.is_empty() {
             response.set_body_mut_ref(body);
         }
-        Some(response)
+        Ok(Some(response))
     }
 
     pub async fn get_broker_runtime_info(
@@ -94,21 +93,20 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
         let runtime_info = self.prepare_runtime_info();
         let key_value_table = KVTable {
             table: runtime_info,
         };
         response.set_body_mut_ref(serde_json::to_string(&key_value_table).unwrap());
-        Some(response)
+        Ok(Some(response))
     }
 
     fn prepare_runtime_info(&self) -> HashMap<CheetahString, CheetahString> {
         let mut runtime_info = self
             .broker_runtime_inner
             .message_store()
-            .as_ref()
             .unwrap()
             .get_runtime_info();
         self.broker_runtime_inner
@@ -176,7 +174,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             "dispatchBehindBytes".to_string(),
             self.broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .dispatch_behind_bytes()
                 .to_string(),
@@ -185,7 +182,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             "pageCacheLockTimeMills".to_string(),
             self.broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .lock_time_millis()
                 .to_string(),
@@ -194,7 +190,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             "earliestMessageTimeStamp".to_string(),
             self.broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_earliest_message_time_store()
                 .to_string(),
@@ -215,7 +210,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
                 "timerReadBehind".to_string(),
                 self.broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_timer_message_store()
                     .unwrap()
@@ -226,7 +220,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
                 "timerOffsetBehind".to_string(),
                 self.broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_timer_message_store()
                     .unwrap()
@@ -237,7 +230,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
                 "timerCongestNum".to_string(),
                 self.broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_timer_message_store()
                     .unwrap()
@@ -248,7 +240,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
                 "timerEnqueueTps".to_string(),
                 self.broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_timer_message_store()
                     .unwrap()
@@ -259,7 +250,6 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
                 "timerDequeueTps".to_string(),
                 self.broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_timer_message_store()
                     .unwrap()
@@ -273,7 +263,7 @@ impl<MS: MessageStore> BrokerConfigRequestHandler<MS> {
             runtime_info.insert("timerEnqueueTps".to_string(), "0.0".to_string());
             runtime_info.insert("timerDequeueTps".to_string(), "0.0".to_string());
         }
-        let default_message_store = self.broker_runtime_inner.message_store().as_ref().unwrap();
+        let default_message_store = self.broker_runtime_inner.message_store().unwrap();
         runtime_info.insert(
             "remainTransientStoreBufferNumbs".to_string(),
             default_message_store

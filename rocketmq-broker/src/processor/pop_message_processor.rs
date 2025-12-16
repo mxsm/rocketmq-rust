@@ -1,19 +1,20 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
+
 #![allow(unused_variables)]
 
 use std::collections::HashMap;
@@ -424,7 +425,7 @@ where
                     let message_filter: Box<dyn MessageFilter> =
                         Box::new(ExpressionMessageFilter::new(
                             Some(subscription_data.clone()),
-                            Some(consumer_filter_data.clone()),
+                            Some(consumer_filter_data),
                             Arc::new(self.broker_runtime_inner.consumer_filter_manager().clone()),
                         ));
                     Some(message_filter)
@@ -490,9 +491,10 @@ where
         let revive_qid = if request_header.order.unwrap_or(false) {
             POP_ORDER_REVIVE_QUEUE
         } else {
-            (self.ck_message_number.fetch_add(1, Ordering::AcqRel)
-                % self.broker_runtime_inner.broker_config().revive_queue_num as i64)
-                .abs() as i32
+            let revive_queue_num =
+                self.broker_runtime_inner.broker_config().revive_queue_num as i64;
+            let ck_num = self.ck_message_number.fetch_add(1, Ordering::AcqRel);
+            ((ck_num % revive_queue_num + revive_queue_num) % revive_queue_num) as i32
         };
         let mut get_message_result = ArcMut::new(GetMessageResult::new_result_size(
             request_header.max_msg_nums as usize,
@@ -897,24 +899,30 @@ where
             .try_lock_with_key(lock_key.clone())
             .await
         {
-            return self
-                .broker_runtime_inner
-                .message_store()
-                .as_ref()
-                .unwrap()
-                .get_max_offset_in_queue(topic, queue_id)
-                - offset
-                + rest_num;
+            let message_store = match self.broker_runtime_inner.message_store() {
+                Some(store) => store,
+                None => {
+                    warn!(
+                        "Message store not initialized, topic={}, group={}",
+                        topic, request_header.consumer_group
+                    );
+                    return rest_num;
+                }
+            };
+            return message_store.get_max_offset_in_queue(topic, queue_id) - offset + rest_num;
         }
         if self.is_pop_should_stop(topic, &request_header.consumer_group, queue_id) {
-            let result = self
-                .broker_runtime_inner
-                .message_store()
-                .as_ref()
-                .unwrap()
-                .get_max_offset_in_queue(topic, queue_id)
-                - offset
-                + rest_num;
+            let message_store = match self.broker_runtime_inner.message_store() {
+                Some(store) => store,
+                None => {
+                    warn!(
+                        "Message store not initialized, topic={}, group={}",
+                        topic, request_header.consumer_group
+                    );
+                    return rest_num;
+                }
+            };
+            let result = message_store.get_max_offset_in_queue(topic, queue_id) - offset + rest_num;
             self.queue_lock_manager()
                 .unlock_with_key(lock_key.clone())
                 .await;
@@ -955,24 +963,39 @@ where
         }
 
         if get_message_result.message_mapped_list().len() >= request_header.max_msg_nums as usize {
-            let result = self
-                .broker_runtime_inner
-                .message_store()
-                .as_ref()
-                .unwrap()
-                .get_max_offset_in_queue(topic, queue_id)
-                - offset
-                + rest_num;
+            let message_store = match self.broker_runtime_inner.message_store() {
+                Some(store) => store,
+                None => {
+                    warn!(
+                        "Message store not initialized, topic={}, group={}",
+                        topic, request_header.consumer_group
+                    );
+                    self.queue_lock_manager()
+                        .unlock_with_key(lock_key.clone())
+                        .await;
+                    return rest_num;
+                }
+            };
+            let result = message_store.get_max_offset_in_queue(topic, queue_id) - offset + rest_num;
             self.queue_lock_manager()
                 .unlock_with_key(lock_key.clone())
                 .await;
             return result;
         }
-        let get_message_result_inner = self
-            .broker_runtime_inner
-            .message_store()
-            .as_ref()
-            .unwrap()
+        let message_store = match self.broker_runtime_inner.message_store() {
+            Some(store) => store,
+            None => {
+                warn!(
+                    "Message store not initialized, topic={}, group={}",
+                    topic, request_header.consumer_group
+                );
+                self.queue_lock_manager()
+                    .unlock_with_key(lock_key.clone())
+                    .await;
+                return rest_num;
+            }
+        };
+        let get_message_result_inner = message_store
             .get_message(
                 &request_header.consumer_group,
                 topic,
@@ -1007,20 +1030,30 @@ where
                                     value.next_begin_offset(),
                                 );
                             atomic_offset.store(value.next_begin_offset(), Ordering::Release);
-                            self.broker_runtime_inner
-                                .message_store()
-                                .as_ref()
-                                .unwrap()
-                                .get_message(
-                                    &request_header.consumer_group,
-                                    topic,
-                                    queue_id,
-                                    offset,
-                                    request_header.max_msg_nums as i32
-                                        - get_message_result.message_mapped_list().len() as i32,
-                                    message_filter,
-                                )
-                                .await
+                            match self.broker_runtime_inner.message_store() {
+                                Some(store) => {
+                                    store
+                                        .get_message(
+                                            &request_header.consumer_group,
+                                            topic,
+                                            queue_id,
+                                            offset,
+                                            request_header.max_msg_nums as i32
+                                                - get_message_result.message_mapped_list().len()
+                                                    as i32,
+                                            message_filter,
+                                        )
+                                        .await
+                                }
+                                None => {
+                                    warn!(
+                                        "Message store not initialized during offset adjustment, \
+                                         topic={}, group={}",
+                                        topic, request_header.consumer_group
+                                    );
+                                    Some(value)
+                                }
+                            }
                         }
                         _ => Some(value),
                     }
@@ -1029,12 +1062,17 @@ where
         };
         match result {
             None => {
-                let num = self
-                    .broker_runtime_inner
-                    .message_store()
-                    .as_ref()
-                    .unwrap()
-                    .get_max_offset_in_queue(topic, queue_id)
+                let message_store = match self.broker_runtime_inner.message_store() {
+                    Some(store) => store,
+                    None => {
+                        warn!(
+                            "Message store not initialized, topic={}, group={}",
+                            topic, request_header.consumer_group
+                        );
+                        return atomic_rest_num.load(Ordering::Acquire);
+                    }
+                };
+                let num = message_store.get_max_offset_in_queue(topic, queue_id)
                     - atomic_offset.load(Ordering::Acquire)
                     + atomic_rest_num.load(Ordering::Acquire);
                 atomic_rest_num.store(num, Ordering::Release);
@@ -1072,7 +1110,7 @@ where
                             queue_id,
                             final_offset,
                             &result_inner,
-                            pop_time as i64,
+                            pop_time,
                             self.broker_runtime_inner
                                 .broker_config()
                                 .broker_name
@@ -1096,6 +1134,16 @@ where
                         queue_id,
                         result_inner.message_queue_offset().as_slice(),
                     );
+                    if self.broker_runtime_inner.broker_config().enable_pop_log {
+                        info!(
+                            topic = %topic,
+                            group = %request_header.consumer_group,
+                            queue_id = queue_id,
+                            msg_count = result_inner.message_count(),
+                            start_offset = final_offset,
+                            "PopMessage succeeded"
+                        );
+                    }
                 } else if let Some(status) = result_inner.status() {
                     if matches!(
                         status,
@@ -1144,7 +1192,7 @@ where
                     .broker_name
                     .as_str();
                 let message_count = result_inner.message_count();
-                for mut maped_buffer in result_inner.message_mapped_vec() {
+                for maped_buffer in result_inner.message_mapped_vec() {
                     if self
                         .broker_runtime_inner
                         .broker_config()
@@ -1156,7 +1204,7 @@ where
                         let mut bytes = maped_buffer.get_bytes().unwrap_or_default();
                         let message_ext_list =
                             message_decoder::decodes_batch(&mut bytes, true, false);
-                        maped_buffer.release();
+                        //maped_buffer.release();
                         for mut message_ext in message_ext_list {
                             let ck_info = ExtraInfoUtil::build_extra_info_with_offset(
                                 final_offset,
@@ -1184,7 +1232,8 @@ where
                                 start_offset: maped_buffer.start_offset,
                                 size: encode.len() as i32,
                                 bytes: Some(encode),
-                                ..Default::default()
+                                mapped_file: None,
+                                is_in_cache: true,
                             };
                             get_message_result.add_message_inner(tmp_result);
                         }
@@ -1232,12 +1281,12 @@ where
         queue_id: i32,
         offset: i64,
         get_message_tmp_result: &GetMessageResult,
-        pop_time: i64,
+        pop_time: u64,
         broker_name: &str,
     ) -> bool {
         let mut ck = PopCheckPoint {
             start_offset: offset,
-            pop_time,
+            pop_time: pop_time as i64,
             invisible_time: request_header.invisible_time as i64,
             bit_map: 0,
             num: get_message_tmp_result.message_mapped_list().len() as u8,
@@ -1248,12 +1297,10 @@ where
             ..Default::default()
         };
         for msg_queue_offset in get_message_tmp_result.message_queue_offset() {
-            // Add the difference between the offset of all pulled messages and the start offset
             ck.add_diff(((*msg_queue_offset) as i64 - offset) as i32);
         }
         let pop_buffer_merge_service_ref_mut = self.pop_buffer_merge_service.mut_from_ref();
 
-        // put check point into memory
         match pop_buffer_merge_service_ref_mut
             .add_ck(
                 &ck,
@@ -1263,19 +1310,16 @@ where
             )
             .await
         {
-            true => true,
-            false => {
-                // The in-memory matching fails (in-memory matching is not enabled),
-                // so put the Offset into both the memory and the disk.
-                pop_buffer_merge_service_ref_mut
-                    .add_ck_just_offset(
-                        ck,
-                        revive_qid,
-                        -1,
-                        get_message_tmp_result.next_begin_offset(),
-                    )
-                    .await
-            }
+            Ok(_) => true,
+            Err(_) => pop_buffer_merge_service_ref_mut
+                .add_ck_just_offset(
+                    ck,
+                    revive_qid,
+                    -1,
+                    get_message_tmp_result.next_begin_offset(),
+                )
+                .await
+                .is_ok(),
         }
     }
 
@@ -1343,7 +1387,6 @@ where
             offset = self
                 .broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_min_offset_in_queue(topic, queue_id);
         } else if self
@@ -1353,14 +1396,12 @@ where
             && self
                 .broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_min_offset_in_queue(topic, queue_id)
                 <= 0
             && self
                 .broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .check_in_mem_by_consume_offset(topic, queue_id, 0, 1)
         {
@@ -1369,7 +1410,6 @@ where
             offset = self
                 .broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_max_offset_in_queue(topic, queue_id)
                 - 1;

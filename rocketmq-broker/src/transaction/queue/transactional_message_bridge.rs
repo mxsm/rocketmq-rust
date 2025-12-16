@@ -1,19 +1,20 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
@@ -86,16 +87,15 @@ where
             offset = self
                 .broker_runtime_inner
                 .message_store()
-                .as_ref()
                 .unwrap()
                 .get_min_offset_in_queue(topic, queue_id);
         }
         offset
     }
 
-    pub fn fetch_message_queues(&mut self, topic: &CheetahString) -> HashSet<MessageQueue> {
+    pub async fn fetch_message_queues(&mut self, topic: &CheetahString) -> HashSet<MessageQueue> {
         let mut message_queues = HashSet::new();
-        let topic_config = self.select_topic_config(topic);
+        let topic_config = self.select_topic_config(topic).await;
         let broker_name = self
             .broker_runtime_inner
             .broker_config()
@@ -169,7 +169,6 @@ where
         let get_message_result = self
             .broker_runtime_inner
             .message_store()
-            .as_ref()
             .unwrap()
             .get_message(
                 group, topic, queue_id, offset, nums, //  MAX_PULL_MSG_SIZE,
@@ -177,7 +176,7 @@ where
             )
             .await;
 
-        if let Some(mut get_message_result) = get_message_result {
+        if let Some(get_message_result) = get_message_result {
             let (pull_status, msg_found_list) = match get_message_result.status().unwrap() {
                 GetMessageStatus::Found => {
                     let msg_list = Self::decode_msg_list(&get_message_result);
@@ -195,7 +194,6 @@ where
 
                 GetMessageStatus::OffsetReset => (PullStatus::NoNewMsg, None),
             };
-            get_message_result.release();
             Some(PullResult::new(
                 pull_status,
                 get_message_result.next_begin_offset() as u64,
@@ -227,7 +225,10 @@ where
         found_list
     }
 
-    pub fn select_topic_config(&mut self, topic: &CheetahString) -> Option<ArcMut<TopicConfig>> {
+    pub async fn select_topic_config(
+        &mut self,
+        topic: &CheetahString,
+    ) -> Option<ArcMut<TopicConfig>> {
         let mut topic_config = self
             .broker_runtime_inner
             .topic_config_manager()
@@ -242,7 +243,8 @@ where
                     PermName::PERM_WRITE | PermName::PERM_READ,
                     false,
                     0,
-                );
+                )
+                .await;
         }
         topic_config
     }
@@ -393,7 +395,6 @@ where
     pub fn look_message_by_offset(&self, offset: i64) -> Option<MessageExt> {
         self.broker_runtime_inner
             .message_store()
-            .as_ref()
             .unwrap()
             .look_message_by_offset(offset)
     }

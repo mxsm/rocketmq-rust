@@ -1,19 +1,19 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
 
 //! `RouteInfoManager` is a core component in Apache RocketMQ, primarily responsible for
 //! managing and maintaining the routing information of the cluster. It ensures correct message
@@ -179,7 +179,7 @@ impl RouteInfoManager {
             self.broker_addr_table.mut_from_ref().get_mut(&broker_name)
         {
             broker_data.set_enable_acting_master(enable_acting_master_inner);
-            broker_data.set_zone_name(zone_name.clone());
+            broker_data.set_zone_name(zone_name);
             false
         } else {
             let mut broker_data = BrokerData::new(
@@ -237,7 +237,7 @@ impl RouteInfoManager {
                             new_state_version
                         );
                         self.broker_live_table.mut_from_ref().remove(
-                            BrokerAddrInfo::new(cluster_name.clone(), broker_addr.clone()).as_ref(),
+                            BrokerAddrInfo::new(cluster_name, broker_addr.clone()).as_ref(),
                         );
                         return Some(result);
                     }

@@ -1,19 +1,20 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
+
 use std::any::Any;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -93,7 +94,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
         mut channel: Channel,
         ctx: ConnectionHandlerContext,
         subscription_data: SubscriptionData,
-        subscription_group_config: SubscriptionGroupConfig,
+        subscription_group_config: &SubscriptionGroupConfig,
         broker_allow_suspend: bool,
         message_filter: Arc<Box<dyn MessageFilter>>,
         mut response: RemotingCommand,
@@ -110,7 +111,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
             &request_header,
             &get_message_result,
             topic_config.as_ref().unwrap().topic_sys_flag as i32,
-            &subscription_group_config,
+            subscription_group_config,
             &mut response,
             client_address.as_str(),
         );
@@ -343,31 +344,39 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
     ) {
         if self.has_consume_message_hook() {
             let ext_fields = request.get_ext_fields().unwrap();
-            let owner = ext_fields
-                .get(BrokerStatsManager::COMMERCIAL_OWNER)
-                .cloned();
-            let auth_type = ext_fields
-                .get(BrokerStatsManager::ACCOUNT_AUTH_TYPE)
-                .cloned();
-            let owner_parent = ext_fields
-                .get(BrokerStatsManager::ACCOUNT_OWNER_PARENT)
-                .cloned();
-            let owner_self = ext_fields
-                .get(BrokerStatsManager::ACCOUNT_OWNER_SELF)
-                .cloned();
+            let owner = ext_fields.get(BrokerStatsManager::COMMERCIAL_OWNER);
+            let auth_type = ext_fields.get(BrokerStatsManager::ACCOUNT_AUTH_TYPE);
+            let owner_parent = ext_fields.get(BrokerStatsManager::ACCOUNT_OWNER_PARENT);
+            let owner_self = ext_fields.get(BrokerStatsManager::ACCOUNT_OWNER_SELF);
 
-            let mut context = ConsumeMessageContext::default();
-            context
-                .consumer_group
-                .clone_from(&request_header.consumer_group);
-            context.topic.clone_from(&request_header.topic);
-            context.queue_id = Some(request_header.queue_id);
-            context.account_auth_type = auth_type;
-            context.account_owner_parent = owner_parent;
-            context.account_owner_self = owner_self;
-            context.namespace = CheetahString::from_string(
-                NamespaceUtil::get_namespace_from_resource(&request_header.topic),
-            );
+            let namespace = CheetahString::from_string(NamespaceUtil::get_namespace_from_resource(
+                &request_header.topic,
+            ));
+
+            let mut context = ConsumeMessageContext {
+                consumer_group: &request_header.consumer_group,
+                topic: &request_header.topic,
+                queue_id: Some(request_header.queue_id),
+                client_host: None,
+                store_host: None,
+                message_ids: None,
+                body_length: 0,
+                success: false,
+                status: None,
+                topic_config: None,
+                account_auth_type: auth_type,
+                account_owner_parent: owner_parent,
+                account_owner_self: owner_self,
+                rcv_msg_num: 0,
+                rcv_msg_size: 0,
+                rcv_stat: StatsType::RcvSuccess,
+                commercial_rcv_msg_num: 0,
+                commercial_owner: None,
+                commercial_rcv_stats: StatsType::RcvSuccess,
+                commercial_rcv_times: 0,
+                commercial_rcv_size: 0,
+                namespace: &namespace,
+            };
 
             match response_code {
                 ResponseCode::Success => {
@@ -381,7 +390,7 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
                     context.commercial_rcv_stats = StatsType::RcvSuccess;
                     context.commercial_rcv_times = inc_value;
                     context.commercial_rcv_size = get_message_result.buffer_total_size();
-                    context.commercial_owner.clone_from(&owner);
+                    context.commercial_owner = owner;
 
                     context.rcv_stat = StatsType::RcvSuccess;
                     context.rcv_msg_num = get_message_result.message_count();
@@ -392,7 +401,7 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
                     if !broker_allow_suspend {
                         context.commercial_rcv_stats = StatsType::RcvEpolls;
                         context.commercial_rcv_times = 1;
-                        context.commercial_owner.clone_from(&owner);
+                        context.commercial_owner = owner;
 
                         context.rcv_stat = StatsType::RcvEpolls;
                         context.rcv_msg_num = 0;
@@ -403,7 +412,7 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
                 ResponseCode::PullRetryImmediately | ResponseCode::PullOffsetMoved => {
                     context.commercial_rcv_stats = StatsType::RcvEpolls;
                     context.commercial_rcv_times = 1;
-                    context.commercial_owner.clone_from(&owner);
+                    context.commercial_owner = owner;
 
                     context.rcv_stat = StatsType::RcvEpolls;
                     context.rcv_msg_num = 0;

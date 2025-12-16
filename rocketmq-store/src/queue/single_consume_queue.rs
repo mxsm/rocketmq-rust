@@ -1,19 +1,20 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
+
 use std::path::PathBuf;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
@@ -38,16 +39,17 @@ use crate::base::dispatch_request::DispatchRequest;
 use crate::base::message_store::MessageStore;
 use crate::base::select_result::SelectMappedBufferResult;
 use crate::base::swappable::Swappable;
-use crate::consume_queue::consume_queue_ext::CqExtUnit;
+use crate::consume_queue::cq_ext_unit::CqExtUnit;
 use crate::consume_queue::mapped_file_queue::MappedFileQueue;
 use crate::filter::MessageFilter;
 use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::consume_queue_ext::ConsumeQueueExt;
+use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
+use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use crate::queue::multi_dispatch_utils::check_multi_dispatch_queue;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
-use crate::queue::referred_iterator::ReferredIterator;
 use crate::queue::CqUnit;
 use crate::queue::FileQueueLifeCycle;
 use crate::store_path_config_helper::get_store_path_consume_queue_ext;
@@ -351,6 +353,269 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
     fn multi_dispatch_lmq_queue(&self, request: &DispatchRequest, max_retries: i32) {
         error!(" multi_dispatch_lmq_queue is not implemented yet ");
     }
+
+    /// Binary search within a mapped file to find the offset by timestamp.
+    ///
+    /// # Arguments
+    ///
+    /// * `mapped_file` - The mapped file to search in
+    /// * `timestamp` - The timestamp to search for
+    /// * `boundary_type` - The boundary type (Lower or Upper)
+    ///
+    /// # Returns
+    ///
+    /// The queue offset that matches the criteria, or 0 if not found
+    fn binary_search_in_queue_by_time(
+        &self,
+        mapped_file: &Arc<DefaultMappedFile>,
+        timestamp: i64,
+        boundary_type: BoundaryType,
+    ) -> i64 {
+        let commit_log = self.message_store.get_commit_log();
+        let min_physic_offset = self.message_store.get_min_phy_offset();
+        let min_logic_offset = self.min_logic_offset.load(Ordering::Relaxed);
+
+        // Calculate the range to search
+        let mut range = mapped_file.get_file_size() as i32;
+        let wrote_position = mapped_file.get_wrote_position();
+        if wrote_position != 0 && wrote_position != mapped_file.get_file_size() as i32 {
+            // mappedFile is the last one and is currently being written.
+            range = wrote_position;
+        }
+
+        let select_result = mapped_file.select_mapped_buffer(0, range);
+        if select_result.is_none() {
+            return 0;
+        }
+        let select_result = select_result.unwrap();
+        let buffer = match &select_result.bytes {
+            Some(b) => b,
+            None => return 0,
+        };
+
+        let ceiling = buffer.len() as i32 - CQ_STORE_UNIT_SIZE;
+        let floor = if min_logic_offset > mapped_file.get_file_from_offset() as i64 {
+            (min_logic_offset - mapped_file.get_file_from_offset() as i64) as i32
+        } else {
+            0
+        };
+        let mut low = floor;
+        let mut high = ceiling;
+        let mut target_offset = -1i32;
+        let mut left_offset = -1i32;
+        let mut right_offset = -1i32;
+
+        // Handle corner cases first:
+        // 1. store time of (high) < timestamp
+        // 2. store time of (low) > timestamp
+
+        // Handle case 1: ceiling store time < timestamp
+        if ceiling >= 0 && (ceiling as usize + CQ_STORE_UNIT_SIZE as usize) <= buffer.len() {
+            let phy_offset = i64::from_be_bytes(
+                buffer[ceiling as usize..ceiling as usize + 8]
+                    .try_into()
+                    .unwrap(),
+            );
+            let size = i32::from_be_bytes(
+                buffer[ceiling as usize + 8..ceiling as usize + 12]
+                    .try_into()
+                    .unwrap(),
+            );
+            let store_time = commit_log.pickup_store_timestamp(phy_offset, size);
+            if store_time < timestamp {
+                return match boundary_type {
+                    BoundaryType::Lower => {
+                        (mapped_file.get_file_from_offset() as i64
+                            + ceiling as i64
+                            + CQ_STORE_UNIT_SIZE as i64)
+                            / CQ_STORE_UNIT_SIZE as i64
+                    }
+                    BoundaryType::Upper => {
+                        (mapped_file.get_file_from_offset() as i64 + ceiling as i64)
+                            / CQ_STORE_UNIT_SIZE as i64
+                    }
+                };
+            }
+        }
+
+        // Handle case 2: floor store time > timestamp
+        if floor >= 0 && (floor as usize + 12) <= buffer.len() {
+            let phy_offset = i64::from_be_bytes(
+                buffer[floor as usize..floor as usize + 8]
+                    .try_into()
+                    .unwrap(),
+            );
+            let size = i32::from_be_bytes(
+                buffer[floor as usize + 8..floor as usize + 12]
+                    .try_into()
+                    .unwrap(),
+            );
+            let store_time = commit_log.pickup_store_timestamp(phy_offset, size);
+            if store_time > timestamp {
+                return match boundary_type {
+                    BoundaryType::Lower => {
+                        mapped_file.get_file_from_offset() as i64 / CQ_STORE_UNIT_SIZE as i64
+                    }
+                    BoundaryType::Upper => 0,
+                };
+            }
+        }
+
+        // Perform binary search
+        while high >= low {
+            let mid_offset = (low + high) / (2 * CQ_STORE_UNIT_SIZE) * CQ_STORE_UNIT_SIZE;
+            if (mid_offset as usize + 12) > buffer.len() {
+                break;
+            }
+
+            let phy_offset = i64::from_be_bytes(
+                buffer[mid_offset as usize..mid_offset as usize + 8]
+                    .try_into()
+                    .unwrap(),
+            );
+            let size = i32::from_be_bytes(
+                buffer[mid_offset as usize + 8..mid_offset as usize + 12]
+                    .try_into()
+                    .unwrap(),
+            );
+
+            // Skip invalid physical offsets
+            if phy_offset < min_physic_offset {
+                low = mid_offset + CQ_STORE_UNIT_SIZE;
+                left_offset = mid_offset;
+                continue;
+            }
+
+            let store_time = commit_log.pickup_store_timestamp(phy_offset, size);
+            if store_time < 0 {
+                warn!(
+                    "Failed to query store timestamp for commit log offset: {}",
+                    phy_offset
+                );
+                return 0;
+            }
+
+            match store_time.cmp(&timestamp) {
+                std::cmp::Ordering::Equal => {
+                    target_offset = mid_offset;
+                    break;
+                }
+                std::cmp::Ordering::Less => {
+                    low = mid_offset + CQ_STORE_UNIT_SIZE;
+                    left_offset = mid_offset;
+                }
+                std::cmp::Ordering::Greater => {
+                    high = mid_offset - CQ_STORE_UNIT_SIZE;
+                    right_offset = mid_offset;
+                }
+            }
+        }
+
+        let offset: i64 = if target_offset != -1 {
+            // We found ONE matched record. The records next to it might also share the same
+            // store-timestamp.
+            match boundary_type {
+                BoundaryType::Lower => {
+                    // Scan backward for records with the same timestamp
+                    let mut previous_attempt = target_offset;
+                    loop {
+                        let attempt = previous_attempt - CQ_STORE_UNIT_SIZE;
+                        if attempt < floor {
+                            break;
+                        }
+                        if (attempt as usize + 12) > buffer.len() {
+                            break;
+                        }
+                        let physical_offset = i64::from_be_bytes(
+                            buffer[attempt as usize..attempt as usize + 8]
+                                .try_into()
+                                .unwrap(),
+                        );
+                        let message_size = i32::from_be_bytes(
+                            buffer[attempt as usize + 8..attempt as usize + 12]
+                                .try_into()
+                                .unwrap(),
+                        );
+                        let message_store_timestamp =
+                            commit_log.pickup_store_timestamp(physical_offset, message_size);
+                        if message_store_timestamp == timestamp {
+                            previous_attempt = attempt;
+                            continue;
+                        }
+                        break;
+                    }
+                    previous_attempt as i64
+                }
+                BoundaryType::Upper => {
+                    // Scan forward for records with the same timestamp
+                    let mut previous_attempt = target_offset;
+                    loop {
+                        let attempt = previous_attempt + CQ_STORE_UNIT_SIZE;
+                        if attempt > ceiling {
+                            break;
+                        }
+                        if (attempt as usize + 12) > buffer.len() {
+                            break;
+                        }
+                        let physical_offset = i64::from_be_bytes(
+                            buffer[attempt as usize..attempt as usize + 8]
+                                .try_into()
+                                .unwrap(),
+                        );
+                        let message_size = i32::from_be_bytes(
+                            buffer[attempt as usize + 8..attempt as usize + 12]
+                                .try_into()
+                                .unwrap(),
+                        );
+                        let message_store_timestamp =
+                            commit_log.pickup_store_timestamp(physical_offset, message_size);
+                        if message_store_timestamp == timestamp {
+                            previous_attempt = attempt;
+                            continue;
+                        }
+                        break;
+                    }
+                    previous_attempt as i64
+                }
+            }
+        } else {
+            // Given timestamp does not have any message records. But we have a range enclosing
+            // the timestamp.
+            /*
+             * Consider the follow case: t2 has no consume queue entry and we are searching
+             * offset of t2 for lower and upper boundaries.
+             *  --------------------------
+             *   timestamp   Consume Queue
+             *       t1          1
+             *       t1          2
+             *       t1          3
+             *       t3          4
+             *       t3          5
+             *   --------------------------
+             * Now, we return 3 as upper boundary of t2 and 4 as its lower boundary. It looks
+             * contradictory at first sight, but it does make sense when performing range
+             * queries.
+             */
+            match boundary_type {
+                BoundaryType::Lower => {
+                    if right_offset != -1 {
+                        right_offset as i64
+                    } else {
+                        return 0;
+                    }
+                }
+                BoundaryType::Upper => {
+                    if left_offset != -1 {
+                        left_offset as i64
+                    } else {
+                        return 0;
+                    }
+                }
+            }
+        };
+
+        (mapped_file.get_file_from_offset() as i64 + offset) / CQ_STORE_UNIT_SIZE as i64
+    }
 }
 
 impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
@@ -539,15 +804,18 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
 
     #[inline]
     fn get(&self, index: i64) -> Option<CqUnit> {
-        match self.iterate_from(index) {
-            None => None,
-            Some(value) => None,
-        }
+        self.iterate_from(index).and_then(|mut iter| iter.next())
     }
 
     #[inline]
     fn get_cq_unit_and_store_time(&self, index: i64) -> Option<(CqUnit, i64)> {
-        todo!()
+        let cq_unit = self.get(index)?;
+        let i = self
+            .message_store
+            .get_queue_store()
+            .downcast_ref::<ConsumeQueueStore>()?
+            .get_store_time(&cq_unit);
+        Some((cq_unit, i))
     }
 
     #[inline]
@@ -856,7 +1124,10 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
     }
 
     #[inline]
-    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn ReferredIterator<CqUnit>>> {
+    fn iterate_from(
+        &self,
+        start_index: i64,
+    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
         match self.get_index_buffer(start_index) {
             None => None,
             Some(value) => Some(Box::new(ConsumeQueueIterator {
@@ -872,7 +1143,7 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
         &self,
         start_index: i64,
         _count: i32,
-    ) -> Option<Box<dyn ReferredIterator<CqUnit>>> {
+    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
         self.iterate_from(start_index)
     }
 
@@ -881,7 +1152,14 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
         timestamp: i64,
         boundary_type: BoundaryType,
     ) -> i64 {
-        todo!()
+        let commit_log = self.message_store.get_commit_log();
+        let mapped_file = self
+            .mapped_file_queue
+            .get_consume_queue_mapped_file_by_time(timestamp, commit_log, boundary_type);
+        if let Some(mapped_file) = mapped_file {
+            return self.binary_search_in_queue_by_time(&mapped_file, timestamp, boundary_type);
+        }
+        -1
     }
 }
 
@@ -898,20 +1176,6 @@ impl ConsumeQueueIterator {
             None => false,
             Some(value) => value.get(offset, cq_ext_unit),
         }
-    }
-}
-
-impl ReferredIterator<CqUnit> for ConsumeQueueIterator {
-    fn release(&mut self) {
-        if let Some(mapped_file) = &mut self.smbr {
-            mapped_file.release();
-        }
-    }
-
-    fn next_and_release(&mut self) -> Option<Self::Item> {
-        let cq_unit = self.next();
-        self.release();
-        cq_unit
     }
 }
 

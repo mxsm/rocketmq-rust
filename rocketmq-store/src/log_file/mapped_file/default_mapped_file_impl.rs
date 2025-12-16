@@ -1,19 +1,19 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
 
 use std::fs;
 use std::fs::File;
@@ -78,8 +78,8 @@ pub struct DefaultMappedFile {
     last_flush_time: AtomicU64,
     swap_map_time: u64,
     mapped_byte_buffer_access_count_since_last_swap: AtomicI64,
-    start_timestamp: u64,
-    stop_timestamp: u64,
+    start_timestamp: AtomicI64,
+    stop_timestamp: AtomicI64,
     metrics: Option<MappedFileMetrics>,
     flush_strategy: FlushStrategy,
 }
@@ -151,9 +151,9 @@ impl DefaultMappedFile {
             last_flush_time: AtomicU64::new(0),
             swap_map_time: 0,
             mapped_byte_buffer_access_count_since_last_swap: Default::default(),
-            start_timestamp: 0,
+            start_timestamp: AtomicI64::new(-1),
             transient_store_pool: None,
-            stop_timestamp: 0,
+            stop_timestamp: AtomicI64::new(-1),
             metrics: Some(MappedFileMetrics::new()),
             flush_strategy: FlushStrategy::Async,
         }
@@ -249,9 +249,9 @@ impl DefaultMappedFile {
             last_flush_time: AtomicU64::new(0),
             swap_map_time: 0,
             mapped_byte_buffer_access_count_since_last_swap: Default::default(),
-            start_timestamp: 0,
+            start_timestamp: AtomicI64::new(-1),
             transient_store_pool: Some(transient_store_pool),
-            stop_timestamp: 0,
+            stop_timestamp: AtomicI64::new(-1),
             mmapped_file: ArcMut::new(mmap),
             metrics: Some(MappedFileMetrics::new()),
             flush_strategy: FlushStrategy::Async,
@@ -641,7 +641,7 @@ impl MappedFile for DefaultMappedFile {
                     size,
                     bytes: Some(bytes),
                     is_in_cache: true,
-                    ..Default::default()
+                    mapped_file: None,
                 })
             } else {
                 warn!(
@@ -987,7 +987,7 @@ impl MappedFile for DefaultMappedFile {
                 size,
                 bytes: Some(bytes),
                 is_in_cache: true,
-                ..Default::default()
+                mapped_file: None,
             })
         } else {
             None
@@ -1032,6 +1032,46 @@ impl DefaultMappedFile {
     #[inline]
     pub fn get_mapped_file_arcmut(&self) -> ArcMut<MmapMut> {
         self.mmapped_file.clone()
+    }
+
+    /// Gets the start timestamp of the mapped file.
+    ///
+    /// # Returns
+    ///
+    /// The start timestamp as i64. Returns -1 if not set.
+    #[inline]
+    pub fn get_start_timestamp(&self) -> i64 {
+        self.start_timestamp.load(Ordering::Acquire)
+    }
+
+    /// Sets the start timestamp of the mapped file.
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The start timestamp to set
+    #[inline]
+    pub fn set_start_timestamp(&self, timestamp: i64) {
+        self.start_timestamp.store(timestamp, Ordering::Release);
+    }
+
+    /// Gets the stop timestamp of the mapped file.
+    ///
+    /// # Returns
+    ///
+    /// The stop timestamp as i64. Returns -1 if not set.
+    #[inline]
+    pub fn get_stop_timestamp(&self) -> i64 {
+        self.stop_timestamp.load(Ordering::Acquire)
+    }
+
+    /// Sets the stop timestamp of the mapped file.
+    ///
+    /// # Arguments
+    ///
+    /// * `timestamp` - The stop timestamp to set
+    #[inline]
+    pub fn set_stop_timestamp(&self, timestamp: i64) {
+        self.stop_timestamp.store(timestamp, Ordering::Release);
     }
 
     #[inline]

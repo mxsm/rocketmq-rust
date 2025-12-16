@@ -1,19 +1,19 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -295,7 +295,7 @@ where
     where
         F: Fn(&mut SendMessageContext, &mut RemotingCommand),
     {
-        let mut response = self.pre_send(channel, ctx, request, &request_header);
+        let mut response = self.pre_send(channel, ctx, request, &request_header).await;
         if response.code() != -1 {
             return Ok(Some(response));
         }
@@ -481,7 +481,7 @@ where
     where
         F: Fn(&mut SendMessageContext, &mut RemotingCommand),
     {
-        let mut response = self.pre_send(channel, ctx, request, &request_header);
+        let mut response = self.pre_send(channel, ctx, request, &request_header).await;
         if response.code() != -1 {
             return Ok(Some(response));
         }
@@ -504,14 +504,17 @@ where
         message_ext.message_ext_inner.queue_id = queue_id;
         let mut ori_props =
             MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
-        if !self.handle_retry_and_dlq(
-            &request_header,
-            &mut response,
-            request,
-            &mut message_ext.message_ext_inner,
-            &mut topic_config,
-            &mut ori_props,
-        ) {
+        if !self
+            .handle_retry_and_dlq(
+                &request_header,
+                &mut response,
+                request,
+                &mut message_ext.message_ext_inner,
+                &mut topic_config,
+                &mut ori_props,
+            )
+            .await
+        {
             return Ok(Some(response));
         }
         message_ext.message_ext_inner.message.body = request.body().cloned();
@@ -985,7 +988,7 @@ where
         }
     }
 
-    pub fn pre_send(
+    pub async fn pre_send(
         &mut self,
         channel: &Channel,
         ctx: &ConnectionHandlerContext,
@@ -1033,11 +1036,12 @@ where
         }
         response = response.set_code(-1);
         self.inner
-            .msg_check(channel, ctx, request, request_header, &mut response);
+            .msg_check(channel, ctx, request, request_header, &mut response)
+            .await;
         response
     }
 
-    fn handle_retry_and_dlq(
+    async fn handle_retry_and_dlq(
         &mut self,
         request_header: &SendMessageRequestHeader,
         response: &mut RemotingCommand,
@@ -1111,7 +1115,8 @@ where
                         PermName::PERM_WRITE | PermName::PERM_READ,
                         false,
                         0,
-                    );
+                    )
+                    .await;
                 // can optimize
                 msg.message.topic = CheetahString::from_string(new_topic.to_string());
                 msg.queue_id = queue_id_int;
@@ -1168,7 +1173,10 @@ where
         }
     }
 
-    pub(crate) fn execute_consume_message_hook_after(&self, context: &mut ConsumeMessageContext) {
+    pub(crate) fn execute_consume_message_hook_after<'a>(
+        &self,
+        context: &mut ConsumeMessageContext<'a>,
+    ) {
         for hook in self.consume_message_hook_vec.iter() {
             hook.consume_message_after(context);
         }
@@ -1281,7 +1289,8 @@ where
                 PermName::PERM_WRITE | PermName::PERM_READ,
                 false,
                 topic_sys_flag,
-            );
+            )
+            .await;
         if topic_config.is_none() {
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code_remark(
@@ -1306,7 +1315,6 @@ where
         let message_store = self
             .broker_runtime_inner
             .message_store()
-            .as_ref()
             .ok_or_else(|| RocketMQError::Internal("Message store not initialized".to_string()))?;
 
         let msg_ext: Option<MessageExt> =
@@ -1342,6 +1350,7 @@ where
             }
         }
 
+        //judge DLQ
         let is_dlq = if msg_ext.reconsume_times >= max_reconsume_times || delay_level < 0 {
             new_topic = CheetahString::from_string(mix_all::get_dlq_topic(&request_header.group));
             queue_id_int = 0;
@@ -1354,7 +1363,8 @@ where
                     PermName::PERM_WRITE | PermName::PERM_READ,
                     false,
                     0,
-                );
+                )
+                .await;
             if topic_config_inner.is_none() {
                 return Ok(Some(
                     RemotingCommand::create_response_command_with_code_remark(
@@ -1441,35 +1451,52 @@ where
                 .origin_msg_id
                 .is_some_and(|ref id| !id.is_empty())
         {
-            let mut context = ConsumeMessageContext::default();
-            let namespace =
-                NamespaceUtil::get_namespace_from_resource(request_header.group.as_str());
-            context.namespace = CheetahString::from_string(namespace);
-            if let Some(ref topic) = request_header.origin_topic {
-                context.topic = topic.clone();
-            }
-            context.consumer_group = request_header.group.clone();
-            context.commercial_rcv_stats = StatsType::SendBack;
-            context.commercial_rcv_times = 1;
-            context.commercial_owner = commercial_owner;
-            context.account_auth_type = request
+            let namespace = CheetahString::from_string(NamespaceUtil::get_namespace_from_resource(
+                request_header.group.as_str(),
+            ));
+            let origin_topic = request_header
+                .origin_topic
+                .as_ref()
+                .unwrap_or(&request_header.group);
+
+            let account_auth_type = request
                 .get_ext_fields()
-                .and_then(|value| value.get(BrokerStatsManager::ACCOUNT_AUTH_TYPE).cloned());
-            context.account_owner_parent = request
+                .and_then(|value| value.get(BrokerStatsManager::ACCOUNT_AUTH_TYPE));
+            let account_owner_parent = request
                 .get_ext_fields()
-                .and_then(|value| value.get(BrokerStatsManager::ACCOUNT_OWNER_PARENT).cloned());
-            context.account_owner_self = request
+                .and_then(|value| value.get(BrokerStatsManager::ACCOUNT_OWNER_PARENT));
+            let account_owner_self = request
                 .get_ext_fields()
-                .and_then(|value| value.get(BrokerStatsManager::ACCOUNT_OWNER_SELF).cloned());
-            context.rcv_stat = if is_dlq {
-                StatsType::SendBackToDlq
-            } else {
-                StatsType::SendBack
+                .and_then(|value| value.get(BrokerStatsManager::ACCOUNT_OWNER_SELF));
+
+            let mut context = ConsumeMessageContext {
+                namespace: &namespace,
+                topic: origin_topic,
+                consumer_group: &request_header.group,
+                queue_id: None,
+                client_host: None,
+                store_host: None,
+                message_ids: None,
+                body_length: 0,
+                success: succeeded,
+                status: None,
+                topic_config: None,
+                account_auth_type,
+                account_owner_parent,
+                account_owner_self,
+                rcv_msg_num: 1,
+                rcv_msg_size: 0,
+                rcv_stat: if is_dlq {
+                    StatsType::SendBackToDlq
+                } else {
+                    StatsType::SendBack
+                },
+                commercial_rcv_msg_num: if succeeded { 1 } else { 0 },
+                commercial_owner: commercial_owner.as_ref(),
+                commercial_rcv_stats: StatsType::SendBack,
+                commercial_rcv_times: 1,
+                commercial_rcv_size: 0,
             };
-            context.success = succeeded;
-            context.rcv_msg_num = 1;
-            context.rcv_msg_size = 0;
-            context.commercial_rcv_msg_num = if succeeded { 1 } else { 0 };
             self.execute_consume_message_hook_after(&mut context);
         }
 
@@ -1548,7 +1575,7 @@ where
         send_message_context
     }
 
-    pub(crate) fn msg_check(
+    pub(crate) async fn msg_check(
         &mut self,
         channel: &Channel,
         _ctx: &ConnectionHandlerContext,
@@ -1612,12 +1639,13 @@ where
                 .broker_runtime_inner
                 .topic_config_manager_mut()
                 .create_topic_in_send_message_method(
-                    request_header.topic.as_str(),
-                    request_header.default_topic.as_str(),
+                    &request_header.topic,
+                    &request_header.default_topic,
                     channel.remote_address(),
                     request_header.default_topic_queue_nums,
                     topic_sys_flag,
-                );
+                )
+                .await;
 
             if topic_config.is_none() && request_header.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX)
             {
@@ -1630,7 +1658,8 @@ where
                         PermName::PERM_WRITE | PermName::PERM_READ,
                         false,
                         topic_sys_flag,
-                    );
+                    )
+                    .await;
             }
 
             if topic_config.is_none() {

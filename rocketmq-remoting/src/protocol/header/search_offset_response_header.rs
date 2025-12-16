@@ -1,19 +1,20 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
+
 use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
@@ -21,4 +22,40 @@ use serde::Serialize;
 #[derive(Debug, Clone, Deserialize, Serialize, Default, RequestHeaderCodecV2)]
 pub struct SearchOffsetResponseHeader {
     pub offset: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json;
+
+    use super::*;
+
+    #[test]
+    fn search_offset_response_header_display_format() {
+        let header = SearchOffsetResponseHeader { offset: 1234567890 };
+        assert_eq!(
+            format!("{:?}", header),
+            "SearchOffsetResponseHeader { offset: 1234567890 }"
+        );
+    }
+
+    #[test]
+    fn search_offset_response_header_serialize() {
+        let header = SearchOffsetResponseHeader { offset: 1234567890 };
+        let serialized = serde_json::to_string(&header).unwrap();
+        assert_eq!(serialized, r#"{"offset":1234567890}"#);
+    }
+
+    #[test]
+    fn search_offset_response_header_deserialize() {
+        let json = r#"{"offset":1234567890}"#;
+        let header: SearchOffsetResponseHeader = serde_json::from_str(json).unwrap();
+        assert_eq!(header.offset, 1234567890);
+    }
+
+    #[test]
+    fn search_offset_response_header_default() {
+        let header = SearchOffsetResponseHeader::default();
+        assert_eq!(header.offset, 0);
+    }
 }

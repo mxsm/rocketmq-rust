@@ -1,19 +1,19 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
 
 //! RouteInfoManager v2 - Refactored with DashMap-based concurrent tables
 //!
@@ -314,7 +314,7 @@ impl RouteInfoManagerV2 {
         // Step 1: Update cluster membership
         // This is safe because we hold the broker write lock
         self.cluster_addr_table
-            .add_broker(cluster_name_arc.clone(), broker_name_arc.clone());
+            .add_broker(cluster_name_arc, broker_name_arc.clone());
 
         debug!(
             "Cluster membership updated: cluster={}, broker={}",
@@ -698,6 +698,19 @@ impl RouteInfoManagerV2 {
                     topic_config.perm,
                     topic_config.topic_sys_flag,
                 );
+
+                // Check if queue data exists and log appropriately
+                let old_queue_data = self.topic_queue_table.get(topic_name, broker_name.as_str());
+                if let Some(existed_qd) = old_queue_data {
+                    if existed_qd.as_ref() != &queue_data {
+                        info!(
+                            "topic changed, {} OLD: {:?} NEW: {:?}",
+                            topic_name, existed_qd, queue_data
+                        );
+                    }
+                } else {
+                    info!("new topic registered, {} {:?}", topic_name, &queue_data);
+                }
 
                 self.topic_queue_table.insert(
                     topic_name_cheetah.clone(),
@@ -1515,7 +1528,7 @@ impl RouteInfoManagerV2 {
 
         // Construct TopicRouteData
         let mut topic_route_data = TopicRouteData {
-            queue_datas: queue_data_vec.clone(),
+            queue_datas: queue_data_vec,
             broker_datas: broker_data_list.clone(),
             ..Default::default()
         };
@@ -1686,7 +1699,7 @@ impl RouteInfoManagerV2 {
     /// - Submissions are batched and processed together
     /// - This reduces lock contention on the global route tables
     pub fn scan_not_active_broker(&self) -> RouteResult<usize> {
-        info!("start scanNotActiveBroker");
+        debug!("start scanNotActiveBroker");
         let current_time = get_current_millis();
 
         // Get expired brokers by checking heartbeat timeout

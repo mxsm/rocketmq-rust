@@ -16,96 +16,66 @@
 #
 
 name: Bug Report
-title: "[Bug🐛] Bug title "
-description: Create a report to help us identify any unintended flaws, errors, or faults.
+title: "[Bug🐛] "
+description: Report a bug to help us improve
 labels: [ "bug🐛" ]
 body:
   - type: checkboxes
     attributes:
-      label: Before Creating the Bug Report
+      label: Prerequisites
       options:
-        - label: >
-            I found a bug, not just asking a question, which should be created in [GitHub Discussions](https://github.com/mxsm/rocketmq-rust/discussions).
+        - label: I have searched existing issues and discussions
           required: true
-        - label: >
-            I have searched the [GitHub Issues](https://github.com/mxsm/rocketmq-rust/issues) and [GitHub Discussions](https://github.com/mxsm/rocketmq-rust/discussions)  of this repository and believe that this is not a duplicate.
-          required: true
-        - label: >
-            I have confirmed that this bug belongs to the current repository, not other repositories of RocketMQ.
+        - label: This is a bug, not a question (use Discussions for questions)
           required: true
 
   - type: textarea
     attributes:
-      label: Runtime platform environment
-      description: Describe the runtime platform environment.
-      placeholder: >
-        OS: (e.g., "Ubuntu 20.04")
-        OS: (e.g., "Windows Server 2019")
+      label: Environment
+      description: Your runtime environment
+      placeholder: |
+        - OS: Ubuntu 22.04 / Windows 11 / macOS 14
+        - RocketMQ Rust: v0.3.0 / main branch / commit abc123
+        - Rust: 1.75.0
+      value: |
+        - OS: 
+        - RocketMQ Rust: 
+        - Rust: 
     validations:
       required: false
 
   - type: textarea
     attributes:
-      label: RocketMQ Rust version
-      description: Describe the RocketMQ Rust version.
-      placeholder: >
-        branch: (e.g master)
-        version: (e.g. 0.1.0)
-        Git commit id: (e.g. 37b9bfa7f4516b8da69e91ec0cb288b9724262a2)
-    validations:
-      required: false
-
-  - type: textarea
-    attributes:
-      label: Rust Version
-      description: Run or Compiler version.
-      placeholder: >
-        Compiler: (e.g., "1.75.0")
-        OS: (e.g., "Ubuntu 20.04")
-    validations:
-      required: false
-
-  - type: textarea
-    attributes:
-      label: Describe the Bug
-      description: Describe what happened.
-      placeholder: >
-        A clear and concise description of what the bug is.
+      label: Bug Description
+      description: What happened?
+      placeholder: Clear and concise description of the bug
     validations:
       required: false
 
   - type: textarea
     attributes:
       label: Steps to Reproduce
-      description: Describe the steps to reproduce the bug here.
-      placeholder: >
-        If possible, provide a recipe for reproducing the error.
+      placeholder: |
+        1. Start broker with config...
+        2. Send message with...
+        3. Observe error...
     validations:
       required: false
 
   - type: textarea
     attributes:
-      label: What Did You Expect to See?
-      description: You expect to see result.
-      placeholder: >
-        A clear and concise description of what you expected to see.
-    validations:
-      required: false
+      label: Expected vs Actual
+      placeholder: |
+        **Expected:** Should send successfully
+        **Actual:** Connection timeout error
 
   - type: textarea
     attributes:
-      label: What Did You See Instead?
-      description: You instead to see result.
-      placeholder: >
-        A clear and concise description of what you saw instead.
-    validations:
-      required: false
+      label: Logs/Screenshots
+      description: Relevant logs, error messages, or screenshots
 
   - type: textarea
     attributes:
       label: Additional Context
-      description: Additional context.
-      placeholder: >
-        Add any other context about the problem here.
-    validations:
-      required: false
+      description: Additional context
+      placeholder: Add any other context about the problem here

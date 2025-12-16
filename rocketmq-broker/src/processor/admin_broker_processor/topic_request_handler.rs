@@ -1,19 +1,19 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
 
 use std::collections::HashMap;
 
@@ -73,7 +73,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_response_command();
         let request_header = request
             .decode_command_custom_header::<CreateTopicRequestHeader>()
@@ -86,11 +86,11 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         let topic = request_header.topic.clone();
         let result = TopicValidator::validate_topic(topic.as_str());
         if !result.valid() {
-            return Some(
+            return Ok(Some(
                 response
                     .set_code(ResponseCode::SystemError)
                     .set_remark(result.remark().clone()),
-            );
+            ));
         }
         if self
             .broker_runtime_inner
@@ -98,14 +98,14 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             .validate_system_topic_when_update_topic
             && TopicValidator::is_system_topic(topic.as_str())
         {
-            return Some(
+            return Ok(Some(
                 response
                     .set_code(ResponseCode::SystemError)
                     .set_remark(format!(
                         "The topic[{}] is conflict with system topic.",
                         topic.as_str()
                     )),
-            );
+            ));
         }
 
         let attributes = match AttributeParser::parse_to_map(
@@ -120,7 +120,9 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 .map(|(k, v)| (k.into(), v.into()))
                 .collect(),
             Err(err) => {
-                return Some(response.set_code(ResponseCode::SystemError).set_remark(err));
+                return Ok(Some(
+                    response.set_code(ResponseCode::SystemError).set_remark(err),
+                ));
             }
         };
 
@@ -144,11 +146,11 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 .broker_config()
                 .enable_mixed_message_type
         {
-            return Some(
+            return Ok(Some(
                 response
                     .set_code(ResponseCode::SystemError)
                     .set_remark("MIXED message type is not supported."),
-            );
+            ));
         }
 
         let topic_config_origin = self
@@ -163,7 +165,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 topic.as_str(),
                 channel.remote_address(),
             );
-            return Some(response.set_code(ResponseCode::Success));
+            return Ok(Some(response.set_code(ResponseCode::Success)));
         }
         self.broker_runtime_inner
             .topic_config_manager_mut()
@@ -195,7 +197,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             .await;
         }
 
-        Some(response.set_code(ResponseCode::Success))
+        Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
     pub async fn update_and_create_topic_list(
@@ -204,7 +206,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut request_body =
             CreateTopicListRequestBody::decode(request.body().as_ref().unwrap().as_ref()).unwrap();
         let mut topic_names = String::new();
@@ -222,11 +224,11 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             let topic = topic_config.topic_name.as_ref().unwrap().as_str();
             let result = TopicValidator::validate_topic(topic);
             if !result.valid() {
-                return Some(
+                return Ok(Some(
                     response
                         .set_code(ResponseCode::SystemError)
                         .set_remark(result.remark().clone()),
-                );
+                ));
             }
             if self
                 .broker_runtime_inner
@@ -234,11 +236,11 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 .validate_system_topic_when_update_topic
                 && TopicValidator::is_system_topic(topic)
             {
-                return Some(
+                return Ok(Some(
                     response
                         .set_code(ResponseCode::SystemError)
                         .set_remark(format!("The topic[{topic}] is conflict with system topic.",)),
-                );
+                ));
             }
             if topic_config.get_topic_message_type() == TopicMessageType::Mixed
                 && !self
@@ -246,11 +248,11 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                     .broker_config()
                     .enable_mixed_message_type
             {
-                return Some(
+                return Ok(Some(
                     response
                         .set_code(ResponseCode::SystemError)
                         .set_remark("MIXED message type is not supported.".to_string()),
-                );
+                ));
             }
             let topic_config_origin = self
                 .broker_runtime_inner
@@ -264,7 +266,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                     topic,
                     channel.remote_address(),
                 );
-                return Some(response.set_code(ResponseCode::Success));
+                return Ok(Some(response.set_code(ResponseCode::Success)));
             }
         }
 
@@ -295,7 +297,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             )
             .await;
         }
-        Some(response.set_code(ResponseCode::Success))
+        Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
     pub async fn delete_topic(
@@ -304,7 +306,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_response_command();
         let request_header = request
             .decode_command_custom_header::<DeleteTopicRequestHeader>()
@@ -317,11 +319,11 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             channel.remote_address()
         );
         if topic.is_empty() {
-            return Some(
+            return Ok(Some(
                 response
                     .set_code(ResponseCode::SystemError)
                     .set_remark("he specified topic is blank."),
-            );
+            ));
         }
         if self
             .broker_runtime_inner
@@ -329,11 +331,11 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             .validate_system_topic_when_update_topic
             && TopicValidator::is_system_topic(topic)
         {
-            return Some(
+            return Ok(Some(
                 response
                     .set_code(ResponseCode::SystemError)
                     .set_remark(format!("The topic[{topic}] is conflict with system topic.",)),
-            );
+            ));
         }
         let groups = self
             .broker_runtime_inner
@@ -366,7 +368,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             }
         }
         self.delete_topic_in_broker(topic);
-        Some(response.set_code(ResponseCode::Success))
+        Ok(Some(response.set_code(ResponseCode::Success)))
     }
 
     pub async fn get_all_topic_config(
@@ -375,7 +377,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
         let topic_config_and_mapping_serialize_wrapper = TopicConfigAndMappingSerializeWrapper {
             topic_queue_mapping_detail_map: self
@@ -409,7 +411,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         if !content.is_empty() {
             response.set_body_mut_ref(content);
         }
-        Some(response)
+        Ok(Some(response))
     }
 
     pub async fn get_system_topic_list_from_broker(
@@ -418,7 +420,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
         let topics = TopicValidator::get_system_topic_set();
         let topic_list = TopicList {
@@ -426,7 +428,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             broker_addr: None,
         };
         response.set_body_mut_ref(topic_list.encode().expect("encode TopicList failed"));
-        Some(response)
+        Ok(Some(response))
     }
 
     pub async fn get_topic_stats_info(
@@ -435,7 +437,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request
             .decode_command_custom_header::<GetTopicStatsRequestHeader>()
@@ -446,11 +448,11 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             .topic_config_manager()
             .select_topic_config(topic);
         if topic_config.is_none() {
-            return Some(
+            return Ok(Some(
                 response
                     .set_code(ResponseCode::TopicNotExist)
                     .set_remark(format!("The topic[{topic}] not exist.")),
-            );
+            ));
         }
         let topic_config = topic_config.unwrap();
         let max_queue_nums = topic_config
@@ -472,7 +474,6 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             let min = std::cmp::max(
                 self.broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_min_offset_in_queue(topic, i as i32),
                 0,
@@ -480,7 +481,6 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             let max = std::cmp::max(
                 self.broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_max_offset_in_queue(topic, i as i32),
                 0,
@@ -490,7 +490,6 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 timestamp = self
                     .broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_message_store_timestamp(topic, i as i32, max - 1);
             }
@@ -505,7 +504,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 .encode()
                 .expect("encode TopicStatsTable failed"),
         );
-        Some(response)
+        Ok(Some(response))
     }
 
     pub async fn get_topic_config(
@@ -514,7 +513,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request
             .decode_command_custom_header::<GetTopicConfigRequestHeader>()
@@ -525,11 +524,11 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             .topic_config_manager()
             .select_topic_config(topic);
         if topic_config.is_none() {
-            return Some(
+            return Ok(Some(
                 response
                     .set_code(ResponseCode::TopicNotExist)
                     .set_remark(format!("No topic in this broker. topic: {topic}")),
-            );
+            ));
         }
         let mut topic_queue_mapping_detail: Option<ArcMut<TopicQueueMappingDetail>> = None;
         if let Some(value) = request_header.topic_request_header.as_ref() {
@@ -545,16 +544,15 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 }
             }
         }
-        let topic_config_and_queue_mapping = TopicConfigAndQueueMapping::new(
-            topic_config.unwrap().try_unwrap().unwrap(),
-            topic_queue_mapping_detail,
-        );
+        let topic_config = (*topic_config.unwrap()).clone();
+        let topic_config_and_queue_mapping =
+            TopicConfigAndQueueMapping::new(topic_config, topic_queue_mapping_detail);
         response.set_body_mut_ref(
             topic_config_and_queue_mapping
                 .encode()
                 .expect("encode TopicConfigAndQueueMapping failed"),
         );
-        Some(response)
+        Ok(Some(response))
     }
 
     pub async fn query_topic_consume_by_who(
@@ -563,7 +561,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request
             .decode_command_custom_header::<QueryTopicConsumeByWhoRequestHeader>()
@@ -577,10 +575,10 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             .broker_runtime_inner
             .consumer_offset_manager()
             .which_group_by_topic(topic);
-        groups.extend(group_in_offset.clone());
+        groups.extend(group_in_offset);
         let group_list = GroupList { group_list: groups };
         response.set_body_mut_ref(group_list.encode().expect("encode GroupList failed"));
-        Some(response)
+        Ok(Some(response))
     }
 
     pub async fn query_topics_by_consumer(
@@ -589,7 +587,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request
             .decode_command_custom_header::<QueryTopicsByConsumerRequestHeader>()
@@ -608,7 +606,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             broker_addr: Some(broker_addr.into()),
         };
         response.set_body_mut_ref(topic_list.encode().expect("encode TopicList failed"));
-        Some(response)
+        Ok(Some(response))
     }
 
     fn delete_topic_in_broker(&mut self, topic: &CheetahString) {

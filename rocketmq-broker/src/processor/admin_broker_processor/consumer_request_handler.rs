@@ -1,19 +1,19 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
 
 use std::collections::HashSet;
 
@@ -57,7 +57,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request
             .decode_command_custom_header::<GetConsumerConnectionListRequestHeader>()
@@ -91,16 +91,16 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                     .encode()
                     .expect("consumer connection list encode failed");
                 response.set_body_mut_ref(body);
-                Some(response)
+                Ok(Some(response))
             }
-            None => Some(
+            None => Ok(Some(
                 response
                     .set_code(ResponseCode::ConsumerNotOnline)
                     .set_remark(format!(
                         "the consumer group[{}] not online",
                         request_header.get_consumer_group()
                     )),
-            ),
+            )),
         }
     }
 
@@ -110,7 +110,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
         let request_header = request
             .decode_command_custom_header::<GetConsumeStatsRequestHeader>()
@@ -180,7 +180,6 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                 let mut broker_offset = self
                     .broker_runtime_inner
                     .message_store()
-                    .as_ref()
                     .unwrap()
                     .get_max_offset_in_queue(topic, i as i32);
                 if broker_offset < 0 {
@@ -210,7 +209,6 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                     let last_timestamp = self
                         .broker_runtime_inner
                         .message_store()
-                        .as_ref()
                         .unwrap()
                         .get_message_store_timestamp(topic, i as i32, time_offset);
                     if last_timestamp > 0 {
@@ -218,7 +216,9 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                     }
                 }
 
-                consume_stats.get_offset_table().insert(mq, offset_wrapper);
+                consume_stats
+                    .get_offset_table_mut()
+                    .insert(mq, offset_wrapper);
             }
 
             let consume_tps = self
@@ -231,7 +231,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         }
         let body = consume_stats.encode().expect("consume stats encode failed");
         response.set_body_mut_ref(body);
-        Some(response)
+        Ok(Some(response))
     }
 
     pub async fn get_all_consumer_offset(
@@ -240,7 +240,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
-    ) -> Option<RemotingCommand> {
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
         let content = self
             .broker_runtime_inner
@@ -248,13 +248,13 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
             .encode();
         if !content.is_empty() {
             response.set_body_mut_ref(content);
-            Some(response)
+            Ok(Some(response))
         } else {
-            Some(
+            Ok(Some(
                 response
                     .set_code(ResponseCode::SystemError)
                     .set_remark("No consumer offset in this broker"),
-            )
+            ))
         }
     }
 }

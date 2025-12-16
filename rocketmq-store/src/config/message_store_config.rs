@@ -1,19 +1,19 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -277,6 +277,9 @@ mod defaults {
     }
     pub fn ha_listen_port() -> usize {
         10912
+    }
+    pub fn default_query_max_num() -> usize {
+        32
     }
 }
 
@@ -571,7 +574,7 @@ pub struct MessageStoreConfig {
     #[serde(default = "defaults::os_page_cache_busy_timeout_mills")]
     pub os_page_cache_busy_timeout_mills: u64,
 
-    #[serde(default)]
+    #[serde(default = "defaults::default_query_max_num")]
     pub default_query_max_num: usize,
 
     #[serde(default)]
@@ -921,7 +924,7 @@ impl Default for MessageStoreConfig {
             duplication_enable: false,
             disk_fall_recorded: false,
             os_page_cache_busy_timeout_mills: 1000,
-            default_query_max_num: 0,
+            default_query_max_num: 32,
             transient_store_pool_enable: false,
             transient_store_pool_size: 0,
             fast_fail_if_no_buffer_in_store_pool: false,

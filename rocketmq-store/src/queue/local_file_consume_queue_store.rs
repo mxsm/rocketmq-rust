@@ -1,19 +1,20 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
+
 #![allow(unused_variables)]
 
 use std::any::Any;
@@ -36,6 +37,7 @@ use tracing::error;
 use tracing::info;
 
 use crate::base::dispatch_request::DispatchRequest;
+use crate::base::message_store::MessageStore;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::queue::batch_consume_queue::BatchConsumeQueue;
@@ -408,7 +410,12 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         timestamp: i64,
         boundary_type: BoundaryType,
     ) -> i64 {
-        todo!()
+        let logic = self.find_or_create_consume_queue(topic, queue_id);
+        let result_offset =
+            logic.get_offset_in_queue_by_time_with_boundary(timestamp, boundary_type);
+        result_offset
+            .max(logic.get_min_offset_in_queue())
+            .min(logic.get_max_offset_in_queue())
     }
 
     fn find_or_create_consume_queue(
@@ -474,7 +481,15 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn get_store_time(&self, cq_unit: &CqUnit) -> i64 {
-        todo!()
+        match self.inner.message_store.as_ref() {
+            Some(ms) => ms
+                .get_commit_log()
+                .pickup_store_timestamp(cq_unit.pos, cq_unit.size),
+            None => {
+                error!("Message store is not set in ConsumeQueueStore");
+                -1
+            }
+        }
     }
 
     fn as_any(&self) -> &dyn Any {
