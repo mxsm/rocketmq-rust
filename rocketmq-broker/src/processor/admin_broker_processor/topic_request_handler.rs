@@ -544,10 +544,9 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 }
             }
         }
-        let topic_config_and_queue_mapping = TopicConfigAndQueueMapping::new(
-            topic_config.unwrap().try_unwrap().unwrap(),
-            topic_queue_mapping_detail,
-        );
+        let topic_config = (*topic_config.unwrap()).clone();
+        let topic_config_and_queue_mapping =
+            TopicConfigAndQueueMapping::new(topic_config, topic_queue_mapping_detail);
         response.set_body_mut_ref(
             topic_config_and_queue_mapping
                 .encode()
