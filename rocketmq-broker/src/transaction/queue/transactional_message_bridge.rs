@@ -96,14 +96,10 @@ where
     pub async fn fetch_message_queues(&mut self, topic: &CheetahString) -> HashSet<MessageQueue> {
         let mut message_queues = HashSet::new();
         let topic_config = self.select_topic_config(topic).await;
-        let broker_name = self
-            .broker_runtime_inner
-            .broker_config()
-            .broker_name
-            .clone();
+        let broker_name = self.broker_runtime_inner.broker_config().broker_name();
         if let Some(topic_config) = topic_config {
             for i in 0..topic_config.read_queue_nums {
-                let mq = MessageQueue::from_parts(topic, broker_name.as_str(), i as i32);
+                let mq = MessageQueue::from_parts(topic, broker_name.clone(), i as i32);
                 message_queues.insert(mq);
             }
         }
@@ -406,7 +402,7 @@ where
                 queue_id,
                 self.broker_runtime_inner
                     .broker_config()
-                    .broker_name
+                    .broker_name()
                     .clone(),
             )
         });

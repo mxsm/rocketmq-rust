@@ -491,9 +491,6 @@ pub struct BrokerConfig {
     #[serde(default)]
     pub enable_controller_mode: bool,
 
-    #[serde(default = "defaults::broker_name")]
-    pub broker_name: CheetahString,
-
     #[serde(default = "defaults::region_id")]
     pub region_id: CheetahString,
 
@@ -792,7 +789,6 @@ impl Default for BrokerConfig {
                 TopicValidator::RMQ_SYS_TRACE_TOPIC,
             ),
             enable_controller_mode: false,
-            broker_name: default_broker_name().into(),
             region_id: CheetahString::from_static_str(mix_all::DEFAULT_TRACE_REGION_ID),
             trace_on: true,
             broker_permission: PermName::PERM_WRITE | PermName::PERM_READ,
@@ -895,8 +891,8 @@ impl Default for BrokerConfig {
 }
 
 impl BrokerConfig {
-    pub fn broker_name(&self) -> CheetahString {
-        self.broker_name.clone()
+    pub fn broker_name(&self) -> &CheetahString {
+        &self.broker_identity.broker_name
     }
 
     pub fn broker_ip1(&self) -> CheetahString {
@@ -938,7 +934,10 @@ impl BrokerConfig {
 
     pub fn get_properties(&self) -> HashMap<CheetahString, CheetahString> {
         let mut properties = HashMap::new();
-        properties.insert("brokerName".into(), self.broker_name.clone());
+        properties.insert(
+            "brokerName".into(),
+            self.broker_identity.broker_name.clone(),
+        );
         properties.insert(
             "brokerClusterName".into(),
             self.broker_identity.broker_cluster_name.clone(),
@@ -991,7 +990,10 @@ impl BrokerConfig {
             self.enable_controller_mode.to_string().into(),
         );
         properties.insert("regionId".into(), self.region_id.clone());
-        properties.insert("brokerName".into(), self.broker_name.clone());
+        properties.insert(
+            "brokerName".into(),
+            self.broker_identity.broker_name.clone(),
+        );
         properties.insert("traceOn".into(), self.trace_on.to_string().into());
         properties.insert(
             "brokerPermission".into(),

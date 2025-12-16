@@ -266,7 +266,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                     mq.set_broker_name(
                         self.broker_runtime_inner
                             .broker_config()
-                            .broker_name
+                            .broker_name()
                             .clone(),
                     );
                     mq.set_queue_id(request_header.queue_id);

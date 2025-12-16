@@ -126,7 +126,7 @@ impl TopicQueueMappingManager {
                 .bname
                 .clone()
                 .unwrap(),
-            self.broker_config.broker_name
+            self.broker_config.broker_name().clone()
         );
 
         // If not find mappingItem, it encounters some errors

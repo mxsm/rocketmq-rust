@@ -134,7 +134,7 @@ where
                 broker_name: Some(
                     self.broker_runtime_inner
                         .broker_config()
-                        .broker_name
+                        .broker_name()
                         .clone(),
                 ),
                 ..Default::default()

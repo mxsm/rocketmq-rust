@@ -96,7 +96,7 @@ impl<MS: MessageStore> EscapeBridge<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         let inner_producer_group_name = CheetahString::from_string(format!(
             "InnerProducerGroup_{}_{}",
-            broker_runtime_inner.broker_config().broker_name,
+            broker_runtime_inner.broker_config().broker_name(),
             broker_runtime_inner
                 .broker_config()
                 .broker_identity
@@ -104,7 +104,7 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         ));
         let inner_consumer_group_name = CheetahString::from_string(format!(
             "InnerConsumerGroup_{}_{}",
-            broker_runtime_inner.broker_config().broker_name,
+            broker_runtime_inner.broker_config().broker_name(),
             broker_runtime_inner
                 .broker_config()
                 .broker_identity
