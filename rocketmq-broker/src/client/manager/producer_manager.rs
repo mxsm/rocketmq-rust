@@ -22,6 +22,7 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_remoting::connection::ConnectionState;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::producer_info::ProducerInfo;
 use rocketmq_remoting::protocol::body::producer_table_info::ProducerTableInfo;
@@ -155,40 +156,60 @@ impl ProducerManager {
         _client_channel_info: &ClientChannelInfo,
         ctx: &ConnectionHandlerContext,
     ) {
+        let mut removed_info: Option<ClientChannelInfo> = None;
+        let mut is_group_empty = false;
+
+        //Remove from group_channel_table and collect info
         if let Some(channel_table) = self.group_channel_table.get(group) {
             if let Some((_channel, old)) = channel_table.remove(ctx.channel()) {
-                // Remove from clientChannelTable only if the channel matches
-                if let Some(entry) = self.client_channel_table.get(old.client_id()) {
-                    if entry.value() == ctx.channel() {
-                        self.client_channel_table.remove(old.client_id());
-                    }
-                }
+                removed_info = Some(old);
+                // Only check empty after successful removal
+                is_group_empty = channel_table.is_empty();
+            }
+        }
+        // Lock released here
 
-                info!(
-                    "unregister a producer[{}] from groupChannelTable, client: {}",
-                    group,
-                    old.client_id()
-                );
-                self.call_producer_change_listener(
-                    ProducerGroupEvent::ClientUnregister,
-                    group,
-                    Some(&old),
-                );
+        //Handle the removed producer (outside of group_channel_table lock)
+        if let Some(old) = removed_info {
+            // Remove from clientChannelTable only if the channel matches
+            if let Some(entry) = self.client_channel_table.get(old.client_id()) {
+                if entry.value() == ctx.channel() {
+                    drop(entry); // Release read lock before remove
+                    self.client_channel_table.remove(old.client_id());
+                }
             }
 
-            // If group is now empty, remove the entire group
-            if channel_table.is_empty() {
-                drop(channel_table); // Release the reference
-                self.group_channel_table.remove(group);
-                info!(
-                    "unregister a producer group[{}] from groupChannelTable",
-                    group
-                );
-                self.call_producer_change_listener(
-                    ProducerGroupEvent::GroupUnregister,
-                    group,
-                    None,
-                );
+            info!(
+                "unregister a producer[{}] from groupChannelTable, client: {}",
+                group,
+                old.client_id()
+            );
+
+            // Call listener outside of locks
+            self.call_producer_change_listener(
+                ProducerGroupEvent::ClientUnregister,
+                group,
+                Some(&old),
+            );
+
+            //Remove empty group (only if we removed a producer)
+            // Re-check if group is still empty to avoid TOCTOU race condition
+            if is_group_empty {
+                // Use remove_if to atomically check and remove
+                let removed = self
+                    .group_channel_table
+                    .remove_if(group, |_, channel_map| channel_map.is_empty());
+                if removed.is_some() {
+                    info!(
+                        "unregister a producer group[{}] from groupChannelTable",
+                        group
+                    );
+                    self.call_producer_change_listener(
+                        ProducerGroupEvent::GroupUnregister,
+                        group,
+                        None,
+                    );
+                }
             }
         }
     }
@@ -210,36 +231,37 @@ impl ProducerManager {
         group: &CheetahString,
         client_channel_info: &ClientChannelInfo,
     ) {
-        // Get or create the channel table for this group
-        let channel_table = self.group_channel_table.entry(group.clone()).or_default();
+        // Update group_channel_table
+        {
+            let channel_table = self.group_channel_table.entry(group.clone()).or_default();
 
-        // Check if this channel is already registered
-        if let Some(mut existing_info) = channel_table.get_mut(client_channel_info.channel()) {
-            // Update timestamp for existing producer
-            existing_info.set_last_update_timestamp(get_current_millis());
-            return;
+            // Check if this channel is already registered
+            if let Some(mut existing_info) = channel_table.get_mut(client_channel_info.channel()) {
+                // Update timestamp for existing producer
+                existing_info.set_last_update_timestamp(get_current_millis());
+                return;
+            }
+
+            // New producer - insert into channel table
+            channel_table.insert(
+                client_channel_info.channel().clone(),
+                client_channel_info.clone(),
+            );
         }
+        // channel_table lock released here
 
-        // New producer - insert into channel table
-        channel_table.insert(
-            client_channel_info.channel().clone(),
-            client_channel_info.clone(),
-        );
-
-        //Only update clientChannelTable if:
-        // 1. The client_id doesn't exist, OR
-        // 2. The existing channel matches the new channel
-        // This prevents incorrectly overwriting a different channel for the same client_id
+        //Update clientChannelTable (outside of group_channel_table lock)
         let client_id = client_channel_info.client_id();
         let new_channel = client_channel_info.channel();
 
-        match self.client_channel_table.get(client_id) {
+        // Check existing channel for this client_id
+        let should_update = match self.client_channel_table.get(client_id) {
             Some(existing_channel) if existing_channel.value() == new_channel => {
                 // Same channel - no action needed
+                false
             }
             Some(existing_channel) => {
-                // Different channel with same client_id - this shouldn't happen normally
-                // but we need to handle it according to Java's behavior
+                // Different channel with same client_id
                 warn!(
                     "Producer client_id[{}] is registering with a different channel. Old channel: \
                      {}, New channel: {}",
@@ -247,15 +269,17 @@ impl ProducerManager {
                     existing_channel.remote_address(),
                     new_channel.remote_address()
                 );
-                // Update to new channel
-                self.client_channel_table
-                    .insert(client_id.clone(), new_channel.clone());
+                true
             }
             None => {
                 // First time seeing this client_id
-                self.client_channel_table
-                    .insert(client_id.clone(), new_channel.clone());
+                true
             }
+        };
+
+        if should_update {
+            self.client_channel_table
+                .insert(client_id.clone(), new_channel.clone());
         }
 
         info!(
@@ -290,25 +314,27 @@ impl ProducerManager {
     pub fn get_available_channel(&self, group: Option<&CheetahString>) -> Option<Channel> {
         let group = group?;
 
-        let channel_map = self.group_channel_table.get(group)?;
-        if channel_map.is_empty() {
-            warn!("Channel list is empty. group={}", group);
-            return None;
-        }
+        // Collect all channels first, then release the lock
+        let channels: Vec<Channel> = {
+            let channel_map = self.group_channel_table.get(group)?;
+            if channel_map.is_empty() {
+                warn!("Channel list is empty. group={}", group);
+                return None;
+            }
+            channel_map
+                .iter()
+                .map(|entry| entry.key().clone())
+                .collect()
+        };
+        // Lock released here
 
-        // Collect all channels
-        let channels: Vec<Channel> = channel_map
-            .iter()
-            .map(|entry| entry.key().clone())
-            .collect();
         let size = channels.len();
-
         if size == 0 {
             warn!("Channel list is empty. group={}", group);
             return None;
         }
 
-        // Round-robin selection
+        // Round-robin selection (no locks held)
         let index = self
             .positive_atomic_counter
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
@@ -324,8 +350,9 @@ impl ProducerManager {
                 return Some(channel.clone());
             }
 
-            // Keep the first healthy channel as fallback
-            if last_healthy_channel.is_none() {
+            // Keep updating to last active channel as fallback (matching Java behavior)
+            // is_active means state != Closed (similar to Java's channel.isActive())
+            if channel.connection_ref().state() != ConnectionState::Closed {
                 last_healthy_channel = Some(channel.clone());
             }
 
@@ -344,33 +371,35 @@ impl ProducerManager {
     /// will be removed.
     pub fn scan_not_active_channel(&self) {
         let current_time = get_current_millis();
-        let mut groups_to_remove = Vec::new();
 
-        // Iterate over all groups
+        // Collect all expired channels without holding locks during modification
+        // Structure: (group_name, channel, client_info)
+        let mut expired_channels: Vec<(CheetahString, Channel, ClientChannelInfo)> = Vec::new();
+
+        // Collect expired channels - only hold read locks here
         for group_entry in self.group_channel_table.iter() {
             let (group, channel_map) = (group_entry.key(), group_entry.value());
-            let mut channels_to_remove = Vec::new();
 
-            // Find expired channels in this group
             for channel_entry in channel_map.iter() {
                 let (channel, info) = (channel_entry.key(), channel_entry.value());
                 let diff = current_time - info.last_update_timestamp();
 
                 if diff > CHANNEL_EXPIRED_TIMEOUT {
-                    channels_to_remove.push((channel.clone(), info.clone()));
+                    expired_channels.push((group.clone(), channel.clone(), info.clone()));
                 }
             }
+        }
+        // All read locks released here
 
-            // Remove expired channels
-            for (channel, info) in channels_to_remove {
+        // Use HashSet to avoid duplicate group removals
+        let mut empty_groups: std::collections::HashSet<CheetahString> =
+            std::collections::HashSet::new();
+
+        // Remove expired channels one by one
+        for (group, channel, info) in expired_channels {
+            // Remove from channel_map
+            if let Some(channel_map) = self.group_channel_table.get(&group) {
                 channel_map.remove(&channel);
-
-                // Remove from clientChannelTable if it matches
-                if let Some(entry) = self.client_channel_table.get(info.client_id()) {
-                    if *entry.value() == channel {
-                        self.client_channel_table.remove(info.client_id());
-                    }
-                }
 
                 warn!(
                     "ProducerManager#scan_not_active_channel: remove expired channel[{}] from \
@@ -380,28 +409,49 @@ impl ProducerManager {
                     info.client_id()
                 );
 
-                self.call_producer_change_listener(
-                    ProducerGroupEvent::ClientUnregister,
-                    group,
-                    Some(&info),
-                );
+                // Check if group is now empty
+                if channel_map.is_empty() {
+                    empty_groups.insert(group.clone());
+                }
             }
 
-            // Mark group for removal if empty
-            if channel_map.is_empty() {
-                groups_to_remove.push(group.clone());
+            // Remove from clientChannelTable if it matches (outside of group_channel_table lock)
+            if let Some(entry) = self.client_channel_table.get(info.client_id()) {
+                if *entry.value() == channel {
+                    drop(entry); // Release the read lock before remove
+                    self.client_channel_table.remove(info.client_id());
+                }
             }
+
+            // Call listener outside of any locks
+            self.call_producer_change_listener(
+                ProducerGroupEvent::ClientUnregister,
+                &group,
+                Some(&info),
+            );
+
+            // Close the expired channel (matching Java's RemotingHelper.closeChannel)
+            channel.connection_ref().close();
         }
 
         // Remove empty groups
-        for group in groups_to_remove {
-            self.group_channel_table.remove(&group);
-            warn!(
-                "SCAN: remove expired channel from ProducerManager groupChannelTable, all clear, \
-                 group={}",
-                group
-            );
-            self.call_producer_change_listener(ProducerGroupEvent::GroupUnregister, &group, None);
+        // Use remove_if to avoid TOCTOU race - only remove if still empty
+        for group in empty_groups {
+            let removed = self
+                .group_channel_table
+                .remove_if(&group, |_, channel_map| channel_map.is_empty());
+            if removed.is_some() {
+                warn!(
+                    "SCAN: remove expired channel from ProducerManager groupChannelTable, all \
+                     clear, group={}",
+                    group
+                );
+                self.call_producer_change_listener(
+                    ProducerGroupEvent::GroupUnregister,
+                    &group,
+                    None,
+                );
+            }
         }
     }
 
@@ -416,25 +466,30 @@ impl ProducerManager {
     /// # Returns
     /// `true` if at least one producer was removed, `false` otherwise
     pub fn do_channel_close_event(&self, remote_addr: &str, channel: &Channel) -> bool {
-        let mut removed = false;
-        let mut groups_to_remove = Vec::new();
+        // Collect all groups that contain this channel
+        // Structure: (group_name, client_channel_info)
+        let mut channels_to_remove: Vec<(CheetahString, ClientChannelInfo)> = Vec::new();
 
-        // Iterate over all groups to find and remove this channel
+        // Only hold read lock during collection
         for group_entry in self.group_channel_table.iter() {
             let (group, channel_map) = (group_entry.key(), group_entry.value());
+            if let Some(entry) = channel_map.get(channel) {
+                channels_to_remove.push((group.clone(), entry.value().clone()));
+            }
+        }
+        // Read locks released here
 
-            if let Some((_, client_channel_info)) = channel_map.remove(channel) {
-                // Remove from clientChannelTable only if the channel matches
-                if let Some(entry) = self
-                    .client_channel_table
-                    .get(client_channel_info.client_id())
-                {
-                    if entry.value() == channel {
-                        self.client_channel_table
-                            .remove(client_channel_info.client_id());
-                    }
-                }
-                removed = true;
+        if channels_to_remove.is_empty() {
+            return false;
+        }
+
+        let mut empty_groups: std::collections::HashSet<CheetahString> =
+            std::collections::HashSet::new();
+
+        // Remove channels from their groups
+        for (group, client_channel_info) in &channels_to_remove {
+            if let Some(channel_map) = self.group_channel_table.get(group) {
+                channel_map.remove(channel);
 
                 info!(
                     "Channel Close event: remove channel[{}][{}] from ProducerManager \
@@ -445,30 +500,56 @@ impl ProducerManager {
                     client_channel_info.client_id()
                 );
 
-                self.call_producer_change_listener(
-                    ProducerGroupEvent::ClientUnregister,
-                    group,
-                    Some(&client_channel_info),
-                );
-
-                // Mark group for removal if it's now empty
+                // Check if group is now empty
                 if channel_map.is_empty() {
-                    groups_to_remove.push(group.clone());
+                    empty_groups.insert(group.clone());
                 }
             }
         }
 
-        // Remove empty groups
-        for group in groups_to_remove {
-            self.group_channel_table.remove(&group);
-            info!(
-                "unregister a producer group[{}] from groupChannelTable",
-                group
-            );
-            self.call_producer_change_listener(ProducerGroupEvent::GroupUnregister, &group, None);
+        // Remove from clientChannelTable (outside of group_channel_table operations)
+        for (_, client_channel_info) in &channels_to_remove {
+            if let Some(entry) = self
+                .client_channel_table
+                .get(client_channel_info.client_id())
+            {
+                if entry.value() == channel {
+                    drop(entry); // Release read lock before remove
+                    self.client_channel_table
+                        .remove(client_channel_info.client_id());
+                }
+            }
         }
 
-        removed
+        //Call listeners (outside of any locks)
+        for (group, client_channel_info) in &channels_to_remove {
+            self.call_producer_change_listener(
+                ProducerGroupEvent::ClientUnregister,
+                group,
+                Some(client_channel_info),
+            );
+        }
+
+        // Remove empty groups
+        // Use remove_if to avoid TOCTOU race - only remove if still empty
+        for group in empty_groups {
+            let removed = self
+                .group_channel_table
+                .remove_if(&group, |_, channel_map| channel_map.is_empty());
+            if removed.is_some() {
+                info!(
+                    "unregister a producer group[{}] from groupChannelTable",
+                    group
+                );
+                self.call_producer_change_listener(
+                    ProducerGroupEvent::GroupUnregister,
+                    &group,
+                    None,
+                );
+            }
+        }
+
+        true
     }
 
     /// Notifies all registered producer change listeners of an event.
