@@ -65,6 +65,9 @@ impl<MS: MessageStore> DefaultTransactionalMessageCheckListener<MS> {
             broker_client: ArcMut::new(broker_client),
         }
     }
+    pub fn broker_to_client(&self) -> ArcMut<Broker2Client> {
+        self.broker_client.clone()
+    }
 }
 
 impl<MS> TransactionalMessageCheckListener for DefaultTransactionalMessageCheckListener<MS>

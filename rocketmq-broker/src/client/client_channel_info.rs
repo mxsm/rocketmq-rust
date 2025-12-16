@@ -80,6 +80,9 @@ impl ClientChannelInfo {
     pub fn channel(&self) -> &Channel {
         &self.channel
     }
+    pub fn channel_mut(&mut self) -> &mut Channel {
+        &mut self.channel
+    }
     pub fn set_channel(&mut self, channel: Channel) {
         self.channel = channel;
     }

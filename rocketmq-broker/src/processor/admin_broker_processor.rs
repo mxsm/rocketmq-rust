@@ -30,6 +30,7 @@ use crate::processor::admin_broker_processor::batch_mq_handler::BatchMqHandler;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 use crate::processor::admin_broker_processor::broker_epoch_cache_handler::BrokerEpochCacheHandler;
 use crate::processor::admin_broker_processor::consumer_request_handler::ConsumerRequestHandler;
+use crate::processor::admin_broker_processor::get_consumer_running_info_handler::GetConsumerRunningInfoHandler;
 use crate::processor::admin_broker_processor::message_related_handler::MessageRelatedHandler;
 use crate::processor::admin_broker_processor::notify_broker_role_change_handler::NotifyBrokerRoleChangeHandler;
 use crate::processor::admin_broker_processor::notify_min_broker_id_handler::NotifyMinBrokerChangeIdHandler;
@@ -43,6 +44,7 @@ mod batch_mq_handler;
 mod broker_config_request_handler;
 mod broker_epoch_cache_handler;
 mod consumer_request_handler;
+mod get_consumer_running_info_handler;
 mod message_related_handler;
 mod notify_broker_role_change_handler;
 mod notify_min_broker_id_handler;
@@ -68,6 +70,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     broker_epoch_cache_handler: BrokerEpochCacheHandler<MS>,
     notify_broker_role_change_handler: NotifyBrokerRoleChangeHandler<MS>,
     message_related_handler: MessageRelatedHandler<MS>,
+    get_consumer_running_info_handler: GetConsumerRunningInfoHandler<MS>,
 }
 
 impl<MS> RequestProcessor for AdminBrokerProcessor<MS>
@@ -111,7 +114,8 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             NotifyBrokerRoleChangeHandler::new(broker_runtime_inner.clone());
 
         let message_related_handler = MessageRelatedHandler::new(broker_runtime_inner.clone());
-
+        let get_consumer_running_info_handler =
+            GetConsumerRunningInfoHandler::new(broker_runtime_inner.clone());
         AdminBrokerProcessor {
             topic_request_handler,
             broker_config_request_handler,
@@ -126,6 +130,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             broker_epoch_cache_handler,
             notify_broker_role_change_handler,
             message_related_handler,
+            get_consumer_running_info_handler,
         }
     }
 }
@@ -272,7 +277,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             RequestCode::CleanExpiredConsumequeue => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::DeleteExpiredCommitlog => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::CleanUnusedTopic => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::GetConsumerRunningInfo => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::GetConsumerRunningInfo => {
+                self.get_consumer_running_info_handler
+                    .get_consumer_running_info(request)
+                    .await
+            }
             RequestCode::QueryCorrectionOffset => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::ConsumeMessageDirectly => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::CloneGroupOffset => Ok(get_unknown_cmd_response(request_code)),
