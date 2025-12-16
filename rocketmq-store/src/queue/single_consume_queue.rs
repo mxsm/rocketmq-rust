@@ -46,6 +46,8 @@ use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 use crate::queue::consume_queue::ConsumeQueueTrait;
 use crate::queue::consume_queue_ext::ConsumeQueueExt;
+use crate::queue::consume_queue_store::ConsumeQueueStoreTrait;
+use crate::queue::local_file_consume_queue_store::ConsumeQueueStore;
 use crate::queue::multi_dispatch_utils::check_multi_dispatch_queue;
 use crate::queue::queue_offset_operator::QueueOffsetOperator;
 use crate::queue::CqUnit;
@@ -810,7 +812,13 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
 
     #[inline]
     fn get_cq_unit_and_store_time(&self, index: i64) -> Option<(CqUnit, i64)> {
-        todo!()
+        let cq_unit = self.get(index)?;
+        let i = self
+            .message_store
+            .get_queue_store()
+            .downcast_ref::<ConsumeQueueStore>()?
+            .get_store_time(&cq_unit);
+        Some((cq_unit, i))
     }
 
     #[inline]

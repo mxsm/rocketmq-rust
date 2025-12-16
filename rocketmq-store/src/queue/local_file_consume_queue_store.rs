@@ -37,6 +37,7 @@ use tracing::error;
 use tracing::info;
 
 use crate::base::dispatch_request::DispatchRequest;
+use crate::base::message_store::MessageStore;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::message_store::local_file_message_store::LocalFileMessageStore;
 use crate::queue::batch_consume_queue::BatchConsumeQueue;
@@ -480,7 +481,15 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn get_store_time(&self, cq_unit: &CqUnit) -> i64 {
-        todo!()
+        match self.inner.message_store.as_ref() {
+            Some(ms) => ms
+                .get_commit_log()
+                .pickup_store_timestamp(cq_unit.pos, cq_unit.size),
+            None => {
+                error!("Message store is not set in ConsumeQueueStore");
+                -1
+            }
+        }
     }
 
     fn as_any(&self) -> &dyn Any {
