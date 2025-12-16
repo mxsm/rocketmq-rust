@@ -216,7 +216,9 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                     }
                 }
 
-                consume_stats.get_offset_table().insert(mq, offset_wrapper);
+                consume_stats
+                    .get_offset_table_mut()
+                    .insert(mq, offset_wrapper);
             }
 
             let consume_tps = self

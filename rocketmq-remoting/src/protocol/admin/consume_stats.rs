@@ -53,8 +53,12 @@ impl ConsumeStats {
             .sum()
     }
 
-    pub fn get_offset_table(&self) -> HashMap<MessageQueue, OffsetWrapper> {
-        self.offset_table.clone()
+    pub fn get_offset_table(&self) -> &HashMap<MessageQueue, OffsetWrapper> {
+        &self.offset_table
+    }
+
+    pub fn get_offset_table_mut(&mut self) -> &mut HashMap<MessageQueue, OffsetWrapper> {
+        &mut self.offset_table
     }
 
     pub fn set_offset_table(&mut self, offset_table: HashMap<MessageQueue, OffsetWrapper>) {
