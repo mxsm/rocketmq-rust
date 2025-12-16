@@ -46,7 +46,7 @@ impl<MS: MessageStore> GetConsumerRunningInfoHandler<MS> {
         let mut client_channel_info = self
             .broker_runtime_inner
             .consumer_manager()
-            .find_channel_by_client_id(&consumer_group.to_string(), &client_id.to_string());
+            .find_channel_by_client_id(consumer_group.as_ref(), client_id.as_ref());
 
         if let Some(client_channel_info) = &mut client_channel_info {
             if (client_channel_info.version() as u32) < RocketMQVersion::V3_1_8_SNAPSHOT.ordinal() {
