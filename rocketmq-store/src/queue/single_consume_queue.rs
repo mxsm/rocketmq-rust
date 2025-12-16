@@ -804,10 +804,7 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
 
     #[inline]
     fn get(&self, index: i64) -> Option<CqUnit> {
-        match self.iterate_from(index) {
-            None => None,
-            Some(value) => None,
-        }
+        self.iterate_from(index).and_then(|mut iter| iter.next())
     }
 
     #[inline]

@@ -1757,11 +1757,12 @@ impl CommitLog {
                 let buffer = result.get_buffer();
                 let sys_flag = (&buffer[MessageDecoder::SYSFLAG_POSITION..]).get_i32();
                 let born_host_length = if sys_flag & MessageSysFlag::BORNHOST_V6_FLAG == 0 {
-                    4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8 + 8
+                    8
                 } else {
-                    4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8 + 20
+                    20
                 };
-                (&buffer[born_host_length..]).get_i64()
+                let msg_store_time_pos = born_host_length + 4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8;
+                (&buffer[msg_store_time_pos..]).get_i64()
             } else {
                 -1
             }
