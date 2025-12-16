@@ -515,9 +515,8 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
-        let request_header = request
-            .decode_command_custom_header::<GetTopicConfigRequestHeader>()
-            .unwrap();
+        let request_header =
+            request.decode_command_custom_header::<GetTopicConfigRequestHeader>()?;
         let topic = &request_header.topic;
         let topic_config = self
             .broker_runtime_inner
@@ -547,11 +546,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         let topic_config = (*topic_config.unwrap()).clone();
         let topic_config_and_queue_mapping =
             TopicConfigAndQueueMapping::new(topic_config, topic_queue_mapping_detail);
-        response.set_body_mut_ref(
-            topic_config_and_queue_mapping
-                .encode()
-                .expect("encode TopicConfigAndQueueMapping failed"),
-        );
+        response.set_body_mut_ref(topic_config_and_queue_mapping.encode()?);
         Ok(Some(response))
     }
 
@@ -563,9 +558,8 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
-        let request_header = request
-            .decode_command_custom_header::<QueryTopicConsumeByWhoRequestHeader>()
-            .unwrap();
+        let request_header =
+            request.decode_command_custom_header::<QueryTopicConsumeByWhoRequestHeader>()?;
         let topic = request_header.topic.as_ref();
         let mut groups = self
             .broker_runtime_inner
