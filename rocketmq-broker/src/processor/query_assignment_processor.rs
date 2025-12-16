@@ -355,7 +355,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
                         topic.clone(),
                         self.broker_runtime_inner
                             .broker_config()
-                            .broker_name
+                            .broker_name()
                             .clone(),
                         mix_all::LMQ_QUEUE_ID as i32,
                     );

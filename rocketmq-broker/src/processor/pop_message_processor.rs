@@ -1111,10 +1111,7 @@ where
                             final_offset,
                             &result_inner,
                             pop_time,
-                            self.broker_runtime_inner
-                                .broker_config()
-                                .broker_name
-                                .as_str(),
+                            self.broker_runtime_inner.broker_config().broker_name(),
                         )
                         .await
                     {
@@ -1175,7 +1172,10 @@ where
                                     pop_time,
                                     revive_qid,
                                     result_inner.next_begin_offset() as u64,
-                                    self.broker_runtime_inner.broker_config().broker_name(),
+                                    self.broker_runtime_inner
+                                        .broker_config()
+                                        .broker_name()
+                                        .clone(),
                                 )
                                 .await;
                         }
@@ -1189,7 +1189,7 @@ where
                 let broker_name = self
                     .broker_runtime_inner
                     .broker_config()
-                    .broker_name
+                    .broker_name()
                     .as_str();
                 let message_count = result_inner.message_count();
                 for maped_buffer in result_inner.message_mapped_vec() {
@@ -1282,7 +1282,7 @@ where
         offset: i64,
         get_message_tmp_result: &GetMessageResult,
         pop_time: u64,
-        broker_name: &str,
+        broker_name: &CheetahString,
     ) -> bool {
         let mut ck = PopCheckPoint {
             start_offset: offset,
@@ -1293,7 +1293,7 @@ where
             queue_id,
             topic: topic.into(),
             cid: request_header.consumer_group.clone(),
-            broker_name: Some(broker_name.into()),
+            broker_name: Some(broker_name.clone()),
             ..Default::default()
         };
         for msg_queue_offset in get_message_tmp_result.message_queue_offset() {

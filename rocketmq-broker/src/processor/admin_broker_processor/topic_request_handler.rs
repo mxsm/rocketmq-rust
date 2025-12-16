@@ -466,7 +466,7 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
             message_queue.set_broker_name(
                 self.broker_runtime_inner
                     .broker_config()
-                    .broker_name
+                    .broker_name()
                     .clone(),
             );
             message_queue.set_queue_id(i as i32);
