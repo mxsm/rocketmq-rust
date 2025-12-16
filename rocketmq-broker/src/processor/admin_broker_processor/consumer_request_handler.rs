@@ -19,6 +19,7 @@ use std::collections::HashSet;
 
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -28,6 +29,7 @@ use rocketmq_remoting::protocol::body::connection::Connection;
 use rocketmq_remoting::protocol::body::consumer_connection::ConsumerConnection;
 use rocketmq_remoting::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
 use rocketmq_remoting::protocol::header::get_consumer_connection_list_request_header::GetConsumerConnectionListRequestHeader;
+use rocketmq_remoting::protocol::header::get_consumer_running_info_request_header::GetConsumerRunningInfoRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
@@ -36,6 +38,7 @@ use rocketmq_store::base::message_store::MessageStore;
 use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
+use crate::client::net::broker_to_client::Broker2Client;
 
 #[derive(Clone)]
 pub(super) struct ConsumerRequestHandler<MS: MessageStore> {
@@ -255,6 +258,100 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                     .set_code(ResponseCode::SystemError)
                     .set_remark("No consumer offset in this broker"),
             ))
+        }
+    }
+
+    pub async fn get_consumer_running_info(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let request_header =
+            match request.decode_command_custom_header::<GetConsumerRunningInfoRequestHeader>() {
+                Ok(header) => header,
+                Err(e) => {
+                    let response = RemotingCommand::create_response_command()
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark(format!(
+                            "decode GetConsumerRunningInfoRequestHeader failed: {}",
+                            e
+                        ));
+                    return Ok(Some(response));
+                }
+            };
+
+        self.call_consumer(
+            request.clone(),
+            request_header.consumer_group.as_str(),
+            request_header.client_id.as_str(),
+        )
+        .await
+    }
+
+    async fn call_consumer(
+        &mut self,
+        request: RemotingCommand,
+        consumer_group: &str,
+        client_id: &str,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let mut response = RemotingCommand::create_response_command();
+
+        let client_channel_info = self
+            .broker_runtime_inner
+            .consumer_manager()
+            .find_channel_by_client_id(consumer_group, client_id);
+
+        if client_channel_info.is_none() {
+            response = response
+                .set_code(ResponseCode::SystemError)
+                .set_remark(format!(
+                    "The Consumer <{}> <{}> not online",
+                    consumer_group, client_id
+                ));
+            return Ok(Some(response));
+        }
+
+        let client_channel_info = client_channel_info.unwrap();
+
+        if client_channel_info.version() < RocketMqVersion::V3_1_8_SNAPSHOT.ordinal() as i32 {
+            response = response
+                .set_code(ResponseCode::SystemError)
+                .set_remark(format!(
+                    "The Consumer <{}> Version <{}> too low to finish, please upgrade it to \
+                     V3_1_8_SNAPSHOT",
+                    client_id,
+                    RocketMqVersion::from_ordinal(client_channel_info.version() as u32).name()
+                ));
+            return Ok(Some(response));
+        }
+
+        let mut channel = client_channel_info.channel().clone();
+
+        // Default timeout is 5000ms, same as Java implementation
+        let timeout_millis = 5000u64;
+
+        match Broker2Client
+            .call_client(&mut channel, request, timeout_millis)
+            .await
+        {
+            Ok(result) => Ok(Some(result)),
+            Err(e) => {
+                let (code, error_type) = match &e {
+                    rocketmq_error::RocketMQError::Network(
+                        rocketmq_error::NetworkError::RequestTimeout { .. }
+                        | rocketmq_error::NetworkError::ConnectionTimeout { .. },
+                    ) => (ResponseCode::ConsumeMsgTimeout, "Timeout"),
+                    _ => (ResponseCode::SystemError, "Exception"),
+                };
+
+                response = response.set_code(code).set_remark(format!(
+                    "consumer <{}> <{}> {}: {:?}",
+                    consumer_group, client_id, error_type, e
+                ));
+                Ok(Some(response))
+            }
         }
     }
 }

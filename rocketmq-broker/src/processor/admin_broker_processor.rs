@@ -272,7 +272,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             RequestCode::CleanExpiredConsumequeue => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::DeleteExpiredCommitlog => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::CleanUnusedTopic => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::GetConsumerRunningInfo => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::GetConsumerRunningInfo => {
+                self.consumer_request_handler
+                    .get_consumer_running_info(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::QueryCorrectionOffset => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::ConsumeMessageDirectly => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::CloneGroupOffset => Ok(get_unknown_cmd_response(request_code)),
