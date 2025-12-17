@@ -178,7 +178,9 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                 );
 
                 // Record BrokerMetrics for non-retry/dlq topics
-                if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
+                if let Some(metrics) =
+                    crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global()
+                {
                     let topic = request_header.topic.as_str();
                     let consumer_group = request_header.consumer_group.as_str();
                     let is_retry = topic.starts_with("%RETRY%") || topic.starts_with("%DLQ%");
@@ -384,12 +386,11 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
                     ]);
 
                     // bornHost: IPv4 = 8 bytes, IPv6 = 20 bytes
-                    let bornhost_length =
-                        if (sys_flag & MessageSysFlag::BORNHOST_V6_FLAG) == 0 {
-                            8
-                        } else {
-                            20
-                        };
+                    let bornhost_length = if (sys_flag & MessageSysFlag::BORNHOST_V6_FLAG) == 0 {
+                        8
+                    } else {
+                        20
+                    };
 
                     // storeTimestamp position = 4(TOTALSIZE) + 4(MAGICCODE) + 4(BODYCRC)
                     //                         + 4(QUEUEID) + 4(FLAG) + 8(QUEUEOFFSET)
