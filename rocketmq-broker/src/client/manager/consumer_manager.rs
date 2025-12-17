@@ -16,14 +16,13 @@
 //  under the License.
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Weak;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
-use parking_lot::RwLock;
+use dashmap::DashMap;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -40,17 +39,37 @@ use crate::client::consumer_group_event::ConsumerGroupEvent;
 use crate::client::consumer_group_info::ConsumerGroupInfo;
 use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
 
+/// Manages consumer client connections and their lifecycle.
+///
+/// This manager maintains:
+/// - Consumer group registrations and subscription relationships
+/// - Channel heartbeat status and expiration detection
+/// - Automatic cleanup of inactive consumers
+///
+/// # Thread Safety
+/// All operations are thread-safe using concurrent data structures.
 pub struct ConsumerManager {
-    consumer_table: Arc<RwLock<HashMap<CheetahString, ConsumerGroupInfo>>>,
-    consumer_compensation_table: Arc<RwLock<HashMap<CheetahString, ConsumerGroupInfo>>>,
+    /// Consumer group name -> ConsumerGroupInfo mapping
+    consumer_table: Arc<DashMap<CheetahString, ConsumerGroupInfo>>,
+    /// Compensation table for consumers without heartbeat
+    consumer_compensation_table: Arc<DashMap<CheetahString, ConsumerGroupInfo>>,
+    /// Listeners notified on consumer registration/unregistration events
     consumer_ids_change_listener_list:
         Vec<Arc<Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>>>,
+    /// Optional broker statistics manager (set once during initialization)
     broker_stats_manager: Option<Weak<BrokerStatsManager>>,
+    /// Timeout for considering a consumer channel as expired (in milliseconds)
     channel_expired_timeout: u64,
+    /// Timeout for subscription data expiration (in milliseconds)
     subscription_expired_timeout: u64,
 }
 
 impl ConsumerManager {
+    /// Creates a new ConsumerManager instance.
+    ///
+    /// # Arguments
+    /// * `consumer_ids_change_listener` - Listener for consumer change events
+    /// * `expired_timeout` - Timeout for channel and subscription expiration (milliseconds)
     pub fn new(
         consumer_ids_change_listener: Arc<
             Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
@@ -59,8 +78,8 @@ impl ConsumerManager {
     ) -> Self {
         let consumer_ids_change_listener_list = vec![consumer_ids_change_listener];
         ConsumerManager {
-            consumer_table: Arc::new(RwLock::new(HashMap::new())),
-            consumer_compensation_table: Arc::new(RwLock::new(HashMap::new())),
+            consumer_table: Arc::new(DashMap::new()),
+            consumer_compensation_table: Arc::new(DashMap::new()),
             consumer_ids_change_listener_list,
             broker_stats_manager: None,
             channel_expired_timeout: expired_timeout,
@@ -68,6 +87,11 @@ impl ConsumerManager {
         }
     }
 
+    /// Creates a new ConsumerManager with broker configuration.
+    ///
+    /// # Arguments
+    /// * `consumer_ids_change_listener` - Listener for consumer change events
+    /// * `broker_config` - Broker configuration containing timeout settings
     pub fn new_with_broker_stats(
         consumer_ids_change_listener: Arc<
             Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
@@ -76,8 +100,8 @@ impl ConsumerManager {
     ) -> Self {
         let consumer_ids_change_listener_list = vec![consumer_ids_change_listener];
         ConsumerManager {
-            consumer_table: Arc::new(RwLock::new(HashMap::new())),
-            consumer_compensation_table: Arc::new(RwLock::new(HashMap::new())),
+            consumer_table: Arc::new(DashMap::new()),
+            consumer_compensation_table: Arc::new(DashMap::new()),
             consumer_ids_change_listener_list,
             broker_stats_manager: None,
             channel_expired_timeout: broker_config.channel_expired_timeout,
@@ -91,30 +115,52 @@ impl ConsumerManager {
         self.broker_stats_manager = Some(broker_stats_manager);
     }
 
+    /// Finds a consumer channel by client ID within a consumer group.
+    ///
+    /// # Arguments
+    /// * `group` - Consumer group name
+    /// * `client_id` - Client identifier
+    ///
+    /// # Returns
+    /// Client channel info if found
     pub fn find_channel_by_client_id(
         &self,
         group: &str,
         client_id: &str,
     ) -> Option<ClientChannelInfo> {
-        let consumer_table = self.consumer_table.read();
-        if let Some(consumer_group_info) = consumer_table.get(group) {
+        if let Some(consumer_group_info) = self.consumer_table.get(group) {
             return consumer_group_info.find_channel_by_client_id(client_id);
         }
         None
     }
 
+    /// Finds a consumer channel by channel reference within a consumer group.
+    ///
+    /// # Arguments  
+    /// * `group` - Consumer group name
+    /// * `channel` - Channel reference
+    ///
+    /// # Returns
+    /// Client channel info if found
     pub fn find_channel_by_channel(
         &self,
         group: &str,
         channel: &Channel,
     ) -> Option<ClientChannelInfo> {
-        let consumer_table = self.consumer_table.read();
-        if let Some(consumer_group_info) = consumer_table.get(group) {
+        if let Some(consumer_group_info) = self.consumer_table.get(group) {
             return consumer_group_info.find_channel_by_channel(channel);
         }
         None
     }
 
+    /// Finds subscription data for a topic within a consumer group.
+    ///
+    /// # Arguments
+    /// * `group` - Consumer group name
+    /// * `topic` - Topic name
+    ///
+    /// # Returns
+    /// Subscription data if found
     pub fn find_subscription_data(
         &self,
         group: &CheetahString,
@@ -123,6 +169,15 @@ impl ConsumerManager {
         self.find_subscription_data_internal(group, topic, true)
     }
 
+    /// Finds subscription data for a topic within a consumer group.
+    ///
+    /// # Arguments
+    /// * `group` - Consumer group name
+    /// * `topic` - Topic name
+    /// * `from_compensation_table` - Whether to check compensation table
+    ///
+    /// # Returns
+    /// Subscription data if found
     pub fn find_subscription_data_internal(
         &self,
         group: &CheetahString,
@@ -136,13 +191,20 @@ impl ConsumerManager {
         }
 
         if from_compensation_table {
-            if let Some(consumer_group_info) = self.consumer_compensation_table.read().get(group) {
+            if let Some(consumer_group_info) = self.consumer_compensation_table.get(group) {
                 return consumer_group_info.find_subscription_data(topic);
             }
         }
         None
     }
 
+    /// Counts the number of subscription data entries for a consumer group.
+    ///
+    /// # Arguments
+    /// * `group` - Consumer group name
+    ///
+    /// # Returns
+    /// Number of subscriptions
     pub fn find_subscription_data_count(&self, group: &CheetahString) -> usize {
         if let Some(consumer_group_info) = self.get_consumer_group_info(group) {
             return consumer_group_info.get_subscription_table().len();
@@ -150,34 +212,55 @@ impl ConsumerManager {
         0
     }
 
+    /// Gets consumer group info for a specific group.
+    ///
+    /// # Arguments
+    /// * `group` - Consumer group name
+    ///
+    /// # Returns
+    /// Consumer group info if found
     pub fn get_consumer_group_info(&self, group: &CheetahString) -> Option<ConsumerGroupInfo> {
         self.get_consumer_group_info_internal(group, false)
     }
 
+    /// Gets consumer group info with optional compensation table fallback.
+    ///
+    /// # Arguments
+    /// * `group` - Consumer group name
+    /// * `from_compensation_table` - Whether to check compensation table
+    ///
+    /// # Returns
+    /// Consumer group info if found
     pub fn get_consumer_group_info_internal(
         &self,
         group: &CheetahString,
         from_compensation_table: bool,
     ) -> Option<ConsumerGroupInfo> {
-        if let Some(consumer_group_info) = self.consumer_table.read().get(group) {
+        if let Some(consumer_group_info) = self.consumer_table.get(group) {
             return Some(consumer_group_info.clone());
         }
         if from_compensation_table {
-            if let Some(consumer_group_info) = self.consumer_compensation_table.read().get(group) {
+            if let Some(consumer_group_info) = self.consumer_compensation_table.get(group) {
                 return Some(consumer_group_info.clone());
             }
         }
         None
     }
 
+    /// Compensates subscription data for consumers without heartbeat.
+    ///
+    /// # Arguments
+    /// * `group` - Consumer group name
+    /// * `topic` - Topic name
+    /// * `subscription_data` - Subscription data to compensate
     pub fn compensate_subscribe_data(
         &self,
         group: &CheetahString,
         topic: &CheetahString,
         subscription_data: &SubscriptionData,
     ) {
-        let mut write_guard = self.consumer_compensation_table.write();
-        let consumer_group_info = write_guard
+        let consumer_group_info = self
+            .consumer_compensation_table
             .entry(group.clone())
             .or_insert_with(|| ConsumerGroupInfo::with_group_name(group.clone()));
         consumer_group_info
@@ -185,20 +268,39 @@ impl ConsumerManager {
             .insert(topic.into(), subscription_data.clone());
     }
 
+    /// Compensates basic consumer info (consume type and message model).
+    ///
+    /// # Arguments
+    /// * `group` - Consumer group name
+    /// * `consume_type` - Consume type (push/pull)
+    /// * `message_model` - Message model (clustering/broadcasting)
     pub fn compensate_basic_consumer_info(
         &self,
         group: &CheetahString,
         consume_type: ConsumeType,
         message_model: MessageModel,
     ) {
-        let mut write_guard = self.consumer_compensation_table.write();
-        let consumer_group_info = write_guard
+        let mut consumer_group_info = self
+            .consumer_compensation_table
             .entry(group.clone())
             .or_insert_with(|| ConsumerGroupInfo::with_group_name(group.clone()));
         consumer_group_info.set_consume_type(consume_type);
         consumer_group_info.set_message_model(message_model);
     }
 
+    /// Registers a consumer in a consumer group.
+    ///
+    /// # Arguments
+    /// * `group` - Consumer group name
+    /// * `client_channel_info` - Client channel information
+    /// * `consume_type` - Consume type (push/pull)
+    /// * `message_model` - Message model (clustering/broadcasting)
+    /// * `consume_from_where` - Where to start consuming
+    /// * `sub_list` - Set of subscription data
+    /// * `is_notify_consumer_ids_changed_enable` - Whether to notify listeners
+    ///
+    /// # Returns
+    /// `true` if registration changed consumer state
     pub fn register_consumer(
         &self,
         group: &CheetahString,
@@ -221,6 +323,20 @@ impl ConsumerManager {
         )
     }
 
+    /// Registers a consumer with extended options.
+    ///
+    /// # Arguments
+    /// * `group` - Consumer group name
+    /// * `client_channel_info` - Client channel information
+    /// * `consume_type` - Consume type (push/pull)
+    /// * `message_model` - Message model (clustering/broadcasting)
+    /// * `consume_from_where` - Where to start consuming
+    /// * `sub_list` - Set of subscription data
+    /// * `is_notify_consumer_ids_changed_enable` - Whether to notify listeners
+    /// * `update_subscription` - Whether to update subscription data
+    ///
+    /// # Returns
+    /// `true` if registration changed consumer state
     pub fn register_consumer_ext(
         &self,
         group: &CheetahString,
@@ -233,15 +349,15 @@ impl ConsumerManager {
         update_subscription: bool,
     ) -> bool {
         let start = Instant::now();
-        let mut write_guard = self.consumer_table.write();
-        let consumer_group_info = write_guard.entry(group.clone()).or_insert_with(|| {
-            ConsumerGroupInfo::new(
-                group.clone(),
-                consume_type,
-                message_model,
-                consume_from_where,
-            )
-        });
+        let mut consumer_group_info =
+            self.consumer_table.entry(group.clone()).or_insert_with(|| {
+                ConsumerGroupInfo::new(
+                    group.clone(),
+                    consume_type,
+                    message_model,
+                    consume_from_where,
+                )
+            });
         let r1 = consumer_group_info.update_channel(
             client_channel_info.clone(),
             consume_type,
@@ -291,6 +407,18 @@ impl ConsumerManager {
         r1 || r2
     }
 
+    /// Registers a consumer without subscription data.
+    ///
+    /// # Arguments
+    /// * `group` - Consumer group name
+    /// * `client_channel_info` - Client channel information
+    /// * `consume_type` - Consume type (push/pull)
+    /// * `message_model` - Message model (clustering/broadcasting)
+    /// * `consume_from_where` - Where to start consuming
+    /// * `is_notify_consumer_ids_changed_enable` - Whether to notify listeners
+    ///
+    /// # Returns
+    /// `true` if registration changed consumer state
     pub fn register_consumer_without_sub(
         &self,
         group: &CheetahString,
@@ -301,15 +429,15 @@ impl ConsumerManager {
         is_notify_consumer_ids_changed_enable: bool,
     ) -> bool {
         let start = Instant::now();
-        let mut write_guard = self.consumer_table.write();
-        let consumer_group_info = write_guard.entry(group.clone()).or_insert_with(|| {
-            ConsumerGroupInfo::new(
-                group.clone(),
-                consume_type,
-                message_model,
-                consume_from_where,
-            )
-        });
+        let mut consumer_group_info =
+            self.consumer_table.entry(group.clone()).or_insert_with(|| {
+                ConsumerGroupInfo::new(
+                    group.clone(),
+                    consume_type,
+                    message_model,
+                    consume_from_where,
+                )
+            });
         let r1 = consumer_group_info.update_channel(
             client_channel_info,
             consume_type,
@@ -319,7 +447,7 @@ impl ConsumerManager {
 
         if r1
             && is_notify_consumer_ids_changed_enable
-            && is_broadcast_mode(consumer_group_info.get_message_model())
+            && !is_broadcast_mode(consumer_group_info.get_message_model())
         {
             let channels = consumer_group_info.get_all_channels();
             self.call_consumer_ids_change_listener(
@@ -337,6 +465,12 @@ impl ConsumerManager {
         r1
     }
 
+    /// Notifies all registered consumer IDs change listeners of an event.
+    ///
+    /// # Arguments
+    /// * `event` - The type of event
+    /// * `group` - The affected consumer group
+    /// * `args` - Additional event arguments
     pub fn call_consumer_ids_change_listener(
         &self,
         event: ConsumerGroupEvent,
@@ -348,9 +482,17 @@ impl ConsumerManager {
         }
     }
 
+    /// Queries which consumer groups are consuming a topic.
+    ///
+    /// # Arguments
+    /// * `topic` - Topic name
+    ///
+    /// # Returns
+    /// Set of consumer group names consuming this topic
     pub fn query_topic_consume_by_who(&self, topic: &CheetahString) -> HashSet<CheetahString> {
         let mut groups = HashSet::new();
-        for (group, consumer_group_info) in self.consumer_table.read().iter() {
+        for entry in self.consumer_table.iter() {
+            let (group, consumer_group_info) = (entry.key(), entry.value());
             if consumer_group_info.find_subscription_data(topic).is_some() {
                 groups.insert(group.clone());
             }
@@ -358,14 +500,19 @@ impl ConsumerManager {
         groups
     }
 
+    /// Unregisters a consumer from a consumer group.
+    ///
+    /// # Arguments
+    /// * `group` - Consumer group name
+    /// * `client_channel_info` - Client channel information
+    /// * `is_notify_consumer_ids_changed_enable` - Whether to notify listeners
     pub fn unregister_consumer(
         &self,
         group: &str,
         client_channel_info: &ClientChannelInfo,
         is_notify_consumer_ids_changed_enable: bool,
     ) {
-        let mut consumer_table = self.consumer_table.write();
-        let consumer_group_info = consumer_table.get_mut(group);
+        let consumer_group_info = self.consumer_table.get_mut(group);
         if consumer_group_info.is_none() {
             return;
         }
@@ -383,15 +530,16 @@ impl ConsumerManager {
         }
         let message_model = consumer_group_info.get_message_model();
         let channels = consumer_group_info.get_all_channels();
-        if consumer_group_info.get_channel_info_table().is_empty()
-            && consumer_table.remove(group).is_some()
-        {
-            info!(
-                "unregister consumer ok, no any connection, and remove consumer group, {}",
-                group
-            );
+        if consumer_group_info.get_channel_info_table().is_empty() {
+            drop(consumer_group_info); // Release the reference
+            if self.consumer_table.remove(group).is_some() {
+                info!(
+                    "unregister consumer ok, no any connection, and remove consumer group, {}",
+                    group
+                );
 
-            self.call_consumer_ids_change_listener(ConsumerGroupEvent::Unregister, group, &[]);
+                self.call_consumer_ids_change_listener(ConsumerGroupEvent::Unregister, group, &[]);
+            }
         }
 
         if is_notify_consumer_ids_changed_enable && !is_broadcast_mode(message_model) {
@@ -403,48 +551,58 @@ impl ConsumerManager {
         }
     }
 
+    /// Removes expired consumer group info from compensation table.
+    ///
+    /// Cleans up subscriptions that have not been updated for longer than
+    /// subscription_expired_timeout.
     pub fn remove_expire_consumer_group_info(&self) {
-        let mut remove_list = Vec::new();
+        let mut groups_to_remove = Vec::new();
 
-        // Using entries() to get mutable access to the map values
-        let mut consumer_compensation_table = self.consumer_compensation_table.write();
-        for (group, consumer_group_info) in &mut consumer_compensation_table.iter_mut() {
-            let mut remove_topic_list = Vec::new();
+        for mut entry in self.consumer_compensation_table.iter_mut() {
+            let group = entry.key().clone();
+            let consumer_group_info = entry.value_mut();
+            let mut topics_to_remove = Vec::new();
             let subscription_table = consumer_group_info.get_subscription_table();
 
-            // First collect topics that need to be removed
+            // Find expired subscriptions
             for subscription_data in subscription_table.iter() {
                 let diff = get_current_millis() as i64 - subscription_data.sub_version;
-
                 if diff > self.subscription_expired_timeout as i64 {
-                    remove_topic_list.push(subscription_data.key().clone());
+                    topics_to_remove.push(subscription_data.key().clone());
                 }
             }
 
-            // Then remove topics and check if the group should be removed
-            for topic in remove_topic_list {
+            // Remove expired subscriptions
+            for topic in topics_to_remove {
                 subscription_table.remove(&topic);
                 if subscription_table.is_empty() {
-                    remove_list.push(group.clone());
+                    groups_to_remove.push(group.clone());
                 }
             }
         }
 
-        // Finally remove groups
-        for group in remove_list {
-            consumer_compensation_table.remove(&group);
+        // Remove empty groups
+        for group in groups_to_remove {
+            self.consumer_compensation_table.remove(&group);
         }
     }
 
+    /// Scans and removes inactive consumer channels that have exceeded the timeout.
+    ///
+    /// This method should be called periodically to clean up expired consumers.
+    ///
+    /// # Timeout
+    /// Consumers that haven't sent heartbeat for more than channel_expired_timeout
+    /// will be removed.
     pub fn scan_not_active_channel(&self) {
-        // Use drain_filter pattern for outer map
         let mut groups_to_remove = Vec::new();
 
-        let mut consumer_table = self.consumer_table.write();
-        for (group, consumer_group_info) in consumer_table.iter_mut() {
+        for mut entry in self.consumer_table.iter_mut() {
+            let group = entry.key().clone();
+            let consumer_group_info = entry.value_mut();
             let channel_info_table = consumer_group_info.get_channel_info_table();
 
-            // Use drain_filter pattern for inner map
+            // Collect expired channels
             let mut channels_to_remove = Vec::new();
             for client_channel_info in channel_info_table.iter() {
                 let diff = get_current_millis() as i64
@@ -460,13 +618,12 @@ impl ConsumerManager {
 
                     self.call_consumer_ids_change_listener(
                         ConsumerGroupEvent::ClientUnregister,
-                        group,
+                        &group,
                         &[
                             client_channel_info.key() as &dyn Any,
                             &consumer_group_info.get_subscribe_topics() as &dyn Any,
                         ],
                     );
-                    // Remove the channel from the consumer group info
                     channels_to_remove.push(client_channel_info.key().clone());
                 }
             }
@@ -484,26 +641,51 @@ impl ConsumerManager {
                     group
                 );
                 groups_to_remove.push(group.clone());
+            } else if !is_broadcast_mode(consumer_group_info.get_message_model()) {
+                // Notify remaining channels about the change
+                self.call_consumer_ids_change_listener(
+                    ConsumerGroupEvent::Change,
+                    &group,
+                    &[&consumer_group_info.get_all_channels() as &dyn Any],
+                );
             }
         }
 
         // Remove empty groups
         for group in groups_to_remove {
-            consumer_table.remove(&group);
+            if self.consumer_table.remove(&group).is_some() {
+                self.call_consumer_ids_change_listener(
+                    ConsumerGroupEvent::Unregister,
+                    group.as_str(),
+                    &[],
+                );
+            }
         }
 
         self.remove_expire_consumer_group_info();
     }
 
+    /// Handles channel close events and removes the associated consumer.
+    ///
+    /// This method is typically called by the connection layer when a channel is closed.
+    ///
+    /// # Arguments
+    /// * `_remote_addr` - The remote address of the closed channel
+    /// * `channel` - The closed channel
+    ///
+    /// # Returns
+    /// `true` if at least one consumer was removed
     pub fn do_channel_close_event(&self, _remote_addr: &str, channel: &Channel) -> bool {
         let mut removed = false;
-        let mut consumer_table = self.consumer_table.write();
         let mut remove_list = Vec::new();
-        for (group, info) in consumer_table.iter_mut() {
+
+        for mut entry in self.consumer_table.iter_mut() {
+            let group = entry.key().clone();
+            let info = entry.value_mut();
             if let Some(client_channel_info) = info.handle_channel_close_event(channel) {
                 self.call_consumer_ids_change_listener(
                     ConsumerGroupEvent::ClientUnregister,
-                    group,
+                    &group,
                     &[
                         &client_channel_info as &dyn Any,
                         &info.get_subscribe_topics() as &dyn Any,
@@ -517,7 +699,7 @@ impl ConsumerManager {
                 if !is_broadcast_mode(info.get_message_model()) {
                     self.call_consumer_ids_change_listener(
                         ConsumerGroupEvent::Change,
-                        group,
+                        &group,
                         &[&info.get_all_channels() as &dyn Any],
                     );
                 }
@@ -525,8 +707,9 @@ impl ConsumerManager {
                 removed = true;
             }
         }
+
         for group in remove_list {
-            if consumer_table.remove(&group).is_some() {
+            if self.consumer_table.remove(&group).is_some() {
                 info!(
                     "unregister consumer ok, no any connection, and remove consumer group, {}",
                     group
@@ -543,6 +726,13 @@ impl ConsumerManager {
     }
 }
 
+/// Checks if the message model is broadcasting mode.
+///
+/// # Arguments
+/// * `message_model` - Message model to check
+///
+/// # Returns
+/// `true` if broadcasting mode
 fn is_broadcast_mode(message_model: MessageModel) -> bool {
     message_model == MessageModel::Broadcasting
 }
