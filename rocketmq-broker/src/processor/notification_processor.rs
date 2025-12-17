@@ -115,14 +115,14 @@ impl<MS: MessageStore> NotificationProcessor<MS> {
         request_header: &NotificationRequestHeader,
     ) -> bool {
         if let Some(tc) = topic_config {
+            let topic_name = match tc.topic_name.as_ref() {
+                Some(name) => name,
+                None => return false,
+            };
             for i in 0..tc.read_queue_nums {
-                let queue_id = (random_q as u32 + i) % tc.read_queue_nums;
+                let queue_id = ((random_q as u32) + i) % tc.read_queue_nums;
                 if self
-                    .has_msg_from_queue(
-                        tc.topic_name.as_ref().unwrap(),
-                        request_header,
-                        queue_id as i32,
-                    )
+                    .has_msg_from_queue(topic_name, request_header, queue_id as i32)
                     .await
                 {
                     return true;
@@ -134,36 +134,36 @@ impl<MS: MessageStore> NotificationProcessor<MS> {
 
     async fn has_msg_from_queue(
         &self,
-        target_topic: &str,
+        target_topic: &CheetahString,
         request_header: &NotificationRequestHeader,
         queue_id: i32,
     ) -> bool {
-        if request_header.order
-            && self
-                .broker_runtime_inner
-                .consumer_order_info_manager()
-                .check_block(
-                    request_header.attempt_id.as_ref().unwrap(),
-                    &request_header.topic,
-                    &request_header.consumer_group,
-                    queue_id,
-                    0,
-                )
-        {
-            return false;
+        // For order mode, check if blocked. If attempt_id is missing, skip block check.
+        if request_header.order {
+            if let Some(attempt_id) = request_header.attempt_id.as_ref() {
+                if self
+                    .broker_runtime_inner
+                    .consumer_order_info_manager()
+                    .check_block(
+                        attempt_id,
+                        &request_header.topic,
+                        &request_header.consumer_group,
+                        queue_id,
+                        0,
+                    )
+                {
+                    return false;
+                }
+            }
         }
 
         let offset = self
-            .get_pop_offset(
-                &target_topic.to_string().into(),
-                &request_header.consumer_group,
-                queue_id,
-            )
+            .get_pop_offset(target_topic, &request_header.consumer_group, queue_id)
             .await;
         let rest_num = self
             .broker_runtime_inner
             .message_store_unchecked()
-            .get_max_offset_in_queue(&target_topic.to_string().into(), queue_id)
+            .get_max_offset_in_queue(target_topic, queue_id)
             - offset;
         rest_num > 0
     }
@@ -212,8 +212,7 @@ where
         request.add_ext_field_if_not_exist(NotificationProcessor::<MS>::BORN_TIME, now.to_string());
         if request
             .ext_fields()
-            .unwrap()
-            .get(NotificationProcessor::<MS>::BORN_TIME)
+            .and_then(|fields| fields.get(NotificationProcessor::<MS>::BORN_TIME))
             .map(|v| v == "0")
             .unwrap_or(false)
         {
@@ -342,14 +341,10 @@ where
                 has_msg = self
                     .has_msg_from_topic(Some(&topic_config), random_q, &request_header)
                     .await;
-            } else {
+            } else if let Some(topic_name) = topic_config.topic_name.as_ref() {
                 let queue_id = request_header.queue_id;
                 has_msg = self
-                    .has_msg_from_queue(
-                        topic_config.topic_name.as_ref().unwrap(),
-                        &request_header,
-                        queue_id,
-                    )
+                    .has_msg_from_queue(topic_name, &request_header, queue_id)
                     .await;
             }
             // if it doesn't have message, fetch retry again
