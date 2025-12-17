@@ -24,7 +24,6 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::TopicFilterType;
-use rocketmq_common::utils::string_utils::StringUtils;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -110,9 +109,8 @@ where
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_header = request
-            .decode_command_custom_header::<EndTransactionRequestHeader>()
-            .expect("EndTransactionRequestHeader decode failed");
+        let request_header =
+            request.decode_command_custom_header::<EndTransactionRequestHeader>()?;
         if BrokerRole::Slave == self.broker_runtime_inner.message_store_config().broker_role {
             warn!("Message store is slave mode, so end transaction is forbidden. ");
             return Ok(Some(RemotingCommand::create_response_command_with_code(
@@ -163,7 +161,8 @@ where
                 }
                 let res =
                     self.check_prepare_message(result.prepare_message.as_ref(), &request_header);
-                if ResponseCode::from(res.code()) != ResponseCode::Success {
+                if ResponseCode::from(res.code()) == ResponseCode::Success {
+                    // Validation passed, send final message
                     let mut msg_inner =
                         end_message_transaction(result.prepare_message.as_mut().unwrap());
                     msg_inner.message_ext_inner.sys_flag = MessageSysFlag::reset_transaction_value(
@@ -186,9 +185,14 @@ where
                             .transactional_message_service
                             .delete_prepare_message(result.prepare_message.as_ref().unwrap())
                             .await;
+                        // TODO: Add metrics tracking
+                        // - commitMessagesTotal.add(1)
+                        // - transactionMetrics.addAndGet(topic, -1)
+                        // - transactionFinishLatency.record(...)
                     }
                     return Ok(Some(send_result));
                 }
+                // Validation failed, return error response
                 return Ok(Some(res));
             } else {
                 OperationResult::default()
@@ -242,21 +246,22 @@ where
         }
 
         // The setting of MessageConst::PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS is configured in the
-        // SendMessageActivity of the Proxy. Therefore, messages sent through theSDK will not have
+        // SendMessageActivity of the Proxy. Therefore, messages sent through the SDK will not have
         // this property.
-        let check_immunity_time_str = message_ext.get_user_property(
+        if let Some(check_immunity_time_str) = message_ext.get_user_property(
             &CheetahString::from_static_str(MessageConst::PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS),
-        );
-        if StringUtils::is_not_empty_ch_string(check_immunity_time_str.as_ref()) {
-            let value_of_current_minus_born =
-                get_current_millis() - (message_ext.born_timestamp as u64);
-            let check_immunity_time = TransactionalMessageUtil::get_immunity_time(
-                check_immunity_time_str.as_ref().unwrap(),
-                self.broker_runtime_inner
-                    .broker_config()
-                    .transaction_timeout,
-            );
-            return value_of_current_minus_born > check_immunity_time;
+        ) {
+            if !check_immunity_time_str.is_empty() {
+                let value_of_current_minus_born =
+                    get_current_millis() - (message_ext.born_timestamp as u64);
+                let check_immunity_time = TransactionalMessageUtil::get_immunity_time(
+                    &check_immunity_time_str,
+                    self.broker_runtime_inner
+                        .broker_config()
+                        .transaction_timeout,
+                );
+                return value_of_current_minus_born > check_immunity_time;
+            }
         }
         false
     }
@@ -272,16 +277,20 @@ where
             let pgroup_read = message_ext.get_property(&CheetahString::from_static_str(
                 MessageConst::PROPERTY_PRODUCER_GROUP,
             ));
-            if pgroup_read.is_none() {
-                command.set_code_mut(ResponseCode::SystemError);
-                command.set_remark_mut("he producer group wrong");
-                return command;
-            }
-            let pgroup = pgroup_read.unwrap();
-            if pgroup != request_header.producer_group.as_str() {
-                command.set_code_mut(ResponseCode::SystemError);
-                command.set_remark_mut("The producer group wrong");
-                return command;
+            match pgroup_read {
+                Some(pgroup) if pgroup == request_header.producer_group.as_str() => {
+                    // Producer group matches, continue validation
+                }
+                Some(_) => {
+                    command.set_code_mut(ResponseCode::SystemError);
+                    command.set_remark_mut("The producer group wrong");
+                    return command;
+                }
+                None => {
+                    command.set_code_mut(ResponseCode::SystemError);
+                    command.set_remark_mut("The producer group wrong");
+                    return command;
+                }
             }
             if message_ext.queue_offset != request_header.tran_state_table_offset as i64 {
                 command.set_code_mut(ResponseCode::SystemError);
@@ -293,6 +302,8 @@ where
                 command.set_remark_mut("The commit log offset wrong");
                 return command;
             }
+            // All validations passed
+            command.set_code_mut(ResponseCode::Success);
         } else {
             command.set_code_mut(ResponseCode::SystemError);
             command.set_remark_mut("Find prepared transaction message failed");
