@@ -182,9 +182,6 @@ impl<MS: MessageStore> TopicRequestHandler<MS> {
                 .register_single_topic_all(topic_config.clone())
                 .await;
         } else {
-            /* self.broker_runtime_inner
-            .topic_config_manager()
-            .broker_runtime_inner()*/
             BrokerRuntimeInner::<MS>::register_increment_broker_data(
                 self.broker_runtime_inner.clone(),
                 vec![topic_config],
