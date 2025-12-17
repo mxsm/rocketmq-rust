@@ -26,7 +26,7 @@ use crate::protocol::header::namesrv::topic_operation_header::TopicRequestHeader
 #[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
 pub struct UpdateConsumerOffsetResponseHeader {}
 
-#[derive(Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateConsumerOffsetRequestHeader {
     #[required]
