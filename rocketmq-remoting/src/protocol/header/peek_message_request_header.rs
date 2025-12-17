@@ -142,3 +142,101 @@ impl TopicRequestHeaderTrait for PeekMessageRequestHeader {
         self.queue_id = queue_id;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rpc::rpc_request_header::RpcRequestHeader;
+
+    #[test]
+    fn test_default_implementation() {
+        let header = PeekMessageRequestHeader::default();
+        assert_eq!(header.consumer_group, CheetahString::new());
+        assert_eq!(header.topic, CheetahString::new());
+        assert_eq!(header.queue_id, 0);
+        assert_eq!(header.max_msg_nums, 32);
+        assert!(header.topic_request_header.is_none());
+    }
+    #[test]
+    fn test_topic_request_header_trait_methods() {
+        let mut header = PeekMessageRequestHeader::default();
+
+        // Test set_topic and topic
+        let test_topic = CheetahString::from("test_topic");
+        header.set_topic(test_topic.clone());
+        assert_eq!(header.topic(), &test_topic);
+
+        // Test set_queue_id and queue_id
+        header.set_queue_id(10);
+        assert_eq!(header.queue_id(), 10);
+
+        // Test with topic_request_header set
+        let rpc_header = RpcRequestHeader {
+            broker_name: Some(CheetahString::from("test_broker")),
+            namespace: Some(CheetahString::from("test_namespace")),
+            namespaced: Some(true),
+            oneway: Some(false),
+        };
+
+        let topic_request_header = TopicRequestHeader {
+            lo: Some(true),
+            rpc: Some(rpc_header),
+        };
+
+        header.topic_request_header = Some(topic_request_header);
+
+        // Test broker_name
+        assert_eq!(
+            header.broker_name(),
+            Some(&CheetahString::from("test_broker"))
+        );
+
+        let new_broker = CheetahString::from("new_broker");
+        header.set_broker_name(new_broker.clone());
+        assert_eq!(header.broker_name(), Some(&new_broker));
+
+        // Test namespace
+        assert_eq!(header.namespace(), Some("test_namespace"));
+
+        let new_namespace = CheetahString::from("new_namespace");
+        header.set_namespace(new_namespace);
+        assert_eq!(header.namespace(), Some("new_namespace"));
+
+        // Test namespaced
+        assert_eq!(header.namespaced(), Some(true));
+        header.set_namespaced(false);
+        assert_eq!(header.namespaced(), Some(false));
+
+        // Test oneway
+        assert_eq!(header.oneway(), Some(false));
+        header.set_oneway(true);
+        assert_eq!(header.oneway(), Some(true));
+
+        // Test lo
+        assert_eq!(header.lo(), Some(true));
+        header.set_lo(Some(false));
+        assert_eq!(header.lo(), Some(false));
+    }
+
+    #[test]
+    fn test_serialization_deserialization() {
+        let header = PeekMessageRequestHeader {
+            consumer_group: CheetahString::from("test_consumer_group"),
+            topic: CheetahString::from("test_topic"),
+            queue_id: 10,
+            max_msg_nums: 32,
+            ..Default::default()
+        };
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&header).unwrap();
+
+        // Deserialize from JSON
+        let deserialized: PeekMessageRequestHeader = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.consumer_group, header.consumer_group);
+        assert_eq!(deserialized.topic, header.topic);
+        assert_eq!(deserialized.queue_id, header.queue_id);
+        assert_eq!(deserialized.max_msg_nums, header.max_msg_nums);
+    }
+}
