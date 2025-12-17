@@ -15,103 +15,171 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use dashmap::DashMap;
-use parking_lot::RwLock;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use serde::ser::SerializeStruct;
+use serde::Deserialize;
 use serde::Serialize;
-use serde::Serializer;
 
 use crate::protocol::body::connection::Connection;
 use crate::protocol::heartbeat::consume_type::ConsumeType;
 use crate::protocol::heartbeat::message_model::MessageModel;
 use crate::protocol::heartbeat::subscription_data::SubscriptionData;
 
-#[derive(Debug, Clone, Default)]
+/// Represents a consumer connection with subscription information.
+///
+/// This struct is serialization-compatible with Java's ConsumerConnection class.
+/// It contains consumer connection details, subscription data, and consumption configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConsumerConnection {
+    /// Set of active connections from consumers
     connection_set: HashSet<Connection>,
-    subscription_table: Arc<DashMap<CheetahString, SubscriptionData>>,
-    consume_type: Arc<RwLock<ConsumeType>>,
-    message_model: Arc<RwLock<MessageModel>>,
-    consume_from_where: Arc<RwLock<ConsumeFromWhere>>,
+    /// Topic subscription table (Topic -> SubscriptionData)
+    #[serde(default)]
+    subscription_table: HashMap<CheetahString, SubscriptionData>,
+    /// Type of consumption (push/pull)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    consume_type: Option<ConsumeType>,
+    /// Message consumption model (clustering/broadcasting)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message_model: Option<MessageModel>,
+    /// Position to start consuming from
+    #[serde(skip_serializing_if = "Option::is_none")]
+    consume_from_where: Option<ConsumeFromWhere>,
 }
 
 impl ConsumerConnection {
+    /// Creates a new ConsumerConnection instance.
     pub fn new() -> Self {
         ConsumerConnection {
             connection_set: HashSet::new(),
-            subscription_table: Arc::new(DashMap::new()),
-            consume_type: Arc::new(RwLock::new(ConsumeType::default())),
-            message_model: Arc::new(RwLock::new(MessageModel::default())),
-            consume_from_where: Arc::new(RwLock::new(ConsumeFromWhere::default())),
+            subscription_table: HashMap::new(),
+            consume_type: None,
+            message_model: None,
+            consume_from_where: None,
         }
     }
-}
 
-impl Serialize for ConsumerConnection {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut s = serializer.serialize_struct("ConsumerConnection", 5)?;
-        s.serialize_field("connection_set", &self.connection_set)?;
-        s.serialize_field("subscription_table", &*self.subscription_table)?;
-        s.serialize_field("consume_type", &*self.consume_type.read())?;
-        s.serialize_field("message_model", &*self.message_model.read())?;
-        s.serialize_field("consume_from_where", &*self.consume_from_where.read())?;
-        s.end()
-    }
-}
-
-impl ConsumerConnection {
-    pub fn get_connection_set(&self) -> HashSet<Connection> {
-        self.connection_set.clone()
+    /// Computes the minimum version across all connections.
+    ///
+    /// This method iterates through all connections and finds the minimum version number.
+    /// Returns `i32::MAX` if there are no connections.
+    ///
+    /// # Returns
+    /// The minimum version number, or `i32::MAX` if connection set is empty
+    pub fn compute_min_version(&self) -> i32 {
+        let mut min_version = i32::MAX;
+        for connection in &self.connection_set {
+            let version = connection.get_version();
+            if version < min_version {
+                min_version = version;
+            }
+        }
+        min_version
     }
 
-    pub fn connection_set_insert(&mut self, connection: Connection) {
-        self.connection_set.insert(connection);
+    /// Gets a clone of the connection set.
+    ///
+    /// # Returns
+    /// A cloned HashSet of all connections
+    pub fn get_connection_set(&self) -> &HashSet<Connection> {
+        &self.connection_set
     }
 
+    /// Sets the connection set.
+    ///
+    /// # Arguments
+    /// * `connection_set` - The new set of connections
     pub fn set_connection_set(&mut self, connection_set: HashSet<Connection>) {
         self.connection_set = connection_set;
     }
 
-    pub fn get_subscription_table(&self) -> Arc<DashMap<CheetahString, SubscriptionData>> {
-        self.subscription_table.clone()
+    /// Inserts a connection into the connection set.
+    ///
+    /// # Arguments
+    /// * `connection` - The connection to insert
+    ///
+    /// # Returns
+    /// `true` if the connection was newly inserted, `false` if it already existed
+    pub fn insert_connection(&mut self, connection: Connection) -> bool {
+        self.connection_set.insert(connection)
     }
 
+    /// Gets a reference to the subscription table.
+    ///
+    /// # Returns
+    /// Reference to the subscription table (Topic -> SubscriptionData mapping)
+    pub fn get_subscription_table(&self) -> &HashMap<CheetahString, SubscriptionData> {
+        &self.subscription_table
+    }
+
+    /// Gets a mutable reference to the subscription table.
+    ///
+    /// # Returns
+    /// Mutable reference to the subscription table
+    pub fn get_subscription_table_mut(&mut self) -> &mut HashMap<CheetahString, SubscriptionData> {
+        &mut self.subscription_table
+    }
+
+    /// Sets the subscription table.
+    ///
+    /// # Arguments
+    /// * `subscription_table` - The new subscription table
     pub fn set_subscription_table(
         &mut self,
-        subscription_table: DashMap<CheetahString, SubscriptionData>,
+        subscription_table: HashMap<CheetahString, SubscriptionData>,
     ) {
-        self.subscription_table = Arc::new(subscription_table);
+        self.subscription_table = subscription_table;
     }
 
-    pub fn get_consume_type(&self) -> ConsumeType {
-        *self.consume_type.read()
+    /// Gets the consume type.
+    ///
+    /// # Returns
+    /// The consume type, or None if not set
+    pub fn get_consume_type(&self) -> Option<ConsumeType> {
+        self.consume_type
     }
 
+    /// Sets the consume type.
+    ///
+    /// # Arguments
+    /// * `consume_type` - The consume type (push/pull)
     pub fn set_consume_type(&mut self, consume_type: ConsumeType) {
-        *self.consume_type.write() = consume_type;
+        self.consume_type = Some(consume_type);
     }
 
-    pub fn get_message_model(&self) -> MessageModel {
-        *self.message_model.read()
+    /// Gets the message model.
+    ///
+    /// # Returns
+    /// The message model, or None if not set
+    pub fn get_message_model(&self) -> Option<MessageModel> {
+        self.message_model
     }
 
+    /// Sets the message model.
+    ///
+    /// # Arguments
+    /// * `message_model` - The message model (clustering/broadcasting)
     pub fn set_message_model(&mut self, message_model: MessageModel) {
-        *self.message_model.write() = message_model;
+        self.message_model = Some(message_model);
     }
 
-    pub fn get_consume_from_where(&self) -> ConsumeFromWhere {
-        *self.consume_from_where.read()
+    /// Gets the consume from where setting.
+    ///
+    /// # Returns
+    /// The consume from where setting, or None if not set
+    pub fn get_consume_from_where(&self) -> Option<ConsumeFromWhere> {
+        self.consume_from_where
     }
 
+    /// Sets the consume from where setting.
+    ///
+    /// # Arguments
+    /// * `consume_from_where` - Where to start consuming from
     pub fn set_consume_from_where(&mut self, consume_from_where: ConsumeFromWhere) {
-        *self.consume_from_where.write() = consume_from_where;
+        self.consume_from_where = Some(consume_from_where);
     }
 }

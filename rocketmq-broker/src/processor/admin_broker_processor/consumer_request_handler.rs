@@ -76,7 +76,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                 body_data.set_consume_type(consumer_group_info.get_consume_type());
                 body_data.set_message_model(consumer_group_info.get_message_model());
                 let subscription_table_consumer = consumer_group_info.get_subscription_table();
-                let subscription_table = body_data.get_subscription_table();
+                let subscription_table = body_data.get_subscription_table_mut();
                 for key_value in subscription_table_consumer.iter() {
                     subscription_table.insert(key_value.key().clone(), key_value.clone());
                 }
@@ -88,7 +88,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                     connection.set_version(channel_info.version());
                     connection
                         .set_client_addr(channel_info.key().remote_address().to_string().into());
-                    body_data.connection_set_insert(connection);
+                    body_data.insert_connection(connection);
                 }
                 let body = body_data
                     .encode()
