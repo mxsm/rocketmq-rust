@@ -65,7 +65,7 @@ pub(crate) mod send_message_processor;
 pub enum BrokerProcessorType<MS: MessageStore, TS> {
     Send(ArcMut<SendMessageProcessor<MS, TS>>),
     Pull(ArcMut<PullMessageProcessor<MS>>),
-    Peek(ArcMut<PeekMessageProcessor>),
+    Peek(ArcMut<PeekMessageProcessor<MS>>),
     Pop(ArcMut<PopMessageProcessor<MS>>),
     Ack(ArcMut<AckMessageProcessor<MS>>),
     ChangeInvisible(ArcMut<ChangeInvisibleTimeProcessor<MS>>),
