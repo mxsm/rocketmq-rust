@@ -21,18 +21,3 @@ use serde::Serialize;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
 pub struct GetAllTopicConfigResponseHeader;
-
-// impl CommandCustomHeader for GetAllTopicConfigResponseHeader {
-//     fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-//         None
-//     }
-// }
-// impl FromMap for GetAllTopicConfigResponseHeader {
-//     type Error = rocketmq_error::RocketmqError;
-
-//     type Target = Self;
-
-//     fn from(_map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-//         Ok(Self {})
-//     }
-// }
