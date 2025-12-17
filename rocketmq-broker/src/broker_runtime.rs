@@ -97,6 +97,7 @@ use crate::processor::consumer_manage_processor::ConsumerManageProcessor;
 use crate::processor::default_pull_message_result_handler::DefaultPullMessageResultHandler;
 use crate::processor::end_transaction_processor::EndTransactionProcessor;
 use crate::processor::notification_processor::NotificationProcessor;
+use crate::processor::polling_info_processor::PollingInfoProcessor;
 use crate::processor::pop_inflight_message_counter::PopInflightMessageCounter;
 use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::pull_message_processor::PullMessageProcessor;
@@ -747,7 +748,9 @@ impl BrokerRuntime {
         //pollingInfoProcessor
         broker_request_processor.register_processor(
             RequestCode::PollingInfo as i32,
-            BrokerProcessorType::PollingInfo(Default::default()),
+            BrokerProcessorType::PollingInfo(ArcMut::new(PollingInfoProcessor::new(
+                self.inner.clone(),
+            ))),
         );
 
         //ReplyMessageProcessor
@@ -2587,6 +2590,10 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 drop(lock);
             }
         }
+    }
+
+    pub fn pop_message_processor(&self) -> Option<&ArcMut<PopMessageProcessor<MS>>> {
+        self.pop_message_processor.as_ref()
     }
 
     pub fn pop_message_processor_unchecked(&self) -> &ArcMut<PopMessageProcessor<MS>> {

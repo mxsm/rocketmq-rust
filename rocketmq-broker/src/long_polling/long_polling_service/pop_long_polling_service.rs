@@ -533,6 +533,21 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
         pop_request
     }
 
+    /// Gets the number of polling requests for a given key
+    ///
+    /// # Arguments
+    /// * `key` - The polling key (topic@consumerGroup@queueId)
+    ///
+    /// # Returns
+    /// The number of polling requests, or 0 if no polling requests exist for the key
+    #[inline]
+    pub fn get_polling_num(&self, key: &str) -> i32 {
+        self.polling_map
+            .get(key)
+            .map(|queue| queue.len() as i32)
+            .unwrap_or(0)
+    }
+
     pub fn set_processor(&mut self, processor: ArcMut<RP>) {
         self.processor = Some(processor);
     }
