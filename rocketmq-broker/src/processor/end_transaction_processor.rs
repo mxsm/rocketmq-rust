@@ -36,10 +36,12 @@ use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
+use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
 use crate::broker_runtime::BrokerRuntimeInner;
+use crate::metrics::broker_metrics_manager::BrokerMetricsManager;
 use crate::transaction::operation_result::OperationResult;
 use crate::transaction::queue::transactional_message_util::TransactionalMessageUtil;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
@@ -111,6 +113,8 @@ where
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header =
             request.decode_command_custom_header::<EndTransactionRequestHeader>()?;
+        debug!("Transaction request: {:?}", request_header);
+
         if BrokerRole::Slave == self.broker_runtime_inner.message_store_config().broker_role {
             warn!("Message store is slave mode, so end transaction is forbidden. ");
             return Ok(Some(RemotingCommand::create_response_command_with_code(
@@ -119,19 +123,54 @@ where
         }
         if request_header.from_transaction_check {
             match request_header.commit_or_rollback {
-                MessageSysFlag::TRANSACTION_NOT_TYPE => return Ok(None),
-                MessageSysFlag::TRANSACTION_COMMIT_TYPE
-                | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => {
-                    //nothing to do, can add some log
+                MessageSysFlag::TRANSACTION_NOT_TYPE => {
+                    warn!(
+                        "Check producer transaction state, but it's pending status. \
+                         RequestHeader: {:?}, Remark: {:?}",
+                        request_header,
+                        request.remark()
+                    );
+                    return Ok(None);
+                }
+                MessageSysFlag::TRANSACTION_COMMIT_TYPE => {
+                    warn!(
+                        "Check producer transaction state, the producer commit the message. \
+                         RequestHeader: {:?}, Remark: {:?}",
+                        request_header,
+                        request.remark()
+                    );
+                }
+                MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => {
+                    warn!(
+                        "Check producer transaction state, the producer rollback the message. \
+                         RequestHeader: {:?}, Remark: {:?}",
+                        request_header,
+                        request.remark()
+                    );
                 }
                 _ => return Ok(None),
             }
         } else {
             match request_header.commit_or_rollback {
-                MessageSysFlag::TRANSACTION_NOT_TYPE => return Ok(None),
-                MessageSysFlag::TRANSACTION_COMMIT_TYPE
-                | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => {
-                    //nothing to do, can add some log
+                MessageSysFlag::TRANSACTION_NOT_TYPE => {
+                    warn!(
+                        "The producer end transaction in sending message, and it's pending \
+                         status. RequestHeader: {:?}, Remark: {:?}",
+                        request_header,
+                        request.remark()
+                    );
+                    return Ok(None);
+                }
+                MessageSysFlag::TRANSACTION_COMMIT_TYPE => {
+                    // Normal commit, no log needed
+                }
+                MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => {
+                    warn!(
+                        "The producer end transaction in sending message, rollback the message. \
+                         RequestHeader: {:?}, Remark: {:?}",
+                        request_header,
+                        request.remark()
+                    );
                 }
                 _ => return Ok(None),
             }
@@ -179,16 +218,35 @@ where
                         &mut msg_inner,
                         MessageConst::PROPERTY_TRANSACTION_PREPARED,
                     );
+
+                    // Save topic and born_timestamp before sending (msg_inner is moved)
+                    let topic = msg_inner.get_topic().clone();
+                    let born_timestamp =
+                        result.prepare_message.as_ref().unwrap().born_timestamp as u64;
+
                     let send_result = self.send_final_message(msg_inner).await;
                     if ResponseCode::from(send_result.code()) == ResponseCode::Success {
                         let _ = self
                             .transactional_message_service
                             .delete_prepare_message(result.prepare_message.as_ref().unwrap())
                             .await;
-                        // TODO: Add metrics tracking
-                        // - commitMessagesTotal.add(1)
-                        // - transactionMetrics.addAndGet(topic, -1)
-                        // - transactionFinishLatency.record(...)
+
+                        // Record metrics for successful commit
+                        if let Some(metrics) = BrokerMetricsManager::try_global() {
+                            // Increment commit messages counter
+                            metrics.inc_commit_messages(&topic, 1);
+
+                            // Record transaction finish latency (in seconds)
+                            let commit_latency_secs =
+                                (get_current_millis() - born_timestamp) / 1000;
+                            metrics.record_transaction_finish_latency(&topic, commit_latency_secs);
+                        }
+
+                        // TODO: Update transaction metrics (half messages count -1) when
+                        // TransactionMetrics is fully implemented
+                        // self.transactional_message_service
+                        //     .get_transaction_metrics()
+                        //     .add_and_get(&topic, -1);
                     }
                     return Ok(Some(send_result));
                 }
@@ -222,6 +280,26 @@ where
                         .transactional_message_service
                         .delete_prepare_message(result.prepare_message.as_ref().unwrap())
                         .await;
+
+                    // Record metrics for successful rollback
+                    if let Some(prepare_msg) = result.prepare_message.as_ref() {
+                        let real_topic = prepare_msg
+                            .get_property(&CheetahString::from_static_str(
+                                MessageConst::PROPERTY_REAL_TOPIC,
+                            ))
+                            .unwrap_or_default();
+
+                        if let Some(metrics) = BrokerMetricsManager::try_global() {
+                            // Increment rollback messages counter
+                            metrics.inc_rollback_messages(&real_topic, 1);
+                        }
+
+                        // TODO: Update transaction metrics (half messages count -1) when
+                        // TransactionMetrics is fully implemented
+                        // self.transactional_message_service
+                        //     .get_transaction_metrics()
+                        //     .add_and_get(&real_topic, -1);
+                    }
                 }
                 return Ok(Some(res));
             }
@@ -312,6 +390,9 @@ where
     }
 
     async fn send_final_message(&mut self, msg_inner: MessageExtBrokerInner) -> RemotingCommand {
+        // Save topic before moving msg_inner
+        let topic = msg_inner.get_topic().clone();
+
         let put_message_result = self
             .broker_runtime_inner
             .message_store_mut()
@@ -324,7 +405,17 @@ where
             PutMessageStatus::PutOk
             | PutMessageStatus::FlushDiskTimeout
             | PutMessageStatus::FlushSlaveTimeout
-            | PutMessageStatus::SlaveNotAvailable => {}
+            | PutMessageStatus::SlaveNotAvailable => {
+                // P2: Update BrokerStats for successful message put
+                if let PutMessageStatus::PutOk = put_message_result.put_message_status() {
+                    if let Some(append_result) = put_message_result.append_message_result() {
+                        let broker_stats = self.broker_runtime_inner.broker_stats_manager();
+                        broker_stats.inc_topic_put_nums(&topic, append_result.msg_num, 1);
+                        broker_stats.inc_topic_put_size(&topic, append_result.wrote_bytes);
+                        broker_stats.inc_broker_put_nums(&topic, append_result.msg_num);
+                    }
+                }
+            }
             PutMessageStatus::ServiceNotAvailable => {
                 response.set_code_mut(ResponseCode::ServiceNotAvailable);
                 response.set_remark_mut("Service not available now. ");
