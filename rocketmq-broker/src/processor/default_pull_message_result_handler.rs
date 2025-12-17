@@ -25,7 +25,9 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all::MASTER_ID;
+use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
+use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -106,11 +108,15 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
             .broker_runtime_inner
             .topic_config_manager()
             .select_topic_config(request_header.topic.as_ref());
+        let topic_sys_flag = topic_config
+            .as_ref()
+            .map(|tc| tc.topic_sys_flag as i32)
+            .unwrap_or(0);
         Self::compose_response_header(
             &self.broker_runtime_inner, //need optimization
             &request_header,
             &get_message_result,
-            topic_config.as_ref().unwrap().topic_sys_flag as i32,
+            topic_sys_flag,
             subscription_group_config,
             &mut response,
             client_address.as_str(),
@@ -155,26 +161,42 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
 
         match code {
             ResponseCode::Success => {
-                self.broker_runtime_inner
-                    .broker_stats_manager()
-                    .inc_group_get_nums(
-                        request_header.consumer_group.as_str(),
-                        request_header.topic.as_str(),
-                        get_message_result.message_count(),
-                    );
-                self.broker_runtime_inner
-                    .broker_stats_manager()
-                    .inc_group_get_size(
-                        request_header.consumer_group.as_str(),
-                        request_header.topic.as_str(),
-                        get_message_result.buffer_total_size(),
-                    );
-                self.broker_runtime_inner
-                    .broker_stats_manager()
-                    .inc_broker_get_nums(
-                        request_header.topic.as_str(),
-                        get_message_result.message_count(),
-                    );
+                let broker_stats = self.broker_runtime_inner.broker_stats_manager();
+                broker_stats.inc_group_get_nums(
+                    request_header.consumer_group.as_str(),
+                    request_header.topic.as_str(),
+                    get_message_result.message_count(),
+                );
+                broker_stats.inc_group_get_size(
+                    request_header.consumer_group.as_str(),
+                    request_header.topic.as_str(),
+                    get_message_result.buffer_total_size(),
+                );
+                broker_stats.inc_broker_get_nums(
+                    request_header.topic.as_str(),
+                    get_message_result.message_count(),
+                );
+
+                // Record BrokerMetrics for non-retry/dlq topics
+                if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
+                    let topic = request_header.topic.as_str();
+                    let consumer_group = request_header.consumer_group.as_str();
+                    let is_retry = topic.starts_with("%RETRY%") || topic.starts_with("%DLQ%");
+                    if !is_retry {
+                        metrics.inc_messages_out_total(
+                            topic,
+                            consumer_group,
+                            get_message_result.message_count() as u64,
+                            false,
+                        );
+                        metrics.inc_throughput_out_total(
+                            topic,
+                            consumer_group,
+                            get_message_result.buffer_total_size() as u64,
+                            false,
+                        );
+                    }
+                }
 
                 if self
                     .broker_runtime_inner
@@ -187,6 +209,16 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                         request_header.topic.as_str(),
                         request_header.queue_id,
                     );
+                    // Record group get latency
+                    let latency = (get_current_millis() - _begin_time_mills) as i32;
+                    self.broker_runtime_inner
+                        .broker_stats_manager()
+                        .inc_group_get_latency(
+                            request_header.consumer_group.as_str(),
+                            request_header.topic.as_str(),
+                            request_header.queue_id,
+                            latency,
+                        );
                     if let Some(body) = body {
                         response.set_body_mut_ref(body);
                     }
@@ -303,7 +335,13 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                 }
                 Some(response)
             }
-            _ => Some(response),
+            _ => {
+                warn!(
+                    "[BUG] impossible result code of get message: {}",
+                    response.code()
+                );
+                Some(response)
+            }
         }
     }
 
@@ -317,20 +355,72 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
 }
 
 impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
+    /// Read message result and return (body bytes, last store timestamp)
     fn read_get_message_result(
         &self,
         get_message_result: &GetMessageResult,
-        _group: &str,
-        _topic: &str,
-        _queue_id: i32,
+        group: &str,
+        topic: &str,
+        queue_id: i32,
     ) -> Option<Bytes> {
         let mut bytes_mut =
             BytesMut::with_capacity(get_message_result.buffer_total_size() as usize);
+        let mut store_timestamp: i64 = 0;
+
         for msg in get_message_result.message_mapped_list() {
-            let data = &msg.mapped_file.as_ref().unwrap().get_mapped_file()
-                [msg.start_offset as usize..(msg.start_offset + msg.size as u64) as usize];
-            bytes_mut.extend_from_slice(data);
+            if let Some(mapped_file) = msg.mapped_file.as_ref() {
+                let data = &mapped_file.get_mapped_file()
+                    [msg.start_offset as usize..(msg.start_offset + msg.size as u64) as usize];
+                bytes_mut.extend_from_slice(data);
+
+                // Parse storeTimestamp from the last message
+                // The position depends on whether bornHost is IPv4 or IPv6
+                if data.len() > MessageDecoder::SYSFLAG_POSITION + 4 {
+                    let sys_flag = i32::from_be_bytes([
+                        data[MessageDecoder::SYSFLAG_POSITION],
+                        data[MessageDecoder::SYSFLAG_POSITION + 1],
+                        data[MessageDecoder::SYSFLAG_POSITION + 2],
+                        data[MessageDecoder::SYSFLAG_POSITION + 3],
+                    ]);
+
+                    // bornHost: IPv4 = 8 bytes, IPv6 = 20 bytes
+                    let bornhost_length =
+                        if (sys_flag & MessageSysFlag::BORNHOST_V6_FLAG) == 0 {
+                            8
+                        } else {
+                            20
+                        };
+
+                    // storeTimestamp position = 4(TOTALSIZE) + 4(MAGICCODE) + 4(BODYCRC)
+                    //                         + 4(QUEUEID) + 4(FLAG) + 8(QUEUEOFFSET)
+                    //                         + 8(PHYSICALOFFSET) + 4(SYSFLAG) + 8(BORNTIMESTAMP)
+                    //                         + bornhost_length
+                    let store_timestamp_pos = 4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8 + bornhost_length;
+
+                    if data.len() > store_timestamp_pos + 8 {
+                        store_timestamp = i64::from_be_bytes([
+                            data[store_timestamp_pos],
+                            data[store_timestamp_pos + 1],
+                            data[store_timestamp_pos + 2],
+                            data[store_timestamp_pos + 3],
+                            data[store_timestamp_pos + 4],
+                            data[store_timestamp_pos + 5],
+                            data[store_timestamp_pos + 6],
+                            data[store_timestamp_pos + 7],
+                        ]);
+                    }
+                }
+            }
         }
+
+        // Record disk fall behind time
+        if store_timestamp > 0 {
+            let fall_behind_time = get_current_millis() as i64 - store_timestamp;
+            self.broker_runtime_inner
+                .broker_stats_manager()
+                .record_disk_fall_behind_time(group, topic, queue_id, fall_behind_time);
+        }
+
         Some(bytes_mut.freeze())
     }
 
