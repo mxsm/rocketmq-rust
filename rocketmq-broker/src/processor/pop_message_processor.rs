@@ -1461,6 +1461,17 @@ where
         &self.queue_lock_manager
     }
 
+    /// Get the pop long polling service
+    ///
+    /// # Returns
+    /// A reference to the PopLongPollingService instance
+    #[inline]
+    pub fn pop_long_polling_service(
+        &self,
+    ) -> Option<&ArcMut<PopLongPollingService<MS, PopMessageProcessor<MS>>>> {
+        Some(&self.pop_long_polling_service)
+    }
+
     pub fn notify_message_arriving(
         &self,
         topic: &CheetahString,

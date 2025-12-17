@@ -70,7 +70,7 @@ pub enum BrokerProcessorType<MS: MessageStore, TS> {
     Ack(ArcMut<AckMessageProcessor<MS>>),
     ChangeInvisible(ArcMut<ChangeInvisibleTimeProcessor<MS>>),
     Notification(ArcMut<NotificationProcessor<MS>>),
-    PollingInfo(ArcMut<PollingInfoProcessor>),
+    PollingInfo(ArcMut<PollingInfoProcessor<MS>>),
     Reply(ArcMut<ReplyMessageProcessor<MS, TS>>),
     QueryMessage(ArcMut<QueryMessageProcessor<MS>>),
     ClientManage(ArcMut<ClientManageProcessor<MS>>),
