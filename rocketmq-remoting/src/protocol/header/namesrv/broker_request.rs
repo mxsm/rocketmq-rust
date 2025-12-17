@@ -93,40 +93,6 @@ impl GetBrokerMemberGroupRequestHeader {
     }
 }
 
-/*impl CommandCustomHeader for GetBrokerMemberGroupRequestHeader {
-    fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-        Some(HashMap::from([
-            (
-                CheetahString::from_static_str(Self::CLUSTER_NAME),
-                self.cluster_name.clone(),
-            ),
-            (
-                CheetahString::from_static_str(Self::BROKER_NAME),
-                self.broker_name.clone(),
-            ),
-        ]))
-    }
-}
-
-impl FromMap for GetBrokerMemberGroupRequestHeader {
-    type Error = rocketmq_error::RocketMQError;
-    type Target = Self;
-
-    fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-        Ok(GetBrokerMemberGroupRequestHeader {
-            cluster_name: map
-                .get(&CheetahString::from_static_str(Self::CLUSTER_NAME))
-                .cloned()
-                .unwrap_or_default(),
-
-            broker_name: map
-                .get(&CheetahString::from_static_str(Self::BROKER_NAME))
-                .cloned()
-                .unwrap_or_default(),
-        })
-    }
-}*/
-
 #[cfg(test)]
 mod tests {
     use cheetah_string::CheetahString;
