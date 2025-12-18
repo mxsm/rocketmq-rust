@@ -44,17 +44,76 @@ pub struct RebalanceLockManager {
 impl RebalanceLockManager {
     pub fn is_lock_all_expired(&self, group: &str) -> bool {
         let lock_table = self.mq_lock_table.read();
-        let lock_entry = lock_table.get(group);
-        if lock_entry.is_none() {
+        match lock_table.get(group) {
+            None => true,
+            Some(lock_entry) => lock_entry.values().all(|entry| entry.is_expired()),
+        }
+    }
+
+    /// Try to lock a single message queue for the specified client.
+    /// Returns true if the lock was successfully acquired.
+    pub fn try_lock(&self, group: &str, mq: &MessageQueue, client_id: &str) -> bool {
+        // Fast path: check if already locked by this client
+        if self.is_locked(group, mq, client_id) {
             return true;
         }
-        let lock_entry = lock_entry.unwrap();
-        for (_, entry) in lock_entry.iter() {
-            if !entry.is_expired() {
-                return false;
+
+        // Slow path: need to acquire write lock
+        let mut write_guard = self.mq_lock_table.write();
+        let group_value = write_guard
+            .entry(group.to_string())
+            .or_insert_with(|| HashMap::with_capacity(32));
+
+        match group_value.get_mut(mq) {
+            None => {
+                // No lock entry exists, create new one
+                group_value.insert(
+                    mq.clone(),
+                    LockEntry {
+                        client_id: client_id.to_string(),
+                        last_update_timestamp: AtomicI64::new(get_current_millis() as i64),
+                    },
+                );
+                info!(
+                    "RebalanceLockManager#tryLock: lock a message queue which has not been locked \
+                     yet, group={}, clientId={}, mq={:?}",
+                    group, client_id, mq
+                );
+                true
+            }
+            Some(lock_entry) => {
+                if lock_entry.is_locked(client_id) {
+                    lock_entry.last_update_timestamp.store(
+                        get_current_millis() as i64,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    return true;
+                }
+
+                let old_client_id = lock_entry.client_id.clone();
+
+                if lock_entry.is_expired() {
+                    lock_entry.client_id = client_id.to_string();
+                    lock_entry.last_update_timestamp.store(
+                        get_current_millis() as i64,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    warn!(
+                        "RebalanceLockManager#tryLock: try to lock a expired message queue, \
+                         group={}, mq={:?}, old client id={}, new client id={}",
+                        group, mq, old_client_id, client_id
+                    );
+                    return true;
+                }
+
+                warn!(
+                    "RebalanceLockManager#tryLock: message queue has been locked by other client, \
+                     group={}, mq={:?}, locked client id={}, current client id={}",
+                    group, mq, old_client_id, client_id
+                );
+                false
             }
         }
-        true
     }
 
     pub fn try_lock_batch(
@@ -115,7 +174,7 @@ impl RebalanceLockManager {
                 }
                 warn!(
                     "RebalanceLockManager#tryLockBatch: message queue has been locked by other \
-                     group={}, mq={:?}, locked client id={}, current client id={}",
+                     client, group={}, mq={:?}, locked client id={}, current client id={}",
                     group, mq, old_client_id, client_id
                 );
             }
@@ -125,63 +184,58 @@ impl RebalanceLockManager {
 
     pub fn unlock_batch(&self, group: &str, mqs: &HashSet<MessageQueue>, client_id: &str) {
         let mut write_guard = self.mq_lock_table.write();
-        let group_value = write_guard.get_mut(group);
-        if group_value.is_none() {
+        let Some(group_value) = write_guard.get_mut(group) else {
             warn!(
                 "RebalanceLockManager#unlockBatch: group not exist, group={}, clientId={}, \
                  mqs={:?}",
                 group, client_id, mqs
             );
             return;
-        }
-        let group_value = group_value.unwrap();
+        };
+
         for mq in mqs.iter() {
-            let lock_entry = group_value.get(mq);
-            if lock_entry.is_none() {
-                warn!(
-                    "RebalanceLockManager#unlockBatch: mq not locked, group={}, clientId={}, mq={}",
-                    group, client_id, mq
-                );
-                continue;
-            }
-            let lock_entry = lock_entry.unwrap();
-            if lock_entry.client_id == *client_id {
-                group_value.remove(mq);
-                info!(
-                    "RebalanceLockManager#unlockBatch: unlock a message queue, group={}, \
-                     clientId={}, mq={:?}",
-                    group, client_id, mq
-                );
-            } else {
-                warn!(
-                    "RebalanceLockManager#unlockBatch: unlock a message queue, but the client id \
-                     is not matched, group={}, clientId={}, mq={:?}",
-                    group, client_id, mq
-                );
+            match group_value.get(mq) {
+                None => {
+                    warn!(
+                        "RebalanceLockManager#unlockBatch: mq not locked, group={}, clientId={}, \
+                         mq={}",
+                        group, client_id, mq
+                    );
+                }
+                Some(lock_entry) if lock_entry.client_id == client_id => {
+                    group_value.remove(mq);
+                    info!(
+                        "RebalanceLockManager#unlockBatch: unlock mq, group={}, clientId={}, \
+                         mq={:?}",
+                        group, client_id, mq
+                    );
+                }
+                Some(lock_entry) => {
+                    warn!(
+                        "RebalanceLockManager#unlockBatch: mq locked by other client, group={}, \
+                         locked clientId={}, current clientId={}, mq={:?}",
+                        group, lock_entry.client_id, client_id, mq
+                    );
+                }
             }
         }
     }
 
     fn is_locked(&self, group: &str, mq: &MessageQueue, client_id: &str) -> bool {
         let lock_table = self.mq_lock_table.read();
-        let group_value = lock_table.get(group);
-        if group_value.is_none() {
-            return false;
+        if let Some(group_value) = lock_table.get(group) {
+            if let Some(lock_entry) = group_value.get(mq) {
+                let locked = lock_entry.is_locked(client_id);
+                if locked {
+                    lock_entry.last_update_timestamp.store(
+                        get_current_millis() as i64,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                }
+                return locked;
+            }
         }
-        let group_value = group_value.unwrap();
-        let lock_entry = group_value.get(mq);
-        if lock_entry.is_none() {
-            return false;
-        }
-        let lock_entry = lock_entry.unwrap();
-        let locked = lock_entry.is_locked(client_id);
-        if locked {
-            lock_entry.last_update_timestamp.store(
-                get_current_millis() as i64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-        }
-        locked
+        false
     }
 }
 
@@ -191,13 +245,6 @@ struct LockEntry {
 }
 
 impl LockEntry {
-    pub fn new() -> LockEntry {
-        Self {
-            client_id: "".to_string(),
-            last_update_timestamp: AtomicI64::new(get_current_millis() as i64),
-        }
-    }
-
     #[inline]
     pub fn is_expired(&self) -> bool {
         let now = get_current_millis() as i64;
@@ -294,5 +341,39 @@ mod rebalance_lock_manager_tests {
         let manager = RebalanceLockManager::default();
         let mq = MessageQueue::default();
         assert!(!manager.is_locked("test_group", &mq, "client_1"));
+    }
+
+    #[test]
+    fn try_lock_locks_single_message_queue() {
+        let manager = RebalanceLockManager::default();
+        let mq = MessageQueue::default();
+        assert!(manager.try_lock("test_group", &mq, "client_1"));
+        // Same client can re-lock
+        assert!(manager.try_lock("test_group", &mq, "client_1"));
+    }
+
+    #[test]
+    fn try_lock_fails_when_locked_by_other_client() {
+        let manager = RebalanceLockManager::default();
+        let mq = MessageQueue::default();
+        assert!(manager.try_lock("test_group", &mq, "client_1"));
+        // Different client cannot lock
+        assert!(!manager.try_lock("test_group", &mq, "client_2"));
+    }
+
+    #[test]
+    fn try_lock_and_try_lock_batch_interoperate() {
+        let manager = RebalanceLockManager::default();
+        let mq = MessageQueue::default();
+        // Lock via try_lock
+        assert!(manager.try_lock("test_group", &mq, "client_1"));
+        // try_lock_batch should recognize the lock
+        let mut set = HashSet::new();
+        set.insert(mq.clone());
+        let locked = manager.try_lock_batch("test_group", &set, "client_1");
+        assert_eq!(locked.len(), 1);
+        // Other client cannot lock via batch
+        let locked = manager.try_lock_batch("test_group", &set, "client_2");
+        assert!(locked.is_empty());
     }
 }
