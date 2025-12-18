@@ -14,12 +14,19 @@
 //  KIND, either express or implied.  See the License for the
 //  specific language governing permissions and limitations
 //  under the License.
-pub mod alter_sync_state_set_request_header;
-pub mod alter_sync_state_set_response_header;
-pub mod apply_broker_id_request_header;
-pub mod elect_master_request_header;
-pub mod get_next_broker_id_request_header;
-pub mod get_replica_info_request_header;
-pub mod get_replica_info_response_header;
-pub mod register_broker_to_controller_request_header;
-pub mod register_broker_to_controller_response_header;
+
+use cheetah_string::CheetahString;
+use rocketmq_macros::RequestHeaderCodecV2;
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterBrokerToControllerResponseHeader {
+    pub cluster_name: Option<CheetahString>,
+    pub broker_name: Option<CheetahString>,
+    pub master_broker_id: Option<i64>,
+    pub master_address: Option<CheetahString>,
+    pub master_epoch: Option<i32>,
+    pub sync_state_set_epoch: Option<i32>,
+}
