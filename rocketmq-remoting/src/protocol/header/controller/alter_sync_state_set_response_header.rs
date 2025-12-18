@@ -14,5 +14,13 @@
 //  KIND, either express or implied.  See the License for the
 //  specific language governing permissions and limitations
 //  under the License.
-pub mod alter_sync_state_set_request_header;
-pub mod alter_sync_state_set_response_header;
+
+use rocketmq_macros::RequestHeaderCodecV2;
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default, RequestHeaderCodecV2)]
+#[serde(rename_all = "camelCase")]
+pub struct AlterSyncStateSetResponseHeader {
+    pub new_sync_state_set_epoch: i32,
+}
