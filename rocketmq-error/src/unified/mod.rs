@@ -23,6 +23,7 @@
 
 mod network;
 mod protocol;
+mod rpc;
 mod serialization;
 mod tools;
 
@@ -30,6 +31,7 @@ use std::io;
 
 pub use network::NetworkError;
 pub use protocol::ProtocolError;
+pub use rpc::RpcClientError;
 pub use serialization::SerializationError;
 use thiserror::Error;
 pub use tools::ToolsError;
@@ -90,6 +92,13 @@ pub enum RocketMQError {
     /// RocketMQ protocol errors (invalid commands, version mismatch, etc.)
     #[error(transparent)]
     Protocol(#[from] ProtocolError),
+
+    // ============================================================================
+    // RPC Client Errors
+    // ============================================================================
+    /// RPC client specific errors (broker lookup, request failures, etc.)
+    #[error(transparent)]
+    Rpc(#[from] RpcClientError),
 
     // ============================================================================
     // Broker Errors

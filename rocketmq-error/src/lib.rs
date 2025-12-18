@@ -58,6 +58,7 @@ pub mod unified;
 pub use unified::NetworkError;
 pub use unified::ProtocolError;
 pub use unified::RocketMQError;
+pub use unified::RpcClientError;
 pub use unified::SerializationError;
 // Re-export result types (but don't conflict with legacy ones below)
 pub use unified::ServiceError as UnifiedServiceError;
