@@ -58,11 +58,18 @@ use rocketmq_remoting::protocol::broker_sync_info::BrokerSyncInfo;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::header::exchange_ha_info_request_header::ExchangeHAInfoRequestHeader;
 use rocketmq_remoting::protocol::header::exchange_ha_info_response_header::ExchangeHaInfoResponseHeader;
+use rocketmq_remoting::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
+use rocketmq_remoting::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
+use rocketmq_remoting::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
+use rocketmq_remoting::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
 use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
+use rocketmq_remoting::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
+use rocketmq_remoting::protocol::header::namesrv::query_data_version_header::QueryDataVersionRequestHeader;
+use rocketmq_remoting::protocol::header::namesrv::query_data_version_header::QueryDataVersionResponseHeader;
 use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::register_broker_header::RegisterBrokerResponseHeader;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::RegisterTopicRequestHeader;
@@ -75,6 +82,7 @@ use rocketmq_remoting::protocol::namesrv::RegisterBrokerResult;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::route::route_data_view::QueueData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::remoting::RemotingService;
@@ -359,6 +367,322 @@ impl BrokerOuterAPI {
     }
 
     pub fn refresh_metadata(&self) {}
+
+    /// Send heartbeat to name servers
+    ///
+    /// # Arguments
+    /// * `cluster_name` - Cluster name
+    /// * `broker_addr` - Broker address
+    /// * `broker_name` - Broker name
+    /// * `broker_id` - Broker ID
+    /// * `timeout_millis` - Request timeout in milliseconds
+    /// * `is_in_broker_container` - Whether broker is in container
+    pub async fn send_heartbeat(
+        &self,
+        cluster_name: CheetahString,
+        broker_addr: CheetahString,
+        broker_name: CheetahString,
+        broker_id: i64,
+        timeout_millis: u64,
+        _is_in_broker_container: bool,
+    ) {
+        let name_server_address_list = self.remoting_client.get_available_name_srv_list();
+        if name_server_address_list.is_empty() {
+            warn!("No available name server for sending heartbeat");
+            return;
+        }
+
+        let request_header = BrokerHeartbeatRequestHeader {
+            cluster_name,
+            broker_addr,
+            broker_name,
+            broker_id: Some(broker_id),
+            epoch: None,
+            max_offset: None,
+            confirm_offset: None,
+            heartbeat_timeout_mills: None,
+            election_priority: None,
+        };
+
+        // Parallel heartbeat to all NameServers
+        let handles: Vec<_> = name_server_address_list
+            .iter()
+            .map(|namesrv_addr| {
+                let addr = namesrv_addr.clone();
+                let header = request_header.clone();
+                let client = self.remoting_client.clone();
+
+                tokio::spawn(async move {
+                    let request = RemotingCommand::create_request_command(
+                        RequestCode::BrokerHeartbeat,
+                        header,
+                    );
+
+                    client
+                        .invoke_request_oneway(&addr, request, timeout_millis)
+                        .await;
+                    debug!("Send heartbeat to name server {} success", addr);
+                })
+            })
+            .collect();
+
+        let _ = futures::future::join_all(handles).await;
+    }
+
+    /// Send heartbeat with data version to name servers
+    ///
+    /// This method sends data version along with heartbeat to allow
+    /// name server to determine if broker metadata has changed.
+    pub async fn send_heartbeat_via_data_version(
+        &self,
+        cluster_name: CheetahString,
+        broker_addr: CheetahString,
+        broker_name: CheetahString,
+        broker_id: u64,
+        timeout_millis: u64,
+        data_version: &DataVersion,
+        _is_in_broker_container: bool,
+    ) {
+        let name_server_address_list = self.remoting_client.get_available_name_srv_list();
+        if name_server_address_list.is_empty() {
+            return;
+        }
+
+        let request_header = QueryDataVersionRequestHeader {
+            broker_addr,
+            broker_name,
+            broker_id,
+            cluster_name,
+        };
+
+        let body = match data_version.encode() {
+            Ok(b) => b,
+            Err(e) => {
+                error!("Failed to encode data version: {}", e);
+                return;
+            }
+        };
+
+        let handles: Vec<_> = name_server_address_list
+            .iter()
+            .map(|namesrv_addr| {
+                let addr = namesrv_addr.clone();
+                let header = request_header.clone();
+                let body_clone = body.clone();
+                let client = self.remoting_client.clone();
+
+                tokio::spawn(async move {
+                    let mut request = RemotingCommand::create_request_command(
+                        RequestCode::QueryDataVersion,
+                        header,
+                    );
+                    request.set_body_mut_ref(bytes::Bytes::from(body_clone));
+
+                    client
+                        .invoke_request_oneway(&addr, request, timeout_millis)
+                        .await;
+                    debug!("Send heartbeat via data version to {} success", addr);
+                })
+            })
+            .collect();
+
+        let _ = futures::future::join_all(handles).await;
+    }
+
+    /// Check if broker needs to register to name servers
+    ///
+    /// This method queries all name servers to determine if broker
+    /// metadata has changed and needs re-registration.
+    ///
+    /// # Returns
+    /// Vector of booleans indicating if each name server needs registration
+    pub async fn need_register(
+        &self,
+        cluster_name: CheetahString,
+        broker_addr: CheetahString,
+        broker_name: CheetahString,
+        broker_id: u64,
+        topic_config_wrapper: &TopicConfigAndMappingSerializeWrapper,
+        timeout_millis: u64,
+        _is_in_broker_container: bool,
+    ) -> Vec<bool> {
+        let name_server_address_list = self.remoting_client.get_name_server_address_list();
+        if name_server_address_list.is_empty() {
+            return vec![];
+        }
+
+        let data_version_body = match topic_config_wrapper
+            .topic_config_serialize_wrapper
+            .data_version()
+            .encode()
+        {
+            Ok(body) => body,
+            Err(e) => {
+                error!("Failed to encode data version: {}", e);
+                return vec![true; name_server_address_list.len()];
+            }
+        };
+
+        let local_data_version = topic_config_wrapper
+            .topic_config_serialize_wrapper
+            .data_version()
+            .clone();
+
+        let handles: Vec<_> = name_server_address_list
+            .iter()
+            .map(|namesrv_addr| {
+                let addr = namesrv_addr.clone();
+                let header = QueryDataVersionRequestHeader {
+                    cluster_name: cluster_name.clone(),
+                    broker_addr: broker_addr.clone(),
+                    broker_name: broker_name.clone(),
+                    broker_id,
+                };
+                let body = data_version_body.clone();
+                let client = self.remoting_client.clone();
+                let local_version = local_data_version.clone();
+
+                tokio::spawn(async move {
+                    let mut request = RemotingCommand::create_request_command(
+                        RequestCode::QueryDataVersion,
+                        header,
+                    );
+                    request.set_body_mut_ref(bytes::Bytes::from(body));
+
+                    match client.invoke_request(Some(&addr), request, timeout_millis).await {
+                        Ok(response) => match ResponseCode::from(response.code()) {
+                            ResponseCode::Success => {
+                                if let Ok(response_header) =
+                                    response.decode_command_custom_header::<QueryDataVersionResponseHeader>()
+                                {
+                                    // If name server explicitly indicates changed
+                                    if response_header.changed() {
+                                        return Some(true);
+                                    }
+
+                                    // Compare data versions
+                                    if let Some(body) = response.body() {
+                                        if let Ok(ns_data_version) = DataVersion::decode(body.as_ref()) {
+                                            return Some(local_version != ns_data_version);
+                                        }
+                                    }
+
+                                    Some(false)
+                                } else {
+                                    Some(true)
+                                }
+                            }
+                            _ => {
+                                warn!("Query data version from {} failed: {:?}", addr, response.code());
+                                Some(true)
+                            }
+                        },
+                        Err(e) => {
+                            error!("Query data version from {} error: {}", addr, e);
+                            Some(true)
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        let results = futures::future::join_all(handles).await;
+        results
+            .into_iter()
+            .filter_map(|r| r.ok().flatten())
+            .collect()
+    }
+
+    /// Get maximum offset of a message queue
+    ///
+    /// # Arguments
+    /// * `addr` - Broker address
+    /// * `topic` - Topic name
+    /// * `queue_id` - Queue ID
+    /// * `committed` - Whether to get committed offset
+    ///
+    /// # Returns
+    /// Maximum offset or error
+    pub async fn get_max_offset(
+        &self,
+        addr: &CheetahString,
+        topic: CheetahString,
+        queue_id: i32,
+        committed: bool,
+    ) -> rocketmq_error::RocketMQResult<i64> {
+        let request_header = GetMaxOffsetRequestHeader {
+            topic,
+            queue_id,
+            committed,
+            topic_request_header: None,
+        };
+
+        let request =
+            RemotingCommand::create_request_command(RequestCode::GetMaxOffset, request_header);
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, 3000)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                let response_header =
+                    response.decode_command_custom_header::<GetMaxOffsetResponseHeader>()?;
+                Ok(response_header.offset)
+            }
+            _ => Err(RocketMQError::BrokerOperationFailed {
+                operation: "get_max_offset",
+                code: response.code(),
+                message: response.remark().map_or("".to_string(), |s| s.to_string()),
+                broker_addr: Some(addr.to_string()),
+            }),
+        }
+    }
+
+    /// Get minimum offset of a message queue
+    ///
+    /// # Arguments
+    /// * `addr` - Broker address
+    /// * `topic` - Topic name
+    /// * `queue_id` - Queue ID
+    ///
+    /// # Returns
+    /// Minimum offset or error
+    pub async fn get_min_offset(
+        &self,
+        addr: &CheetahString,
+        topic: CheetahString,
+        queue_id: i32,
+    ) -> rocketmq_error::RocketMQResult<i64> {
+        let request_header = GetMinOffsetRequestHeader {
+            topic,
+            queue_id,
+            topic_request_header: None,
+        };
+
+        let request =
+            RemotingCommand::create_request_command(RequestCode::GetMinOffset, request_header);
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, 3000)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                let response_header =
+                    response.decode_command_custom_header::<GetMinOffsetResponseHeader>()?;
+                Ok(response_header.offset)
+            }
+            _ => Err(RocketMQError::BrokerOperationFailed {
+                operation: "get_min_offset",
+                code: response.code(),
+                message: response.remark().map_or("".to_string(), |s| s.to_string()),
+                broker_addr: Some(addr.to_string()),
+            }),
+        }
+    }
 
     pub fn rpc_client(&self) -> &RpcClientImpl {
         &self.rpc_client
