@@ -78,9 +78,6 @@ pub struct GetBrokerMemberGroupRequestHeader {
 }
 
 impl GetBrokerMemberGroupRequestHeader {
-    /* const BROKER_NAME: &'static str = "brokerName";
-    const CLUSTER_NAME: &'static str = "clusterName";*/
-
     pub fn new(
         cluster_name: impl Into<CheetahString>,
         broker_name: impl Into<CheetahString>,
