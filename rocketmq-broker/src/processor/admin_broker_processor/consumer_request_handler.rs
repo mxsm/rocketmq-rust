@@ -62,9 +62,8 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
-        let request_header = request
-            .decode_command_custom_header::<GetConsumerConnectionListRequestHeader>()
-            .unwrap();
+        let request_header =
+            request.decode_command_custom_header::<GetConsumerConnectionListRequestHeader>()?;
         let consumer_group_info = self
             .broker_runtime_inner
             .consumer_manager()
@@ -90,9 +89,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                         .set_client_addr(channel_info.key().remote_address().to_string().into());
                     body_data.insert_connection(connection);
                 }
-                let body = body_data
-                    .encode()
-                    .expect("consumer connection list encode failed");
+                let body = body_data.encode()?;
                 response.set_body_mut_ref(body);
                 Ok(Some(response))
             }
