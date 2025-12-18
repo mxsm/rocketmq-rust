@@ -28,3 +28,94 @@ pub struct ApplyBrokerIdRequestHeader {
     pub applied_broker_id: i64,
     pub register_check_code: CheetahString,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::protocol::command_custom_header::CommandCustomHeader;
+    use crate::protocol::command_custom_header::FromMap;
+
+    #[test]
+    fn apply_broker_id_request_header_serializes_correctly() {
+        let header = ApplyBrokerIdRequestHeader {
+            cluster_name: CheetahString::from_static_str("test_cluster"),
+            broker_name: CheetahString::from_static_str("test_broker"),
+            applied_broker_id: 9876543210,
+            register_check_code: CheetahString::from_static_str("check_code_123"),
+        };
+        let map = header.to_map().unwrap();
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("clusterName"))
+                .unwrap(),
+            "test_cluster"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("brokerName"))
+                .unwrap(),
+            "test_broker"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("appliedBrokerId"))
+                .unwrap(),
+            "9876543210"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("registerCheckCode"))
+                .unwrap(),
+            "check_code_123"
+        );
+    }
+
+    #[test]
+    fn apply_broker_id_request_header_deserializes_correctly() {
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str("clusterName"),
+            CheetahString::from_static_str("test_cluster"),
+        );
+        map.insert(
+            CheetahString::from_static_str("brokerName"),
+            CheetahString::from_static_str("test_broker"),
+        );
+        map.insert(
+            CheetahString::from_static_str("appliedBrokerId"),
+            CheetahString::from_static_str("9876543210"),
+        );
+        map.insert(
+            CheetahString::from_static_str("registerCheckCode"),
+            CheetahString::from_static_str("check_code_123"),
+        );
+
+        let header = <ApplyBrokerIdRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.cluster_name, "test_cluster");
+        assert_eq!(header.broker_name, "test_broker");
+        assert_eq!(header.applied_broker_id, 9876543210);
+        assert_eq!(header.register_check_code, "check_code_123");
+    }
+
+    #[test]
+    fn apply_broker_id_request_header_default() {
+        let header = ApplyBrokerIdRequestHeader::default();
+        assert_eq!(header.cluster_name, "");
+        assert_eq!(header.broker_name, "");
+        assert_eq!(header.applied_broker_id, 0);
+        assert_eq!(header.register_check_code, "");
+    }
+
+    #[test]
+    fn apply_broker_id_request_header_clone() {
+        let header = ApplyBrokerIdRequestHeader {
+            cluster_name: CheetahString::from_static_str("test_cluster"),
+            broker_name: CheetahString::from_static_str("test_broker"),
+            applied_broker_id: 9876543210,
+            register_check_code: CheetahString::from_static_str("check_code_123"),
+        };
+        let cloned = header.clone();
+        assert_eq!(header.cluster_name, cloned.cluster_name);
+        assert_eq!(header.broker_name, cloned.broker_name);
+        assert_eq!(header.applied_broker_id, cloned.applied_broker_id);
+        assert_eq!(header.register_check_code, cloned.register_check_code);
+    }
+}
