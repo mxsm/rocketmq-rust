@@ -52,12 +52,7 @@ impl RebalanceLockManager {
 
     /// Try to lock a single message queue for the specified client.
     /// Returns true if the lock was successfully acquired.
-    pub fn try_lock(
-        &self,
-        group: &str,
-        mq: &MessageQueue,
-        client_id: &str,
-    ) -> bool {
+    pub fn try_lock(&self, group: &str, mq: &MessageQueue, client_id: &str) -> bool {
         // Fast path: check if already locked by this client
         if self.is_locked(group, mq, client_id) {
             return true;
@@ -80,8 +75,8 @@ impl RebalanceLockManager {
                     },
                 );
                 info!(
-                    "RebalanceLockManager#tryLock: lock a message queue which has not been \
-                     locked yet, group={}, clientId={}, mq={:?}",
+                    "RebalanceLockManager#tryLock: lock a message queue which has not been locked \
+                     yet, group={}, clientId={}, mq={:?}",
                     group, client_id, mq
                 );
                 true
@@ -112,8 +107,8 @@ impl RebalanceLockManager {
                 }
 
                 warn!(
-                    "RebalanceLockManager#tryLock: message queue has been locked by other \
-                     client, group={}, mq={:?}, locked client id={}, current client id={}",
+                    "RebalanceLockManager#tryLock: message queue has been locked by other client, \
+                     group={}, mq={:?}, locked client id={}, current client id={}",
                     group, mq, old_client_id, client_id
                 );
                 false
