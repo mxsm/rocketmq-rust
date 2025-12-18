@@ -23,6 +23,7 @@ pub mod check_transaction_state_request_header;
 pub mod client_request_header;
 pub mod consume_message_directly_result_request_header;
 pub mod consumer_send_msg_back_request_header;
+pub mod controller;
 pub mod create_topic_request_header;
 pub mod delete_subscription_group_request_header;
 pub mod delete_topic_request_header;
