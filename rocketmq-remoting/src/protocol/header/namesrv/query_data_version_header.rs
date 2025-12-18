@@ -61,6 +61,10 @@ impl QueryDataVersionResponseHeader {
     pub fn new(changed: bool) -> Self {
         Self { changed }
     }
+
+    pub fn changed(&self) -> bool {
+        self.changed
+    }
 }
 
 #[cfg(test)]
