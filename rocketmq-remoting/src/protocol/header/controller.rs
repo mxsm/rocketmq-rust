@@ -21,3 +21,4 @@ pub mod elect_master_request_header;
 pub mod get_next_broker_id_request_header;
 pub mod get_replica_info_request_header;
 pub mod get_replica_info_response_header;
+pub mod register_broker_to_controller_request_header;
