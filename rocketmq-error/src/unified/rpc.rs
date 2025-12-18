@@ -50,3 +50,44 @@ pub enum RpcClientError {
     #[error("RPC error from remote: code={0}, message={1}")]
     RemoteError(i32, String),
 }
+
+impl RpcClientError {
+    /// Helper to construct a `BrokerNotFound` error.
+    pub fn broker_not_found(broker_name: impl Into<String>) -> Self {
+        RpcClientError::BrokerNotFound {
+            broker_name: broker_name.into(),
+        }
+    }
+    /// Helper to construct a `RequestFailed` error.
+    pub fn request_failed<E>(
+        addr: impl Into<String>,
+        request_code: i32,
+        timeout_ms: u64,
+        source: E,
+    ) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        RpcClientError::RequestFailed {
+            addr: addr.into(),
+            request_code,
+            timeout_ms,
+            source: Box::new(source),
+        }
+    }
+    /// Helper to construct an `UnexpectedResponseCode` error.
+    pub fn unexpected_response_code(code: i32, code_name: impl Into<String>) -> Self {
+        RpcClientError::UnexpectedResponseCode {
+            code,
+            code_name: code_name.into(),
+        }
+    }
+    /// Helper to construct an `UnsupportedRequestCode` error.
+    pub fn unsupported_request_code(code: i32) -> Self {
+        RpcClientError::UnsupportedRequestCode { code }
+    }
+    /// Helper to construct a `RemoteError`.
+    pub fn remote_error(code: i32, message: impl Into<String>) -> Self {
+        RpcClientError::RemoteError(code, message.into())
+    }
+}
