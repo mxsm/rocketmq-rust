@@ -53,13 +53,24 @@ use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::body::message_request_mode_serialize_wrapper::MessageRequestModeSerializeWrapper;
 use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
 use rocketmq_remoting::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper;
+use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigAndMappingSerializeWrapper;
 use rocketmq_remoting::protocol::broker_sync_info::BrokerSyncInfo;
+use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
+use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
+use rocketmq_remoting::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader;
+use rocketmq_remoting::protocol::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader;
+use rocketmq_remoting::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
+use rocketmq_remoting::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader;
+use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
+use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_response_header::RegisterBrokerToControllerResponseHeader;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
+use rocketmq_remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
 use rocketmq_remoting::protocol::header::exchange_ha_info_request_header::ExchangeHAInfoRequestHeader;
 use rocketmq_remoting::protocol::header::exchange_ha_info_response_header::ExchangeHaInfoResponseHeader;
 use rocketmq_remoting::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
+use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
 use rocketmq_remoting::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
 use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
@@ -98,7 +109,9 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
-
+use rocketmq_remoting::protocol::body::elect_master_response_body::ElectMasterResponseBody;
+use rocketmq_remoting::protocol::header::controller::apply_broker_id_response_header::ApplyBrokerIdResponseHeader;
+use rocketmq_remoting::protocol::header::controller::get_next_broker_id_response_header::GetNextBrokerIdResponseHeader;
 use crate::broker_runtime::BrokerRuntimeInner;
 
 pub struct BrokerOuterAPI {
@@ -1093,6 +1106,389 @@ impl BrokerOuterAPI {
         _is_compatible_with_old_name_srv: bool,
     ) -> rocketmq_error::RocketMQResult<Option<BrokerMemberGroup>> {
         unimplemented!()
+    }
+
+    /// Get controller metadata information
+    pub async fn get_controller_metadata(
+        &self,
+        controller_address: &CheetahString,
+    ) -> rocketmq_error::RocketMQResult<GetMetaDataResponseHeader> {
+        let request =
+            RemotingCommand::create_remoting_command(RequestCode::ControllerGetMetadataInfo);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(controller_address), request, 3000)
+            .await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                Ok(response.decode_command_custom_header::<GetMetaDataResponseHeader>()?)
+            }
+            _ => Err(RocketMQError::BrokerOperationFailed {
+                operation: "get_controller_metadata",
+                code: response.code(),
+                message: response.remark().map_or("".to_string(), |s| s.to_string()),
+                broker_addr: Some(controller_address.to_string()),
+            }),
+        }
+    }
+
+    /// Send heartbeat to controller
+    pub async fn send_heartbeat_to_controller(
+        &self,
+        controller_address: CheetahString,
+        cluster_name: CheetahString,
+        broker_addr: CheetahString,
+        broker_name: CheetahString,
+        broker_id: i64,
+        timeout_millis: u64,
+        epoch: Option<i32>,
+        max_offset: Option<i64>,
+        confirm_offset: Option<i64>,
+        heartbeat_timeout_millis: Option<i64>,
+        election_priority: Option<i32>,
+    ) {
+        if controller_address.is_empty() {
+            return;
+        }
+        let request_header = BrokerHeartbeatRequestHeader {
+            cluster_name,
+            broker_addr,
+            broker_name,
+            broker_id: Some(broker_id),
+            epoch,
+            max_offset,
+            confirm_offset,
+            heartbeat_timeout_mills: heartbeat_timeout_millis,
+            election_priority,
+        };
+        let client = self.remoting_client.clone();
+        tokio::spawn(async move {
+            let request = RemotingCommand::create_request_command(
+                RequestCode::BrokerHeartbeat,
+                request_header,
+            );
+            client
+                .invoke_request_oneway(&controller_address, request, timeout_millis)
+                .await;
+        });
+    }
+
+    /// Alter sync state set in controller
+    pub async fn alter_sync_state_set(
+        &self,
+        controller_address: &CheetahString,
+        broker_name: CheetahString,
+        master_broker_id: i64,
+        master_epoch: i32,
+        new_sync_state_set: HashSet<i64>,
+        sync_state_set_epoch: i32,
+    ) -> rocketmq_error::RocketMQResult<SyncStateSet> {
+        let request_header = AlterSyncStateSetRequestHeader {
+            broker_name,
+            master_broker_id,
+            master_epoch,
+        };
+        let mut request = RemotingCommand::create_request_command(
+            RequestCode::ControllerAlterSyncStateSet,
+            request_header,
+        );
+        request.set_body_mut_ref(
+            SyncStateSet::with_values(new_sync_state_set, sync_state_set_epoch).encode()?,
+        );
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(controller_address), request, 3000)
+            .await?;
+
+        if ResponseCode::from(response.code()) != ResponseCode::Success {
+            return Err(RocketMQError::BrokerOperationFailed {
+                operation: "alter_sync_state_set",
+                code: response.code(),
+                message: response
+                    .remark()
+                    .map_or("alter_sync_state_set failed".to_string(), |s| s.to_string()),
+                broker_addr: Some(controller_address.to_string()),
+            });
+        }
+
+        if response.body().is_none() {
+            return Err(RocketMQError::BrokerOperationFailed {
+                operation: "alter_sync_state_set",
+                code: -1,
+                message: "No body in alter_sync_state_set response".to_string(),
+                broker_addr: Some(controller_address.to_string()),
+            });
+        }
+        let body = response.body().unwrap();
+        let sync_state_set: SyncStateSet = SyncStateSet::decode(body.as_ref())?;
+        Ok(sync_state_set)
+    }
+
+    /// Broker elect itself as master
+    pub async fn broker_elect(
+        &self,
+        controller_address: &CheetahString,
+        cluster_name: CheetahString,
+        broker_name: CheetahString,
+        broker_id: i64,
+    ) -> rocketmq_error::RocketMQResult<(ElectMasterResponseHeader, HashSet<i64>)> {
+        let request_header = ElectMasterRequestHeader {
+            cluster_name,
+            broker_name,
+            broker_id,
+            ..Default::default()
+        };
+        let request = RemotingCommand::create_request_command(
+            RequestCode::ControllerElectMaster,
+            request_header,
+        );
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(controller_address), request, 3000)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success | ResponseCode::ControllerMasterStillExist => {
+                let response_header = response
+                    .decode_command_custom_header::<ElectMasterResponseHeader>()
+                    .map_err(|e| RocketMQError::BrokerOperationFailed {
+                        operation: "broker_elect",
+                        code: -1,
+                        message: format!("Failed to decode elect response: {:?}", e),
+                        broker_addr: Some(controller_address.to_string()),
+                    })?;
+                if response.body().is_none() {
+                    return Err(RocketMQError::BrokerOperationFailed {
+                        operation: "broker_elect",
+                        code: -1,
+                        message: "No body in broker_elect response".to_string(),
+                        broker_addr: Some(controller_address.to_string()),
+                    });
+                }
+                let body = response.body().unwrap();
+                let elect_master_response_body = ElectMasterResponseBody::decode(body.as_ref())?;
+                Ok((response_header, elect_master_response_body.sync_state_set))
+            }
+            _ => Err(RocketMQError::BrokerOperationFailed {
+                operation: "broker_elect",
+                code: response.code(),
+                message: response
+                    .remark()
+                    .map_or("broker_elect failed".to_string(), |s| s.to_string()),
+                broker_addr: Some(controller_address.to_string()),
+            }),
+        }
+    }
+
+    /// Get next broker ID from controller
+    pub async fn get_next_broker_id(
+        &self,
+        cluster_name: CheetahString,
+        broker_name: CheetahString,
+        controller_address: &CheetahString,
+    ) -> rocketmq_error::RocketMQResult<GetNextBrokerIdResponseHeader> {
+        let request_header = GetNextBrokerIdRequestHeader {
+            cluster_name,
+            broker_name,
+        };
+        let request = RemotingCommand::create_request_command(
+            RequestCode::ControllerGetNextBrokerId,
+            request_header,
+        );
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(controller_address), request, 3000)
+            .await?;
+
+        if ResponseCode::from(response.code()) != ResponseCode::Success {
+            return Err(RocketMQError::BrokerOperationFailed {
+                operation: "get_next_broker_id",
+                code: response.code(),
+                message: response
+                    .remark()
+                    .map_or("get_next_broker_id failed".to_string(), |s| s.to_string()),
+                broker_addr: Some(controller_address.to_string()),
+            });
+        }
+
+        if let Some(body) = response.body() {
+            let next_broker_id = GetNextBrokerIdResponseHeader::decode(body.as_ref())?;
+            Ok(next_broker_id)
+        } else {
+            Err(RocketMQError::BrokerOperationFailed {
+                operation: "get_next_broker_id",
+                code: -1,
+                message: "No next broker id in response".to_string(),
+                broker_addr: Some(controller_address.to_string()),
+            })
+        }
+    }
+
+    /// Apply broker ID from controller
+    pub async fn apply_broker_id(
+        &self,
+        cluster_name: CheetahString,
+        broker_name: CheetahString,
+        broker_id: i64,
+        register_check_code: CheetahString,
+        controller_address: &CheetahString,
+    ) -> rocketmq_error::RocketMQResult<ApplyBrokerIdResponseHeader> {
+        let request_header = ApplyBrokerIdRequestHeader {
+            cluster_name,
+            broker_name,
+            applied_broker_id: broker_id,
+            register_check_code,
+        };
+        let request = RemotingCommand::create_request_command(
+            RequestCode::ControllerApplyBrokerId,
+            request_header,
+        );
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(controller_address), request, 3000)
+            .await?;
+
+        if ResponseCode::from(response.code()) != ResponseCode::Success {
+            return Err(RocketMQError::BrokerOperationFailed {
+                operation: "apply_broker_id",
+                code: response.code(),
+                message: response
+                    .remark()
+                    .map_or("apply_broker_id failed".to_string(), |s| s.to_string()),
+                broker_addr: Some(controller_address.to_string()),
+            });
+        }
+
+        let response_header = response
+            .decode_command_custom_header::<ApplyBrokerIdResponseHeader>()
+            .map_err(|e| RocketMQError::BrokerOperationFailed {
+                operation: "apply_broker_id",
+                code: -1,
+                message: format!("Failed to decode apply broker id response: {:?}", e),
+                broker_addr: Some(controller_address.to_string()),
+            })?;
+        Ok(response_header)
+    }
+
+    /// Register broker to controller
+    pub async fn register_broker_to_controller(
+        &self,
+        cluster_name: CheetahString,
+        broker_name: CheetahString,
+        broker_id: i64,
+        broker_address: CheetahString,
+        controller_address: &CheetahString,
+    ) -> rocketmq_error::RocketMQResult<(
+        RegisterBrokerToControllerResponseHeader,
+        Option<HashSet<i64>>,
+    )> {
+        let request_header = RegisterBrokerToControllerRequestHeader {
+            cluster_name: Some(cluster_name),
+            broker_name: Some(broker_name),
+            broker_id: Some(broker_id),
+            broker_address: Some(broker_address),
+            ..Default::default()
+        };
+        let request = RemotingCommand::create_request_command(
+            RequestCode::ControllerRegisterBroker,
+            request_header,
+        );
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(controller_address), request, 3000)
+            .await?;
+
+        if ResponseCode::from(response.code()) != ResponseCode::Success {
+            return Err(RocketMQError::BrokerOperationFailed {
+                operation: "register_broker_to_controller",
+                code: response.code(),
+                message: response
+                    .remark()
+                    .map_or("register_broker_to_controller failed".to_string(), |s| {
+                        s.to_string()
+                    }),
+                broker_addr: Some(controller_address.to_string()),
+            });
+        }
+
+        let response_header = response
+            .decode_command_custom_header::<RegisterBrokerToControllerResponseHeader>()
+            .map_err(|e| RocketMQError::BrokerOperationFailed {
+                operation: "register_broker_to_controller",
+                code: -1,
+                message: format!("Failed to decode register response: {:?}", e),
+                broker_addr: Some(controller_address.to_string()),
+            })?;
+
+        if response.body().is_none() {
+            return Err(RocketMQError::BrokerOperationFailed {
+                operation: "register_broker_to_controller",
+                code: -1,
+                message: "No body in register_broker_to_controller response".to_string(),
+                broker_addr: Some(controller_address.to_string()),
+            });
+        }
+        let body = response.body().unwrap();
+        let mut sync_state_set = SyncStateSet::decode(body.as_ref())?;
+
+        Ok((response_header, sync_state_set.take_sync_state_set()))
+    }
+
+    /// Get replica info from controller
+    /// Returns: (header, SyncStateSet)
+    pub async fn get_replica_info(
+        &self,
+        controller_address: &CheetahString,
+        broker_name: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<(GetReplicaInfoResponseHeader, SyncStateSet)> {
+        let request_header = GetReplicaInfoRequestHeader { broker_name };
+        let request = RemotingCommand::create_request_command(
+            RequestCode::ControllerGetReplicaInfo,
+            request_header,
+        );
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(controller_address), request, 3000)
+            .await?;
+
+        if ResponseCode::from(response.code()) != ResponseCode::Success {
+            return Err(RocketMQError::BrokerOperationFailed {
+                operation: "get_replica_info",
+                code: response.code(),
+                message: response
+                    .remark()
+                    .map_or("get_replica_info failed".to_string(), |s| s.to_string()),
+                broker_addr: Some(controller_address.to_string()),
+            });
+        }
+
+        let response_header = response
+            .decode_command_custom_header::<GetReplicaInfoResponseHeader>()
+            .map_err(|e| RocketMQError::BrokerOperationFailed {
+                operation: "get_replica_info",
+                code: -1,
+                message: format!("Failed to decode replica info response: {:?}", e),
+                broker_addr: Some(controller_address.to_string()),
+            })?;
+
+        if response.body().is_none() {
+            return Err(RocketMQError::BrokerOperationFailed {
+                operation: "get_replica_info",
+                code: -1,
+                message: "No body in get_replica_info response".to_string(),
+                broker_addr: Some(controller_address.to_string()),
+            });
+        }
+        let body = response.body().unwrap();
+        let sync_state_set = SyncStateSet::decode(body.as_ref())?;
+
+        Ok((response_header, sync_state_set))
     }
 
     pub async fn send_broker_ha_info(
