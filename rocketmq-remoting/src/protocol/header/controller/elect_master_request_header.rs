@@ -68,3 +68,109 @@ impl Default for ElectMasterRequestHeader {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::protocol::command_custom_header::CommandCustomHeader;
+    use crate::protocol::command_custom_header::FromMap;
+
+    #[test]
+    fn elect_master_request_header_new() {
+        let header =
+            ElectMasterRequestHeader::new("test_cluster", "test_broker", 123, true, 1234567890);
+        assert_eq!(header.cluster_name, "test_cluster");
+        assert_eq!(header.broker_name, "test_broker");
+        assert_eq!(header.broker_id, 123);
+        assert!(header.designate_elect);
+        assert_eq!(header.invoke_time, 1234567890);
+    }
+
+    #[test]
+    fn elect_master_request_header_serializes_correctly() {
+        let header =
+            ElectMasterRequestHeader::new("test_cluster", "test_broker", 123, true, 1234567890);
+        let map = header.to_map().unwrap();
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("clusterName"))
+                .unwrap(),
+            "test_cluster"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("brokerName"))
+                .unwrap(),
+            "test_broker"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("brokerId"))
+                .unwrap(),
+            "123"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("designateElect"))
+                .unwrap(),
+            "true"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("invokeTime"))
+                .unwrap(),
+            "1234567890"
+        );
+    }
+
+    #[test]
+    fn elect_master_request_header_deserializes_correctly() {
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str("clusterName"),
+            CheetahString::from_static_str("test_cluster"),
+        );
+        map.insert(
+            CheetahString::from_static_str("brokerName"),
+            CheetahString::from_static_str("test_broker"),
+        );
+        map.insert(
+            CheetahString::from_static_str("brokerId"),
+            CheetahString::from_static_str("123"),
+        );
+        map.insert(
+            CheetahString::from_static_str("designateElect"),
+            CheetahString::from_static_str("true"),
+        );
+        map.insert(
+            CheetahString::from_static_str("invokeTime"),
+            CheetahString::from_static_str("1234567890"),
+        );
+
+        let header = <ElectMasterRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.cluster_name, "test_cluster");
+        assert_eq!(header.broker_name, "test_broker");
+        assert_eq!(header.broker_id, 123);
+        assert!(header.designate_elect);
+        assert_eq!(header.invoke_time, 1234567890);
+    }
+
+    #[test]
+    fn elect_master_request_header_default() {
+        let header = ElectMasterRequestHeader::default();
+        assert_eq!(header.cluster_name, "");
+        assert_eq!(header.broker_name, "");
+        assert_eq!(header.broker_id, 0);
+        assert!(!header.designate_elect);
+        assert!(header.invoke_time > 0);
+    }
+
+    #[test]
+    fn elect_master_request_header_clone() {
+        let header =
+            ElectMasterRequestHeader::new("test_cluster", "test_broker", 123, true, 1234567890);
+        let cloned = header.clone();
+        assert_eq!(header.cluster_name, cloned.cluster_name);
+        assert_eq!(header.broker_name, cloned.broker_name);
+        assert_eq!(header.broker_id, cloned.broker_id);
+        assert_eq!(header.designate_elect, cloned.designate_elect);
+        assert_eq!(header.invoke_time, cloned.invoke_time);
+    }
+}
