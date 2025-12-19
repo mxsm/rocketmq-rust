@@ -158,6 +158,11 @@ impl QueueOffsetOperator {
     ) {
         *self.batch_topic_queue_table.lock() = batch_topic_queue_table;
     }
+
+    #[inline]
+    pub fn get_topic_queue_table(&self) -> HashMap<CheetahString, i64> {
+        self.topic_queue_table.lock().clone()
+    }
 }
 
 #[cfg(test)]
