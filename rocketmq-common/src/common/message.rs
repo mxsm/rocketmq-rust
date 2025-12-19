@@ -40,6 +40,7 @@ pub mod message_ext_broker_inner;
 pub mod message_id;
 pub mod message_queue;
 pub mod message_queue_assignment;
+pub mod message_queue_for_c;
 pub mod message_single;
 
 /// This module defines the `MessageTrait` trait, which provides a flexible interface for working
