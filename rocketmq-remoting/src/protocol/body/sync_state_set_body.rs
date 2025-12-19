@@ -28,6 +28,32 @@ pub struct SyncStateSet {
 }
 
 impl SyncStateSet {
+    pub fn new() -> SyncStateSet {
+        SyncStateSet {
+            sync_state_set: None,
+            sync_state_set_epoch: 0,
+        }
+    }
+
+    pub fn take_sync_state_set(&mut self) -> Option<HashSet<i64>> {
+        self.sync_state_set.take()
+    }
+
+    pub fn with_values(sync_state_set: HashSet<i64>, sync_state_set_epoch: i32) -> SyncStateSet {
+        SyncStateSet {
+            sync_state_set: Some(sync_state_set),
+            sync_state_set_epoch,
+        }
+    }
+
+    pub fn set_sync_state_set(&mut self, sync_state_set: HashSet<i64>) {
+        self.sync_state_set = Some(sync_state_set);
+    }
+
+    pub fn set_sync_state_set_epoch(&mut self, sync_state_set_epoch: i32) {
+        self.sync_state_set_epoch = sync_state_set_epoch;
+    }
+
     pub fn get_sync_state_set(&self) -> Option<&HashSet<i64>> {
         self.sync_state_set.as_ref()
     }
