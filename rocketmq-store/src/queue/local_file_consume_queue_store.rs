@@ -31,6 +31,7 @@ use rocketmq_common::common::attribute::cq_type::CQType;
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_rust::ArcMut;
 use tracing::error;
@@ -213,11 +214,88 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn flush(&self, consume_queue: &dyn ConsumeQueueTrait, flush_least_pages: i32) -> bool {
-        todo!()
+        let file_queue_life_cycle =
+            self.get_life_cycle(consume_queue.get_topic(), consume_queue.get_queue_id());
+        file_queue_life_cycle.flush(flush_least_pages)
     }
 
-    async fn clean_expired(&self, min_phy_offset: i64) {
-        todo!()
+    async fn clean_expired(&self, min_commit_log_offset: i64) {
+        // Collect queues to remove
+        let mut queues_to_destroy = Vec::new();
+        let mut topics_to_remove = Vec::new();
+
+        {
+            let mut consume_queue_table = self.inner.consume_queue_table.lock();
+            let topics: Vec<CheetahString> = consume_queue_table.keys().cloned().collect();
+
+            for topic in topics {
+                // Skip system topics
+                if TopicValidator::is_system_topic(&topic) {
+                    continue;
+                }
+
+                if let Some(queue_table) = consume_queue_table.get_mut(&topic) {
+                    let queue_ids: Vec<i32> = queue_table.keys().cloned().collect();
+                    let mut queues_to_remove = Vec::new();
+
+                    for queue_id in queue_ids {
+                        if let Some(consume_queue) = queue_table.get(&queue_id) {
+                            let max_cl_offset_in_queue = consume_queue.get_max_physic_offset();
+
+                            if max_cl_offset_in_queue == -1 {
+                                tracing::warn!(
+                                    "maybe ConsumeQueue was created just now. topic={} queueId={} \
+                                     maxPhysicOffset={} minLogicOffset={}.",
+                                    consume_queue.get_topic(),
+                                    consume_queue.get_queue_id(),
+                                    consume_queue.get_max_physic_offset(),
+                                    consume_queue.get_min_logic_offset()
+                                );
+                            } else if max_cl_offset_in_queue < min_commit_log_offset {
+                                tracing::info!(
+                                    "cleanExpiredConsumerQueue: {} {} consumer queue destroyed, \
+                                     minCommitLogOffset: {} maxCLOffsetInConsumeQueue: {}",
+                                    topic,
+                                    queue_id,
+                                    min_commit_log_offset,
+                                    max_cl_offset_in_queue
+                                );
+
+                                queues_to_remove.push(queue_id);
+                            }
+                        }
+                    }
+
+                    // Remove expired queues and collect for destruction
+                    for queue_id in queues_to_remove {
+                        if let Some(consume_queue) = queue_table.remove(&queue_id) {
+                            queues_to_destroy.push((topic.clone(), queue_id, consume_queue));
+                        }
+                    }
+
+                    // If all queues removed, mark topic for removal
+                    if queue_table.is_empty() {
+                        topics_to_remove.push(topic.clone());
+                    }
+                }
+            }
+
+            // Remove empty topics
+            for topic in &topics_to_remove {
+                consume_queue_table.remove(topic);
+                tracing::info!("cleanExpiredConsumerQueue: {},topic destroyed", topic);
+            }
+        }
+
+        // Now destroy queues and remove from offset table (outside the lock)
+        for (topic, queue_id, consume_queue) in queues_to_destroy {
+            // Remove from topic queue table
+            self.inner.queue_offset_operator.remove(&topic, queue_id);
+
+            // Destroy the queue
+            let consume_queue_ref = &**consume_queue.as_ref();
+            self.destroy_queue(consume_queue_ref);
+        }
     }
 
     fn check_self(&self) {
@@ -235,19 +313,27 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         consume_queue: &dyn ConsumeQueueTrait,
         min_commit_log_pos: i64,
     ) -> i32 {
-        todo!()
+        let file_queue_life_cycle =
+            self.get_life_cycle(consume_queue.get_topic(), consume_queue.get_queue_id());
+        file_queue_life_cycle.delete_expired_file(min_commit_log_pos)
     }
 
     fn is_first_file_available(&self, consume_queue: &dyn ConsumeQueueTrait) -> bool {
-        todo!()
+        let file_queue_life_cycle =
+            self.get_life_cycle(consume_queue.get_topic(), consume_queue.get_queue_id());
+        file_queue_life_cycle.is_first_file_available()
     }
 
     fn is_first_file_exist(&self, consume_queue: &dyn ConsumeQueueTrait) -> bool {
-        todo!()
+        let file_queue_life_cycle =
+            self.get_life_cycle(consume_queue.get_topic(), consume_queue.get_queue_id());
+        file_queue_life_cycle.is_first_file_exist()
     }
 
     fn roll_next_file(&self, consume_queue: &dyn ConsumeQueueTrait, offset: i64) -> i64 {
-        todo!()
+        let file_queue_life_cycle =
+            self.get_life_cycle(consume_queue.get_topic(), consume_queue.get_queue_id());
+        file_queue_life_cycle.roll_next_file(offset)
     }
 
     fn truncate_dirty(&self, offset_to_truncate: i64) {
@@ -282,11 +368,21 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         start_index: i64,
         num: i32,
     ) -> Vec<Bytes> {
-        todo!()
+        // This method is primarily for RocksDB mode
+        // For LocalFile mode, use ConsumeQueue's iterateFrom method instead
+        tracing::warn!(
+            "range_query is not supported in LocalFile mode, use ConsumeQueue iterateFrom instead"
+        );
+        Vec::new()
     }
 
     async fn get(&self, topic: &CheetahString, queue_id: i32, start_index: i64) -> Bytes {
-        todo!()
+        // This method is primarily for RocksDB mode
+        // For LocalFile mode, use ConsumeQueue's get method instead
+        tracing::warn!(
+            "get is not supported in LocalFile mode, use ConsumeQueue get method instead"
+        );
+        Bytes::new()
     }
 
     fn get_consume_queue_table(&self) -> Arc<ConsumeQueueTable> {
@@ -304,11 +400,15 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn increase_lmq_offset(&self, queue_key: &str, message_num: i16) {
-        todo!()
+        self.inner
+            .queue_offset_operator
+            .increase_queue_offset(CheetahString::from(queue_key), message_num);
     }
 
     fn get_lmq_queue_offset(&self, queue_key: &str) -> i64 {
-        todo!()
+        self.inner
+            .queue_offset_operator
+            .current_queue_offset(&queue_key.into())
     }
 
     fn recover_offset_table(&mut self, min_phy_offset: i64) {
@@ -333,10 +433,14 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         if self.inner.message_store_config.duplication_enable
             || self.inner.broker_config.enable_controller_mode
         {
-            unimplemented!()
+            // In duplication/controller mode, use LMQ offset table
+            self.inner
+                .queue_offset_operator
+                .set_lmq_topic_queue_table(cq_offset_table);
+        } else {
+            self.set_topic_queue_table(cq_offset_table);
+            self.set_batch_topic_queue_table(bcq_offset_table);
         }
-        self.set_topic_queue_table(cq_offset_table);
-        self.set_batch_topic_queue_table(bcq_offset_table);
     }
 
     fn set_topic_queue_table(&mut self, topic_queue_table: HashMap<CheetahString, i64>) {
@@ -353,7 +457,7 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn get_topic_queue_table(&self) -> HashMap<CheetahString, i64> {
-        todo!()
+        self.inner.queue_offset_operator.get_topic_queue_table()
     }
 
     fn get_max_phy_offset_in_consume_queue(
@@ -400,7 +504,8 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
     }
 
     fn get_max_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
-        todo!()
+        let queue = self.find_or_create_consume_queue(topic, queue_id);
+        queue.get_max_offset_in_queue()
     }
 
     fn get_offset_in_queue_by_time(
@@ -423,19 +528,30 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
         topic: &CheetahString,
         queue_id: i32,
     ) -> ArcConsumeQueue {
-        let mut consume_queue_table = self.inner.consume_queue_table.lock();
-
-        let topic_map = consume_queue_table.entry(topic.clone()).or_default();
-
-        if let Some(value) = topic_map.get(&queue_id) {
-            return value.clone();
+        // Fast path: check if queue already exists
+        {
+            let consume_queue_table = self.inner.consume_queue_table.lock();
+            if let Some(topic_map) = consume_queue_table.get(topic) {
+                if let Some(queue) = topic_map.get(&queue_id) {
+                    return queue.clone();
+                }
+            }
         }
 
-        let consume_queue = topic_map.entry(queue_id).or_insert_with(|| {
-            let message_store = self.inner.message_store.as_ref().unwrap();
-            let option = message_store.get_topic_config(topic);
-            match QueueTypeUtils::get_cq_type_arc_mut(option.as_ref()) {
-                CQType::SimpleCQ | CQType::RocksDBCQ => ArcMut::new(Box::new(ConsumeQueue::new(
+        // Slow path: create new consume queue without holding lock
+        // Get topic config and determine queue type (lock-free)
+        let message_store = self
+            .inner
+            .message_store
+            .as_ref()
+            .expect("MessageStore must be set before creating consume queues");
+        let topic_config = message_store.get_topic_config(topic);
+        let cq_type = QueueTypeUtils::get_cq_type_arc_mut(topic_config.as_ref());
+
+        // Create the queue object (expensive operation, no lock held)
+        let new_queue: ArcConsumeQueue = match cq_type {
+            CQType::SimpleCQ | CQType::RocksDBCQ => {
+                let consume_queue = ConsumeQueue::new(
                     topic.clone(),
                     queue_id,
                     CheetahString::from_string(get_store_path_consume_queue(
@@ -445,8 +561,11 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
                         .message_store_config
                         .get_mapped_file_size_consume_queue(),
                     self.inner.message_store.clone().unwrap(),
-                ))),
-                CQType::BatchCQ => ArcMut::new(Box::new(BatchConsumeQueue::new(
+                );
+                ArcMut::new(Box::new(consume_queue))
+            }
+            CQType::BatchCQ => {
+                let consume_queue = BatchConsumeQueue::new(
                     topic.clone(),
                     queue_id,
                     CheetahString::from_string(get_store_path_batch_consume_queue(
@@ -457,10 +576,16 @@ impl ConsumeQueueStoreTrait for ConsumeQueueStore {
                         .mapper_file_size_batch_consume_queue,
                     None,
                     self.inner.message_store_config.clone(),
-                ))),
+                );
+                ArcMut::new(Box::new(consume_queue))
             }
-        });
-        consume_queue.clone()
+        };
+
+        //Insert into table with triple-check pattern (prevents race conditions)
+        let mut consume_queue_table = self.inner.consume_queue_table.lock();
+        let topic_map = consume_queue_table.entry(topic.clone()).or_default();
+
+        topic_map.entry(queue_id).or_insert(new_queue).clone()
     }
 
     fn find_consume_queue_map(
