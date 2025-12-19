@@ -39,6 +39,7 @@ pub mod get_consumer_connection_list_request_header;
 pub mod get_consumer_listby_group_request_header;
 pub mod get_consumer_listby_group_response_header;
 pub mod get_consumer_running_info_request_header;
+pub mod get_consumer_status_request_header;
 pub mod get_earliest_msg_storetime_response_header;
 pub mod get_max_offset_request_header;
 pub mod get_max_offset_response_header;
