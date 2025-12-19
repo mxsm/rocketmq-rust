@@ -25,3 +25,52 @@ use serde::Serialize;
 pub struct GetReplicaInfoRequestHeader {
     pub broker_name: CheetahString,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::protocol::command_custom_header::CommandCustomHeader;
+    use crate::protocol::command_custom_header::FromMap;
+
+    #[test]
+    fn get_replica_info_request_header_serializes_correctly() {
+        let header = GetReplicaInfoRequestHeader {
+            broker_name: CheetahString::from_static_str("test_broker"),
+        };
+        let map = header.to_map().unwrap();
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("brokerName"))
+                .unwrap(),
+            "test_broker"
+        );
+    }
+
+    #[test]
+    fn get_replica_info_request_header_deserializes_correctly() {
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str("brokerName"),
+            CheetahString::from_static_str("test_broker"),
+        );
+
+        let header = <GetReplicaInfoRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.broker_name, "test_broker");
+    }
+
+    #[test]
+    fn get_replica_info_request_header_default() {
+        let header = GetReplicaInfoRequestHeader::default();
+        assert_eq!(header.broker_name, "");
+    }
+
+    #[test]
+    fn get_replica_info_request_header_clone() {
+        let header = GetReplicaInfoRequestHeader {
+            broker_name: CheetahString::from_static_str("test_broker"),
+        };
+        let cloned = header.clone();
+        assert_eq!(header.broker_name, cloned.broker_name);
+    }
+}
