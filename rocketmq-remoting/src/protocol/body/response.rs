@@ -15,4 +15,5 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
+pub mod get_consumer_status_body;
 pub mod lock_batch_response_body;
