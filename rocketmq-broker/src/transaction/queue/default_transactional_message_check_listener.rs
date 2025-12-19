@@ -161,8 +161,7 @@ where
             .producer_manager()
             .get_available_channel(group_id.as_ref());
         if let Some(mut channel) = channel {
-            let _ = self
-                .broker_client
+            self.broker_client
                 .check_producer_transaction_state(
                     group_id.as_ref().unwrap(),
                     &mut channel,
