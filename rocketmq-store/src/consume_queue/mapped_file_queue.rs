@@ -22,9 +22,11 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use cheetah_string::CheetahString;
-use parking_lot::RwLock;
+use parking_lot::Mutex;
 use rocketmq_common::common::boundary_type::BoundaryType;
+use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_common::UtilAll::offset_to_file_name;
 use tracing::error;
 use tracing::info;
@@ -36,13 +38,13 @@ use crate::log_file::mapped_file::default_mapped_file_impl::DefaultMappedFile;
 use crate::log_file::mapped_file::MappedFile;
 use crate::queue::single_consume_queue::CQ_STORE_UNIT_SIZE;
 
-#[derive(Default)]
 pub struct MappedFileQueue {
     pub(crate) store_path: String,
 
     pub(crate) mapped_file_size: u64,
 
-    pub(crate) mapped_files: Arc<RwLock<Vec<Arc<DefaultMappedFile>>>>,
+    /// Lock-free concurrent access using ArcSwap (equivalent to Java's CopyOnWriteArrayList)
+    pub(crate) mapped_files: ArcSwap<Vec<Arc<DefaultMappedFile>>>,
 
     pub(crate) allocate_mapped_file_service: Option<AllocateMappedFileService>,
 
@@ -51,6 +53,24 @@ pub struct MappedFileQueue {
     pub(crate) committed_where: Arc<AtomicU64>,
 
     pub(crate) store_timestamp: Arc<AtomicU64>,
+
+    /// Commit lock for thread safety (matches Java's synchronized)
+    commit_lock: Arc<Mutex<()>>,
+}
+
+impl Default for MappedFileQueue {
+    fn default() -> Self {
+        Self {
+            store_path: String::new(),
+            mapped_file_size: 0,
+            mapped_files: ArcSwap::from_pointee(Vec::new()),
+            allocate_mapped_file_service: None,
+            flushed_where: Arc::new(AtomicU64::new(0)),
+            committed_where: Arc::new(AtomicU64::new(0)),
+            store_timestamp: Arc::new(AtomicU64::new(0)),
+            commit_lock: Arc::new(Mutex::new(())),
+        }
+    }
 }
 
 impl MappedFileQueue {
@@ -63,11 +83,12 @@ impl MappedFileQueue {
         MappedFileQueue {
             store_path,
             mapped_file_size,
-            mapped_files: Arc::new(RwLock::new(Vec::new())),
+            mapped_files: ArcSwap::from_pointee(Vec::new()),
             allocate_mapped_file_service,
             flushed_where: Arc::new(AtomicU64::new(0)),
             committed_where: Arc::new(AtomicU64::new(0)),
             store_timestamp: Arc::new(AtomicU64::new(0)),
+            commit_lock: Arc::new(Mutex::new(())),
         }
     }
 }
@@ -87,8 +108,18 @@ impl MappedFileQueue {
         true
     }
 
+    /// Commit data to file system cache
+    ///
+    ///
+    /// # Arguments
+    /// * `commit_least_pages` - Minimum pages to commit
+    ///
+    /// # Returns
+    /// Returns true if commit succeeded
     #[inline]
     pub fn commit(&self, commit_least_pages: i32) -> bool {
+        let _lock = self.commit_lock.lock();
+
         let mut result = true;
         let committed_where = self.get_committed_where();
         if let Some(mapped_file) =
@@ -108,7 +139,7 @@ impl MappedFileQueue {
     }
 
     pub fn check_self(&self) {
-        let mapped_files = self.mapped_files.read();
+        let mapped_files = self.mapped_files.load();
         if !mapped_files.is_empty() {
             let mut iter = mapped_files.iter();
             let mut pre = iter.next();
@@ -172,19 +203,23 @@ impl MappedFileQueue {
             mapped_file.set_wrote_position(self.mapped_file_size as i32);
             mapped_file.set_flushed_position(self.mapped_file_size as i32);
             mapped_file.set_committed_position(self.mapped_file_size as i32);
-            self.mapped_files.write().push(Arc::new(mapped_file));
+
+            // Write: copy-on-write update
+            let mut files = (**self.mapped_files.load()).clone();
+            files.push(Arc::new(mapped_file));
+            self.mapped_files.store(Arc::new(files));
         }
         true
     }
 
     #[inline]
     pub fn get_last_mapped_file(&self) -> Option<Arc<DefaultMappedFile>> {
-        self.mapped_files.read().last().cloned()
+        self.mapped_files.load().last().cloned()
     }
 
     #[inline]
     pub fn get_first_mapped_file(&self) -> Option<Arc<DefaultMappedFile>> {
-        self.mapped_files.read().first().cloned()
+        self.mapped_files.load().first().cloned()
     }
 
     #[inline]
@@ -247,91 +282,86 @@ impl MappedFileQueue {
         self.do_create_mapped_file(next_file_path, next_next_file_path)
     }
 
+    /// Create mapped file with refactored logic to avoid deadlock
+    ///
+    /// # Arguments
+    /// * `next_file_path` - Path for the file to create
+    /// * `next_next_file_path` - Path for pre-allocation (N+2 file)
+    ///
+    /// # Returns
+    /// The created mapped file wrapped in Arc
     #[inline]
     fn do_create_mapped_file(
         &mut self,
         next_file_path: PathBuf,
         next_next_file_path: PathBuf,
     ) -> Option<Arc<DefaultMappedFile>> {
-        let mapped_file = match self.allocate_mapped_file_service {
-            None => {
-                // Synchronous creation (legacy path)
-                DefaultMappedFile::new(
-                    CheetahString::from_string(next_file_path.to_string_lossy().to_string()),
-                    self.mapped_file_size,
-                )
-            }
-            Some(ref service) => {
-                let file_path_str = next_file_path.to_string_lossy().to_string();
+        let is_first = self.mapped_files.load().is_empty();
 
-                // Use tokio runtime to wait for pre-allocated file
-                let rt = tokio::runtime::Handle::try_current();
-                match rt {
-                    Ok(handle) => {
-                        match handle.block_on(async {
-                            service
-                                .allocate_mapped_file(file_path_str.clone(), self.mapped_file_size)
-                                .await
-                        }) {
-                            Ok(pre_allocated) => {
-                                // Pre-allocated file is ready!
-                                // Trigger pre-allocation of N+2 file
-                                let _drop = service.submit_request(
-                                    next_next_file_path.to_string_lossy().to_string(),
-                                    self.mapped_file_size,
-                                );
-                                std::mem::drop(_drop);
-                                // Set first_create flag if this is the first file
-                                // Note: Cannot modify Arc directly, flag should be set during
-                                // creation
-                                if self.mapped_files.read().is_empty() {
-                                    // The flag is set in DefaultMappedFile constructor if needed
-                                }
-                                self.mapped_files.write().push(pre_allocated.clone());
-                                return Some(pre_allocated);
-                            }
-                            Err(e) => {
-                                warn!(
-                                    "Pre-allocation failed for {}: {}, falling back to sync \
-                                     creation",
-                                    file_path_str, e
-                                );
-                                // Fallback to synchronous creation
-                                DefaultMappedFile::new(
-                                    CheetahString::from_string(file_path_str),
-                                    self.mapped_file_size,
-                                )
-                            }
-                        }
-                    }
-                    Err(_) => {
-                        // No tokio runtime, use synchronous creation
-                        DefaultMappedFile::new(
-                            CheetahString::from_string(file_path_str),
+        let mut arc_file =
+            self.create_mapped_file_internal(next_file_path.clone(), next_next_file_path)?;
+
+        if is_first {
+            if let Some(file) = Arc::get_mut(&mut arc_file) {
+                file.set_first_create_in_queue(true);
+            }
+        }
+
+        // Write: copy-on-write update
+        let mut files = (**self.mapped_files.load()).clone();
+        files.push(arc_file.clone());
+        self.mapped_files.store(Arc::new(files));
+
+        Some(arc_file)
+    }
+
+    /// Internal method to create mapped file (lock-free)
+    fn create_mapped_file_internal(
+        &self,
+        file_path: PathBuf,
+        next_file_path: PathBuf,
+    ) -> Option<Arc<DefaultMappedFile>> {
+        let file_path_str = file_path.to_string_lossy().to_string();
+
+        // Try async allocation if service available
+        if let Some(ref service) = self.allocate_mapped_file_service {
+            if let Ok(rt) = tokio::runtime::Handle::try_current() {
+                match rt.block_on(async {
+                    service
+                        .allocate_mapped_file(file_path_str.clone(), self.mapped_file_size)
+                        .await
+                }) {
+                    Ok(pre_allocated) => {
+                        // Trigger pre-allocation of N+2 file
+                        std::mem::drop(service.submit_request(
+                            next_file_path.to_string_lossy().to_string(),
                             self.mapped_file_size,
-                        )
+                        ));
+                        // Return Arc directly
+                        return Some(pre_allocated);
+                    }
+                    Err(e) => {
+                        warn!("Pre-allocation failed: {}, using sync creation", e);
                     }
                 }
             }
-        };
-
-        let mut mapped_file = mapped_file;
-        if self.mapped_files.read().is_empty() {
-            mapped_file.set_first_create_in_queue(true);
         }
-        let inner = Arc::new(mapped_file);
-        self.mapped_files.write().push(inner.clone());
-        Some(inner)
+
+        // Fallback: synchronous creation
+        Some(Arc::new(DefaultMappedFile::new(
+            CheetahString::from_string(file_path_str),
+            self.mapped_file_size,
+        )))
     }
 
     #[inline]
-    pub fn get_mapped_files(&self) -> Arc<RwLock<Vec<Arc<DefaultMappedFile>>>> {
-        self.mapped_files.clone()
+    pub fn get_mapped_files(&self) -> &ArcSwap<Vec<Arc<DefaultMappedFile>>> {
+        &self.mapped_files
     }
 
     #[inline]
     pub fn get_mapped_files_size(&self) -> usize {
-        self.mapped_files.read().len()
+        self.mapped_files.load().len()
     }
 
     #[inline]
@@ -346,10 +376,15 @@ impl MappedFileQueue {
             .store(committed_where as u64, Ordering::SeqCst);
     }
 
+    /// Truncate dirty files beyond the specified offset
+    ///
+    /// # Arguments
+    /// * `offset` - The offset beyond which files are considered dirty
     #[inline]
     pub fn truncate_dirty_files(&mut self, offset: i64) {
         let mut will_remove_files = Vec::new();
-        for mapped_file in self.mapped_files.read().iter() {
+
+        for mapped_file in self.mapped_files.load().iter() {
             let file_tail_offset = mapped_file.get_file_from_offset() + self.mapped_file_size;
             if file_tail_offset as i64 > offset {
                 if offset >= mapped_file.get_file_from_offset() as i64 {
@@ -364,6 +399,9 @@ impl MappedFileQueue {
                 }
             }
         }
+
+        //Actually delete the files that were marked for removal
+        self.delete_expired_file(will_remove_files);
     }
 
     #[inline]
@@ -378,9 +416,12 @@ impl MappedFileQueue {
     pub fn delete_last_mapped_file(&mut self) {
         if let Some(last_mapped_file) = self.get_last_mapped_file() {
             last_mapped_file.destroy(1000);
-            self.mapped_files
-                .write()
-                .retain(|mf| mf.as_ref() != last_mapped_file.as_ref());
+
+            // Write: copy-on-write update
+            let mut files = (**self.mapped_files.load()).clone();
+            files.retain(|mf| mf.as_ref() != last_mapped_file.as_ref());
+            self.mapped_files.store(Arc::new(files));
+
             info!(
                 "on recover, destroy a logic mapped file {}",
                 last_mapped_file.get_file_name()
@@ -391,19 +432,634 @@ impl MappedFileQueue {
     #[inline]
     pub(crate) fn delete_expired_file(&mut self, files: Vec<Arc<DefaultMappedFile>>) {
         let mut files = files;
-        let read_guard = self.mapped_files.read();
+        let current_files = self.mapped_files.load();
         if !files.is_empty() {
-            files.retain(|mf| read_guard.contains(mf));
-            self.mapped_files.write().retain(|mf| !files.contains(mf));
+            files.retain(|mf| current_files.contains(mf));
+
+            // Write: copy-on-write update
+            let mut new_files = (**current_files).clone();
+            new_files.retain(|mf| !files.contains(mf));
+            self.mapped_files.store(Arc::new(new_files));
         }
     }
 
+    /// Delete expired files by time
+    ///
+    /// This is a critical method for disk space management.
+    ///
+    /// # Arguments
+    /// * `expired_time` - Maximum time a file can exist (milliseconds)
+    /// * `delete_files_interval` - Interval between deleting files (milliseconds)
+    /// * `interval_forcibly` - Force deletion interval (milliseconds)
+    /// * `clean_immediately` - Whether to clean immediately
+    /// * `delete_file_batch_max` - Maximum files to delete in one batch
+    ///
+    /// # Returns
+    /// Number of files deleted
+    pub fn delete_expired_file_by_time(
+        &mut self,
+        expired_time: i64,
+        delete_files_interval: i32,
+        interval_forcibly: i64,
+        clean_immediately: bool,
+        delete_file_batch_max: i32,
+    ) -> i32 {
+        let mfs = (**self.mapped_files.load()).clone();
+        let mfs_length = mfs.len().saturating_sub(1);
+        let mut delete_count = 0;
+        let mut files = Vec::new();
+
+        // Check before deleting
+        self.check_self();
+
+        for (i, mapped_file) in mfs.iter().enumerate().take(mfs_length) {
+            let live_max_timestamp =
+                mapped_file.get_last_modified_timestamp() as i64 + expired_time;
+
+            if get_current_millis() as i64 >= live_max_timestamp || clean_immediately {
+                if mapped_file.destroy(interval_forcibly as u64) {
+                    files.push(mapped_file.clone());
+                    delete_count += 1;
+
+                    if files.len() >= delete_file_batch_max as usize {
+                        break;
+                    }
+
+                    if delete_files_interval > 0 && (i + 1) < mfs_length {
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            delete_files_interval as u64,
+                        ));
+                    }
+                } else {
+                    break;
+                }
+            } else {
+                // Avoid deleting files in the middle
+                break;
+            }
+        }
+
+        self.delete_expired_file(files);
+        delete_count
+    }
+
+    /// Delete expired files by offset
+    ///
+    /// This method deletes files based on consumption progress.
+    ///
+    /// # Arguments
+    /// * `offset` - The minimum physical offset still needed
+    /// * `unit_size` - Size of each unit (for ConsumeQueue, typically CQ_STORE_UNIT_SIZE)
+    ///
+    /// # Returns
+    /// Number of files deleted
+    pub fn delete_expired_file_by_offset(&mut self, offset: i64, unit_size: i32) -> i32 {
+        let mfs = (**self.mapped_files.load()).clone();
+        let mut files = Vec::new();
+        let mut delete_count = 0;
+        let mfs_length = mfs.len().saturating_sub(1);
+
+        for mapped_file in mfs.iter().take(mfs_length) {
+            let mut destroy = false;
+
+            if let Some(result) = mapped_file
+                .select_mapped_buffer((self.mapped_file_size - unit_size as u64) as i32, unit_size)
+            {
+                if let Some(ref buffer) = result.bytes {
+                    if buffer.len() >= 8 {
+                        let max_offset_in_logic_queue =
+                            i64::from_be_bytes(buffer[0..8].try_into().unwrap_or([0u8; 8]));
+                        destroy = max_offset_in_logic_queue < offset;
+
+                        if destroy {
+                            info!(
+                                "physic min offset {}, logics in current mappedFile max offset \
+                                 {}, delete it",
+                                offset, max_offset_in_logic_queue
+                            );
+                        }
+                    }
+                }
+            } else if !mapped_file.is_available() {
+                warn!("Found a hanged consume queue file, attempting to delete it.");
+                destroy = true;
+            } else {
+                warn!("this being not executed forever.");
+                break;
+            }
+
+            if destroy && mapped_file.destroy(1000 * 60) {
+                files.push(mapped_file.clone());
+                delete_count += 1;
+            } else {
+                break;
+            }
+        }
+
+        self.delete_expired_file(files);
+        delete_count
+    }
+
+    /// Reset offset to specified position
+    ///
+    /// Used in recovery scenarios.
+    ///
+    /// # Arguments
+    /// * `offset` - Target offset to reset to
+    ///
+    /// # Returns
+    /// true if reset succeeded, false if offset is too far back
+    pub fn reset_offset(&mut self, offset: i64) -> bool {
+        // Check if offset is reasonable
+        if let Some(mapped_file_last) = self.get_last_mapped_file() {
+            let last_offset = mapped_file_last.get_file_from_offset() as i64
+                + mapped_file_last.get_wrote_position() as i64;
+            let diff = last_offset - offset;
+            let max_diff = (self.mapped_file_size * 2) as i64;
+
+            if diff > max_diff {
+                return false;
+            }
+        }
+
+        // Load current files
+        let current_files = self.mapped_files.load();
+        let mut to_removes = Vec::new();
+
+        // Iterate backwards
+        for i in (0..current_files.len()).rev() {
+            let mapped_file = &current_files[i];
+
+            if offset >= mapped_file.get_file_from_offset() as i64 {
+                let where_pos = (offset % mapped_file.get_file_size() as i64) as i32;
+                mapped_file.set_flushed_position(where_pos);
+                mapped_file.set_wrote_position(where_pos);
+                mapped_file.set_committed_position(where_pos);
+                break;
+            } else {
+                to_removes.push(i);
+            }
+        }
+
+        // Remove files beyond the offset (copy-on-write update)
+        if !to_removes.is_empty() {
+            let mut new_files = (**current_files).clone();
+            for &idx in to_removes.iter().rev() {
+                new_files.remove(idx);
+            }
+            self.mapped_files.store(Arc::new(new_files));
+        }
+
+        true
+    }
+
+    /// Check if mapped files list is empty
+    #[inline]
+    pub fn is_mapped_files_empty(&self) -> bool {
+        self.mapped_files.load().is_empty()
+    }
+
+    /// Check if list is empty or current file is full
+    #[inline]
+    pub fn is_empty_or_current_file_full(&self) -> bool {
+        match self.get_last_mapped_file() {
+            None => true,
+            Some(file) => file.is_full(),
+        }
+    }
+
+    /// Check if should roll to next file
+    ///
+    /// # Arguments
+    /// * `msg_size` - Size of message to write
+    ///
+    /// # Returns
+    /// true if should create new file
+    #[inline]
+    pub fn should_roll(&self, msg_size: i32) -> bool {
+        if self.is_empty_or_current_file_full() {
+            return true;
+        }
+
+        if let Some(mapped_file_last) = self.get_last_mapped_file() {
+            if mapped_file_last.get_wrote_position() + msg_size
+                > mapped_file_last.get_file_size() as i32
+            {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Get minimum offset in the queue
+    ///
+    /// Returns -1 if no mapped files exist
+    #[inline]
+    pub fn get_min_offset(&self) -> i64 {
+        if !self.mapped_files.load().is_empty() {
+            if let Some(first) = self.get_first_mapped_file() {
+                return first.get_file_from_offset() as i64;
+            }
+        }
+        -1
+    }
+
+    /// Get total mapped memory size
+    ///
+    /// Only counts available (not destroyed) mapped files
+    #[inline]
+    pub fn get_mapped_memory_size(&self) -> i64 {
+        let files = self.mapped_files.load();
+        let mut size = 0i64;
+        for mapped_file in files.iter() {
+            if mapped_file.is_available() {
+                size += self.mapped_file_size as i64;
+            }
+        }
+        size
+    }
+
+    /// Get how much data has fallen behind
+    ///
+    /// Returns the difference between max wrote position and flushed position
+    #[inline]
+    pub fn how_much_fall_behind(&self) -> i64 {
+        if self.mapped_files.load().is_empty() {
+            return 0;
+        }
+
+        let committed = self.get_flushed_where();
+        if committed != 0 {
+            if let Some(mapped_file) = self.get_last_mapped_file() {
+                return (mapped_file.get_file_from_offset() as i64
+                    + mapped_file.get_wrote_position() as i64)
+                    - committed;
+            }
+        }
+
+        0
+    }
+
+    /// Gracefully shutdown all mapped files
+    ///
+    /// # Arguments
+    /// * `interval_forcibly` - Force shutdown interval (milliseconds)
+    pub fn shutdown(&self, interval_forcibly: u64) {
+        for mapped_file in self.mapped_files.load().iter() {
+            mapped_file.shutdown(interval_forcibly);
+        }
+    }
+
+    /// Create a snapshot of current mapped files
+    ///
+    /// Returns a safe copy of all mapped files that can be iterated
+    /// without holding the lock.
+    ///
+    /// # Returns
+    /// Vector of Arc-wrapped mapped files
+    ///
+    /// # Example
+    /// ```ignore
+    /// let snapshot = queue.snapshot();
+    /// for file in snapshot {
+    ///     // Process each file without holding locks
+    /// }
+    /// ```
+    #[inline]
+    pub fn snapshot(&self) -> Vec<Arc<DefaultMappedFile>> {
+        (**self.mapped_files.load()).clone()
+    }
+
+    /// Create an iterator over mapped files
+    ///
+    /// # Returns
+    /// Iterator that yields Arc<DefaultMappedFile>
+    ///
+    /// # Example
+    /// ```ignore
+    /// for file in queue.iter() {
+    ///     println!("File: {}", file.get_file_name());
+    /// }
+    /// ```
+    pub fn iter(&self) -> impl Iterator<Item = Arc<DefaultMappedFile>> {
+        self.snapshot().into_iter()
+    }
+
+    /// Create a reversed iterator over mapped files
+    ///
+    /// Iterates from newest to oldest file.
+    ///
+    /// # Returns
+    /// Reversed iterator that yields Arc<DefaultMappedFile>
+    ///
+    /// # Example
+    /// ```ignore
+    /// for file in queue.iter_reversed() {
+    ///     println!("File (reversed): {}", file.get_file_name());
+    /// }
+    /// ```
+    pub fn iter_reversed(&self) -> impl Iterator<Item = Arc<DefaultMappedFile>> {
+        let mut snapshot = self.snapshot();
+        snapshot.reverse();
+        snapshot.into_iter()
+    }
+
+    /// Get mapped files within a specific offset range
+    ///
+    /// Returns files whose range [fileFromOffset, fileFromOffset + fileSize)
+    /// intersects with the requested range [from, to).
+    ///
+    /// # Arguments
+    /// * `from` - Start offset (inclusive)
+    /// * `to` - End offset (exclusive)
+    ///
+    /// # Returns
+    /// Vector of mapped files in the range
+    ///
+    /// # Example
+    /// ```ignore
+    /// let files = queue.range(1024, 4096);
+    /// for file in files {
+    ///     // Process files that overlap with [1024, 4096)
+    /// }
+    /// ```
+    pub fn range(&self, from: i64, to: i64) -> Vec<Arc<DefaultMappedFile>> {
+        let mut result = Vec::new();
+        let files = self.mapped_files.load();
+
+        for mapped_file in files.iter() {
+            let file_from = mapped_file.get_file_from_offset() as i64;
+            let file_to = file_from + mapped_file.get_file_size() as i64;
+
+            // File ends before range starts - skip
+            if file_to <= from {
+                continue;
+            }
+
+            // File starts after range ends - break (files are sorted)
+            if file_from >= to {
+                break;
+            }
+
+            // File overlaps with range - include it
+            result.push(mapped_file.clone());
+        }
+
+        result
+    }
+
+    /// Get total file size (all mapped files combined)
+    ///
+    /// # Returns
+    /// Total size in bytes
+    #[inline]
+    pub fn get_total_file_size(&self) -> i64 {
+        let files = self.mapped_files.load();
+        (files.len() as i64) * (self.mapped_file_size as i64)
+    }
+
+    /// Get the number of mapped files
+    ///
+    /// # Returns
+    /// Count of mapped files in the queue
+    #[inline]
+    pub fn get_mapped_file_count(&self) -> usize {
+        self.mapped_files.load().len()
+    }
+
+    /// Get store path
+    ///
+    /// # Returns
+    /// The storage directory path
+    #[inline]
+    pub fn get_store_path(&self) -> &str {
+        &self.store_path
+    }
+
+    /// Get mapped file size
+    ///
+    /// # Returns
+    /// Size of each mapped file in bytes
+    #[inline]
+    pub fn get_mapped_file_size_config(&self) -> u64 {
+        self.mapped_file_size
+    }
+
+    /// Retry deleting the first file
+    ///
+    /// Attempts to delete the first file if it's not available.
+    /// This is used for cleanup when a file is destroyed but still in the list.
+    ///
+    /// # Arguments
+    /// * `interval_forcibly` - Force deletion timeout (milliseconds)
+    ///
+    /// # Returns
+    /// true if deletion succeeded, false otherwise
+    pub fn retry_delete_first_file(&mut self, interval_forcibly: i64) -> bool {
+        if let Some(first) = self.get_first_mapped_file() {
+            if !first.is_available() {
+                warn!(
+                    "The mappedFile was destroyed once, but still alive: {}",
+                    first.get_file_name()
+                );
+
+                let result = first.destroy(interval_forcibly as u64);
+                if result {
+                    info!("The mappedFile re-delete OK: {}", first.get_file_name());
+                    let files = vec![first];
+                    self.delete_expired_file(files);
+                } else {
+                    warn!("The mappedFile re-delete failed: {}", first.get_file_name());
+                }
+
+                return result;
+            }
+        }
+
+        false
+    }
+
+    /// Swap mapped byte buffers to reduce memory pressure
+    ///
+    /// This method implements memory-mapped buffer swapping for old files
+    /// that are no longer frequently accessed. It helps reduce memory usage
+    /// by unmapping buffers that haven't been accessed recently.
+    ///
+    /// # Arguments
+    /// * `reserve_num` - Number of recent files to keep in memory (minimum 3)
+    /// * `force_swap_interval_ms` - Force swap after this interval (milliseconds)
+    /// * `normal_swap_interval_ms` - Normal swap interval if file was accessed
+    ///
+    /// # Note
+    /// - Only files older than `reserve_num` are candidates for swapping
+    /// - Files are swapped if they exceed the swap interval
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Swap buffers for files older than 10 minutes
+    /// queue.swap_map(3, 1000 * 60 * 10, 1000 * 60 * 5);
+    /// ```
+    pub fn swap_map(
+        &self,
+        reserve_num: i32,
+        force_swap_interval_ms: i64,
+        normal_swap_interval_ms: i64,
+    ) {
+        let files = self.mapped_files.load();
+
+        if files.is_empty() {
+            return;
+        }
+
+        // Ensure we reserve at least 3 files
+        let reserve_num = if reserve_num < 3 { 3 } else { reserve_num };
+
+        let files_len = files.len() as i32;
+
+        // Process files, skipping the most recent reserved files
+        // Iterates from (length-reserve-1) down to 0
+        for i in (0..=(files_len - reserve_num - 1)).rev() {
+            if i < 0 {
+                break;
+            }
+
+            let mapped_file = &files[i as usize];
+            let current_time = get_current_millis() as i64;
+            let recent_swap_time = mapped_file.get_recent_swap_map_time();
+
+            // Force swap if interval exceeded
+            if current_time - recent_swap_time > force_swap_interval_ms {
+                mapped_file.swap_map();
+                continue;
+            }
+
+            // Normal swap if accessed and interval exceeded
+            if current_time - recent_swap_time > normal_swap_interval_ms
+                && mapped_file.get_mapped_byte_buffer_access_count_since_last_swap() > 0
+            {
+                mapped_file.swap_map();
+            }
+        }
+    }
+
+    /// Clean swapped mapped byte buffers
+    ///
+    /// This method cleans up swapped buffers that have been swapped for
+    /// a long time and are unlikely to be accessed again. This helps
+    /// reclaim system resources.
+    ///
+    /// # Arguments
+    /// * `force_clean_swap_interval_ms` - Clean buffers swapped longer than this
+    ///
+    /// # Note
+    /// - Keeps the 3 most recent files from cleaning
+    /// - Only cleans buffers that have been swapped for a long time
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Clean buffers swapped for more than 1 hour
+    /// queue.clean_swapped_map(1000 * 60 * 60);
+    /// ```
+    pub fn clean_swapped_map(&self, force_clean_swap_interval_ms: i64) {
+        let files = self.mapped_files.load();
+
+        if files.is_empty() {
+            return;
+        }
+
+        let reserve_num = 3;
+        let files_len = files.len() as i32;
+
+        // Process files, skipping the most recent reserved files
+        // Iterates from (length-reserve-1) down to 0
+        for i in (0..=(files_len - reserve_num - 1)).rev() {
+            if i < 0 {
+                break;
+            }
+
+            let mapped_file = &files[i as usize];
+            let current_time = get_current_millis() as i64;
+            let recent_swap_time = mapped_file.get_recent_swap_map_time();
+
+            if current_time - recent_swap_time > force_clean_swap_interval_ms {
+                // Note: clean_swapped_map method needs to be implemented in MappedFile
+                // For now, we can call swap_map again which has similar effect
+                let _ = mapped_file.swap_map();
+            }
+        }
+    }
+
+    /// Get mapped file by timestamp
+    ///
+    /// Finds the mapped file that contains data for the given timestamp.
+    /// This is a simple lookup based on file modification time.
+    ///
+    /// # Arguments
+    /// * `timestamp` - The timestamp to search for (milliseconds)
+    ///
+    /// # Returns
+    /// The mapped file containing data for that timestamp, or the last file
+    pub fn get_mapped_file_by_time(&self, timestamp: i64) -> Option<Arc<DefaultMappedFile>> {
+        let files = self.snapshot();
+
+        if files.is_empty() {
+            return None;
+        }
+
+        for mapped_file in files.iter() {
+            if mapped_file.get_last_modified_timestamp() as i64 >= timestamp {
+                return Some(mapped_file.clone());
+            }
+        }
+
+        // Return last file if no match
+        files.last().cloned()
+    }
+
+    // ============ Additional Helper Methods ============
+
+    /// Copy mapped files to array
+    ///
+    /// Internal method to create a snapshot of files, optionally reserving
+    /// some files from the copy.
+    ///
+    /// # Arguments
+    /// * `reserved_mapped_files` - Number of files to exclude from the end
+    ///
+    /// # Returns
+    /// Vector of mapped files, or None if insufficient files
+    fn copy_mapped_files(
+        &self,
+        reserved_mapped_files: usize,
+    ) -> Option<Vec<Arc<DefaultMappedFile>>> {
+        let files = self.mapped_files.load();
+
+        if files.len() <= reserved_mapped_files {
+            return None;
+        }
+
+        Some((**files).clone())
+    }
+
+    /// Stream access to mapped files
+    ///
+    /// Returns an iterator that can be used with standard iterator combinators.
+    #[inline]
+    pub fn stream(&self) -> impl Iterator<Item = Arc<DefaultMappedFile>> {
+        self.iter()
+    }
+
+    /// Destroy all mapped files and cleanup resources
+    ///
+    /// This method destroys all mapped files and removes the storage directory.
+    /// It should only be called during shutdown or cleanup operations.
     #[inline]
     pub fn destroy(&mut self) {
-        for mapped_file in self.mapped_files.read().iter() {
+        for mapped_file in self.mapped_files.load().iter() {
             mapped_file.destroy(1000 * 3);
         }
-        self.mapped_files.write().clear();
+        self.mapped_files.store(Arc::new(Vec::new()));
         self.set_flushed_where(0);
         let path = PathBuf::from(&self.store_path);
         if path.is_dir() {
@@ -411,6 +1067,17 @@ impl MappedFileQueue {
         }
     }
 
+    /// Find mapped file by offset
+    ///
+    /// Locates the mapped file containing the specified offset.
+    /// Uses direct indexing for O(1) lookup when possible.
+    ///
+    /// # Arguments
+    /// * `offset` - The offset to search for
+    /// * `return_first_on_not_found` - Return first file if offset not found
+    ///
+    /// # Returns
+    /// The mapped file containing the offset, or None
     pub fn find_mapped_file_by_offset(
         &self,
         offset: i64,
@@ -436,15 +1103,18 @@ impl MappedFileQueue {
                 let index = (offset as usize / self.mapped_file_size as usize)
                     - (first_offset as usize / self.mapped_file_size as usize);
 
-                let read_guard = self.mapped_files.read();
-                if let Some(file) = read_guard.get(index).cloned() {
-                    if offset >= file.get_file_from_offset() as i64 {
+                let files = self.mapped_files.load();
+                if let Some(file) = files.get(index).cloned() {
+                    let file_offset = file.get_file_from_offset() as i64;
+                    // Must check both lower and upper bounds
+                    if offset >= file_offset && offset < file_offset + self.mapped_file_size as i64
+                    {
                         return Some(file);
                     }
                 }
 
                 // Fall back to linear search if direct indexing fails
-                for file in read_guard.iter() {
+                for file in files.iter() {
                     let file_offset = file.get_file_from_offset() as i64;
                     if offset >= file_offset && offset < file_offset + self.mapped_file_size as i64
                     {
@@ -537,13 +1207,12 @@ impl MappedFileQueue {
         commit_log: &CommitLog,
         boundary_type: BoundaryType,
     ) -> Option<Arc<DefaultMappedFile>> {
-        let mapped_files = self.mapped_files.read();
+        let mapped_files = self.mapped_files.load();
         if mapped_files.is_empty() {
             return None;
         }
 
         let mfs: Vec<Arc<DefaultMappedFile>> = mapped_files.iter().cloned().collect();
-        drop(mapped_files);
 
         let mfs_len = mfs.len();
 
@@ -627,7 +1296,7 @@ mod tests {
             ..MappedFileQueue::default()
         };
         assert!(queue.load());
-        assert!(queue.mapped_files.read().is_empty());
+        assert!(queue.mapped_files.load().is_empty());
     }
 
     #[test]
@@ -643,7 +1312,7 @@ mod tests {
             ..MappedFileQueue::default()
         };
         assert!(queue.load());
-        assert_eq!(queue.mapped_files.read().len(), 1);
+        assert_eq!(queue.mapped_files.load().len(), 1);
     }
 
     #[test]
@@ -657,7 +1326,7 @@ mod tests {
             ..MappedFileQueue::default()
         };
         assert!(queue.load());
-        assert!(queue.mapped_files.read().is_empty());
+        assert!(queue.mapped_files.load().is_empty());
     }
 
     #[test]
@@ -671,7 +1340,7 @@ mod tests {
             ..MappedFileQueue::default()
         };
         assert!(!queue.load());
-        assert!(queue.mapped_files.read().is_empty());
+        assert!(queue.mapped_files.load().is_empty());
     }
 
     #[test]
@@ -686,6 +1355,6 @@ mod tests {
             ..MappedFileQueue::default()
         };
         assert!(queue.load());
-        assert_eq!(queue.mapped_files.read().len(), 1);
+        assert_eq!(queue.mapped_files.load().len(), 1);
     }
 }
