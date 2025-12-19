@@ -18,7 +18,6 @@ rocketmq-common = { workspace = true }
 rocketmq-remoting = { workspace = true }
 rocketmq-runtime = { workspace = true }
 rocketmq-error.workspace = true
-thiserror = { workspace = true }
 
 #json spupport
 serde.workspace = true
