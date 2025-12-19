@@ -304,10 +304,12 @@ impl CommitLog {
                 // Replace the mapped_files vec in mapped_file_queue
                 // This is safe because we're in &mut self
                 {
-                    let mapped_files_arc = self.mapped_file_queue.get_mapped_files();
-                    let mut files = mapped_files_arc.write();
-                    files.clear();
-                    files.extend(mapped_files);
+                    // Copy-on-write update
+                    let mut new_files = Vec::new();
+                    new_files.extend(mapped_files);
+                    self.mapped_file_queue
+                        .get_mapped_files()
+                        .store(Arc::new(new_files));
                 }
 
                 // Log detailed statistics
@@ -1074,7 +1076,7 @@ impl CommitLog {
         let broker_config = self.broker_config.clone();
 
         let mapped_files = self.mapped_file_queue.get_mapped_files();
-        let mapped_files_inner = mapped_files.read();
+        let mapped_files_inner = mapped_files.load();
 
         if mapped_files_inner.is_empty() {
             warn!("The commitlog files are deleted, and delete the consume queue files");
@@ -1194,7 +1196,7 @@ impl CommitLog {
         let broker_config = self.broker_config.clone();
         // let mut mapped_file_queue = mapped_files.write().await;
         let mapped_files = self.mapped_file_queue.get_mapped_files();
-        let mapped_files_inner = mapped_files.read();
+        let mapped_files_inner = mapped_files.load();
         if !mapped_files_inner.is_empty() {
             // Began to recover from the last third file
             let mut index = (mapped_files_inner.len() as i32) - 3;
@@ -1360,7 +1362,7 @@ impl CommitLog {
         let broker_config = self.broker_config.clone();
 
         let binding = self.mapped_file_queue.get_mapped_files();
-        let mapped_files_inner = binding.read();
+        let mapped_files_inner = binding.load();
 
         if mapped_files_inner.is_empty() {
             warn!("The commitlog files are deleted, and delete the consume queue files");
@@ -1515,7 +1517,7 @@ impl CommitLog {
         let broker_config = self.broker_config.clone();
         // let mut mapped_file_queue = mapped_files.write().await;
         let binding = self.mapped_file_queue.get_mapped_files();
-        let mapped_files_inner = binding.read();
+        let mapped_files_inner = binding.load();
         if !mapped_files_inner.is_empty() {
             // Began to recover from the last third file
             let mut index = (mapped_files_inner.len() as i32) - 1;

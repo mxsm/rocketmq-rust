@@ -636,7 +636,7 @@ impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
 
     fn recover(&mut self) {
         let binding = self.mapped_file_queue.get_mapped_files();
-        let mapped_files = binding.read();
+        let mapped_files = binding.load();
         if mapped_files.is_empty() {
             return;
         }

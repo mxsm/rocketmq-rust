@@ -3086,6 +3086,7 @@ name = "rocketmq-store"
 version = "0.8.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "bytes",
  "cheetah-string",
  "criterion",

@@ -238,7 +238,7 @@ fn bench_post_load_access(c: &mut Criterion) {
     );
     queue.load();
     let files = queue.get_mapped_files();
-    let files_guard = files.read();
+    let files_guard = files.load();
 
     // Benchmark: Sequential reads from first file
     group.bench_function("sequential_read_4KB_blocks", |b| {
