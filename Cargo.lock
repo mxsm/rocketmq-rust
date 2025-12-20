@@ -2793,6 +2793,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocketmq-auth"
+version = "0.8.0"
+
+[[package]]
 name = "rocketmq-broker"
 version = "0.8.0"
 dependencies = [
