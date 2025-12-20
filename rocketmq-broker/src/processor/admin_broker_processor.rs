@@ -34,6 +34,7 @@ use crate::processor::admin_broker_processor::message_related_handler::MessageRe
 use crate::processor::admin_broker_processor::notify_broker_role_change_handler::NotifyBrokerRoleChangeHandler;
 use crate::processor::admin_broker_processor::notify_min_broker_id_handler::NotifyMinBrokerChangeIdHandler;
 use crate::processor::admin_broker_processor::offset_request_handler::OffsetRequestHandler;
+use crate::processor::admin_broker_processor::producer_request_handler::ProducerRequestHandler;
 use crate::processor::admin_broker_processor::reset_master_flusg_offset_handler::ResetMasterFlushOffsetHandler;
 use crate::processor::admin_broker_processor::subscription_group_handler::SubscriptionGroupHandler;
 use crate::processor::admin_broker_processor::topic_request_handler::TopicRequestHandler;
@@ -47,6 +48,7 @@ mod message_related_handler;
 mod notify_broker_role_change_handler;
 mod notify_min_broker_id_handler;
 mod offset_request_handler;
+mod producer_request_handler;
 mod reset_master_flusg_offset_handler;
 mod subscription_group_handler;
 mod topic_request_handler;
@@ -68,6 +70,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     broker_epoch_cache_handler: BrokerEpochCacheHandler<MS>,
     notify_broker_role_change_handler: NotifyBrokerRoleChangeHandler<MS>,
     message_related_handler: MessageRelatedHandler<MS>,
+    producer_request_handler: ProducerRequestHandler<MS>,
 }
 
 impl<MS> RequestProcessor for AdminBrokerProcessor<MS>
@@ -111,7 +114,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             NotifyBrokerRoleChangeHandler::new(broker_runtime_inner.clone());
 
         let message_related_handler = MessageRelatedHandler::new(broker_runtime_inner.clone());
-
+        let producer_request_handler = ProducerRequestHandler::new(broker_runtime_inner.clone());
         AdminBrokerProcessor {
             topic_request_handler,
             broker_config_request_handler,
@@ -126,6 +129,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             broker_epoch_cache_handler,
             notify_broker_role_change_handler,
             message_related_handler,
+            producer_request_handler,
         }
     }
 }
@@ -230,7 +234,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .get_consumer_connection_list(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::GetProducerConnectionList => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::GetProducerConnectionList => {
+                self.producer_request_handler
+                    .get_producer_connection_list(ctx, request)
+                    .await
+            }
             RequestCode::GetAllProducerInfo => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::GetConsumeStats => {
                 self.consumer_request_handler
