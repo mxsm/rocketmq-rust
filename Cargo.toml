@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "rocketmq",
+    "rocketmq-auth",
     "rocketmq-broker",
     "rocketmq-cli",
     "rocketmq-client",
@@ -50,6 +51,7 @@ rocketmq-remoting = { version = "0.8.0", path = "./rocketmq-remoting" }
 rocketmq-client-rust = { version = "0.8.0", path = "./rocketmq-client" }
 rocketmq-tools = { version = "0.8.0", path = "./rocketmq-tools" }
 rocketmq-error = { version = "0.8.0", path = "./rocketmq-error" }
+rocketmq-auth = { version = "0.8.0", path = "./rocketmq-auth" }
 
 tokio = { version = "1.48", features = ["full"] }
 tokio-util = { version = "0.7.17", features = ["full"] }
@@ -85,8 +87,8 @@ cfg-if = "1.0.4"
 
 sysinfo = "0.37.2"
 uuid = { version = "1.19.0", features = [
-    "v4",                # Lets you generate random UUIDs
-    "fast-rng",          # Use a faster (but still sufficiently random) RNG
+    "v4", # Lets you generate random UUIDs
+    "fast-rng", # Use a faster (but still sufficiently random) RNG
     "macro-diagnostics",
 ] }
 
