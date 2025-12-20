@@ -32,7 +32,7 @@ use crate::producer::send_result::SendResult;
 #[derive(Default)]
 pub struct SendMessageContext<'a> {
     pub producer_group: Option<CheetahString>,
-    pub message: Option<Box<dyn MessageTrait + Send + Sync>>,
+    pub message: Option<&'a (dyn MessageTrait + Send + Sync)>,
     pub mq: Option<&'a MessageQueue>,
     pub broker_addr: Option<CheetahString>,
     pub born_host: Option<CheetahString>,
