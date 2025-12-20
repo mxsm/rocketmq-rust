@@ -117,11 +117,14 @@ impl MQProducer for TransactionMQProducer {
         self.default_producer.send(msg).await
     }
 
-    async fn send_with_timeout(
+    async fn send_with_timeout<M>(
         &mut self,
-        msg: Message,
+        msg: M,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<SendResult> {
+    ) -> rocketmq_error::RocketMQResult<SendResult>
+    where
+        M: MessageTrait + Send + Sync,
+    {
         self.default_producer.send_with_timeout(msg, timeout).await
     }
 
