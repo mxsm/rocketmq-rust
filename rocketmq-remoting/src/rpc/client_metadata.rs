@@ -29,7 +29,6 @@ use crate::protocol::route::topic_route_data::TopicRouteData;
 use crate::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
 use crate::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 
-#[derive(Default, Clone)]
 pub struct ClientMetadata {
     topic_route_table: Arc<RwLock<HashMap<CheetahString /* Topic */, TopicRouteData>>>,
     topic_end_points_table: Arc<
@@ -56,6 +55,12 @@ pub struct ClientMetadata {
             >,
         >,
     >,
+}
+
+impl Default for ClientMetadata {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ClientMetadata {
