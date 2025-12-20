@@ -118,7 +118,7 @@ pub struct BrokerOuterAPI {
     remoting_client: ArcMut<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
     name_server_address: Option<String>,
     rpc_client: RpcClientImpl,
-    client_metadata: ClientMetadata,
+    client_metadata: Arc<ClientMetadata>,
 }
 
 impl BrokerOuterAPI {
@@ -127,11 +127,11 @@ impl BrokerOuterAPI {
             tokio_client_config,
             DefaultRemotingRequestProcessor,
         ));
-        let client_metadata = ClientMetadata::new();
+        let client_metadata = Arc::new(ClientMetadata::new());
         Self {
             remoting_client: client.clone(),
             name_server_address: None,
-            rpc_client: RpcClientImpl::new(client_metadata.clone(), client),
+            rpc_client: RpcClientImpl::new(Arc::clone(&client_metadata), client),
             client_metadata,
         }
     }
@@ -144,14 +144,14 @@ impl BrokerOuterAPI {
             tokio_client_config,
             DefaultRemotingRequestProcessor,
         ));
-        let client_metadata = ClientMetadata::new();
+        let client_metadata = Arc::new(ClientMetadata::new());
         if let Some(rpc_hook) = rpc_hook {
             client.register_rpc_hook(rpc_hook);
         }
         Self {
             remoting_client: client.clone(),
             name_server_address: None,
-            rpc_client: RpcClientImpl::new(client_metadata.clone(), client),
+            rpc_client: RpcClientImpl::new(Arc::clone(&client_metadata), client),
             client_metadata,
         }
     }

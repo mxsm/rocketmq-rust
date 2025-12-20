@@ -51,6 +51,7 @@
 //! ```
 
 use std::any::Any;
+use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -120,7 +121,7 @@ impl ResponseConfig {
 /// ```
 pub struct RpcClientImpl {
     /// Client metadata for broker address resolution
-    client_metadata: ClientMetadata,
+    client_metadata: Arc<ClientMetadata>,
     /// Underlying remoting client for network communication
     remoting_client: ArcMut<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
     /// Registered client hooks for request interception
@@ -135,7 +136,7 @@ impl RpcClientImpl {
     /// * `client_metadata` - Metadata for broker address resolution
     /// * `remoting_client` - Network client for sending requests
     pub fn new(
-        client_metadata: ClientMetadata,
+        client_metadata: Arc<ClientMetadata>,
         remoting_client: ArcMut<RocketmqDefaultClient<DefaultRemotingRequestProcessor>>,
     ) -> Self {
         RpcClientImpl {
