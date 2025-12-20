@@ -15,14 +15,13 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-use std::collections::HashMap;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use cheetah_string::CheetahString;
-use lazy_static::lazy_static;
-use parking_lot::RwLock;
+use dashmap::DashMap;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
 use tracing::info;
@@ -31,13 +30,13 @@ use crate::base::client_config::ClientConfig;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::producer::produce_accumulator::ProduceAccumulator;
 
-type ClientInstanceHashMap = HashMap<CheetahString /* clientId */, ArcMut<MQClientInstance>>;
-type AccumulatorHashMap = HashMap<CheetahString /* clientId */, ArcMut<ProduceAccumulator>>;
+type ClientInstanceHashMap = DashMap<CheetahString /* clientId */, ArcMut<MQClientInstance>>;
+type AccumulatorHashMap = DashMap<CheetahString /* clientId */, ArcMut<ProduceAccumulator>>;
 
 #[derive(Default)]
 pub struct MQClientManager {
-    factory_table: Arc<RwLock<ClientInstanceHashMap>>,
-    accumulator_table: Arc<RwLock<AccumulatorHashMap>>,
+    factory_table: Arc<ClientInstanceHashMap>,
+    accumulator_table: Arc<AccumulatorHashMap>,
     factory_index_generator: AtomicI32,
 }
 
@@ -45,15 +44,14 @@ impl MQClientManager {
     fn new() -> Self {
         MQClientManager {
             factory_index_generator: AtomicI32::new(0),
-            factory_table: Arc::new(RwLock::new(HashMap::new())),
-            accumulator_table: Arc::new(RwLock::new(HashMap::new())),
+            factory_table: Arc::new(DashMap::with_capacity(128)),
+            accumulator_table: Arc::new(DashMap::with_capacity(128)),
         }
     }
 
+    #[inline]
     pub fn get_instance() -> &'static MQClientManager {
-        lazy_static! {
-            static ref INSTANCE: MQClientManager = MQClientManager::new();
-        }
+        static INSTANCE: LazyLock<MQClientManager> = LazyLock::new(MQClientManager::new);
         &INSTANCE
     }
 
@@ -63,21 +61,17 @@ impl MQClientManager {
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> ArcMut<MQClientInstance> {
         let client_id = CheetahString::from_string(client_config.build_mq_client_id());
-        let mut factory_table = self.factory_table.write();
 
-        if let Some(instance) = factory_table.get(&client_id) {
-            return instance.clone();
-        }
+        self.factory_table
+            .entry(client_id.clone())
+            .or_insert_with(|| {
+                let index = self.factory_index_generator.fetch_add(1, Ordering::Relaxed);
 
-        let instance = MQClientInstance::new_arc(
-            client_config,
-            self.factory_index_generator.fetch_add(1, Ordering::SeqCst),
-            client_id.clone(),
-            rpc_hook,
-        );
-        info!("Created new MQClientInstance for clientId: [{}]", client_id);
-        factory_table.insert(client_id, instance.clone());
-        instance
+                info!("Created new MQClientInstance for clientId: [{}]", client_id);
+
+                MQClientInstance::new_arc(client_config, index, client_id, rpc_hook)
+            })
+            .clone()
     }
 
     pub fn get_or_create_produce_accumulator(
@@ -85,23 +79,20 @@ impl MQClientManager {
         client_config: ClientConfig,
     ) -> ArcMut<ProduceAccumulator> {
         let client_id = CheetahString::from_string(client_config.build_mq_client_id());
-        let mut accumulator_table = self.accumulator_table.write();
 
-        if let Some(accumulator) = accumulator_table.get(&client_id) {
-            return accumulator.clone();
-        }
-
-        let accumulator = ArcMut::new(ProduceAccumulator::new(client_id.as_str()));
-        info!(
-            "Created new ProduceAccumulator for clientId:[{}]",
-            client_id
-        );
-        accumulator_table.insert(client_id, accumulator.clone());
-
-        accumulator
+        self.accumulator_table
+            .entry(client_id.clone())
+            .or_insert_with(|| {
+                info!(
+                    "Created new ProduceAccumulator for clientId:[{}]",
+                    client_id
+                );
+                ArcMut::new(ProduceAccumulator::new(client_id.as_str()))
+            })
+            .clone()
     }
 
-    pub async fn remove_client_factory(&self, client_id: &CheetahString) {
-        self.factory_table.write().remove(client_id);
+    pub fn remove_client_factory(&self, client_id: &CheetahString) {
+        self.factory_table.remove(client_id);
     }
 }
