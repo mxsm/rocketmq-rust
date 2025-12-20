@@ -26,3 +26,66 @@ pub struct GetNextBrokerIdRequestHeader {
     pub cluster_name: CheetahString,
     pub broker_name: CheetahString,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::protocol::command_custom_header::CommandCustomHeader;
+    use crate::protocol::command_custom_header::FromMap;
+
+    #[test]
+    fn get_next_broker_id_request_header_serializes_correctly() {
+        let header = GetNextBrokerIdRequestHeader {
+            cluster_name: CheetahString::from_static_str("test_cluster"),
+            broker_name: CheetahString::from_static_str("test_broker"),
+        };
+        let map = header.to_map().unwrap();
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("clusterName"))
+                .unwrap(),
+            "test_cluster"
+        );
+        assert_eq!(
+            map.get(&CheetahString::from_static_str("brokerName"))
+                .unwrap(),
+            "test_broker"
+        );
+    }
+
+    #[test]
+    fn get_next_broker_id_request_header_deserializes_correctly() {
+        let mut map = HashMap::new();
+        map.insert(
+            CheetahString::from_static_str("clusterName"),
+            CheetahString::from_static_str("test_cluster"),
+        );
+        map.insert(
+            CheetahString::from_static_str("brokerName"),
+            CheetahString::from_static_str("test_broker"),
+        );
+
+        let header = <GetNextBrokerIdRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.cluster_name, "test_cluster");
+        assert_eq!(header.broker_name, "test_broker");
+    }
+
+    #[test]
+    fn get_next_broker_id_request_header_default() {
+        let header = GetNextBrokerIdRequestHeader::default();
+        assert_eq!(header.cluster_name, "");
+        assert_eq!(header.broker_name, "");
+    }
+
+    #[test]
+    fn get_next_broker_id_request_header_clone() {
+        let header = GetNextBrokerIdRequestHeader {
+            cluster_name: CheetahString::from_static_str("test_cluster"),
+            broker_name: CheetahString::from_static_str("test_broker"),
+        };
+        let cloned = header.clone();
+        assert_eq!(header.cluster_name, cloned.cluster_name);
+        assert_eq!(header.broker_name, cloned.broker_name);
+    }
+}
