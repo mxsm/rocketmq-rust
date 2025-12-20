@@ -11,7 +11,7 @@ members = [
     "rocketmq-example",
     "rocketmq-filter",
     "rocketmq-macros",
-    "rocketmq-namesrv",
+    "rocketmq-namesrv", "rocketmq-proxy",
     "rocketmq-remoting",
     "rocketmq-runtime",
     "rocketmq-store",

@@ -3023,6 +3023,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocketmq-proxy"
+version = "0.8.0"
+
+[[package]]
 name = "rocketmq-remoting"
 version = "0.8.0"
 dependencies = [
