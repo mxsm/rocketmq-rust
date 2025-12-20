@@ -278,4 +278,16 @@ impl MessageAccessor {
             MessageConst::PROPERTY_CONSUME_START_TIMESTAMP,
         ))
     }
+
+    /// Clones a message.
+    pub fn clone_message<M>(message: &M) -> Message
+    where
+        M: MessageTrait,
+    {
+        let mut new_message =
+            Message::new_body(message.get_topic().clone(), message.get_body().cloned());
+        new_message.set_flag(message.get_flag());
+        new_message.set_properties(message.get_properties().clone());
+        new_message
+    }
 }

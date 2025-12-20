@@ -157,7 +157,7 @@ impl DefaultMQProducerImpl {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
-        T: MessageTrait + Clone + Send + Sync,
+        T: MessageTrait + Send + Sync,
     {
         self.send_default_impl(msg, CommunicationMode::Sync, None, timeout)
             .await
@@ -169,7 +169,7 @@ impl DefaultMQProducerImpl {
         msg: &mut T,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
-        T: MessageTrait + Clone + Send + Sync,
+        T: MessageTrait + Send + Sync,
     {
         self.send_with_timeout(msg, self.producer_config.send_msg_timeout() as u64)
             .await
@@ -182,7 +182,7 @@ impl DefaultMQProducerImpl {
         send_callback: Option<SendMessageCallback>,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        T: MessageTrait + Clone + Send + Sync,
+        T: MessageTrait + Send + Sync,
     {
         self.async_send_with_callback_timeout(
             msg,
@@ -199,7 +199,7 @@ impl DefaultMQProducerImpl {
         mq: MessageQueue,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
-        T: MessageTrait + Clone + Send + Sync,
+        T: MessageTrait + Send + Sync,
     {
         self.sync_send_with_message_queue_timeout(
             msg,
@@ -212,7 +212,7 @@ impl DefaultMQProducerImpl {
     #[inline]
     pub async fn send_oneway<T>(&mut self, mut msg: T) -> rocketmq_error::RocketMQResult<()>
     where
-        T: MessageTrait + Clone + Send + Sync,
+        T: MessageTrait + Send + Sync,
     {
         self.send_default_impl(
             &mut msg,
@@ -230,7 +230,7 @@ impl DefaultMQProducerImpl {
         mq: MessageQueue,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        T: MessageTrait + Clone + Send + Sync,
+        T: MessageTrait + Send + Sync,
     {
         self.make_sure_state_ok()?;
         Validators::check_message(Some(&msg), self.producer_config.as_ref())?;
@@ -251,7 +251,7 @@ impl DefaultMQProducerImpl {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
-        T: MessageTrait + Clone + Send + Sync,
+        T: MessageTrait + Send + Sync,
     {
         let begin_start_time = Instant::now();
         self.make_sure_state_ok()?;
@@ -290,7 +290,7 @@ impl DefaultMQProducerImpl {
         send_callback: Option<SendMessageCallback>,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        T: MessageTrait + Clone + Send + Sync,
+        T: MessageTrait + Send + Sync,
     {
         self.async_send_batch_to_queue_with_callback_timeout(
             msg,
@@ -310,7 +310,7 @@ impl DefaultMQProducerImpl {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        M: MessageTrait + Clone + Send + Sync,
+        M: MessageTrait + Send + Sync,
         T: std::any::Any + Sync + Send,
     {
         let begin_start_time = Instant::now();
@@ -352,7 +352,7 @@ impl DefaultMQProducerImpl {
         arg: T,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        M: MessageTrait + Clone + Send + Sync,
+        M: MessageTrait + Send + Sync,
         T: std::any::Any + Sync + Send,
     {
         self.send_select_impl(
@@ -377,7 +377,7 @@ impl DefaultMQProducerImpl {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
-        M: MessageTrait + Clone + Send + Sync,
+        M: MessageTrait + Send + Sync,
         T: std::any::Any + Sync + Send,
     {
         let begin_start_time = Instant::now();
@@ -395,7 +395,7 @@ impl DefaultMQProducerImpl {
                         &topic_publish_info.message_queue_list,
                         &mut self.client_config,
                     );
-                let mut user_message = msg.clone();
+                let mut user_message = MessageAccessor::clone_message(&msg);
                 let user_topic = NamespaceUtil::without_namespace_with_namespace(
                     user_message.get_topic(),
                     self.client_config
@@ -443,7 +443,7 @@ impl DefaultMQProducerImpl {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        T: MessageTrait + Clone + Send + Sync,
+        T: MessageTrait + Send + Sync,
     {
         let mut producer_impl = self.default_mqproducer_impl_inner.clone().unwrap();
         let begin_start_time = Instant::now();
@@ -508,7 +508,7 @@ impl DefaultMQProducerImpl {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        T: MessageTrait + Clone + Send + Sync,
+        T: MessageTrait + Send + Sync,
     {
         let producer_impl = self.default_mqproducer_impl_inner.clone().unwrap();
         let begin_start_time = Instant::now();
@@ -674,7 +674,7 @@ impl DefaultMQProducerImpl {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
-        T: MessageTrait + Clone + Send + Sync,
+        T: MessageTrait + Send + Sync,
     {
         self.make_sure_state_ok()?;
         let invoke_id = random::<u64>();
@@ -930,7 +930,7 @@ impl DefaultMQProducerImpl {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
-        T: MessageTrait + Clone + Send + Sync,
+        T: MessageTrait + Send + Sync,
     {
         let begin_start_time = Instant::now();
         let mut broker_name = self
@@ -1013,51 +1013,6 @@ impl DefaultMQProducerImpl {
             self.execute_check_forbidden_hook(&check_forbidden_context)?;
         }
 
-        let mut send_message_context = if self.has_send_message_hook() {
-            let namespace = self.client_config.get_namespace();
-            let producer_group = self.producer_config.producer_group().clone();
-            let born_host = self.client_config.client_ip.clone();
-            let is_trans = msg.get_property(&CheetahString::from_static_str(
-                MessageConst::PROPERTY_TRANSACTION_PREPARED,
-            ));
-            let msg_type_flag = msg
-                .get_property(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_STARTDE_LIVER_TIME,
-                ))
-                .is_some()
-                || msg
-                    .get_property(&CheetahString::from_static_str(
-                        MessageConst::PROPERTY_DELAY_TIME_LEVEL,
-                    ))
-                    .is_some();
-            let mut send_message_context = SendMessageContext {
-                producer: self.default_mqproducer_impl_inner.clone(),
-                producer_group: Some(producer_group),
-                communication_mode: Some(communication_mode),
-                born_host,
-                broker_addr: Some(broker_addr.clone()),
-                message: Some(Box::new(msg.clone())),
-                mq: Some(mq),
-                namespace,
-                ..Default::default()
-            };
-
-            if let Some(value) = is_trans {
-                let value_ = value.parse().unwrap_or(false);
-                if value_ {
-                    send_message_context.msg_type = Some(MessageType::TransMsgHalf);
-                }
-            }
-            if msg_type_flag {
-                send_message_context.msg_type = Some(MessageType::DelayMsg);
-            }
-            let send_message_context = Some(send_message_context);
-            self.execute_send_message_hook_before(&send_message_context);
-            send_message_context
-        } else {
-            None
-        };
-
         //build send message request header
         let mut request_header = SendMessageRequestHeader {
             producer_group: CheetahString::from_string(
@@ -1105,19 +1060,66 @@ impl DefaultMQProducerImpl {
             }
         }
 
+        // Handle namespace before creating send_message_context
+        if topic_with_namespace && communication_mode == CommunicationMode::Async {
+            msg.set_topic(CheetahString::from_string(
+                NamespaceUtil::without_namespace_with_namespace(
+                    msg.get_topic(),
+                    self.client_config
+                        .get_namespace()
+                        .unwrap_or_default()
+                        .as_str(),
+                ),
+            ));
+        }
+
+        let mut send_message_context = if self.has_send_message_hook() {
+            let namespace = self.client_config.get_namespace();
+            let producer_group = self.producer_config.producer_group().clone();
+            let born_host = self.client_config.client_ip.clone();
+            let is_trans = msg.get_property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_TRANSACTION_PREPARED,
+            ));
+            let msg_type_flag = msg
+                .get_property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_STARTDE_LIVER_TIME,
+                ))
+                .is_some()
+                || msg
+                    .get_property(&CheetahString::from_static_str(
+                        MessageConst::PROPERTY_DELAY_TIME_LEVEL,
+                    ))
+                    .is_some();
+            let mut send_message_context = SendMessageContext {
+                producer: self.default_mqproducer_impl_inner.clone(),
+                producer_group: Some(producer_group),
+                communication_mode: Some(communication_mode),
+                born_host,
+                broker_addr: Some(broker_addr.clone()),
+                message: None, // Don't store message reference to avoid borrow conflicts
+                mq: Some(mq),
+                namespace,
+                ..Default::default()
+            };
+
+            if let Some(value) = is_trans {
+                let value_ = value.parse().unwrap_or(false);
+                if value_ {
+                    send_message_context.msg_type = Some(MessageType::TransMsgHalf);
+                }
+            }
+            if msg_type_flag {
+                send_message_context.msg_type = Some(MessageType::DelayMsg);
+            }
+            let send_message_context = Some(send_message_context);
+            self.execute_send_message_hook_before(&send_message_context);
+            send_message_context
+        } else {
+            None
+        };
+
         let send_result = match communication_mode {
             CommunicationMode::Async => {
-                if topic_with_namespace {
-                    msg.set_topic(CheetahString::from_string(
-                        NamespaceUtil::without_namespace_with_namespace(
-                            msg.get_topic(),
-                            self.client_config
-                                .get_namespace()
-                                .unwrap_or_default()
-                                .as_str(),
-                        ),
-                    ));
-                }
                 let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
                 self.client_instance
                     .as_ref()
@@ -1334,7 +1336,7 @@ impl DefaultMQProducerImpl {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<MessageQueue>
     where
-        M: MessageTrait + Clone,
+        M: MessageTrait,
         T: std::any::Any + Send,
     {
         let begin_start_time = Instant::now();
@@ -1352,7 +1354,7 @@ impl DefaultMQProducerImpl {
                         &topic_publish_info.message_queue_list,
                         &mut self.client_config,
                     );
-                let mut user_message = msg.clone();
+                let mut user_message = MessageAccessor::clone_message(msg);
                 let user_topic = NamespaceUtil::without_namespace_with_namespace(
                     user_message.get_topic(),
                     self.client_config
@@ -1387,7 +1389,7 @@ impl DefaultMQProducerImpl {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<SendResult>
     where
-        M: MessageTrait + Clone + Send + Sync,
+        M: MessageTrait + Send + Sync,
         T: std::any::Any + Sync + Send,
     {
         let result = self
@@ -1428,7 +1430,7 @@ impl DefaultMQProducerImpl {
             + Sync
             + 'static,
         T: std::any::Any + Sync + Send,
-        M: MessageTrait + Clone + Send + Sync,
+        M: MessageTrait + Send + Sync,
     {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
@@ -1496,7 +1498,7 @@ impl DefaultMQProducerImpl {
             + Sync
             + 'static,
         T: std::any::Any + Sync + Send,
-        M: MessageTrait + Clone + Send + Sync,
+        M: MessageTrait + Send + Sync,
     {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
@@ -1548,7 +1550,7 @@ impl DefaultMQProducerImpl {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
     where
-        M: MessageTrait + Clone + Send + Sync,
+        M: MessageTrait + Send + Sync,
     {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
@@ -1610,7 +1612,7 @@ impl DefaultMQProducerImpl {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        M: MessageTrait + Clone + Send + Sync,
+        M: MessageTrait + Send + Sync,
     {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
@@ -1661,7 +1663,7 @@ impl DefaultMQProducerImpl {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        M: MessageTrait + Clone + Send + Sync,
+        M: MessageTrait + Send + Sync,
     {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
@@ -1718,7 +1720,7 @@ impl DefaultMQProducerImpl {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
     where
-        M: MessageTrait + Clone + Send + Sync,
+        M: MessageTrait + Send + Sync,
     {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
