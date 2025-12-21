@@ -12,6 +12,13 @@ keywords = ["rocketmq", "controller", "raft", "distributed", "messaging"]
 categories = ["network-programming", "asynchronous"]
 
 [dependencies]
+# Internal dependencies (rocketmq-rust modules)
+rocketmq-common = { workspace = true }
+rocketmq-remoting = { workspace = true }
+rocketmq-runtime = { workspace = true }
+rocketmq-store = { workspace = true }
+rocketmq-rust = { workspace = true }
+
 # Core async runtime
 tokio = { workspace = true }
 tokio-util = { workspace = true }
@@ -54,12 +61,7 @@ async-trait = "0.1"
 # Storage backends
 rocksdb = { version = "0.24", optional = true }
 
-# Internal dependencies (rocketmq-rust modules)
-rocketmq-common = { workspace = true }
-rocketmq-remoting = { workspace = true }
-rocketmq-runtime = { workspace = true }
-rocketmq-store = { workspace = true }
-rocketmq-rust = { workspace = true }
+cheetah-string = { workspace = true }
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["async_tokio"] }
