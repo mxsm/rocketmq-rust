@@ -25,7 +25,17 @@ use crate::protocol::body::connection::Connection;
 #[derive(Serialize, Deserialize, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ProducerConnection {
-    pub connection_set: HashSet<Connection>,
+    connection_set: HashSet<Connection>,
+}
+impl ProducerConnection {
+    pub fn new() -> Self {
+        Self {
+            connection_set: HashSet::new(),
+        }
+    }
+    pub fn connection_set_mut(&mut self) -> &mut HashSet<Connection> {
+        &mut self.connection_set
+    }
 }
 
 #[cfg(test)]
