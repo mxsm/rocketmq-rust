@@ -72,6 +72,7 @@
 
 pub mod config;
 pub mod error;
+mod helper;
 pub mod manager;
 pub mod metadata;
 pub mod processor;
