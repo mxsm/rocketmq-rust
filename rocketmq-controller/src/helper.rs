@@ -16,3 +16,4 @@
 //  under the License.
 
 pub(crate) mod broker_lifecycle_listener;
+pub(crate) mod broker_live_info_getter;

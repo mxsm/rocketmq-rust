@@ -1,3 +1,5 @@
+use crate::heartbeat::broker_live_info::BrokerLiveInfo;
+
 //  Licensed to the Apache Software Foundation (ASF) under one
 //  or more contributor license agreements.  See the NOTICE file
 //  distributed with this work for additional information
@@ -15,5 +17,6 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-pub(crate) mod broker_identity_info;
-pub(crate) mod broker_live_info;
+pub trait BrokerLiveInfoGetter: Send + Sync {
+    fn get(&self, cluster_name: &str, broker_name: &str, broker_id: i64) -> BrokerLiveInfo;
+}
