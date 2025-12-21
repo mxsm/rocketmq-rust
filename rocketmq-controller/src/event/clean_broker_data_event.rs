@@ -17,18 +17,20 @@
 
 use std::collections::HashSet;
 
+use cheetah_string::CheetahString;
+
 use crate::event::event_message::EventMessage;
 use crate::event::event_type::EventType;
 
 #[derive(Debug, Clone)]
 pub struct CleanBrokerDataEvent {
-    broker_name: String,
+    broker_name: CheetahString,
     broker_id_set_to_clean: HashSet<u64>,
 }
 
 impl CleanBrokerDataEvent {
     pub fn new(
-        broker_name: impl Into<String>,
+        broker_name: impl Into<CheetahString>,
         broker_id_set_to_clean: impl IntoIterator<Item = u64>,
     ) -> Self {
         Self {
