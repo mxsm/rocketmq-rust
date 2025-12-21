@@ -100,7 +100,7 @@ pub struct ProducerConfig {
     rpc_hook: Option<Arc<dyn RPCHook>>,
     compress_level: i32,
     compress_type: CompressionType,
-    compressor: Option<Arc<Box<dyn Compressor + Send + Sync>>>,
+    compressor: Option<&'static (dyn Compressor + Send + Sync)>,
 }
 
 impl ProducerConfig {
@@ -185,8 +185,8 @@ impl ProducerConfig {
         self.compress_type
     }
 
-    pub fn compressor(&self) -> &Option<Arc<Box<dyn Compressor + Send + Sync>>> {
-        &self.compressor
+    pub fn compressor(&self) -> Option<&'static (dyn Compressor + Send + Sync)> {
+        self.compressor
     }
 }
 
@@ -233,9 +233,7 @@ impl Default for ProducerConfig {
                 .parse()
                 .unwrap(),
             compress_type: compression_type,
-            compressor: Some(Arc::new(CompressorFactory::get_compressor(
-                compression_type,
-            ))),
+            compressor: Some(CompressorFactory::get_compressor(compression_type)),
         }
     }
 }
@@ -340,8 +338,8 @@ impl DefaultMQProducer {
         self.producer_config.compress_type
     }
 
-    pub fn compressor(&self) -> &Option<Arc<Box<dyn Compressor + Send + Sync>>> {
-        &self.producer_config.compressor
+    pub fn compressor(&self) -> Option<&'static (dyn Compressor + Send + Sync)> {
+        self.producer_config.compressor
     }
 
     pub fn set_client_config(&mut self, client_config: ClientConfig) {
@@ -458,7 +456,7 @@ impl DefaultMQProducer {
         self.producer_config.compress_type = compress_type;
     }
 
-    pub fn set_compressor(&mut self, compressor: Option<Arc<Box<dyn Compressor + Send + Sync>>>) {
+    pub fn set_compressor(&mut self, compressor: Option<&'static (dyn Compressor + Send + Sync)>) {
         self.producer_config.compressor = compressor;
     }
 

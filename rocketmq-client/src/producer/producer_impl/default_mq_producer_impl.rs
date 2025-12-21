@@ -1231,7 +1231,6 @@ impl DefaultMQProducerImpl {
                     let data = self
                         .producer_config
                         .compressor()
-                        .as_ref()
                         .unwrap()
                         .compress(body, self.producer_config.compress_level());
                     if let Ok(data) = data {

@@ -53,7 +53,7 @@ pub struct DefaultMQProducerBuilder {
     rpc_hook: Option<Arc<dyn RPCHook>>,
     compress_level: Option<i32>,
     compress_type: Option<CompressionType>,
-    compressor: Option<Arc<Box<dyn Compressor + Send + Sync>>>,
+    compressor: Option<&'static (dyn Compressor + Send + Sync)>,
 }
 
 impl DefaultMQProducerBuilder {
@@ -250,7 +250,7 @@ impl DefaultMQProducerBuilder {
     }
 
     #[inline]
-    pub fn compressor(mut self, compressor: Arc<Box<dyn Compressor + Send + Sync>>) -> Self {
+    pub fn compressor(mut self, compressor: &'static (dyn Compressor + Send + Sync)) -> Self {
         self.compressor = Some(compressor);
         self
     }
