@@ -15,5 +15,7 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-pub(crate) mod broker_identity_info;
-pub(crate) mod broker_live_info;
+use crate::heartbeat::broker_live_info::BrokerLiveInfo;
+pub trait BrokerLiveInfoGetter: Send + Sync {
+    fn get(&self, cluster_name: &str, broker_name: &str, broker_id: i64) -> BrokerLiveInfo;
+}
