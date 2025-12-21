@@ -17,5 +17,6 @@
 
 pub(crate) mod alter_sync_state_set_event;
 pub(crate) mod apply_broker_id_event;
+pub(crate) mod clean_broker_data_event;
 pub(crate) mod event_message;
 pub(crate) mod event_type;
