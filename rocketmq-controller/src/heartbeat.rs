@@ -16,3 +16,4 @@
 //  under the License.
 
 pub(crate) mod broker_identity_info;
+mod broker_live_info;
