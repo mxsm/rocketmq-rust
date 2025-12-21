@@ -15,5 +15,8 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-pub(crate) mod event_message;
-pub(crate) mod event_type;
+use crate::event::event_type::EventType;
+
+pub trait EventMessage {
+    fn get_event_type(&self) -> EventType;
+}
