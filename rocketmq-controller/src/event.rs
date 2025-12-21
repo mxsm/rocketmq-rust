@@ -21,3 +21,4 @@ pub(crate) mod clean_broker_data_event;
 pub(crate) mod elect_master_event;
 pub(crate) mod event_message;
 pub(crate) mod event_type;
+pub(crate) mod update_broker_address_event;
