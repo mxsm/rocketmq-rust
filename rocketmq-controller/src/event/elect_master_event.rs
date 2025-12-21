@@ -1,0 +1,86 @@
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
+
+use cheetah_string::CheetahString;
+
+use crate::event::event_message::EventMessage;
+use crate::event::event_type::EventType;
+
+#[derive(Debug, Clone)]
+pub struct ElectMasterEvent {
+    /// Whether a new master was elected
+    new_master_elected: bool,
+    broker_name: CheetahString,
+    new_master_broker_id: Option<u64>,
+}
+
+impl ElectMasterEvent {
+    pub fn without_new_master(
+        new_master_elected: bool,
+        broker_name: impl Into<CheetahString>,
+    ) -> Self {
+        Self {
+            new_master_elected,
+            broker_name: broker_name.into(),
+            new_master_broker_id: None,
+        }
+    }
+
+    pub fn with_new_master(
+        broker_name: impl Into<CheetahString>,
+        new_master_broker_id: u64,
+    ) -> Self {
+        Self {
+            new_master_elected: true,
+            broker_name: broker_name.into(),
+            new_master_broker_id: Some(new_master_broker_id),
+        }
+    }
+
+    pub fn new(
+        new_master_elected: bool,
+        broker_name: impl Into<CheetahString>,
+        new_master_broker_id: Option<u64>,
+    ) -> Self {
+        Self {
+            new_master_elected,
+            broker_name: broker_name.into(),
+            new_master_broker_id,
+        }
+    }
+
+    #[inline]
+    pub fn new_master_elected(&self) -> bool {
+        self.new_master_elected
+    }
+
+    #[inline]
+    pub fn broker_name(&self) -> &str {
+        &self.broker_name
+    }
+
+    #[inline]
+    pub fn new_master_broker_id(&self) -> Option<u64> {
+        self.new_master_broker_id
+    }
+}
+
+impl EventMessage for ElectMasterEvent {
+    fn get_event_type(&self) -> EventType {
+        EventType::ElectMasterEvent
+    }
+}
