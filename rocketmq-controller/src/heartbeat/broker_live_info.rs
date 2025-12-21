@@ -14,8 +14,8 @@
 //  KIND, either express or implied.  See the License for the
 //  specific language governing permissions and limitations
 //  under the License.
+
 use std::fmt;
-use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use rocketmq_remoting::net::channel::Channel;
@@ -108,7 +108,7 @@ impl BrokerLiveInfo {
         self.election_priority
     }
 
-    pub fn channel(&self) -> &Arc<dyn RemotingChannel> {
+    pub fn channel(&self) -> &Channel {
         &self.channel
     }
 
