@@ -57,7 +57,7 @@ pub struct TransactionMQProducerBuilder {
     rpc_hook: Option<Arc<dyn RPCHook>>,
     compress_level: Option<i32>,
     compress_type: Option<CompressionType>,
-    compressor: Option<Arc<Box<dyn Compressor + Send + Sync>>>,
+    compressor: Option<&'static (dyn Compressor + Send + Sync)>,
     transaction_listener: Option<Arc<Box<dyn TransactionListener>>>,
     check_runtime: Option<Arc<RocketMQRuntime>>,
 }
@@ -234,7 +234,7 @@ impl TransactionMQProducerBuilder {
         self
     }
 
-    pub fn compressor(mut self, compressor: Arc<Box<dyn Compressor + Send + Sync>>) -> Self {
+    pub fn compressor(mut self, compressor: &'static (dyn Compressor + Send + Sync)) -> Self {
         self.compressor = Some(compressor);
         self
     }
