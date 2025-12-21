@@ -26,37 +26,37 @@ impl<MS: MessageStore> ProducerRequestHandler<MS> {
         request: &RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
+        let request_header = request
+            .decode_command_custom_header_fast::<GetProducerConnectionListRequestHeader>()?;
         let mut producer_connection = ProducerConnection::new();
-        if let Ok(request_header) =
-            request.decode_command_custom_header_fast::<GetProducerConnectionListRequestHeader>()
+
+        if let Some(channel_info_hashmap) = self
+            .broker_runtime_inner
+            .producer_manager()
+            .get_producer_table()
+            .data()
+            .get(request_header.producer_group().as_str())
         {
-            if let Some(channel_info_hashmap) = self
-                .broker_runtime_inner
-                .producer_manager()
-                .get_producer_table()
-                .data()
-                .get(request_header.producer_group().as_str())
-            {
-                for i in channel_info_hashmap {
-                    let mut connection = Connection::new();
-                    connection.set_client_id(i.client_id().into());
-                    connection.set_language(i.language());
-                    connection.set_version(i.version());
-                    connection.set_client_addr(i.remote_ip().into());
+            for i in channel_info_hashmap {
+                let mut connection = Connection::new();
+                connection.set_client_id(i.client_id().into());
+                connection.set_language(i.language());
+                connection.set_version(i.version());
+                connection.set_client_addr(i.remote_ip().into());
 
-                    producer_connection.connection_set_mut().insert(connection);
-                }
-
-                if let Ok(body) = producer_connection.encode() {
-                    response = response.set_body(body).set_code(ResponseCode::Success);
-                    return Ok(Some(response));
-                }
+                producer_connection.connection_set_mut().insert(connection);
             }
+            let body = producer_connection.encode()?;
+            response = response.set_body(body).set_code(ResponseCode::Success);
+            return Ok(Some(response));
         }
 
         response = response
             .set_code(ResponseCode::SystemError)
-            .set_remark("get_producer_connection_list err");
+            .set_remark(format!(
+                "the producer group[{}] not exist",
+                request_header.producer_group()
+            ));
         Ok(Some(response))
     }
 }
