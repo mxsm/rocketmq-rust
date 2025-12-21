@@ -71,9 +71,10 @@
 #![allow(clippy::module_inception)]
 
 pub mod config;
+pub(crate) mod elect;
 pub mod error;
-mod heartbeat;
-mod helper;
+pub(crate) mod heartbeat;
+pub(crate) mod helper;
 pub mod manager;
 pub mod metadata;
 pub mod processor;
