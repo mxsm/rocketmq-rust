@@ -15,6 +15,6 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-pub(crate) mod broker_lifecycle_listener;
-pub(crate) mod broker_live_info_getter;
-pub(crate) mod broker_valid_predicate;
+pub trait BrokerValidPredicate: Send + Sync {
+    fn check(&self, cluster_name: &str, broker_name: &str, broker_id: Option<i64>) -> bool;
+}
