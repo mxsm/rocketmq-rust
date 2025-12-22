@@ -62,3 +62,95 @@ impl SyncStateSet {
         self.sync_state_set_epoch
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_state_set_serializes_correctly() {
+        let mut set = HashSet::new();
+        set.insert(0);
+        set.insert(1);
+
+        let sync_state = SyncStateSet::with_values(set, 5);
+        let json = serde_json::to_string(&sync_state).unwrap();
+
+        assert!(json.contains("syncStateSet"));
+        assert!(json.contains("syncStateSetEpoch"));
+        assert!(json.contains("5"));
+    }
+
+    #[test]
+    fn sync_state_set_deserializes_correctly() {
+        let json = r#"{
+            "syncStateSet": [0, 1, 2],
+            "syncStateSetEpoch": 10
+        }"#;
+
+        let sync_state: SyncStateSet = serde_json::from_str(json).unwrap();
+        assert!(sync_state.get_sync_state_set().is_some());
+        assert_eq!(sync_state.get_sync_state_set().unwrap().len(), 3);
+        assert!(sync_state.get_sync_state_set().unwrap().contains(&0));
+        assert!(sync_state.get_sync_state_set().unwrap().contains(&1));
+        assert!(sync_state.get_sync_state_set().unwrap().contains(&2));
+        assert_eq!(sync_state.get_sync_state_set_epoch(), 10);
+    }
+
+    #[test]
+    fn sync_state_set_default_and_new() {
+        let sync_state = SyncStateSet::default();
+        assert!(sync_state.get_sync_state_set().is_none());
+        assert_eq!(sync_state.get_sync_state_set_epoch(), 0);
+
+        let sync_state = SyncStateSet::new();
+        assert!(sync_state.get_sync_state_set().is_none());
+        assert_eq!(sync_state.get_sync_state_set_epoch(), 0);
+    }
+
+    #[test]
+    fn sync_state_set_take_sync_state_set() {
+        let mut set = HashSet::new();
+        set.insert(1);
+        set.insert(2);
+
+        let mut sync_state = SyncStateSet::with_values(set, 5);
+
+        let taken = sync_state.take_sync_state_set();
+        assert!(taken.is_some());
+        assert_eq!(taken.unwrap().len(), 2);
+
+        assert!(sync_state.get_sync_state_set().is_none());
+    }
+
+    #[test]
+    fn sync_state_set_with_values() {
+        let mut set = HashSet::new();
+        set.insert(0);
+        set.insert(1);
+        set.insert(2);
+
+        let sync_state = SyncStateSet::with_values(set, 5);
+        assert!(sync_state.get_sync_state_set().is_some());
+        assert_eq!(sync_state.get_sync_state_set().unwrap().len(), 3);
+        assert_eq!(sync_state.get_sync_state_set_epoch(), 5);
+    }
+
+    #[test]
+    fn sync_state_set_setters_and_getters() {
+        let mut sync_state = SyncStateSet::new();
+
+        let mut set = HashSet::new();
+        set.insert(100);
+        set.insert(200);
+
+        sync_state.set_sync_state_set(set);
+        sync_state.set_sync_state_set_epoch(10);
+
+        assert!(sync_state.get_sync_state_set().is_some());
+        assert_eq!(sync_state.get_sync_state_set().unwrap().len(), 2);
+        assert!(sync_state.get_sync_state_set().unwrap().contains(&100));
+        assert!(sync_state.get_sync_state_set().unwrap().contains(&200));
+        assert_eq!(sync_state.get_sync_state_set_epoch(), 10);
+    }
+}
