@@ -737,16 +737,17 @@ impl MQProducer for DefaultMQProducer {
         Ok(())
     }
 
-    async fn send_with_callback_timeout<F>(
+    async fn send_with_callback_timeout<F, M>(
         &mut self,
-        mut msg: Message,
+        mut msg: M,
         send_callback: F,
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        M: MessageTrait + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.topic.as_str()));
+        msg.set_topic(self.with_namespace(msg.get_topic().as_str()));
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()

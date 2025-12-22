@@ -128,14 +128,15 @@ pub trait MQProducer {
     /// # Returns
     ///
     /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
-    async fn send_with_callback_timeout<F>(
+    async fn send_with_callback_timeout<F, M>(
         &mut self,
-        msg: Message,
+        msg: M,
         send_callback: F,
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
+        F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
+        M: MessageTrait + Send + Sync;
 
     /// Sends a message without waiting for a response.
     ///
