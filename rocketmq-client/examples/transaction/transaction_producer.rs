@@ -58,7 +58,7 @@ pub async fn main() -> RocketMQResult<()> {
     for _ in 0..10 {
         let message = Message::with_tags(TOPIC, TAG, "Hello RocketMQ".as_bytes());
         let send_result = producer
-            .send_message_in_transaction::<()>(message, None)
+            .send_message_in_transaction::<(), _>(message, None)
             .await?;
         println!("send result: {}", send_result);
     }
@@ -85,7 +85,7 @@ impl Default for TransactionListenerImpl {
 impl TransactionListener for TransactionListenerImpl {
     fn execute_local_transaction(
         &self,
-        msg: &Message,
+        msg: &dyn MessageTrait,
         _arg: Option<&(dyn Any + Send + Sync)>,
     ) -> LocalTransactionState {
         let value = self

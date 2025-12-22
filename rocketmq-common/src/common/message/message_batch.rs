@@ -90,7 +90,6 @@ impl MessageBatch {
             }
 
             if let Some(first_message) = first {
-                let first_message = first.unwrap();
                 if first_message.get_topic() != message.get_topic() {
                     return Err(RocketMQError::illegal_argument(
                         "The topic of the messages in one batch should be the same",
