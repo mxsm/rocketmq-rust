@@ -15,6 +15,8 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
+mod sync_state_info;
+
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
