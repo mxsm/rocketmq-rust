@@ -18,6 +18,7 @@ rocketmq-remoting = { workspace = true }
 rocketmq-runtime = { workspace = true }
 rocketmq-store = { workspace = true }
 rocketmq-rust = { workspace = true }
+rocketmq-macros = { workspace = true }
 
 # Core async runtime
 tokio = { workspace = true }
