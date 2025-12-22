@@ -15,6 +15,19 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-pub(crate) mod broker_close_channel_request;
-pub(crate) mod broker_close_channel_response;
-pub(crate) mod check_not_active_broker_request;
+use rocketmq_common::TimeUtils::get_current_millis;
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct CheckNotActiveBrokerRequest {
+    pub check_time_millis: u64,
+}
+
+impl Default for CheckNotActiveBrokerRequest {
+    fn default() -> Self {
+        Self {
+            check_time_millis: get_current_millis(),
+        }
+    }
+}
