@@ -471,7 +471,10 @@ impl DefaultMQProducer {
         }
     }
 
-    fn batch(&mut self, messages: Vec<Message>) -> rocketmq_error::RocketMQResult<MessageBatch> {
+    fn batch<M>(&mut self, messages: Vec<M>) -> rocketmq_error::RocketMQResult<MessageBatch>
+    where
+        M: MessageTrait + Send + Sync,
+    {
         match MessageBatch::generate_from_vec(messages) {
             Ok(mut msg_batch) => {
                 for message in msg_batch.messages.as_mut().unwrap() {
@@ -1032,10 +1035,10 @@ impl MQProducer for DefaultMQProducer {
         unimplemented!("DefaultMQProducer not support send_message_in_transaction")
     }
 
-    async fn send_batch(
-        &mut self,
-        msgs: Vec<Message>,
-    ) -> rocketmq_error::RocketMQResult<SendResult> {
+    async fn send_batch<M>(&mut self, msgs: Vec<M>) -> rocketmq_error::RocketMQResult<SendResult>
+    where
+        M: MessageTrait + Send + Sync,
+    {
         let mut batch = self.batch(msgs)?;
         let result = self
             .default_mqproducer_impl
