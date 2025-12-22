@@ -83,6 +83,8 @@ pub mod processor;
 pub mod raft;
 pub mod rpc;
 pub mod storage;
+mod task;
+
 pub use config::ControllerConfig;
 pub use error::ControllerError;
 pub use error::Result;
