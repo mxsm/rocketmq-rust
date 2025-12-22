@@ -20,10 +20,10 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use std::sync::OnceLock;
 use rocketmq_common::common::base::plain_access_config::PlainAccessConfig;
 use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::config::TopicConfig;
