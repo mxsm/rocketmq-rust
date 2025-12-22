@@ -15,5 +15,4 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-pub(crate) mod broker_close_channel_request;
-pub(crate) mod broker_close_channel_response;
+pub struct BrokerCloseChannelResponse;
