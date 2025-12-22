@@ -17,6 +17,7 @@
 
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
+use std::sync::LazyLock;
 
 use bytes::BufMut;
 use bytes::BytesMut;
@@ -39,28 +40,26 @@ use crate::UtilAll::bytes_to_string;
 use crate::UtilAll::write_int;
 use crate::UtilAll::write_short;
 
-lazy_static! {
-    static ref COUNTER: AtomicI32 = AtomicI32::new(0);
-    static ref START_TIME: Mutex<i64> = Mutex::new(0);
-    static ref NEXT_START_TIME: Mutex<i64> = Mutex::new(0);
-    static ref LEN: usize = {
-        let ip = util_all::get_ip().unwrap_or_else(|_| create_fake_ip());
-        ip.len() + 2 + 4 + 4 + 2
-    };
-    static ref FIX_STRING: Vec<char> = {
-        let ip = util_all::get_ip().unwrap_or_else(|_| create_fake_ip());
-        let pid = std::process::id() as i16;
-        let class_loader_hash = JavaStringHasher::hash_str("MessageClientIDSetter");
-        let mut bytes = BytesMut::with_capacity(ip.len() + 2 + 4);
-        bytes.put(ip.as_slice());
-        bytes.put_i16(pid);
-        bytes.put_i32(class_loader_hash);
-        let data = bytes_to_string(bytes.freeze().as_ref())
-            .chars()
-            .collect::<Vec<char>>();
-        data
-    };
-}
+static COUNTER: LazyLock<AtomicI32> = LazyLock::new(|| AtomicI32::new(0));
+static START_TIME: LazyLock<Mutex<i64>> = LazyLock::new(|| Mutex::new(0));
+static NEXT_START_TIME: LazyLock<Mutex<i64>> = LazyLock::new(|| Mutex::new(0));
+static LEN: LazyLock<usize> = LazyLock::new(|| {
+    let ip = util_all::get_ip().unwrap_or_else(|_| create_fake_ip());
+    ip.len() + 2 + 4 + 4 + 2
+});
+static FIX_STRING: LazyLock<Vec<char>> = LazyLock::new(|| {
+    let ip = util_all::get_ip().unwrap_or_else(|_| create_fake_ip());
+    let pid = std::process::id() as i16;
+    let class_loader_hash = JavaStringHasher::hash_str("MessageClientIDSetter");
+    let mut bytes = BytesMut::with_capacity(ip.len() + 2 + 4);
+    bytes.put(ip.as_slice());
+    bytes.put_i16(pid);
+    bytes.put_i32(class_loader_hash);
+    let data = bytes_to_string(bytes.freeze().as_ref())
+        .chars()
+        .collect::<Vec<char>>();
+    data
+});
 
 pub fn create_fake_ip() -> Vec<u8> {
     get_current_millis().to_be_bytes()[4..].to_vec()
