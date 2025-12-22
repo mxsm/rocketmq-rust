@@ -69,3 +69,78 @@ impl EventMessage for UpdateBrokerAddressEvent {
         EventType::UpdateBrokerAddressEvent
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::u64;
+
+    use super::*;
+
+    const TEST_CLUSTER_NAME: &str = "test_cluster";
+    const TEST_BROKER_NAME: &str = "test_broker";
+    const TEST_BROKER_ADDRESS: &str = "192.168.10.30:8989";
+    const BROKER_ID: Option<u64> = Some(u64::MAX);
+
+    #[test]
+    fn new_method() {
+        let event = UpdateBrokerAddressEvent::new(
+            TEST_CLUSTER_NAME,
+            TEST_BROKER_NAME,
+            TEST_BROKER_ADDRESS,
+            BROKER_ID,
+        );
+
+        assert_eq!(event.cluster_name(), TEST_CLUSTER_NAME);
+        assert_eq!(event.broker_name(), TEST_BROKER_NAME);
+        assert_eq!(event.broker_address(), TEST_BROKER_ADDRESS);
+        assert_eq!(event.broker_id(), BROKER_ID);
+    }
+
+    #[test]
+    fn new_without_broker_id() {
+        let event = UpdateBrokerAddressEvent::new(
+            TEST_CLUSTER_NAME,
+            TEST_BROKER_NAME,
+            TEST_BROKER_ADDRESS,
+            None,
+        );
+
+        assert_eq!(event.broker_id(), None);
+    }
+
+    #[test]
+    fn accepts_mixed_string_types() {
+        let event = UpdateBrokerAddressEvent::new(
+            TEST_CLUSTER_NAME,
+            String::from(TEST_BROKER_NAME),
+            CheetahString::from(TEST_BROKER_ADDRESS),
+            BROKER_ID,
+        );
+
+        assert_eq!(event.cluster_name(), TEST_CLUSTER_NAME);
+        assert_eq!(event.broker_name(), TEST_BROKER_NAME);
+        assert_eq!(event.broker_address(), TEST_BROKER_ADDRESS);
+    }
+
+    #[test]
+    fn correct_event_type() {
+        let event = UpdateBrokerAddressEvent::new(
+            TEST_CLUSTER_NAME,
+            TEST_BROKER_NAME,
+            TEST_BROKER_ADDRESS,
+            BROKER_ID,
+        );
+
+        assert_eq!(event.get_event_type(), EventType::UpdateBrokerAddressEvent);
+    }
+
+    #[test]
+    fn handles_unicode_strings() {
+        let event = UpdateBrokerAddressEvent::new("集群名称", "代理名称", "地址:8989", Some(42));
+
+        assert_eq!(event.cluster_name(), "集群名称");
+        assert_eq!(event.broker_name(), "代理名称");
+        assert_eq!(event.broker_address(), "地址:8989");
+        assert_eq!(event.broker_id(), Some(42));
+    }
+}
