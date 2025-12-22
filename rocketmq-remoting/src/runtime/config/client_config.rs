@@ -15,13 +15,11 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 
 use crate::runtime::config::net_system_config::NetSystemConfig;
 
-lazy_static! {
-    static ref NET_SYSTEM_CONFIG: NetSystemConfig = NetSystemConfig::new();
-}
+static NET_SYSTEM_CONFIG: LazyLock<NetSystemConfig> = LazyLock::new(NetSystemConfig::new);
 
 #[derive(Clone)]
 pub struct TokioClientConfig {
