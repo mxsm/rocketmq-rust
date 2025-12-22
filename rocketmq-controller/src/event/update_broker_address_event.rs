@@ -72,8 +72,6 @@ impl EventMessage for UpdateBrokerAddressEvent {
 
 #[cfg(test)]
 mod tests {
-    use std::u64;
-
     use super::*;
 
     const TEST_CLUSTER_NAME: &str = "test_cluster";
