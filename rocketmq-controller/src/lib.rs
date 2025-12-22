@@ -78,11 +78,11 @@ pub(crate) mod heartbeat;
 pub(crate) mod helper;
 pub mod manager;
 pub mod metadata;
+pub mod metrics;
 pub mod processor;
 pub mod raft;
 pub mod rpc;
 pub mod storage;
-
 pub use config::ControllerConfig;
 pub use error::ControllerError;
 pub use error::Result;
