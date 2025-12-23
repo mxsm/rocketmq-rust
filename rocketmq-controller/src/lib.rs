@@ -70,6 +70,7 @@
 #![allow(dead_code)]
 #![allow(clippy::module_inception)]
 
+mod command;
 pub mod config;
 pub mod controller;
 pub(crate) mod elect;
@@ -86,6 +87,7 @@ pub mod rpc;
 pub mod storage;
 pub mod task;
 
+pub use command::Args;
 pub use config::ControllerConfig;
 pub use elect::policy::DefaultElectPolicy;
 pub use error::ControllerError;

@@ -2928,6 +2928,7 @@ dependencies = [
  "bytes",
  "cheetah-string",
  "chrono",
+ "clap",
  "criterion",
  "dashmap",
  "env_logger",
