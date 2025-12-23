@@ -330,13 +330,14 @@ impl MQProducer for TransactionMQProducer {
             .await
     }
 
-    async fn send_message_in_transaction<T>(
+    async fn send_message_in_transaction<T, M>(
         &mut self,
-        mut msg: Message,
+        mut msg: M,
         arg: Option<T>,
     ) -> rocketmq_error::RocketMQResult<TransactionSendResult>
     where
         T: std::any::Any + Sync + Send,
+        M: MessageTrait + Send + Sync,
     {
         msg.set_topic(self.default_producer.with_namespace(msg.get_topic()));
         self.default_producer

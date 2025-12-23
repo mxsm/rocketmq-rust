@@ -1849,11 +1849,14 @@ impl DefaultMQProducerImpl {
         }
     }
 
-    pub async fn send_message_in_transaction(
+    pub async fn send_message_in_transaction<M>(
         &mut self,
-        mut msg: Message,
+        mut msg: M,
         arg: Option<Box<dyn Any + Send + Sync>>,
-    ) -> rocketmq_error::RocketMQResult<TransactionSendResult> {
+    ) -> rocketmq_error::RocketMQResult<TransactionSendResult>
+    where
+        M: MessageTrait + Send + Sync,
+    {
         // ignore DelayTimeLevel parameter
         if msg.get_delay_time_level() != 0 {
             MessageAccessor::clear_property(&mut msg, MessageConst::PROPERTY_DELAY_TIME_LEVEL);
@@ -1930,7 +1933,7 @@ impl DefaultMQProducerImpl {
 
     pub async fn end_transaction(
         &mut self,
-        msg: &Message,
+        msg: &dyn MessageTrait,
         send_result: &SendResult,
         local_transaction_state: LocalTransactionState,
     ) -> rocketmq_error::RocketMQResult<()> {

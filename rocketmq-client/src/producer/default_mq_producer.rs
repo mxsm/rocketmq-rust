@@ -1021,13 +1021,14 @@ impl MQProducer for DefaultMQProducer {
             .await
     }
 
-    async fn send_message_in_transaction<T>(
+    async fn send_message_in_transaction<T, M>(
         &mut self,
-        msg: Message,
+        msg: M,
         arg: Option<T>,
     ) -> rocketmq_error::RocketMQResult<TransactionSendResult>
     where
         T: std::any::Any + Sync + Send,
+        M: MessageTrait + Send + Sync,
     {
         unimplemented!("DefaultMQProducer not support send_message_in_transaction")
     }
