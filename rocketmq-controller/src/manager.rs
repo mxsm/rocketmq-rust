@@ -15,7 +15,8 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-mod sync_state_info;
+pub(crate) mod broker_replica_info;
+pub(crate) mod sync_state_info;
 
 use std::sync::Arc;
 
