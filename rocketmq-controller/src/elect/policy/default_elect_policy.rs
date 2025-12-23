@@ -263,7 +263,7 @@ mod tests {
 
     impl BrokerValidPredicate for MockValidPredicate {
         fn check(&self, _cluster_name: &str, _broker_name: &str, broker_id: Option<i64>) -> bool {
-            broker_id.map_or(false, |id| self.valid_brokers.contains(&id))
+            broker_id.is_some_and(|id| self.valid_brokers.contains(&id))
         }
     }
 
