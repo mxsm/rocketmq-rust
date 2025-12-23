@@ -65,6 +65,8 @@ rocksdb = { version = "0.24", optional = true }
 
 cheetah-string = { workspace = true }
 
+clap = { version = "4.5.53", features = ["derive"] }
+
 [dev-dependencies]
 criterion = { version = "0.8", features = ["async_tokio"] }
 tempfile = "3.10"
