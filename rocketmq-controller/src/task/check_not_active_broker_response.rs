@@ -15,7 +15,4 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-pub(crate) mod broker_close_channel_request;
-pub(crate) mod broker_close_channel_response;
-pub(crate) mod check_not_active_broker_request;
-pub(crate) mod check_not_active_broker_response;
+pub struct CheckNotActiveBrokerResponse;
