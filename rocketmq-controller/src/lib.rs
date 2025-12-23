@@ -73,7 +73,7 @@
 pub mod config;
 pub(crate) mod elect;
 pub mod error;
-pub(crate) mod event;
+pub mod event;
 pub(crate) mod heartbeat;
 pub(crate) mod helper;
 pub mod manager;

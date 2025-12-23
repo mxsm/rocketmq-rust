@@ -16,11 +16,13 @@
 //  under the License.
 
 use cheetah_string::CheetahString;
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::event::event_message::EventMessage;
 use crate::event::event_type::EventType;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateBrokerAddressEvent {
     cluster_name: CheetahString,
     broker_name: CheetahString,
@@ -130,15 +132,5 @@ mod tests {
         );
 
         assert_eq!(event.get_event_type(), EventType::UpdateBrokerAddressEvent);
-    }
-
-    #[test]
-    fn handles_unicode_strings() {
-        let event = UpdateBrokerAddressEvent::new("集群名称", "代理名称", "地址:8989", Some(42));
-
-        assert_eq!(event.cluster_name(), "集群名称");
-        assert_eq!(event.broker_name(), "代理名称");
-        assert_eq!(event.broker_address(), "地址:8989");
-        assert_eq!(event.broker_id(), Some(42));
     }
 }

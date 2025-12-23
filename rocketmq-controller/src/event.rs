@@ -15,11 +15,12 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-pub(crate) mod alter_sync_state_set_event;
-pub(crate) mod apply_broker_id_event;
-pub(crate) mod clean_broker_data_event;
+pub mod alter_sync_state_set_event;
+pub mod apply_broker_id_event;
+pub mod clean_broker_data_event;
 pub(crate) mod controller_result;
-pub(crate) mod elect_master_event;
-pub(crate) mod event_message;
-pub(crate) mod event_type;
-pub(crate) mod update_broker_address_event;
+pub mod elect_master_event;
+pub mod event_message;
+pub mod event_serializer;
+pub mod event_type;
+pub mod update_broker_address_event;
