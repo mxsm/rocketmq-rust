@@ -15,8 +15,10 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
@@ -34,7 +36,10 @@ pub struct BrokerReplicaInfo {
 }
 
 impl BrokerReplicaInfo {
-    pub fn new(cluster_name: impl Into<CheetahString>, broker_name: impl Into<CheetahString>) -> Self {
+    pub fn new(
+        cluster_name: impl Into<CheetahString>,
+        broker_name: impl Into<CheetahString>,
+    ) -> Self {
         Self {
             cluster_name: cluster_name.into(),
             broker_name: broker_name.into(),
@@ -59,8 +64,14 @@ impl BrokerReplicaInfo {
         &self.broker_name
     }
 
-    pub fn add_broker(&mut self, broker_id: u64, ip_address: impl Into<CheetahString>, register_check_code: impl Into<CheetahString>) {
-        self.broker_id_info.insert(broker_id, (ip_address.into(), register_check_code.into()));
+    pub fn add_broker(
+        &mut self,
+        broker_id: u64,
+        ip_address: impl Into<CheetahString>,
+        register_check_code: impl Into<CheetahString>,
+    ) {
+        self.broker_id_info
+            .insert(broker_id, (ip_address.into(), register_check_code.into()));
         self.next_assign_broker_id.fetch_add(1, Ordering::SeqCst);
     }
 
@@ -88,7 +99,11 @@ impl BrokerReplicaInfo {
         self.broker_id_info.get(&broker_id).map(|p| p.1.clone())
     }
 
-    pub fn update_broker_address(&mut self, broker_id: u64, broker_address: impl Into<CheetahString>) {
+    pub fn update_broker_address(
+        &mut self,
+        broker_id: u64,
+        broker_address: impl Into<CheetahString>,
+    ) {
         if let Some(pair) = self.broker_id_info.get_mut(&broker_id) {
             pair.0 = broker_address.into();
         }
@@ -135,7 +150,12 @@ impl<'de> Deserialize<'de> for BrokerReplicaInfo {
             broker_id_info: helper
                 .broker_id_info
                 .into_iter()
-                .map(|(k, (a, c))| (k, (CheetahString::from_string(a), CheetahString::from_string(c))))
+                .map(|(k, (a, c))| {
+                    (
+                        k,
+                        (CheetahString::from_string(a), CheetahString::from_string(c)),
+                    )
+                })
                 .collect(),
         })
     }
