@@ -21,3 +21,4 @@ pub(crate) mod check_not_active_broker_request;
 pub(crate) mod check_not_active_broker_response;
 pub(crate) mod get_broker_live_info_request;
 pub(crate) mod get_broker_live_info_response;
+pub(crate) mod raft_broker_heartbeat_event_request;
