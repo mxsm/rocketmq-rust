@@ -17,10 +17,13 @@
 
 use std::collections::HashSet;
 
+use serde::Deserialize;
+use serde::Serialize;
+
 use crate::event::event_message::EventMessage;
 use crate::event::event_type::EventType;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlterSyncStateSetEvent {
     broker_name: String,
     new_sync_state_set: HashSet<u64>, // BrokerId

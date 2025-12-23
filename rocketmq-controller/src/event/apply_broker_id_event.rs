@@ -16,11 +16,13 @@
 //  under the License.
 
 use cheetah_string::CheetahString;
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::event::event_message::EventMessage;
 use crate::event::event_type::EventType;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyBrokerIdEvent {
     cluster_name: CheetahString,
     broker_name: CheetahString,

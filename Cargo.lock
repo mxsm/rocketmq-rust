@@ -2940,6 +2940,7 @@ dependencies = [
  "raft",
  "raft-proto",
  "rocketmq-common",
+ "rocketmq-error",
  "rocketmq-macros",
  "rocketmq-remoting",
  "rocketmq-runtime",
