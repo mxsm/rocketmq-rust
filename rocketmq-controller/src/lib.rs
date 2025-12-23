@@ -84,8 +84,8 @@ pub mod raft;
 pub mod rpc;
 pub mod storage;
 mod task;
-
 pub use config::ControllerConfig;
+pub use elect::policy::DefaultElectPolicy;
 pub use error::ControllerError;
 pub use error::Result;
 pub use manager::ControllerManager;

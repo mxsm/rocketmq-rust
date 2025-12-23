@@ -15,5 +15,6 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-pub(crate) mod elect_policy;
-pub mod policy;
+pub mod default_elect_policy;
+
+pub use default_elect_policy::DefaultElectPolicy;
