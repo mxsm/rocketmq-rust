@@ -17,9 +17,9 @@
 
 use std::collections::HashSet;
 
+use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
-use cheetah_string::CheetahString;
 
 use crate::event::event_message::EventMessage;
 use crate::event::event_type::EventType;
