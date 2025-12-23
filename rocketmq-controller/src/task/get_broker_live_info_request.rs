@@ -15,8 +15,11 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-pub(crate) mod broker_close_channel_request;
-pub(crate) mod broker_close_channel_response;
-pub(crate) mod check_not_active_broker_request;
-pub(crate) mod check_not_active_broker_response;
-pub(crate) mod get_broker_live_info_request;
+use cheetah_string::CheetahString;
+
+#[derive(Debug, Clone)]
+pub struct GetBrokerLiveInfoRequest {
+    pub cluster_name: Option<CheetahString>,
+    pub broker_name: Option<CheetahString>,
+    pub broker_id: Option<u64>,
+}
