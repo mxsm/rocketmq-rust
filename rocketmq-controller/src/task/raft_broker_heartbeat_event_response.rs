@@ -15,12 +15,22 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-pub(crate) mod broker_close_channel_request;
-pub(crate) mod broker_close_channel_response;
-pub(crate) mod check_not_active_broker_request;
-pub(crate) mod check_not_active_broker_response;
-pub(crate) mod get_broker_live_info_request;
-pub(crate) mod get_broker_live_info_response;
-pub(crate) mod get_sync_state_data_request;
-pub(crate) mod raft_broker_heartbeat_event_request;
-pub(crate) mod raft_broker_heartbeat_event_response;
+use std::fmt;
+
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RaftBrokerHeartBeatEventResponse {}
+
+impl RaftBrokerHeartBeatEventResponse {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl fmt::Display for RaftBrokerHeartBeatEventResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "RaftBrokerHeartBeatEventResponse{{}}")
+    }
+}
