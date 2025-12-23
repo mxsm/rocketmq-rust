@@ -71,6 +71,7 @@
 #![allow(clippy::module_inception)]
 
 pub mod config;
+pub mod controller;
 pub(crate) mod elect;
 pub mod error;
 pub mod event;
@@ -83,7 +84,8 @@ pub mod processor;
 pub mod raft;
 pub mod rpc;
 pub mod storage;
-mod task;
+pub mod task;
+
 pub use config::ControllerConfig;
 pub use elect::policy::DefaultElectPolicy;
 pub use error::ControllerError;
