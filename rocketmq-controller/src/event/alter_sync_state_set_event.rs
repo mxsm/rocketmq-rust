@@ -17,18 +17,20 @@
 
 use std::collections::HashSet;
 
+use cheetah_string::CheetahString;
+
 use crate::event::event_message::EventMessage;
 use crate::event::event_type::EventType;
 
 #[derive(Debug, Clone)]
 pub struct AlterSyncStateSetEvent {
-    broker_name: String,
+    broker_name: CheetahString,
     new_sync_state_set: HashSet<u64>, // BrokerId
 }
 
 impl AlterSyncStateSetEvent {
     pub fn new(
-        broker_name: impl Into<String>,
+        broker_name: impl Into<CheetahString>,
         new_sync_state_set: impl IntoIterator<Item = u64>,
     ) -> Self {
         Self {
