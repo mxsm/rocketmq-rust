@@ -19,11 +19,12 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
+use std::sync::LazyLock;
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
-use lazy_static::lazy_static;
 use rocketmq_common::common::message::message_batch::MessageBatch;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
@@ -128,18 +129,14 @@ use crate::producer::send_callback::SendMessageCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::send_status::SendStatus;
 
-lazy_static! {
-    static ref sendSmartMsg: bool = std::env::var("org.apache.rocketmq.client.sendSmartMsg")
+static INIT_REMOTING_VERSION: OnceLock<()> = OnceLock::new();
+
+static SEND_SMART_MSG: LazyLock<bool> = LazyLock::new(|| {
+    std::env::var("org.apache.rocketmq.client.sendSmartMsg")
         .unwrap_or("false".to_string())
         .parse()
-        .unwrap_or(false);
-    static ref INIT_REMOTING_VERSION: () = {
-        EnvUtils::put_property(
-            remoting_command::REMOTING_VERSION_KEY,
-            (CURRENT_VERSION as u32).to_string(),
-        );
-    };
-}
+        .unwrap_or(false)
+});
 
 pub struct MQClientAPIImpl {
     remoting_client: ArcMut<RocketmqDefaultClient<ClientRemotingProcessor>>,
@@ -361,7 +358,7 @@ impl MQClientAPIImpl {
         client_config: ClientConfig,
         tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
     ) -> Self {
-        lazy_static::initialize(&INIT_REMOTING_VERSION);
+        init_remoting_version();
 
         let mut default_client =
             RocketmqDefaultClient::new_with_cl(tokio_client_config, client_remoting_processor, tx);
@@ -528,7 +525,7 @@ impl MQClientAPIImpl {
         ));
         let is_reply = msg_type.is_some() && msg_type.unwrap() == mix_all::REPLY_MESSAGE_FLAG;
         let mut request = if is_reply {
-            if *sendSmartMsg {
+            if *SEND_SMART_MSG {
                 let request_header_v2 =
                     SendMessageRequestHeaderV2::create_send_message_request_header_v2(
                         &request_header,
@@ -545,7 +542,7 @@ impl MQClientAPIImpl {
             }
         } else {
             let is_batch_message = msg.as_any().downcast_ref::<MessageBatch>().is_some();
-            if *sendSmartMsg || is_batch_message {
+            if *SEND_SMART_MSG || is_batch_message {
                 let request_header_v2 =
                     SendMessageRequestHeaderV2::create_send_message_request_header_v2(
                         &request_header,
@@ -2285,4 +2282,13 @@ fn build_queue_offset_sorted_map(
             .push(message_ext.queue_offset() as u64);
     }
     Ok(sort_map)
+}
+
+pub fn init_remoting_version() {
+    INIT_REMOTING_VERSION.get_or_init(|| {
+        EnvUtils::put_property(
+            remoting_command::REMOTING_VERSION_KEY,
+            (CURRENT_VERSION as u32).to_string(),
+        );
+    });
 }
