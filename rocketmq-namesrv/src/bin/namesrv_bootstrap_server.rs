@@ -93,7 +93,7 @@ fn parse_config_file() -> Result<(NamesrvConfig, u32, String)> {
     };
 
     info!(
-        "Rocketmq name remoting_server(Rust) running on: {}:{}",
+        "Rocketmq name server(Rust) running on: {}:{}",
         args.ip, args.port
     );
     Ok((namesrv_config, args.port, args.ip))
@@ -103,10 +103,10 @@ fn parse_config_file() -> Result<(NamesrvConfig, u32, String)> {
 #[command(
     author = "mxsm",
     version = "0.1.0",
-    about = "RocketMQ Name remoting_server(Rust)"
+    about = "RocketMQ Name server(Rust)"
 )]
 struct Args {
-    /// rocketmq name remoting_server port
+    /// rocketmq name server port
     #[arg(
         short,
         long,
@@ -117,7 +117,7 @@ struct Args {
     )]
     port: u32,
 
-    /// rocketmq name remoting_server ip
+    /// rocketmq name server ip
     #[arg(
         short,
         long,
