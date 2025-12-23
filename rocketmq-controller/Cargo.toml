@@ -81,3 +81,7 @@ storage-rocksdb = ["rocksdb"]
 storage-file = []
 metrics = []
 debug = []
+
+[[bin]]
+name = "rocketmq-controller-rust"
+path = "src/bin/controller_bootstrap.rs"
