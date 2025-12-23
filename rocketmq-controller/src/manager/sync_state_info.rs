@@ -139,3 +139,65 @@ impl<'de> Deserialize<'de> for SyncStateInfo {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_sync_state_info() {
+        let cluster_name = "test_cluster";
+        let broker_name = "test_broker";
+        let info = SyncStateInfo::new(cluster_name, broker_name);
+
+        assert_eq!(info.cluster_name(), cluster_name);
+        assert_eq!(info.broker_name(), broker_name);
+        assert_eq!(info.master_epoch(), 0);
+        assert_eq!(info.sync_state_set_epoch(), 0);
+        assert!(info.sync_state_set().is_empty());
+        assert!(info.master_broker_id().is_none());
+        assert!(info.is_first_time_for_elect());
+    }
+
+    #[test]
+    fn test_update_master_info() {
+        let mut info = SyncStateInfo::new("c", "b");
+        assert!(!info.is_master_exist());
+
+        info.update_master_info(100);
+
+        assert_eq!(info.master_broker_id(), Some(100));
+        assert_eq!(info.master_epoch(), 1);
+        assert!(info.is_master_exist());
+        assert!(!info.is_first_time_for_elect());
+    }
+
+    #[test]
+    fn test_update_sync_state_set() {
+        let mut info = SyncStateInfo::new("c", "b");
+        let mut set = HashSet::new();
+        set.insert(1);
+        set.insert(2);
+
+        info.update_sync_state_set_info(&set);
+
+        assert_eq!(info.sync_state_set().len(), 2);
+        assert!(info.sync_state_set().contains(&1));
+        assert_eq!(info.sync_state_set_epoch(), 1);
+    }
+
+    #[test]
+    fn test_remove_from_sync_state() {
+        let mut info = SyncStateInfo::new("c", "b");
+        let mut set = HashSet::new();
+        set.insert(1);
+        set.insert(2);
+        info.update_sync_state_set_info(&set);
+
+        info.remove_from_sync_state(1);
+
+        assert_eq!(info.sync_state_set().len(), 1);
+        assert!(!info.sync_state_set().contains(&1));
+        assert!(info.sync_state_set().contains(&2));
+    }
+}
