@@ -491,11 +491,13 @@ pub trait MQProducer {
     ///
     /// * `rocketmq_error::RocketMQResult<SendResult>` - A result containing the send result or an
     ///   error.
-    async fn send_batch_with_timeout(
+    async fn send_batch_with_timeout<M>(
         &mut self,
-        msgs: Vec<Message>,
+        msgs: Vec<M>,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<SendResult>;
+    ) -> rocketmq_error::RocketMQResult<SendResult>
+    where
+        M: MessageTrait + Send + Sync;
 
     /// Sends a batch of messages to a specific message queue.
     ///
