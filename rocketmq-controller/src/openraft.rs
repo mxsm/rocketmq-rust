@@ -21,10 +21,15 @@
 //! consensus and metadata management.
 
 mod log_store;
+mod network;
+mod node;
 mod state_machine;
 pub mod storage;
 
 pub use log_store::LogStore;
+pub use network::NetworkConnection;
+pub use network::NetworkFactory;
+pub use node::RaftNodeManager;
 pub use state_machine::BrokerMetadata;
 pub use state_machine::StateMachine;
 pub use state_machine::TopicConfig;
