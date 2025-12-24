@@ -27,7 +27,7 @@ tokio-util = { workspace = true }
 
 # Raft consensus algorithm  - MIGRATING TO OPENRAFT
 # Old raft for legacy code (temporary until migration completes)
-raft = "0.7"
+raft = { git = "https://github.com/tikv/raft-rs.git", branch = "master" }
 protobuf = "2.28"
 # New openraft implementation
 openraft = { git = "https://github.com/databendlabs/openraft.git", branch = "release-0.10", features = ["serde", "tokio-rt"] }
