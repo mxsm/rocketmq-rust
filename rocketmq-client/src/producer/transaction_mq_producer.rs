@@ -368,11 +368,14 @@ impl MQProducer for TransactionMQProducer {
             .await
     }
 
-    async fn send_batch_to_queue(
+    async fn send_batch_to_queue<M>(
         &mut self,
-        msgs: Vec<Message>,
+        msgs: Vec<M>,
         mq: MessageQueue,
-    ) -> rocketmq_error::RocketMQResult<SendResult> {
+    ) -> rocketmq_error::RocketMQResult<SendResult>
+    where
+        M: MessageTrait + Send + Sync,
+    {
         self.default_producer.send_batch_to_queue(msgs, mq).await
     }
 
