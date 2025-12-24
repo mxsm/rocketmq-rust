@@ -543,12 +543,13 @@ pub trait MQProducer {
     /// # Returns
     ///
     /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
-    async fn send_batch_with_callback<F>(
+    async fn send_batch_with_callback<M, F>(
         &mut self,
-        msgs: Vec<Message>,
+        msgs: Vec<M>,
         f: F,
     ) -> rocketmq_error::RocketMQResult<()>
     where
+        M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static;
 
     /// Sends a batch of messages with a callback and a timeout.
