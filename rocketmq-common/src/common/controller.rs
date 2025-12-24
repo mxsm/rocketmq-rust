@@ -15,9 +15,7 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-pub mod metrics_exporter_type;
-pub mod nop_long_counter;
-pub mod nop_long_histogram;
-pub mod nop_observable_long_gauge;
+pub mod controller_config;
 
-pub use metrics_exporter_type::MetricsExporterType;
+pub use controller_config::ControllerConfig;
+pub use controller_config::RAFT_CONTROLLER;
