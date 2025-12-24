@@ -133,7 +133,7 @@ openraft::declare_raft_types!(
         D = ControllerRequest,
         R = ControllerResponse,
         Node = Node,
-        SnapshotData = Vec<u8>,
+        SnapshotData = std::io::Cursor<Vec<u8>>,
 );
 
 /// Type alias for the Raft instance

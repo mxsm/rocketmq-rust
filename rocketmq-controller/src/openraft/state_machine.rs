@@ -288,7 +288,7 @@ impl RaftSnapshotBuilder<TypeConfig> for StateMachine {
                 last_membership,
                 snapshot_id: format!("snapshot-{}", last_applied.index),
             },
-            snapshot: snapshot_data,
+            snapshot: std::io::Cursor::new(snapshot_data),
         })
     }
 }
@@ -351,21 +351,24 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
         }
     }
 
-    async fn begin_receiving_snapshot(&mut self) -> Result<Vec<u8>, std::io::Error> {
-        Ok(Vec::new())
+    async fn begin_receiving_snapshot(
+        &mut self,
+    ) -> Result<std::io::Cursor<Vec<u8>>, std::io::Error> {
+        Ok(std::io::Cursor::new(Vec::new()))
     }
 
     async fn install_snapshot(
         &mut self,
         meta: &openraft::SnapshotMeta<TypeConfig>,
-        snapshot: Vec<u8>,
+        snapshot: std::io::Cursor<Vec<u8>>,
     ) -> Result<(), std::io::Error> {
-        let snapshot_data: SnapshotData = serde_json::from_slice(&snapshot).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Failed to deserialize snapshot: {}", e),
-            )
-        })?;
+        let snapshot_data: SnapshotData =
+            serde_json::from_slice(snapshot.get_ref()).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Failed to deserialize snapshot: {}", e),
+                )
+            })?;
 
         self.install_snapshot_data(snapshot_data).await;
 
