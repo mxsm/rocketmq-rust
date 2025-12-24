@@ -385,8 +385,10 @@ mod tests {
 
     #[test]
     fn test_config_validation_invalid_type() {
-        let mut config = ControllerConfig::default();
-        config.controller_type = "InvalidType".to_string();
+        let config = ControllerConfig {
+            controller_type: "InvalidType".to_string(),
+            ..Default::default()
+        };
 
         assert!(config.validate().is_err());
     }
