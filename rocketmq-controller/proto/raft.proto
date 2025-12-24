@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package rocketmq_rust_controller;
+
+// Internal Raft protocol messages
+
+service RaftService {
+  // Append entries RPC
+  rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
+  
+  // Stream append entries for pipeline replication
+  rpc StreamAppend(stream AppendEntriesRequest) returns (stream AppendEntriesResponse);
+  
+  // Vote RPC
+  rpc Vote(VoteRequest) returns (VoteResponse);
+  
+  // Install snapshot RPC
+  rpc InstallSnapshot(stream SnapshotRequest) returns (SnapshotResponse);
+}
+
+// Vote request
+message VoteRequest {
+  uint64 term = 1;
+  uint64 candidate_id = 2;
+  optional uint64 last_log_index = 3;
+  optional uint64 last_log_term = 4;
+}
+
+// Vote response
+message VoteResponse {
+  uint64 term = 1;
+  bool vote_granted = 2;
+  optional uint64 last_log_index = 3;
+}
+
+// Log entry
+message LogEntry {
+  uint64 term = 1;
+  uint64 index = 2;
+  bytes data = 3;
+}
+
+// Append entries request
+message AppendEntriesRequest {
+  uint64 term = 1;
+  uint64 leader_id = 2;
+  optional uint64 prev_log_index = 3;
+  optional uint64 prev_log_term = 4;
+  repeated LogEntry entries = 5;
+  optional uint64 leader_commit = 6;
+}
+
+// Append entries response
+message AppendEntriesResponse {
+  uint64 term = 1;
+  bool success = 2;
+  optional uint64 conflict_index = 3;
+  optional uint64 last_log_index = 4;
+}
+
+// Snapshot chunk
+message SnapshotRequest {
+  uint64 term = 1;
+  uint64 leader_id = 2;
+  optional uint64 last_included_index = 3;
+  optional uint64 last_included_term = 4;
+  bytes data = 5;
+  bool done = 6;
+}
+
+// Snapshot response
+message SnapshotResponse {
+  uint64 term = 1;
+  bool success = 2;
+}
