@@ -34,7 +34,7 @@ openraft = { git = "https://github.com/databendlabs/openraft.git", branch = "rel
 slog = { version = "2.7", features = ["max_level_trace", "release_max_level_info"] }
 
 # gRPC networking
-tonic = { version = "0.12", features = ["transport", "codegen", "prost"] }
+tonic = { version = "0.13", features = ["transport", "codegen", "prost"] }
 tonic-reflection = "0.12"
 
 # Serialization
