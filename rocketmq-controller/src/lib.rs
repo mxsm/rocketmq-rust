@@ -81,13 +81,13 @@ pub(crate) mod helper;
 pub mod manager;
 pub mod metadata;
 pub mod metrics;
+pub mod openraft;
 pub mod processor;
 pub mod raft;
 pub mod rpc;
 pub mod storage;
 pub mod task;
 pub mod typ;
-
 pub mod protobuf {
     tonic::include_proto!("rocketmq_rust_controller");
 }

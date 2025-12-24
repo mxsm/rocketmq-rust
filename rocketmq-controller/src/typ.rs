@@ -142,8 +142,8 @@ pub type Raft = openraft::Raft<TypeConfig>;
 /// Type alias for Raft configuration
 pub type RaftConfig = openraft::Config;
 
-/// Type alias for log ID
-pub type LogId = openraft::LogId<NodeId>;
+/// Type alias for log ID (using TypeConfig)
+pub type LogId = openraft::LogId<TypeConfig>;
 
 /// Type alias for log entry
 pub type LogEntry = openraft::Entry<TypeConfig>;
@@ -151,8 +151,8 @@ pub type LogEntry = openraft::Entry<TypeConfig>;
 /// Type alias for committed log entry
 pub type CommittedLogEntry = openraft::entry::Entry<TypeConfig>;
 
-/// Type alias for vote
-pub type Vote = openraft::Vote<NodeId>;
+/// Type alias for vote (using TypeConfig)
+pub type Vote = openraft::Vote<TypeConfig>;
 
 /// Type alias for Raft metrics
 pub type RaftMetrics = openraft::metrics::RaftMetrics<TypeConfig>;
