@@ -90,6 +90,11 @@ pub mod task;
 pub mod typ;
 pub mod protobuf {
     tonic::include_proto!("rocketmq_rust_controller");
+
+    // OpenRaft protobuf definitions
+    pub mod openraft {
+        tonic::include_proto!("rocketmq_rust_controller.openraft");
+    }
 }
 
 pub use command::Args;

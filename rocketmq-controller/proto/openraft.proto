@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+package rocketmq_rust_controller.openraft;
+
+// OpenRaft RPC service
+service OpenRaftService {
+  // Append entries RPC
+  rpc AppendEntries(OpenRaftAppendRequest) returns (OpenRaftAppendResponse);
+  
+  // Vote RPC for leader election
+  rpc Vote(OpenRaftVoteRequest) returns (OpenRaftVoteResponse);
+  
+  // Install snapshot RPC
+  rpc InstallSnapshot(stream OpenRaftSnapshotRequest) returns (OpenRaftSnapshotResponse);
+}
+
+// LogId represents a unique log entry identifier
+message OpenRaftLogId {
+  uint64 leader_id = 1;
+  uint64 index = 2;
+}
+
+// Vote information
+message OpenRaftVote {
+  uint64 term = 1;
+  uint64 node_id = 2;
+  bool committed = 3;
+}
+
+// Node information
+message OpenRaftNode {
+  string addr = 1;
+  map<string, string> data = 2;
+}
+
+// Log entry for replication
+message OpenRaftLogEntry {
+  OpenRaftLogId log_id = 1;
+  bytes payload = 2;
+}
+
+// Append entries request
+message OpenRaftAppendRequest {
+  OpenRaftVote vote = 1;
+  optional OpenRaftLogId prev_log_id = 2;
+  repeated OpenRaftLogEntry entries = 3;
+  optional OpenRaftLogId leader_commit = 4;
+}
+
+// Append entries response
+message OpenRaftAppendResponse {
+  OpenRaftVote vote = 1;
+  bool success = 2;
+  optional OpenRaftLogId conflict = 3;
+}
+
+// Vote request
+message OpenRaftVoteRequest {
+  OpenRaftVote vote = 1;
+  optional OpenRaftLogId last_log_id = 2;
+}
+
+// Vote response
+message OpenRaftVoteResponse {
+  OpenRaftVote vote = 1;
+  bool vote_granted = 2;
+  optional OpenRaftLogId last_log_id = 3;
+}
+
+// Snapshot metadata
+message OpenRaftSnapshotMeta {
+  optional OpenRaftLogId last_log_id = 1;
+  string snapshot_id = 2;
+  bytes last_membership = 3;
+}
+
+// Snapshot request (streamed)
+message OpenRaftSnapshotRequest {
+  OpenRaftVote vote = 1;
+  OpenRaftSnapshotMeta meta = 2;
+  uint64 offset = 3;
+  bytes data = 4;
+  bool done = 5;
+}
+
+// Snapshot response
+message OpenRaftSnapshotResponse {
+  OpenRaftVote vote = 1;
+}
