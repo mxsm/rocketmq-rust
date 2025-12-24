@@ -42,13 +42,10 @@ use crate::error::Result;
 pub struct MessageCodec;
 
 impl MessageCodec {
-    /// Encode a Raft message to bytes using protobuf
+    /// Encode a Raft message to bytes using protobuf 2.x
     pub fn encode(msg: &Message) -> Result<Bytes> {
-        // Convert to protobuf message
-        let proto_msg: eraftpb::Message = msg.clone();
-
-        // Encode using protobuf v2
-        let encoded = proto_msg
+        // Encode using protobuf 2.x
+        let encoded = msg
             .write_to_bytes()
             .map_err(|e| ControllerError::SerializationError(e.to_string()))?;
 
@@ -87,12 +84,11 @@ impl MessageCodec {
             .await
             .map_err(|e| ControllerError::NetworkError(e.to_string()))?;
 
-        // Deserialize using protobuf v2
-        let proto_msg = eraftpb::Message::parse_from_bytes(&buf)
+        // Deserialize using protobuf 2.x
+        let msg = eraftpb::Message::parse_from_bytes(&buf)
             .map_err(|e| ControllerError::SerializationError(e.to_string()))?;
 
-        // Convert to raft Message
-        Ok(proto_msg)
+        Ok(msg)
     }
 }
 

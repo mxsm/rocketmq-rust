@@ -87,6 +87,10 @@ pub mod rpc;
 pub mod storage;
 pub mod task;
 
+pub mod protobuf {
+    tonic::include_proto!("rocketmq_rust_controller");
+}
+
 pub use command::Args;
 pub use config::ControllerConfig;
 pub use elect::policy::DefaultElectPolicy;

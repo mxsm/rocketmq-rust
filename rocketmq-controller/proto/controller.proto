@@ -1,0 +1,171 @@
+syntax = "proto3";
+
+package rocketmq_rust_controller;
+
+// Application-level Controller API
+
+service ControllerService {
+  // Initialize a new cluster
+  rpc Init(InitRequest) returns (InitResponse);
+  
+  // Add a learner node
+  rpc AddLearner(AddLearnerRequest) returns (AddLearnerResponse);
+  
+  // Change membership
+  rpc ChangeMembership(ChangeMembershipRequest) returns (ChangeMembershipResponse);
+  
+  // Register broker
+  rpc RegisterBroker(RegisterBrokerRequest) returns (RegisterBrokerResponse);
+  
+  // Broker heartbeat
+  rpc BrokerHeartbeat(BrokerHeartbeatRequest) returns (BrokerHeartbeatResponse);
+  
+  // Elect master broker
+  rpc ElectMaster(ElectMasterRequest) returns (ElectMasterResponse);
+  
+  // Get metadata
+  rpc GetMetadata(GetMetadataRequest) returns (GetMetadataResponse);
+  
+  // Get controller metrics
+  rpc Metrics(MetricsRequest) returns (MetricsResponse);
+}
+
+// Node information
+message Node {
+  uint64 node_id = 1;
+  string rpc_addr = 2;
+}
+
+// Init request
+message InitRequest {
+  repeated Node nodes = 1;
+}
+
+// Init response
+message InitResponse {
+  bool success = 1;
+  optional string error = 2;
+  uint64 leader_id = 3;
+}
+
+// Add learner request
+message AddLearnerRequest {
+  Node node = 1;
+  bool blocking = 2;
+}
+
+// Add learner response  
+message AddLearnerResponse {
+  bool success = 1;
+  optional string error = 2;
+}
+
+// Change membership request
+message ChangeMembershipRequest {
+  repeated uint64 members = 1;
+  bool retain = 2;
+}
+
+// Change membership response
+message ChangeMembershipResponse {
+  bool success = 1;
+  optional string error = 2;
+}
+
+// Broker info
+message BrokerInfo {
+  string broker_name = 1;
+  string broker_addr = 2;
+  uint64 broker_id = 3;
+  string cluster_name = 4;
+  int32 epoch = 5;
+  int64 max_offset = 6;
+  int64 election_priority = 7;
+}
+
+// Register broker request
+message RegisterBrokerRequest {
+  BrokerInfo broker = 1;
+}
+
+// Register broker response
+message RegisterBrokerResponse {
+  bool success = 1;
+  optional string error = 2;
+  optional string master_addr = 3;
+  optional int32 master_epoch = 4;
+  optional int32 sync_state_set_epoch = 5;
+}
+
+// Broker heartbeat request
+message BrokerHeartbeatRequest {
+  string broker_name = 1;
+  string broker_addr = 2;
+  uint64 broker_id = 3;
+  int64 heartbeat_timeout_millis = 4;
+  int32 epoch = 5;
+  int64 max_offset = 6;
+  int64 confirm_offset = 7;
+}
+
+// Broker heartbeat response
+message BrokerHeartbeatResponse {
+  bool success = 1;
+  optional string error = 2;
+  bool is_master = 3;
+  optional string master_addr = 4;
+  optional int32 master_epoch = 5;
+  optional int32 sync_state_set_epoch = 6;
+}
+
+// Elect master request
+message ElectMasterRequest {
+  string broker_name = 1;
+}
+
+// Elect master response
+message ElectMasterResponse {
+  bool success = 1;
+  optional string error = 2;
+  optional string master_broker = 3;
+  optional string master_addr = 4;
+}
+
+// Get metadata request
+message GetMetadataRequest {
+  string metadata_type = 1;
+  optional string key = 2;
+}
+
+// Topic info
+message TopicInfo {
+  string topic_name = 1;
+  int32 read_queue_nums = 2;
+  int32 write_queue_nums = 3;
+  int32 perm = 4;
+}
+
+// Get metadata response
+message GetMetadataResponse {
+  bool success = 1;
+  optional string error = 2;
+  repeated BrokerInfo brokers = 3;
+  repeated TopicInfo topics = 4;
+  string configs_json = 5;
+}
+
+// Metrics request
+message MetricsRequest {
+}
+
+// Metrics response
+message MetricsResponse {
+  uint64 node_id = 1;
+  optional uint64 leader_id = 2;
+  uint64 current_term = 3;
+  string state = 4;
+  uint64 last_log_index = 5;
+  uint64 commit_index = 6;
+  repeated uint64 members = 7;
+  string metrics_json = 8;
+}
