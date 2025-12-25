@@ -15,6 +15,4 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-pub mod broker_heartbeat_manager;
-pub mod broker_housekeeping_service;
-pub mod controller_manager;
+pub struct ControllerManager;
