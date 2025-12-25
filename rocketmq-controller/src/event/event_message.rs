@@ -15,8 +15,12 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
+use std::any::Any;
+
 use crate::event::event_type::EventType;
 
-pub trait EventMessage {
+pub trait EventMessage: Any {
     fn get_event_type(&self) -> EventType;
+
+    fn as_any(&self) -> &dyn Any;
 }

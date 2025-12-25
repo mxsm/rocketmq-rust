@@ -71,6 +71,9 @@ pub struct ControllerConfig {
 
     /// Heartbeat interval in milliseconds
     pub heartbeat_interval_ms: u64,
+
+    /// Enable elect unclean master (master not in sync state set)
+    pub enable_elect_unclean_master: bool,
 }
 
 impl ControllerConfig {
@@ -84,6 +87,7 @@ impl ControllerConfig {
             storage_backend: StorageBackendType::RocksDB,
             election_timeout_ms: 1000,
             heartbeat_interval_ms: 300,
+            enable_elect_unclean_master: false,
         }
     }
 
@@ -114,6 +118,12 @@ impl ControllerConfig {
     /// Set heartbeat interval
     pub fn with_heartbeat_interval_ms(mut self, interval_ms: u64) -> Self {
         self.heartbeat_interval_ms = interval_ms;
+        self
+    }
+
+    /// Set enable elect unclean master
+    pub fn with_enable_elect_unclean_master(mut self, enable: bool) -> Self {
+        self.enable_elect_unclean_master = enable;
         self
     }
 
@@ -180,6 +190,7 @@ impl ControllerConfig {
             storage_backend: StorageBackendType::Memory,
             election_timeout_ms: 1000,
             heartbeat_interval_ms: 300,
+            enable_elect_unclean_master: false,
         }
     }
 }

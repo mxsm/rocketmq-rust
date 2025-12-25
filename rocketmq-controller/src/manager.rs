@@ -16,6 +16,7 @@
 //  under the License.
 
 pub(crate) mod broker_replica_info;
+pub(crate) mod replicas_info_manager;
 pub(crate) mod sync_state_info;
 
 use std::sync::Arc;

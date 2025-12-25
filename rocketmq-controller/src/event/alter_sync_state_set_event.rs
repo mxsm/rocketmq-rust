@@ -54,6 +54,10 @@ impl AlterSyncStateSetEvent {
 
 impl EventMessage for AlterSyncStateSetEvent {
     fn get_event_type(&self) -> EventType {
-        EventType::AlterSyncStateSetEvent
+        EventType::AlterSyncStateSet
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
