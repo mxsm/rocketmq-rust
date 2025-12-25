@@ -83,6 +83,10 @@ impl ElectMasterEvent {
 
 impl EventMessage for ElectMasterEvent {
     fn get_event_type(&self) -> EventType {
-        EventType::ElectMasterEvent
+        EventType::ElectMaster
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }

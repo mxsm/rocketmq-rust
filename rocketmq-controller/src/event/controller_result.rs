@@ -59,4 +59,37 @@ impl<T> ControllerResult<T> {
     pub fn add_event(&mut self, event: Arc<dyn EventMessage + Send + Sync>) {
         self.events.push(event);
     }
+
+    pub fn response(&self) -> Option<&T> {
+        self.response.as_ref()
+    }
+
+    pub fn response_mut(&mut self) -> Option<&mut T> {
+        self.response.as_mut()
+    }
+
+    pub fn body(&self) -> Option<&Bytes> {
+        self.body.as_ref()
+    }
+
+    pub fn set_body(&mut self, body: Bytes) {
+        self.body = Some(body);
+    }
+
+    pub fn response_code(&self) -> ResponseCode {
+        self.response_code
+    }
+
+    pub fn remark(&self) -> Option<&str> {
+        self.remark.as_ref().map(|s| s.as_str())
+    }
+
+    pub fn set_code_and_remark(&mut self, code: ResponseCode, remark: impl Into<CheetahString>) {
+        self.response_code = code;
+        self.remark = Some(remark.into());
+    }
+
+    pub fn is_success(&self) -> bool {
+        self.response_code == ResponseCode::Success
+    }
 }

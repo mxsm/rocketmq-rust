@@ -21,23 +21,23 @@ use std::fmt;
 #[repr(i16)]
 #[allow(clippy::enum_variant_names)]
 pub enum EventType {
-    AlterSyncStateSetEvent = 1,
-    ApplyBrokerIdEvent = 2,
-    ElectMasterEvent = 3,
+    AlterSyncStateSet = 1,
+    ApplyBrokerId = 2,
+    ElectMaster = 3,
     ReadEvent = 4,
-    CleanBrokerDataEvent = 5,
-    UpdateBrokerAddressEvent = 6,
+    CleanBrokerData = 5,
+    UpdateBrokerAddress = 6,
 }
 
 impl EventType {
     pub fn from_id(id: i16) -> Option<Self> {
         match id {
-            1 => Some(Self::AlterSyncStateSetEvent),
-            2 => Some(Self::ApplyBrokerIdEvent),
-            3 => Some(Self::ElectMasterEvent),
+            1 => Some(Self::AlterSyncStateSet),
+            2 => Some(Self::ApplyBrokerId),
+            3 => Some(Self::ElectMaster),
             4 => Some(Self::ReadEvent),
-            5 => Some(Self::CleanBrokerDataEvent),
-            6 => Some(Self::UpdateBrokerAddressEvent),
+            5 => Some(Self::CleanBrokerData),
+            6 => Some(Self::UpdateBrokerAddress),
             _ => None,
         }
     }
@@ -49,12 +49,12 @@ impl EventType {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::AlterSyncStateSetEvent => "AlterSyncStateSetEvent",
-            Self::ApplyBrokerIdEvent => "ApplyBrokerIdEvent",
-            Self::ElectMasterEvent => "ElectMasterEvent",
+            Self::AlterSyncStateSet => "AlterSyncStateSet",
+            Self::ApplyBrokerId => "ApplyBrokerId",
+            Self::ElectMaster => "ElectMaster",
             Self::ReadEvent => "ReadEvent",
-            Self::CleanBrokerDataEvent => "CleanBrokerDataEvent",
-            Self::UpdateBrokerAddressEvent => "UpdateBrokerAddressEvent",
+            Self::CleanBrokerData => "CleanBrokerData",
+            Self::UpdateBrokerAddress => "UpdateBrokerAddress",
         }
     }
 }

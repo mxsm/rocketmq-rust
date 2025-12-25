@@ -27,17 +27,17 @@ use crate::event::event_type::EventType;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CleanBrokerDataEvent {
     broker_name: CheetahString,
-    broker_id_set_to_clean: HashSet<u64>,
+    broker_id_set_to_clean: Option<HashSet<u64>>,
 }
 
 impl CleanBrokerDataEvent {
     pub fn new(
         broker_name: impl Into<CheetahString>,
-        broker_id_set_to_clean: impl IntoIterator<Item = u64>,
+        broker_id_set_to_clean: Option<HashSet<u64>>,
     ) -> Self {
         Self {
             broker_name: broker_name.into(),
-            broker_id_set_to_clean: broker_id_set_to_clean.into_iter().collect(),
+            broker_id_set_to_clean,
         }
     }
 
@@ -47,13 +47,17 @@ impl CleanBrokerDataEvent {
     }
 
     #[inline]
-    pub fn broker_id_set_to_clean(&self) -> &HashSet<u64> {
-        &self.broker_id_set_to_clean
+    pub fn broker_id_set_to_clean(&self) -> Option<&HashSet<u64>> {
+        self.broker_id_set_to_clean.as_ref()
     }
 }
 
 impl EventMessage for CleanBrokerDataEvent {
     fn get_event_type(&self) -> EventType {
-        EventType::CleanBrokerDataEvent
+        EventType::CleanBrokerData
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }

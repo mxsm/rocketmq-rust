@@ -76,6 +76,10 @@ impl ApplyBrokerIdEvent {
 
 impl EventMessage for ApplyBrokerIdEvent {
     fn get_event_type(&self) -> EventType {
-        EventType::ApplyBrokerIdEvent
+        EventType::ApplyBrokerId
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }

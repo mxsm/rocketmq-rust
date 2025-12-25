@@ -48,7 +48,7 @@ fn test_serialize_deserialize_alter_sync_state_set_event() {
 
     // Verify event type in header
     let event_type_id = i16::from_be_bytes([bytes[0], bytes[1]]);
-    assert_eq!(event_type_id, EventType::AlterSyncStateSetEvent.id());
+    assert_eq!(event_type_id, EventType::AlterSyncStateSet.id());
 
     // Deserialize
     let deserialized = serializer.deserialize(&bytes).unwrap().unwrap();
@@ -81,7 +81,7 @@ fn test_serialize_deserialize_apply_broker_id_event() {
 
     // Verify event type
     let event_type_id = i16::from_be_bytes([bytes[0], bytes[1]]);
-    assert_eq!(event_type_id, EventType::ApplyBrokerIdEvent.id());
+    assert_eq!(event_type_id, EventType::ApplyBrokerId.id());
 
     // Deserialize
     let deserialized = serializer.deserialize(&bytes).unwrap().unwrap();
@@ -110,7 +110,7 @@ fn test_serialize_deserialize_elect_master_event_with_new_master() {
 
     // Verify event type
     let event_type_id = i16::from_be_bytes([bytes[0], bytes[1]]);
-    assert_eq!(event_type_id, EventType::ElectMasterEvent.id());
+    assert_eq!(event_type_id, EventType::ElectMaster.id());
 
     // Deserialize
     let deserialized = serializer.deserialize(&bytes).unwrap().unwrap();
@@ -155,13 +155,18 @@ fn test_serialize_deserialize_elect_master_event_without_new_master() {
 fn test_serialize_deserialize_clean_broker_data_event() {
     let serializer = EventSerializer::new();
 
-    let broker_ids: Vec<u64> = vec![1, 2, 3, 4, 5];
-    let event = CleanBrokerDataEvent::new("test-broker", broker_ids.clone());
+    let mut broker_ids = HashSet::new();
+    broker_ids.insert(1u64);
+    broker_ids.insert(2u64);
+    broker_ids.insert(3u64);
+    broker_ids.insert(4u64);
+    broker_ids.insert(5u64);
+    let event = CleanBrokerDataEvent::new("test-broker", Some(broker_ids));
     let bytes = serializer.serialize_event(event.clone()).unwrap().unwrap();
 
     // Verify event type
     let event_type_id = i16::from_be_bytes([bytes[0], bytes[1]]);
-    assert_eq!(event_type_id, EventType::CleanBrokerDataEvent.id());
+    assert_eq!(event_type_id, EventType::CleanBrokerData.id());
 
     // Deserialize
     let deserialized = serializer.deserialize(&bytes).unwrap().unwrap();
@@ -182,17 +187,13 @@ fn test_serialize_deserialize_clean_broker_data_event() {
 fn test_serialize_deserialize_update_broker_address_event_with_id() {
     let serializer = EventSerializer::new();
 
-    let event = UpdateBrokerAddressEvent::new(
-        "test-cluster",
-        "test-broker",
-        "192.168.1.200:10911",
-        Some(99),
-    );
+    let event =
+        UpdateBrokerAddressEvent::new("test-cluster", "test-broker", "192.168.1.200:10911", 99);
     let bytes = serializer.serialize_event(event.clone()).unwrap().unwrap();
 
     // Verify event type
     let event_type_id = i16::from_be_bytes([bytes[0], bytes[1]]);
-    assert_eq!(event_type_id, EventType::UpdateBrokerAddressEvent.id());
+    assert_eq!(event_type_id, EventType::UpdateBrokerAddress.id());
 
     // Deserialize
     let deserialized = serializer.deserialize(&bytes).unwrap().unwrap();
@@ -213,7 +214,7 @@ fn test_serialize_deserialize_update_broker_address_event_without_id() {
     let serializer = EventSerializer::new();
 
     let event =
-        UpdateBrokerAddressEvent::new("test-cluster", "test-broker", "192.168.1.200:10911", None);
+        UpdateBrokerAddressEvent::new("test-cluster", "test-broker", "192.168.1.200:10911", 0);
     let bytes = serializer.serialize_event(event.clone()).unwrap().unwrap();
 
     // Deserialize
@@ -224,7 +225,7 @@ fn test_serialize_deserialize_update_broker_address_event_without_id() {
         assert_eq!(deserialized_event.cluster_name(), event.cluster_name());
         assert_eq!(deserialized_event.broker_name(), event.broker_name());
         assert_eq!(deserialized_event.broker_address(), event.broker_address());
-        assert_eq!(deserialized_event.broker_id(), None);
+        assert_eq!(deserialized_event.broker_id(), 0);
     } else {
         panic!("Expected UpdateBrokerAddressEvent");
     }
@@ -295,6 +296,10 @@ fn test_multiple_events_round_trip() {
     let serializer = EventSerializer::new();
 
     // Create multiple events
+    let mut broker_ids = HashSet::new();
+    broker_ids.insert(1u64);
+    broker_ids.insert(2u64);
+    broker_ids.insert(3u64);
     let events = [
         Event::ElectMaster(ElectMasterEvent::with_new_master("broker1", 1)),
         Event::ApplyBrokerId(ApplyBrokerIdEvent::new(
@@ -304,7 +309,7 @@ fn test_multiple_events_round_trip() {
             2,
             "code1",
         )),
-        Event::CleanBrokerData(CleanBrokerDataEvent::new("broker3", vec![1, 2, 3])),
+        Event::CleanBrokerData(CleanBrokerDataEvent::new("broker3", Some(broker_ids))),
     ];
 
     // Serialize all events
@@ -331,12 +336,12 @@ fn test_multiple_events_round_trip() {
 #[test]
 fn test_event_type_extraction() {
     let elect_event = Event::ElectMaster(ElectMasterEvent::with_new_master("broker", 1));
-    assert_eq!(elect_event.event_type(), EventType::ElectMasterEvent);
+    assert_eq!(elect_event.event_type(), EventType::ElectMaster);
 
     let apply_event = Event::ApplyBrokerId(ApplyBrokerIdEvent::new(
         "cluster", "broker", "addr", 1, "code",
     ));
-    assert_eq!(apply_event.event_type(), EventType::ApplyBrokerIdEvent);
+    assert_eq!(apply_event.event_type(), EventType::ApplyBrokerId);
 }
 
 #[test]

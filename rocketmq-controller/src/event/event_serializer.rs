@@ -49,11 +49,11 @@ impl Event {
     /// Get the event type of this event
     pub fn event_type(&self) -> EventType {
         match self {
-            Event::AlterSyncStateSet(_) => EventType::AlterSyncStateSetEvent,
-            Event::ApplyBrokerId(_) => EventType::ApplyBrokerIdEvent,
-            Event::ElectMaster(_) => EventType::ElectMasterEvent,
-            Event::CleanBrokerData(_) => EventType::CleanBrokerDataEvent,
-            Event::UpdateBrokerAddress(_) => EventType::UpdateBrokerAddressEvent,
+            Event::AlterSyncStateSet(_) => EventType::AlterSyncStateSet,
+            Event::ApplyBrokerId(_) => EventType::ApplyBrokerId,
+            Event::ElectMaster(_) => EventType::ElectMaster,
+            Event::CleanBrokerData(_) => EventType::CleanBrokerData,
+            Event::UpdateBrokerAddress(_) => EventType::UpdateBrokerAddress,
         }
     }
 }
@@ -195,7 +195,7 @@ impl EventSerializer {
         // Deserialize based on event type
         // Java: switch (eventType) with individual deserialize calls
         let event = match event_type {
-            EventType::AlterSyncStateSetEvent => {
+            EventType::AlterSyncStateSet => {
                 let alter_event: AlterSyncStateSetEvent = serde_json::from_slice(json_data)
                     .map_err(|e| {
                         SerializationError::event_deserialization_failed(format!(
@@ -205,7 +205,7 @@ impl EventSerializer {
                     })?;
                 Event::AlterSyncStateSet(alter_event)
             }
-            EventType::ApplyBrokerIdEvent => {
+            EventType::ApplyBrokerId => {
                 let apply_event: ApplyBrokerIdEvent =
                     serde_json::from_slice(json_data).map_err(|e| {
                         SerializationError::event_deserialization_failed(format!(
@@ -215,7 +215,7 @@ impl EventSerializer {
                     })?;
                 Event::ApplyBrokerId(apply_event)
             }
-            EventType::ElectMasterEvent => {
+            EventType::ElectMaster => {
                 let elect_event: ElectMasterEvent =
                     serde_json::from_slice(json_data).map_err(|e| {
                         SerializationError::event_deserialization_failed(format!(
@@ -225,7 +225,7 @@ impl EventSerializer {
                     })?;
                 Event::ElectMaster(elect_event)
             }
-            EventType::CleanBrokerDataEvent => {
+            EventType::CleanBrokerData => {
                 let clean_event: CleanBrokerDataEvent =
                     serde_json::from_slice(json_data).map_err(|e| {
                         SerializationError::event_deserialization_failed(format!(
@@ -235,7 +235,7 @@ impl EventSerializer {
                     })?;
                 Event::CleanBrokerData(clean_event)
             }
-            EventType::UpdateBrokerAddressEvent => {
+            EventType::UpdateBrokerAddress => {
                 let update_event: UpdateBrokerAddressEvent = serde_json::from_slice(json_data)
                     .map_err(|e| {
                         SerializationError::event_deserialization_failed(format!(
@@ -410,13 +410,13 @@ mod tests {
 
         // First 2 bytes should be event type ID
         let event_type_id = i16::from_be_bytes([bytes[0], bytes[1]]);
-        assert_eq!(event_type_id, EventType::ElectMasterEvent.id());
+        assert_eq!(event_type_id, EventType::ElectMaster.id());
 
         // Deserialize
         let deserialized = serializer.deserialize(&bytes).unwrap().unwrap();
 
         // Check event type
-        assert_eq!(deserialized.event_type(), EventType::ElectMasterEvent);
+        assert_eq!(deserialized.event_type(), EventType::ElectMaster);
 
         // Extract specific event
         if let Event::ElectMaster(deserialized_event) = deserialized {
@@ -461,6 +461,6 @@ mod tests {
 
         // Verify it can be deserialized
         let deserialized = serializer.deserialize(&bytes).unwrap().unwrap();
-        assert_eq!(deserialized.event_type(), EventType::ElectMasterEvent);
+        assert_eq!(deserialized.event_type(), EventType::ElectMaster);
     }
 }

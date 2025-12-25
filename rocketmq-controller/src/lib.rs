@@ -102,6 +102,7 @@ pub use config::ControllerConfig;
 pub use elect::policy::DefaultElectPolicy;
 pub use error::ControllerError;
 pub use error::Result;
+pub use manager::replicas_info_manager::ReplicasInfoManager;
 pub use manager::ControllerManager;
 
 /// Controller module version

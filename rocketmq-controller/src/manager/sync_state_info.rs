@@ -64,6 +64,10 @@ impl SyncStateInfo {
         self.master_epoch.fetch_add(1, Ordering::SeqCst);
     }
 
+    pub fn update_master_info_to_none(&mut self) {
+        self.master_broker_id = None;
+    }
+
     pub fn update_sync_state_set_info(&mut self, new_sync_state_set: &HashSet<u64>) {
         self.sync_state_set = new_sync_state_set.clone();
         self.sync_state_set_epoch.fetch_add(1, Ordering::SeqCst);

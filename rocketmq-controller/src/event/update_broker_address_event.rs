@@ -27,7 +27,7 @@ pub struct UpdateBrokerAddressEvent {
     cluster_name: CheetahString,
     broker_name: CheetahString,
     broker_address: CheetahString,
-    broker_id: Option<u64>,
+    broker_id: u64,
 }
 
 impl UpdateBrokerAddressEvent {
@@ -35,7 +35,7 @@ impl UpdateBrokerAddressEvent {
         cluster_name: impl Into<CheetahString>,
         broker_name: impl Into<CheetahString>,
         broker_address: impl Into<CheetahString>,
-        broker_id: Option<u64>,
+        broker_id: u64,
     ) -> Self {
         Self {
             cluster_name: cluster_name.into(),
@@ -61,14 +61,18 @@ impl UpdateBrokerAddressEvent {
     }
 
     #[inline]
-    pub fn broker_id(&self) -> Option<u64> {
+    pub fn broker_id(&self) -> u64 {
         self.broker_id
     }
 }
 
 impl EventMessage for UpdateBrokerAddressEvent {
     fn get_event_type(&self) -> EventType {
-        EventType::UpdateBrokerAddressEvent
+        EventType::UpdateBrokerAddress
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -87,13 +91,13 @@ mod tests {
             TEST_CLUSTER_NAME,
             TEST_BROKER_NAME,
             TEST_BROKER_ADDRESS,
-            BROKER_ID,
+            0,
         );
 
         assert_eq!(event.cluster_name(), TEST_CLUSTER_NAME);
         assert_eq!(event.broker_name(), TEST_BROKER_NAME);
         assert_eq!(event.broker_address(), TEST_BROKER_ADDRESS);
-        assert_eq!(event.broker_id(), BROKER_ID);
+        assert_eq!(event.broker_id(), 0);
     }
 
     #[test]
@@ -102,10 +106,10 @@ mod tests {
             TEST_CLUSTER_NAME,
             TEST_BROKER_NAME,
             TEST_BROKER_ADDRESS,
-            None,
+            1,
         );
 
-        assert_eq!(event.broker_id(), None);
+        assert_eq!(event.broker_id(), 1);
     }
 
     #[test]
@@ -114,7 +118,7 @@ mod tests {
             TEST_CLUSTER_NAME,
             String::from(TEST_BROKER_NAME),
             CheetahString::from(TEST_BROKER_ADDRESS),
-            BROKER_ID,
+            0,
         );
 
         assert_eq!(event.cluster_name(), TEST_CLUSTER_NAME);
@@ -128,9 +132,9 @@ mod tests {
             TEST_CLUSTER_NAME,
             TEST_BROKER_NAME,
             TEST_BROKER_ADDRESS,
-            BROKER_ID,
+            0,
         );
 
-        assert_eq!(event.get_event_type(), EventType::UpdateBrokerAddressEvent);
+        assert_eq!(event.get_event_type(), EventType::UpdateBrokerAddress);
     }
 }
