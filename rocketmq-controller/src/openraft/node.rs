@@ -46,7 +46,7 @@ pub struct RaftNodeManager {
     node_id: NodeId,
 
     /// Raft instance
-    raft: Raft,
+    raft: Arc<Raft>,
 
     /// Storage
     store: Arc<Store>,
@@ -99,7 +99,7 @@ impl RaftNodeManager {
 
         Ok(Self {
             node_id,
-            raft,
+            raft: Arc::new(raft),
             store,
         })
     }
@@ -171,8 +171,8 @@ impl RaftNodeManager {
     }
 
     /// Get the Raft instance
-    pub fn raft(&self) -> &Raft {
-        &self.raft
+    pub fn raft(&self) -> Arc<Raft> {
+        self.raft.clone()
     }
 
     /// Get the storage
