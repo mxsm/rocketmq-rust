@@ -15,7 +15,16 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-pub(crate) trait BrokerLifecycleListener: Send + Sync {
+/// Broker lifecycle listener trait
+///
+/// Implementations of this trait will be notified when brokers become inactive.
+pub trait BrokerLifecycleListener: Send + Sync {
     /// Triggered when broker becomes inactive
+    ///
+    /// # Arguments
+    ///
+    /// * `cluster_name` - The cluster name of the broker
+    /// * `broker_name` - The broker name
+    /// * `broker_id` - The broker ID
     fn on_broker_inactive(&self, cluster_name: &str, broker_name: &str, broker_id: i64);
 }

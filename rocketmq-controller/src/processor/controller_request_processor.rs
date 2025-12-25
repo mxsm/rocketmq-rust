@@ -123,7 +123,7 @@ pub struct ControllerRequestProcessor {
     controller_manager: Arc<ControllerManager>,
 
     /// Reference to the heartbeat manager
-    heartbeat_manager: Arc<BrokerHeartbeatManager>,
+    heartbeat_manager: Arc<dyn BrokerHeartbeatManager>,
 
     /// Configuration blacklist - configs that cannot be dynamically updated
     config_blacklist: Arc<HashSet<String>>,
