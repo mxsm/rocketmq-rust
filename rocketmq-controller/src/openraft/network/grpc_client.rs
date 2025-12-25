@@ -177,18 +177,70 @@ impl RaftNetwork<TypeConfig> for GrpcNetworkClient {
 
     async fn install_snapshot(
         &mut self,
-        _req: InstallSnapshotRequest<TypeConfig>,
+        req: InstallSnapshotRequest<TypeConfig>,
         _option: RPCOption,
     ) -> Result<
         InstallSnapshotResponse<TypeConfig>,
         RPCError<TypeConfig, RaftError<TypeConfig, InstallSnapshotError>>,
     > {
-        debug!("Sending install_snapshot to node {}", self.target);
+        debug!(
+            "Sending install_snapshot to node {}: vote={:?}, meta={:?}",
+            self.target, req.vote, req.meta
+        );
 
-        // TODO: Implement snapshot streaming
-        Err(RPCError::Network(NetworkError::new(
-            &std::io::Error::other("InstallSnapshot not yet implemented"),
-        )))
+        let client = self.get_client().await.map_err(RPCError::Network)?;
+
+        // Serialize snapshot metadata
+        let last_membership = serde_json::to_vec(&req.meta.last_membership).map_err(|e| {
+            RPCError::Network(NetworkError::new(&std::io::Error::other(format!(
+                "Failed to serialize membership: {}",
+                e
+            ))))
+        })?;
+
+        // For streaming API, we need to send data in chunks
+        // OpenRaft 0.10 uses offset/data/done fields directly in the request
+        let request = crate::protobuf::openraft::OpenRaftSnapshotRequest {
+            vote: Some(crate::protobuf::openraft::OpenRaftVote {
+                term: req.vote.leader_id.term,
+                node_id: req.vote.leader_id.node_id,
+                committed: req.vote.committed,
+            }),
+            meta: Some(crate::protobuf::openraft::OpenRaftSnapshotMeta {
+                last_log_id: req.meta.last_log_id.map(|id| {
+                    crate::protobuf::openraft::OpenRaftLogId {
+                        leader_id: id.leader_id.node_id,
+                        index: id.index,
+                    }
+                }),
+                snapshot_id: req.meta.snapshot_id.clone(),
+                last_membership: last_membership.clone(),
+            }),
+            offset: req.offset,
+            data: req.data,
+            done: req.done,
+        };
+
+        let stream = tokio_stream::iter(vec![request]);
+
+        // Send streaming request
+        let response = client
+            .install_snapshot(Request::new(stream))
+            .await
+            .map_err(|e| {
+                error!("InstallSnapshot RPC failed: {}", e);
+                RPCError::Network(NetworkError::new(&std::io::Error::other(e.to_string())))
+            })?;
+
+        let proto_resp = response.into_inner();
+
+        // Parse vote from response
+        let vote = proto_resp
+            .vote
+            .map(|v| openraft::Vote::new(v.term, crate::typ::NodeId::from(v.node_id)))
+            .unwrap_or_default();
+
+        Ok(InstallSnapshotResponse { vote })
     }
 
     async fn vote(
