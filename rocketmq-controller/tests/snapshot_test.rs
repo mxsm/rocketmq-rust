@@ -84,7 +84,7 @@ async fn test_state_machine_snapshot() {
 
     // Verify snapshot metadata
     assert!(
-        snapshot.snapshot.get_ref().len() > 0,
+        !snapshot.snapshot.get_ref().is_empty(),
         "Snapshot should contain data"
     );
     println!("Snapshot size: {} bytes", snapshot.snapshot.get_ref().len());
