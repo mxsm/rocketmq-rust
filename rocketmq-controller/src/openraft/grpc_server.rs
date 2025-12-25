@@ -166,9 +166,89 @@ impl OpenRaftService for GrpcRaftService {
 
     async fn install_snapshot(
         &self,
-        _request: Request<tonic::Streaming<OpenRaftSnapshotRequest>>,
+        request: Request<tonic::Streaming<OpenRaftSnapshotRequest>>,
     ) -> Result<Response<OpenRaftSnapshotResponse>, Status> {
-        // TODO: Implement snapshot streaming
-        Err(Status::unimplemented("InstallSnapshot not yet implemented"))
+        use tokio_stream::StreamExt;
+
+        let mut stream = request.into_inner();
+
+        let mut vote: Option<crate::typ::Vote> = None;
+        let mut snapshot_meta: Option<openraft::SnapshotMeta<crate::typ::TypeConfig>> = None;
+        let mut snapshot_data = Vec::new();
+
+        // Receive all chunks
+        while let Some(chunk_result) = stream.next().await {
+            let chunk =
+                chunk_result.map_err(|e| Status::internal(format!("Stream error: {}", e)))?;
+
+            // Extract vote and meta from first chunk
+            if vote.is_none() {
+                if let Some(v) = chunk.vote {
+                    vote = Some(openraft::Vote::new(v.term, v.node_id));
+                }
+            }
+
+            if snapshot_meta.is_none() {
+                if let Some(meta) = chunk.meta {
+                    let last_membership: openraft::StoredMembership<crate::typ::TypeConfig> =
+                        serde_json::from_slice(&meta.last_membership).map_err(|e| {
+                            Status::invalid_argument(format!(
+                                "Failed to deserialize membership: {}",
+                                e
+                            ))
+                        })?;
+
+                    snapshot_meta = Some(openraft::SnapshotMeta {
+                        last_log_id: meta.last_log_id.map(|id| crate::typ::LogId {
+                            leader_id: crate::typ::Vote::new(id.leader_id, id.leader_id).leader_id,
+                            index: id.index,
+                        }),
+                        last_membership,
+                        snapshot_id: meta.snapshot_id,
+                    });
+                }
+            }
+
+            // Append data chunk
+            snapshot_data.extend_from_slice(&chunk.data);
+
+            if chunk.done {
+                break;
+            }
+        }
+
+        let vote = vote.ok_or_else(|| Status::invalid_argument("Missing vote"))?;
+        let meta =
+            snapshot_meta.ok_or_else(|| Status::invalid_argument("Missing snapshot meta"))?;
+
+        debug!(
+            "Received snapshot: size={} bytes, last_log_id={:?}",
+            snapshot_data.len(),
+            meta.last_log_id
+        );
+
+        // Create install snapshot request with correct fields
+        let install_req = crate::typ::InstallSnapshotRequest {
+            vote,
+            meta,
+            offset: 0,
+            data: snapshot_data,
+            done: true,
+        };
+
+        // Install snapshot through Raft
+        match self.raft.install_snapshot(install_req).await {
+            Ok(resp) => Ok(Response::new(OpenRaftSnapshotResponse {
+                vote: Some(crate::protobuf::openraft::OpenRaftVote {
+                    term: resp.vote.leader_id.term,
+                    node_id: resp.vote.leader_id.node_id,
+                    committed: resp.vote.committed,
+                }),
+            })),
+            Err(e) => {
+                error!("InstallSnapshot failed: {}", e);
+                Err(Status::internal(format!("Raft error: {}", e)))
+            }
+        }
     }
 }
