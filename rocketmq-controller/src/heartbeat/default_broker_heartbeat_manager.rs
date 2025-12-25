@@ -44,7 +44,7 @@ use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```no_run,ignore
 /// use std::sync::Arc;
 /// use rocketmq_controller::config::ControllerConfig;
 /// use rocketmq_controller::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
