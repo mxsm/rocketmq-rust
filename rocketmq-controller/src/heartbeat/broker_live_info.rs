@@ -112,9 +112,12 @@ impl BrokerLiveInfo {
         &self.channel
     }
 
-    // setters（迁移期可接受）
     pub fn set_last_update_timestamp(&mut self, ts: u64) {
         self.last_update_timestamp = ts;
+    }
+
+    pub fn set_heartbeat_timeout_millis(&mut self, timeout_millis: u64) {
+        self.heartbeat_timeout_millis = timeout_millis;
     }
 
     pub fn set_epoch(&mut self, epoch: i32) {

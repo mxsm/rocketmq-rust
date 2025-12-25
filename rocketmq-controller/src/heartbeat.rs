@@ -17,3 +17,4 @@
 
 pub(crate) mod broker_identity_info;
 pub(crate) mod broker_live_info;
+pub(crate) mod default_broker_heartbeat_manager;
