@@ -117,10 +117,7 @@ jobs:
       - name: Install system dependencies (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          choco install llvm cmake ninja protoc -y
-          echo "CC=clang" >> $env:GITHUB_ENV
-          echo "CXX=clang++" >> $env:GITHUB_ENV
-          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+          choco install cmake ninja protoc -y
 
       - name: Set up Rust nightly
         uses: dtolnay/rust-toolchain@nightly
