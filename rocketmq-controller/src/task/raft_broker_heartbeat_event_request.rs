@@ -191,3 +191,81 @@ impl fmt::Display for RaftBrokerHeartBeatEventRequest {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_defaults() {
+        let request = RaftBrokerHeartBeatEventRequest::new();
+        assert!(request.cluster_name_identity_info().is_none());
+        assert!(request.broker_name_identity_info().is_none());
+        assert!(request.broker_id().is_none());
+        assert!(request.epoch().is_none());
+    }
+
+    #[test]
+    fn test_setters_and_getters_live_info() {
+        let mut request = RaftBrokerHeartBeatEventRequest::new();
+
+        request.set_broker_name("test_broker");
+        request.set_broker_addr("127.0.0.1:8080");
+        request.set_broker_id(10);
+        request.set_epoch(5);
+        request.set_max_offset(1000);
+        request.set_confirm_offset(900);
+        request.set_heartbeat_timeout_millis(5000);
+        request.set_election_priority(Some(1));
+
+        assert_eq!(
+            request.broker_name(),
+            Some(&CheetahString::from("test_broker"))
+        );
+        assert_eq!(
+            request.broker_addr(),
+            Some(&CheetahString::from("127.0.0.1:8080"))
+        );
+        assert_eq!(request.broker_id(), Some(10));
+        assert_eq!(request.epoch(), Some(5));
+        assert_eq!(request.max_offset(), Some(1000));
+        assert_eq!(request.confirm_offset(), Some(900));
+        assert_eq!(request.heartbeat_timeout_millis(), Some(5000));
+        assert_eq!(request.election_priority(), Some(1));
+    }
+
+    #[test]
+    fn test_broker_identity_info_interaction() {
+        let mut request = RaftBrokerHeartBeatEventRequest::new();
+
+        let info = BrokerIdentityInfo::new("my_cluster", "my_broker", Some(123));
+        request.set_broker_identity_info(&info);
+
+        assert_eq!(
+            request.cluster_name_identity_info(),
+            Some(&CheetahString::from("my_cluster"))
+        );
+        assert_eq!(
+            request.broker_name_identity_info(),
+            Some(&CheetahString::from("my_broker"))
+        );
+        assert_eq!(request.broker_id_identity_info(), Some(123));
+
+        let reconstructed = request.broker_identity_info();
+        assert_eq!(reconstructed.cluster_name, "my_cluster");
+        assert_eq!(reconstructed.broker_id, Some(123));
+    }
+
+    #[test]
+    fn test_display_formatting() {
+        let mut request = RaftBrokerHeartBeatEventRequest::new();
+        request.set_broker_name("DisplayBroker");
+        request.set_epoch(99);
+
+        let output = format!("{}", request);
+
+        assert!(output.contains("RaftBrokerHeartBeatEventRequest"));
+        assert!(output.contains("DisplayBroker"));
+        assert!(output.contains("99"));
+    }
+}
