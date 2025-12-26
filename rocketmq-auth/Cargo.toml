@@ -13,3 +13,4 @@ description.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+cheetah-string = { workspace = true }

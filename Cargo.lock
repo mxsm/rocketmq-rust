@@ -3255,6 +3255,9 @@ dependencies = [
 [[package]]
 name = "rocketmq-auth"
 version = "0.8.0"
+dependencies = [
+ "cheetah-string",
+]
 
 [[package]]
 name = "rocketmq-broker"
