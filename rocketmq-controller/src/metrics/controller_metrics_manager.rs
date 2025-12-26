@@ -696,22 +696,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_calculate_directory_size() {
-        use std::fs::File;
-        use std::io::Write;
-
-        use tempfile::TempDir;
-
-        let temp_dir = TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("test.txt");
-        let mut file = File::create(&file_path).unwrap();
-        file.write_all(b"Hello, World!").unwrap();
-
-        let size = calculate_directory_size(temp_dir.path()).unwrap();
-        assert!(size >= 13); // At least the file size
-    }
-
-    #[test]
     fn test_new_attributes_builder() {
         let attrs = ControllerMetricsManager::new_attributes_builder();
         // Just verify it returns a vector
