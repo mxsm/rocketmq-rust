@@ -106,12 +106,7 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: |
           brew update
-          brew install llvm cmake protobuf snappy lz4 zstd
-
-          echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
-          echo "CC=clang" >> $GITHUB_ENV
-          echo "CXX=clang++" >> $GITHUB_ENV
-          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> $GITHUB_ENV
+          brew install cmake protobuf snappy lz4 zstd
 
       # ---------- Windows ----------
       - name: Install system dependencies (Windows)
