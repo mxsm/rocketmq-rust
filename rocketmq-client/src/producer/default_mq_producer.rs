@@ -1086,12 +1086,15 @@ impl MQProducer for DefaultMQProducer {
         Ok(result.expect("SendResult should not be None"))
     }
 
-    async fn send_batch_to_queue_with_timeout(
+    async fn send_batch_to_queue_with_timeout<M>(
         &mut self,
-        msgs: Vec<Message>,
+        msgs: Vec<M>,
         mq: MessageQueue,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<SendResult> {
+    ) -> rocketmq_error::RocketMQResult<SendResult>
+    where
+        M: MessageTrait + Send + Sync,
+    {
         let batch = self.batch(msgs)?;
         let result = self
             .default_mqproducer_impl
