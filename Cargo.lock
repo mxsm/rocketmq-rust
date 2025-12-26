@@ -2910,7 +2910,7 @@ checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs.git?branch=master#1fd05e000fb094015507c5c985849d370100fb72"
+source = "git+https://github.com/tikv/raft-rs.git?rev=1fd05e0#1fd05e000fb094015507c5c985849d370100fb72"
 dependencies = [
  "bytes",
  "fxhash",
@@ -2928,7 +2928,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs.git?branch=master#1fd05e000fb094015507c5c985849d370100fb72"
+source = "git+https://github.com/tikv/raft-rs.git?rev=1fd05e0#1fd05e000fb094015507c5c985849d370100fb72"
 dependencies = [
  "bytes",
  "protobuf",
