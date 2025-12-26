@@ -46,6 +46,14 @@ pub enum ControllerError {
     #[error("Broker registration failed: {0}")]
     BrokerRegistrationFailed(String),
 
+    /// Not initialized error
+    #[error("Not initialized: {0}")]
+    NotInitialized(String),
+
+    /// Initialization failed error
+    #[error("Initialization failed")]
+    InitializationFailed,
+
     /// Configuration error
     #[error("Configuration error: {0}")]
     ConfigError(String),
