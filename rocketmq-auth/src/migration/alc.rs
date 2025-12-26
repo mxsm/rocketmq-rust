@@ -17,3 +17,4 @@
 
 pub mod acl_config;
 pub mod plain_access_config;
+pub mod plain_access_data;
