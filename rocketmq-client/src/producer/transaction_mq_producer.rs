@@ -410,13 +410,14 @@ impl MQProducer for TransactionMQProducer {
             .await
     }
 
-    async fn send_batch_with_callback_timeout<F>(
+    async fn send_batch_with_callback_timeout<M, F>(
         &mut self,
-        msgs: Vec<Message>,
+        msgs: Vec<M>,
         f: F,
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
+        M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
     {
         self.default_producer
