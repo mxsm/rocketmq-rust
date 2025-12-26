@@ -15,4 +15,5 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
+pub mod acl_config;
 pub mod plain_access_config;
