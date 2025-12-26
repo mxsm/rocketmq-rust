@@ -91,3 +91,49 @@ impl Default for AuthConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_auth_config_default_values() {
+        let config = AuthConfig::default();
+
+        // String fields
+        assert!(config.config_name.is_empty());
+        assert!(config.cluster_name.is_empty());
+        assert!(config.auth_config_path.is_empty());
+
+        assert!(config.authentication_provider.is_empty());
+        assert!(config.authentication_metadata_provider.is_empty());
+        assert!(config.authentication_strategy.is_empty());
+        assert!(config.authentication_whitelist.is_empty());
+        assert!(config.init_authentication_user.is_empty());
+        assert!(config.inner_client_authentication_credentials.is_empty());
+
+        assert!(config.authorization_provider.is_empty());
+        assert!(config.authorization_metadata_provider.is_empty());
+        assert!(config.authorization_strategy.is_empty());
+        assert!(config.authorization_whitelist.is_empty());
+
+        // Boolean fields
+        assert!(!config.authentication_enabled);
+        assert!(!config.authorization_enabled);
+        assert!(!config.migrate_auth_from_v1_enabled);
+
+        // Cache defaults
+        assert_eq!(config.user_cache_max_num, 1000);
+        assert_eq!(config.user_cache_expired_second, 600);
+        assert_eq!(config.user_cache_refresh_second, 60);
+
+        assert_eq!(config.acl_cache_max_num, 1000);
+        assert_eq!(config.acl_cache_expired_second, 600);
+        assert_eq!(config.acl_cache_refresh_second, 60);
+
+        assert_eq!(config.stateful_authentication_cache_max_num, 10000);
+        assert_eq!(config.stateful_authentication_cache_expired_second, 60);
+        assert_eq!(config.stateful_authorization_cache_max_num, 10000);
+        assert_eq!(config.stateful_authorization_cache_expired_second, 60);
+    }
+}
