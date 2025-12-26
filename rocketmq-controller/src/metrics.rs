@@ -14,4 +14,9 @@
 //  KIND, either express or implied.  See the License for the
 //  specific language governing permissions and limitations
 //  under the License.
+
 pub mod controller_metrics_constant;
+pub mod controller_metrics_manager;
+
+pub use controller_metrics_constant::*;
+pub use controller_metrics_manager::ControllerMetricsManager;

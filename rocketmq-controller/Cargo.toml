@@ -27,7 +27,7 @@ tokio-util = { workspace = true }
 
 # Raft consensus algorithm  - MIGRATING TO OPENRAFT
 # Old raft for legacy code (temporary until migration completes)
-raft = { git = "https://github.com/tikv/raft-rs.git", rev = "1fd05e0" }
+raft = { git = "https://github.com/tikv/raft-rs.git", branch = "master" }
 protobuf = "2.28"
 # New openraft implementation
 openraft = { git = "https://github.com/databendlabs/openraft.git", branch = "release-0.10", features = ["serde", "tokio-rt"] }
@@ -68,6 +68,11 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+# Metrics and observability
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "metrics"], optional = true }
+
 # Time utilities
 chrono = "0.4"
 
@@ -94,7 +99,7 @@ harness = false
 default = ["storage-file"]
 storage-rocksdb = ["rocksdb"]
 storage-file = []
-metrics = []
+metrics = ["opentelemetry-otlp"]
 debug = []
 
 [[bin]]
