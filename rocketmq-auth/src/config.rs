@@ -17,7 +17,6 @@
 
 use cheetah_string::CheetahString;
 
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct AuthConfig {
     pub config_name: CheetahString,
