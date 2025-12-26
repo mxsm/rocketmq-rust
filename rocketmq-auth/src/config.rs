@@ -137,4 +137,3 @@ mod tests {
         assert_eq!(config.stateful_authorization_cache_expired_second, 60);
     }
 }
-    
