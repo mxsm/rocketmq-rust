@@ -16,3 +16,4 @@
 //  under the License.
 
 pub mod subject_type;
+pub mod user_status;
