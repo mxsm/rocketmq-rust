@@ -38,7 +38,6 @@ serde_json.workspace = true
 serde_json_any_key.workspace = true
 
 rand.workspace = true
-lazy_static.workspace = true
 
 flate2 = { workspace = true }
 
