@@ -13,6 +13,9 @@ description.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+rocketmq-common = { workspace = true }
+
+
 cheetah-string = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

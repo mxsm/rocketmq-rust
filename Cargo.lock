@@ -3257,6 +3257,7 @@ name = "rocketmq-auth"
 version = "0.8.0"
 dependencies = [
  "cheetah-string",
+ "rocketmq-common",
  "serde",
  "serde_json",
 ]
