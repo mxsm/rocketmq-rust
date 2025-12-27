@@ -2316,7 +2316,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 [[package]]
 name = "openraft"
 version = "0.10.0"
-source = "git+https://github.com/databendlabs/openraft.git?branch=release-0.10#5ee43f35fe94846b8d85254b45a979f0b06b5309"
+source = "git+https://github.com/databendlabs/openraft.git?rev=534bf40#534bf40d9acd02d2405e1786323a54520418e7cc"
 dependencies = [
  "anyerror",
  "byte-unit",
@@ -2326,6 +2326,8 @@ dependencies = [
  "futures",
  "maplit",
  "openraft-macros",
+ "openraft-rt",
+ "openraft-rt-tokio",
  "rand 0.9.2",
  "serde",
  "thiserror 1.0.69",
@@ -2338,13 +2340,34 @@ dependencies = [
 [[package]]
 name = "openraft-macros"
 version = "0.10.0"
-source = "git+https://github.com/databendlabs/openraft.git?branch=release-0.10#5ee43f35fe94846b8d85254b45a979f0b06b5309"
+source = "git+https://github.com/databendlabs/openraft.git?rev=534bf40#534bf40d9acd02d2405e1786323a54520418e7cc"
 dependencies = [
  "chrono",
  "proc-macro2",
  "quote",
  "semver",
  "syn 2.0.111",
+]
+
+[[package]]
+name = "openraft-rt"
+version = "0.10.0"
+source = "git+https://github.com/databendlabs/openraft.git?rev=534bf40#534bf40d9acd02d2405e1786323a54520418e7cc"
+dependencies = [
+ "futures",
+ "openraft-macros",
+ "rand 0.9.2",
+]
+
+[[package]]
+name = "openraft-rt-tokio"
+version = "0.10.0"
+source = "git+https://github.com/databendlabs/openraft.git?rev=534bf40#534bf40d9acd02d2405e1786323a54520418e7cc"
+dependencies = [
+ "futures",
+ "openraft-rt",
+ "rand 0.9.2",
+ "tokio",
 ]
 
 [[package]]
@@ -2955,7 +2978,7 @@ checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs.git?branch=master#1fd05e000fb094015507c5c985849d370100fb72"
+source = "git+https://github.com/tikv/raft-rs.git?rev=1fd05e0#1fd05e000fb094015507c5c985849d370100fb72"
 dependencies = [
  "bytes",
  "fxhash",
@@ -2973,7 +2996,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs.git?branch=master#1fd05e000fb094015507c5c985849d370100fb72"
+source = "git+https://github.com/tikv/raft-rs.git?rev=1fd05e0#1fd05e000fb094015507c5c985849d370100fb72"
 dependencies = [
  "bytes",
  "protobuf",
@@ -4538,6 +4561,7 @@ dependencies = [
  "signal-hook-registry",
  "socket2 0.6.0",
  "tokio-macros",
+ "tracing",
  "windows-sys 0.61.2",
 ]
 
@@ -5049,9 +5073,9 @@ dependencies = [
 
 [[package]]
 name = "validit"
-version = "0.2.4"
+version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1fad49f3eae9c160c06b4d49700a99e75817f127cf856e494b56d5e23170020"
+checksum = "4efba0434d5a0a62d4f22070b44ce055dc18cb64d4fa98276aa523dadfaba0e7"
 dependencies = [
  "anyerror",
 ]
