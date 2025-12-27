@@ -20,7 +20,6 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use lazy_static::lazy_static;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -34,18 +33,15 @@ use crate::common::topic::TopicValidator;
 
 const DEFAULT_CLUSTER_NAME: &str = "DefaultCluster";
 
-lazy_static! {
-    pub static ref LOCAL_HOST_NAME: Option<String> = match hostname::get() {
-        Ok(hostname) => {
-            Some(hostname.to_string_lossy().to_string())
-        }
-        Err(_) => {
-            None
-        }
-    };
-    pub static ref NAMESRV_ADDR: Option<String> =
-        std::env::var(NAMESRV_ADDR_PROPERTY).map_or(Some("127.0.0.1:9876".to_string()), Some);
-}
+pub static LOCAL_HOST_NAME: std::sync::LazyLock<Option<String>> =
+    std::sync::LazyLock::new(|| match hostname::get() {
+        Ok(hostname) => Some(hostname.to_string_lossy().to_string()),
+        Err(_) => None,
+    });
+
+pub static NAMESRV_ADDR: std::sync::LazyLock<Option<String>> = std::sync::LazyLock::new(|| {
+    std::env::var(NAMESRV_ADDR_PROPERTY).map_or(Some("127.0.0.1:9876".to_string()), Some)
+});
 
 /// Default value functions for Serde deserialization
 mod defaults {
