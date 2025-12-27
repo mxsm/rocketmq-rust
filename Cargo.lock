@@ -3258,8 +3258,13 @@ version = "0.8.0"
 dependencies = [
  "cheetah-string",
  "rocketmq-common",
+ "rocketmq-error",
  "serde",
  "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
