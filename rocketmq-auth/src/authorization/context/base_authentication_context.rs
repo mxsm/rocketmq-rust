@@ -20,8 +20,8 @@ use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
 
-use crate::authentication::context::authentication_context::AuthenticationContext;
 use crate::authentication::AsAny;
+use crate::authorization::context::authentication_context::AuthenticationContext;
 
 #[derive(Debug, Default)]
 pub struct BaseAuthenticationContext {
