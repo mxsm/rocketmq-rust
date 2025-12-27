@@ -18,10 +18,13 @@
 use std::hash::Hash;
 
 use cheetah_string::CheetahString;
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::migration::alc::plain_access_config::PlainAccessConfig;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PlainAccessData {
     pub global_white_remote_addresses: Vec<CheetahString>,
 
@@ -30,6 +33,11 @@ pub struct PlainAccessData {
     pub data_version: Vec<DataVersion>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub struct DataVersion {
+    pub timestamp: u64,
+    pub counter: u64,
+}
 impl PlainAccessData {
     pub fn new() -> Self {
         Self::default()
@@ -70,8 +78,3 @@ impl PlainAccessData {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct DataVersion {
-    pub timestamp: u64,
-    pub counter: u64,
-}
