@@ -77,4 +77,3 @@ impl PlainAccessData {
         self.data_version.last()
     }
 }
-
