@@ -15,14 +15,15 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-use std::any::Any;
+use crate::authentication::enums::subject_type::SubjectType;
 
-pub mod context;
-pub mod enums;
-pub mod model;
+pub trait Subject {
+    fn subject_key(&self) -> &str;
 
-pub trait AsAny: Any {
-    fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn subject_type(&self) -> SubjectType;
 
-    fn as_any(&self) -> &dyn Any;
+    #[inline]
+    fn is_subject(&self, subject_type: SubjectType) -> bool {
+        self.subject_type() == subject_type
+    }
 }
