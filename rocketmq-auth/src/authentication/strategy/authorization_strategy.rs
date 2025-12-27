@@ -15,15 +15,11 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-use std::any::Any;
+use rocketmq_error::RocketMQResult;
 
-pub mod context;
-pub mod enums;
-pub mod model;
-pub mod strategy;
-
-pub trait AsAny: Any {
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-
-    fn as_any(&self) -> &dyn Any;
+pub trait AuthorizationStrategy {
+    fn evaluate(
+        &self,
+        context: &dyn crate::authentication::context::authentication_context::AuthenticationContext,
+    ) -> RocketMQResult<()>;
 }
