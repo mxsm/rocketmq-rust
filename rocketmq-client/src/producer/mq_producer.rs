@@ -18,7 +18,6 @@
 use std::any::Any;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageTrait;
 
 use crate::producer::send_callback::SendMessageCallback;
