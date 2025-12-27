@@ -15,5 +15,6 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-mod authentication_context;
+pub mod authentication_context;
 pub mod base_authentication_context;
+pub mod default_authentication_context;
