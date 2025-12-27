@@ -20,6 +20,6 @@ use rocketmq_error::RocketMQResult;
 pub trait AuthorizationStrategy {
     fn evaluate(
         &self,
-        context: &dyn crate::authentication::context::authentication_context::AuthenticationContext,
+        context: &dyn crate::authorization::context::authentication_context::AuthenticationContext,
     ) -> RocketMQResult<()>;
 }
