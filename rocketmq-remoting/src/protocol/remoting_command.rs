@@ -21,7 +21,6 @@ use std::hint;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::sync::Once;
 
 use bytes::Buf;
 use bytes::BufMut;
@@ -59,8 +58,6 @@ static CONFIG_VERSION: std::sync::LazyLock<i32> = std::sync::LazyLock::new(|| {
         .parse::<i32>()
         .unwrap_or(0)
 });
-
-static INIT: std::sync::LazyLock<Once> = std::sync::LazyLock::new(Once::new);
 
 pub static SERIALIZE_TYPE_CONFIG_IN_THIS_SERVER: std::sync::LazyLock<SerializeType> =
     std::sync::LazyLock::new(|| {
