@@ -15,8 +15,4 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-#![allow(dead_code)]
-
-pub mod authentication;
-pub mod config;
-pub mod migration;
+pub mod authentication_context;

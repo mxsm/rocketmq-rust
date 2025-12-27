@@ -15,8 +15,12 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-#![allow(dead_code)]
+use std::any::Any;
 
-pub mod authentication;
-pub mod config;
-pub mod migration;
+pub mod context;
+
+pub trait AsAny: Any {
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+
+    fn as_any(&self) -> &dyn Any;
+}
