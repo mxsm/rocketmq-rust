@@ -1,0 +1,98 @@
+//  Licensed to the Apache Software Foundation (ASF) under one
+//  or more contributor license agreements.  See the NOTICE file
+//  distributed with this work for additional information
+//  regarding copyright ownership.  The ASF licenses this file
+//  to you under the Apache License, Version 2.0 (the
+//  "License"); you may not use this file except in compliance
+//  with the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing,
+//  software distributed under the License is distributed on an
+//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+//  KIND, either express or implied.  See the License for the
+//  specific language governing permissions and limitations
+//  under the License.
+use cheetah_string::CheetahString;
+
+use crate::authentication::enums::subject_type::SubjectType;
+use crate::authentication::enums::user_status::UserStatus;
+use crate::authentication::enums::user_type::UserType;
+use crate::authentication::model::subject::Subject;
+
+#[derive(Debug, Clone)]
+pub struct User {
+    username: CheetahString,
+    password: Option<CheetahString>,
+    user_type: Option<UserType>,
+    user_status: Option<UserStatus>,
+}
+
+impl User {
+    pub fn of(username: impl Into<CheetahString>) -> Self {
+        User {
+            username: username.into(),
+            password: None,
+            user_type: None,
+            user_status: None,
+        }
+    }
+
+    pub fn of_with_password(
+        username: impl Into<CheetahString>,
+        password: impl Into<CheetahString>,
+    ) -> Self {
+        User {
+            username: username.into(),
+            password: Some(password.into()),
+            user_type: None,
+            user_status: None,
+        }
+    }
+
+    pub fn of_with_type(
+        username: impl Into<CheetahString>,
+        password: impl Into<CheetahString>,
+        user_type: UserType,
+    ) -> Self {
+        User {
+            username: username.into(),
+            password: Some(password.into()),
+            user_type: Some(user_type),
+            user_status: None,
+        }
+    }
+}
+
+impl User {
+    pub fn username(&self) -> &CheetahString {
+        &self.username
+    }
+
+    pub fn password(&self) -> Option<&CheetahString> {
+        self.password.as_ref()
+    }
+
+    pub fn user_type(&self) -> Option<UserType> {
+        self.user_type
+    }
+
+    pub fn user_status(&self) -> Option<UserStatus> {
+        self.user_status
+    }
+
+    pub fn set_user_status(&mut self, status: UserStatus) {
+        self.user_status = Some(status);
+    }
+}
+
+impl Subject for User {
+    fn subject_key(&self) -> &str {
+        self.username.as_str()
+    }
+
+    fn subject_type(&self) -> SubjectType {
+        SubjectType::User
+    }
+}
