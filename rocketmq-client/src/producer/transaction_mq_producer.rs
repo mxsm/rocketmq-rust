@@ -19,7 +19,6 @@ use std::any::Any;
 use std::sync::Arc;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_runtime::RocketMQRuntime;
 
