@@ -55,3 +55,58 @@ impl fmt::Display for BrokerIdentityInfo {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn broker_identity_info_new() {
+        let info = BrokerIdentityInfo::new("test_cluster", "test_broker", Some(0));
+        assert_eq!(info.cluster_name, "test_cluster");
+        assert_eq!(info.broker_name, "test_broker");
+        assert_eq!(info.broker_id, Some(0));
+
+        let info = BrokerIdentityInfo::new("cluster1", "broker1", None);
+        assert_eq!(info.cluster_name, "cluster1");
+        assert_eq!(info.broker_name, "broker1");
+        assert_eq!(info.broker_id, None);
+    }
+
+    #[test]
+    fn broker_identity_info_is_empty() {
+        let info = BrokerIdentityInfo::new("", "", None);
+        assert!(info.is_empty());
+
+        let info = BrokerIdentityInfo::new("  ", "  ", None);
+        assert!(info.is_empty());
+
+        let info = BrokerIdentityInfo::new("cluster", "broker", Some(1));
+        assert!(!info.is_empty());
+
+        let info = BrokerIdentityInfo::new("cluster", "", None);
+        assert!(!info.is_empty());
+    }
+
+    #[test]
+    fn broker_identity_info_clone_and_equality() {
+        let info1 = BrokerIdentityInfo::new("test_cluster", "test_broker", Some(100));
+        let info2 = info1.clone();
+        assert_eq!(info1, info2);
+    }
+
+    #[test]
+    fn broker_identity_info_display() {
+        let info = BrokerIdentityInfo::new("test_cluster", "test_broker", Some(0));
+        let display_str = format!("{}", info);
+        assert!(display_str.contains("test_cluster"));
+        assert!(display_str.contains("test_broker"));
+        assert!(display_str.contains("Some(0)"));
+
+        let info = BrokerIdentityInfo::new("cluster", "broker", None);
+        let display_str = format!("{}", info);
+        let expected =
+            "BrokerIdentityInfo{clusterName='cluster', brokerName='broker', brokerId=None}";
+        assert_eq!(display_str, expected);
+    }
+}
