@@ -17,3 +17,4 @@
 
 pub mod subject_type;
 pub mod user_status;
+pub mod user_type;
