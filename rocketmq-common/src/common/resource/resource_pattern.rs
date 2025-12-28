@@ -138,27 +138,33 @@ mod tests {
 
     #[test]
     fn serde_json_serializes_to_number() {
-        assert_eq!("1", serde_json::to_string(&ResourcePattern::Any).unwrap());
+        assert_eq!(
+            "1",
+            serde_json::to_string(&ResourcePattern::Any)
+                .expect("ResourcePattern::Any must serialize")
+        );
         assert_eq!(
             "2",
-            serde_json::to_string(&ResourcePattern::Literal).unwrap()
+            serde_json::to_string(&ResourcePattern::Literal)
+                .expect("ResourcePattern::Literal must serialize")
         );
         assert_eq!(
             "3",
-            serde_json::to_string(&ResourcePattern::Prefixed).unwrap()
+            serde_json::to_string(&ResourcePattern::Prefixed)
+                .expect("ResourcePattern::Prefixed must serialize")
         );
     }
 
     #[test]
     fn serde_json_deserializes_from_number() {
-        let any: ResourcePattern = serde_json::from_str("1").unwrap();
-        assert_eq!(ResourcePattern::Any, any);
+        let any: Option<ResourcePattern> = serde_json::from_str("1").ok();
+        assert_eq!(Some(ResourcePattern::Any), any);
 
-        let literal: ResourcePattern = serde_json::from_str("2").unwrap();
-        assert_eq!(ResourcePattern::Literal, literal);
+        let literal: Option<ResourcePattern> = serde_json::from_str("2").ok();
+        assert_eq!(Some(ResourcePattern::Literal), literal);
 
-        let prefixed: ResourcePattern = serde_json::from_str("3").unwrap();
-        assert_eq!(ResourcePattern::Prefixed, prefixed);
+        let prefixed: Option<ResourcePattern> = serde_json::from_str("3").ok();
+        assert_eq!(Some(ResourcePattern::Prefixed), prefixed);
     }
 
     #[test]
@@ -174,8 +180,19 @@ mod tests {
             ResourcePattern::Literal,
             ResourcePattern::Prefixed,
         ] {
-            let serialized = serde_json::to_string(&variant).unwrap();
-            let parsed: ResourcePattern = serde_json::from_str(&serialized).unwrap();
+            let serialized = serde_json::to_string(&variant).unwrap_or_else(|e| {
+                panic!(
+                    "Could not serialize ResourcePattern::{:?}: {}",
+                    &variant.name(),
+                    e
+                )
+            });
+            let parsed: ResourcePattern = serde_json::from_str(&serialized).unwrap_or_else(|e| {
+                panic!(
+                    "Could not parse {:?} as ResourcePattern: {}",
+                    &serialized, e
+                )
+            });
             assert_eq!(variant, parsed);
         }
     }
