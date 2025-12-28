@@ -1865,6 +1865,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "469fb0b9cefa57e3ef31275ee7cacb78f2fdca44e4765491884a2b119d4eb130"
 
 [[package]]
+name = "ipnetwork"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf370abdafd54d13e54a620e8c3e1145f28e46cc9d704bc6d94414559df41763"
+
+[[package]]
 name = "iri-string"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3257,8 +3263,10 @@ name = "rocketmq-auth"
 version = "0.8.0"
 dependencies = [
  "cheetah-string",
+ "ipnetwork",
  "rocketmq-common",
  "rocketmq-error",
+ "rocketmq-remoting",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -3362,7 +3370,6 @@ dependencies = [
  "form_urlencoded",
  "futures",
  "hostname",
- "lazy_static",
  "local-ip-address",
  "lz4_flex",
  "mockall",
@@ -3524,7 +3531,6 @@ dependencies = [
  "flume",
  "futures",
  "futures-util",
- "lazy_static",
  "num_cpus",
  "parking_lot",
  "rand 0.9.2",

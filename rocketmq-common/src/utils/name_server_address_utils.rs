@@ -17,7 +17,6 @@
 
 use std::env;
 
-use lazy_static::lazy_static;
 use regex::Regex;
 
 use crate::common::mix_all;
@@ -26,11 +25,13 @@ const INSTANCE_PREFIX: &str = "MQ_INST_";
 const INSTANCE_REGEX: &str = "MQ_INST_\\w+_\\w+";
 const ENDPOINT_PREFIX: &str = "(\\w+://|)";
 
-lazy_static! {
-    pub static ref NAMESRV_ENDPOINT_PATTERN: Regex = Regex::new("^http://.*").unwrap();
-    pub static ref INST_ENDPOINT_PATTERN: Regex =
-        Regex::new(&format!("^{ENDPOINT_PREFIX}{INSTANCE_REGEX}")).unwrap();
-}
+pub static NAMESRV_ENDPOINT_PATTERN: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new("^http://.*").unwrap());
+
+pub static INST_ENDPOINT_PATTERN: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+    Regex::new(&format!("^{ENDPOINT_PREFIX}{INSTANCE_REGEX}")).unwrap()
+});
+
 pub struct NameServerAddressUtils;
 
 impl NameServerAddressUtils {
