@@ -157,14 +157,14 @@ mod tests {
 
     #[test]
     fn serde_json_deserializes_from_number() {
-        let any: Option<ResourcePattern> = serde_json::from_str("1").ok();
-        assert_eq!(Some(ResourcePattern::Any), any);
+        let any: ResourcePattern = serde_json::from_str("1").expect("Must deserialize 1");
+        assert_eq!(ResourcePattern::Any, any);
 
-        let literal: Option<ResourcePattern> = serde_json::from_str("2").ok();
-        assert_eq!(Some(ResourcePattern::Literal), literal);
+        let literal: ResourcePattern = serde_json::from_str("2").expect("Must deserialize 2");
+        assert_eq!(ResourcePattern::Literal, literal);
 
-        let prefixed: Option<ResourcePattern> = serde_json::from_str("3").ok();
-        assert_eq!(Some(ResourcePattern::Prefixed), prefixed);
+        let prefixed: ResourcePattern = serde_json::from_str("3").expect("Must deserialize 3");
+        assert_eq!(ResourcePattern::Prefixed, prefixed);
     }
 
     #[test]
