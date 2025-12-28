@@ -61,3 +61,54 @@ impl EventMessage for CleanBrokerDataEvent {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clean_broker_data_event_new_and_getters() {
+        let broker_name = "test_broker";
+        let mut ids = HashSet::new();
+        ids.insert(1);
+        ids.insert(2);
+
+        let event = CleanBrokerDataEvent::new(broker_name, Some(ids.clone()));
+        assert_eq!(event.broker_name(), broker_name);
+        assert_eq!(event.broker_id_set_to_clean(), Some(&ids));
+
+        let event = CleanBrokerDataEvent::new(broker_name, None);
+        assert_eq!(event.broker_name(), broker_name);
+        assert_eq!(event.broker_id_set_to_clean(), None);
+    }
+
+    #[test]
+    fn clean_broker_data_event_get_event_type() {
+        let event = CleanBrokerDataEvent::new("broker", None);
+        assert_eq!(event.get_event_type(), EventType::CleanBrokerData);
+    }
+
+    #[test]
+    fn clean_broker_data_event_as_any() {
+        let event = CleanBrokerDataEvent::new("broker", None);
+        let any = event.as_any();
+        assert!(any.is::<CleanBrokerDataEvent>());
+        let downcast = any.downcast_ref::<CleanBrokerDataEvent>().unwrap();
+        assert_eq!(downcast.broker_name(), "broker");
+    }
+
+    #[test]
+    fn clean_broker_data_event_serialization_and_deserialization() {
+        let mut ids = HashSet::new();
+        ids.insert(1);
+        let event = CleanBrokerDataEvent::new("broker", Some(ids));
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: CleanBrokerDataEvent = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.broker_name(), event.broker_name());
+        assert_eq!(
+            deserialized.broker_id_set_to_clean(),
+            event.broker_id_set_to_clean()
+        );
+    }
+}
