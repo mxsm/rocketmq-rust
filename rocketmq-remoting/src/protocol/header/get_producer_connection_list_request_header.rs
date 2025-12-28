@@ -26,10 +26,10 @@ use crate::rpc::rpc_request_header::RpcRequestHeader;
 pub struct GetProducerConnectionListRequestHeader {
     #[required]
     #[serde(rename = "producerGroup")]
-    producer_group: CheetahString,
+    pub producer_group: CheetahString,
 
     #[serde(flatten)]
-    rpc_request_header: Option<RpcRequestHeader>,
+    pub rpc_request_header: Option<RpcRequestHeader>,
 }
 
 impl GetProducerConnectionListRequestHeader {
@@ -39,5 +39,52 @@ impl GetProducerConnectionListRequestHeader {
 
     pub fn set_producer_group(&mut self, producer_group: CheetahString) {
         self.producer_group = producer_group;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json;
+
+    use super::*;
+
+    #[test]
+    fn get_producer_connection_list_request_header_serialize() {
+        let mut header = GetProducerConnectionListRequestHeader::default();
+        header.set_producer_group(CheetahString::from_static_str("test_group"));
+        let json = serde_json::to_string(&header).unwrap();
+        assert_eq!(json, r#"{"producerGroup":"test_group"}"#);
+
+        let mut header = GetProducerConnectionListRequestHeader::default();
+        header.set_producer_group(CheetahString::from_static_str("test_group"));
+        let rpc_header = RpcRequestHeader {
+            broker_name: Some(CheetahString::from_static_str("broker_a")),
+            ..Default::default()
+        };
+        header.rpc_request_header = Some(rpc_header);
+        let json = serde_json::to_string(&header).unwrap();
+        assert!(json.contains("\"producerGroup\":\"test_group\""));
+        assert!(json.contains("\"brokerName\":\"broker_a\""));
+    }
+
+    #[test]
+    fn get_producer_connection_list_request_header_deserialize() {
+        let json = r#"{"producerGroup":"test_group"}"#;
+        let header: GetProducerConnectionListRequestHeader = serde_json::from_str(json).unwrap();
+        assert_eq!(header.producer_group(), "test_group");
+    }
+
+    #[test]
+    fn get_producer_connection_list_request_header_default() {
+        let header = GetProducerConnectionListRequestHeader::default();
+        assert_eq!(header.producer_group(), "");
+    }
+
+    #[test]
+    fn get_producer_connection_list_request_header_clone() {
+        let mut header = GetProducerConnectionListRequestHeader::default();
+        header.set_producer_group(CheetahString::from_static_str("test_group"));
+        let cloned = header.clone();
+        assert_eq!(cloned.producer_group(), header.producer_group());
     }
 }
