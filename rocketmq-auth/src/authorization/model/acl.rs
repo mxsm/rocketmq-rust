@@ -155,6 +155,7 @@ mod tests {
 
     use super::*;
     use crate::authentication::model::user::User;
+    use crate::authorization::enums::decision::Decision;
     use crate::authorization::model::policy::Policy;
 
     #[test]
