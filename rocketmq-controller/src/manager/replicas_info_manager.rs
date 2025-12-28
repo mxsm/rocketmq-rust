@@ -332,7 +332,7 @@ impl ReplicasInfoManager {
             let sync_state_set_i64: HashSet<i64> =
                 sync_state_set.iter().map(|&id| id as i64).collect();
             let all_replica_brokers_i64 = all_replica_brokers
-                .map(|set| set.iter().map(|&id| id as i64).collect::<HashSet<i64>>());
+                .map(|set: std::collections::HashSet<u64>| set.iter().map(|&id| id as i64).collect::<std::collections::HashSet<i64>>());
 
             new_master = elect_policy
                 .elect(
@@ -1075,7 +1075,7 @@ mod tests {
 
     #[test]
     fn test_replicas_info_manager_creation() {
-        let config = Arc::new(ControllerConfig::new(1, "127.0.0.1:9876".parse().unwrap()));
+        let config = Arc::new(ControllerConfig::new_node(1, "127.0.0.1:9876".parse().unwrap()));
         let manager = ReplicasInfoManager::new(config);
         assert_eq!(manager.replica_info_table.len(), 0);
         assert_eq!(manager.sync_state_set_info_table.len(), 0);

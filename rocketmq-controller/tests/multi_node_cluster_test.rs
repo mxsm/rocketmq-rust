@@ -55,7 +55,7 @@ async fn create_cluster(node_count: u64, base_port: u16) -> Vec<(u64, Arc<RaftNo
             .cloned()
             .collect();
 
-        let config = ControllerConfig::new(node_id, addr)
+        let config = ControllerConfig::default().with_node_info(node_id, addr)
             .with_election_timeout_ms(1000)
             .with_heartbeat_interval_ms(300)
             .with_raft_peers(peers);

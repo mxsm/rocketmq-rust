@@ -48,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listen_addr = "127.0.0.1:9876".parse()?;
 
     let config = Arc::new(
-        ControllerConfig::new(node_id, listen_addr)
+        ControllerConfig::new_node(node_id, listen_addr)
             .with_election_timeout_ms(1000)
             .with_heartbeat_interval_ms(300),
     );

@@ -126,16 +126,14 @@ fn create_cluster_config(
 
     let listen_addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
 
-    let config = ControllerConfig {
-        node_id,
-        listen_addr,
-        raft_peers: peers,
-        storage_path: format!("/tmp/rocketmq-controller-cluster/node{}", node_id).into(),
-        storage_backend: StorageBackendType::Memory, // Use memory storage for testing
-        election_timeout_ms: 1000,
-        heartbeat_interval_ms: 300,
-        enable_elect_unclean_master: false,
-    };
+    let config = ControllerConfig::default()
+        .with_node_info(node_id, listen_addr)
+        .with_raft_peers(peers)
+        .with_storage_path(format!("/tmp/rocketmq-controller-cluster/node{}", node_id))
+        .with_storage_backend(StorageBackendType::Memory)
+        .with_election_timeout_ms(1000)
+        .with_heartbeat_interval_ms(300)
+        .with_enable_elect_unclean_master_local(false);
 
     Ok(config)
 }

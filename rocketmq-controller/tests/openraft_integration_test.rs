@@ -29,7 +29,7 @@ use rocketmq_controller::typ::Node;
 async fn test_node_creation() {
     // Create a test configuration
     let config = Arc::new(
-        ControllerConfig::new(1, "127.0.0.1:9876".parse().unwrap())
+        ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap())
             .with_election_timeout_ms(1000)
             .with_heartbeat_interval_ms(300),
     );
@@ -47,7 +47,7 @@ async fn test_node_creation() {
 async fn test_cluster_initialization() {
     // Create configuration for node 1
     let config = Arc::new(
-        ControllerConfig::new(1, "127.0.0.1:19876".parse().unwrap())
+        ControllerConfig::default().with_node_info(1, "127.0.0.1:19876".parse().unwrap())
             .with_election_timeout_ms(1000)
             .with_heartbeat_interval_ms(300),
     );
@@ -166,7 +166,7 @@ async fn test_storage_operations() {
 async fn test_client_write() {
     // Create configuration
     let config = Arc::new(
-        ControllerConfig::new(1, "127.0.0.1:29876".parse().unwrap())
+        ControllerConfig::default().with_node_info(1, "127.0.0.1:29876".parse().unwrap())
             .with_election_timeout_ms(1000)
             .with_heartbeat_interval_ms(300),
     );

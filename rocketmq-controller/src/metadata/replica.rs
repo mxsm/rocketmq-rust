@@ -557,7 +557,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_replicas_manager() {
-        let config = Arc::new(ControllerConfig::new(1, "127.0.0.1:9876".parse().unwrap()));
+        let config = Arc::new(ControllerConfig::new_node(1, "127.0.0.1:9876".parse().unwrap()));
         let manager = ReplicasManager::new(config);
 
         // Register master

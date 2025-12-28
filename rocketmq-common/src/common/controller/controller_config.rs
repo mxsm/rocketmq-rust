@@ -24,6 +24,7 @@ use serde::Serialize;
 use crate::common::metrics::MetricsExporterType;
 use crate::common::mix_all::ROCKETMQ_HOME_ENV;
 use crate::utils::env_utils::EnvUtils;
+use std::net::SocketAddr;
 
 /// Controller type constant
 pub const RAFT_CONTROLLER: &str = "Raft";
@@ -32,9 +33,33 @@ pub const RAFT_CONTROLLER: &str = "Raft";
 ///
 /// This configuration defines the behavior and parameters of the RocketMQ controller.
 /// It manages broker election, state synchronization, and cluster coordination.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RaftPeer {
+    /// Node ID
+    pub id: u64,
+
+    /// Peer address
+    pub addr: SocketAddr,
+}
+
+/// Storage backend type
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum StorageBackendType {
+    /// RocksDB storage
+    RocksDB,
+
+    /// File-based storage
+    File,
+
+    /// In-memory storage (for testing)
+    Memory,
+} 
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ControllerConfig {
+    // --- shared Controller fields (existing) ---
     /// RocketMQ home directory
     ///
     /// Defaults to ROCKETMQ_HOME environment variable or current directory
@@ -150,6 +175,31 @@ pub struct ControllerConfig {
     /// These configs can only be changed by restarting the process.
     /// Default: "configBlackList;configStorePath"
     pub config_black_list: String,
+
+    // --- node-specific fields (added for controller usage) ---
+    /// Node id for this controller process (optional in shared config)
+    pub node_id: u64,
+
+    /// Listen address for RPC/raft on this node
+    pub listen_addr: SocketAddr,
+
+    /// Peer list used for raft bootstrapping
+    pub raft_peers: Vec<RaftPeer>,
+
+    /// Election timeout (ms) used by Raft
+    pub election_timeout_ms: u64,
+
+    /// Heartbeat interval (ms) used by Raft
+    pub heartbeat_interval_ms: u64,
+
+    /// Local storage path for controller artifacts
+    pub storage_path: String,
+
+    /// Storage backend to use for local controller artifacts
+    pub storage_backend: StorageBackendType,
+
+    /// Whether the controller may elect an unclean master on this node
+    pub enable_elect_unclean_master_local: bool,
 }
 
 impl Default for ControllerConfig {
@@ -193,6 +243,14 @@ impl Default for ControllerConfig {
             metrics_label: String::new(),
             metrics_in_delta: false,
             config_black_list: "configBlackList;configStorePath".to_string(),
+            node_id: 1,
+            listen_addr: "127.0.0.1:9876".parse().unwrap(),
+            raft_peers: Vec::new(),
+            election_timeout_ms: 1000,
+            heartbeat_interval_ms: 300,
+            storage_path: String::new(),
+            storage_backend: StorageBackendType::Memory,
+            enable_elect_unclean_master_local: false,
         }
     }
 }
@@ -309,6 +367,65 @@ impl ControllerConfig {
     pub fn with_metrics_label(mut self, label: impl Into<String>) -> Self {
         self.metrics_label = label.into();
         self
+    }
+
+    /// Set node id and listen address for node-specific usage
+    pub fn with_node_info(mut self, node_id: u64, listen_addr: SocketAddr) -> Self {
+        self.node_id = node_id;
+        self.listen_addr = listen_addr;
+        self
+    }
+
+    /// Set raft peers for bootstrapping
+    pub fn with_raft_peers(mut self, peers: Vec<RaftPeer>) -> Self {
+        self.raft_peers = peers;
+        self
+    }
+
+    /// Set election timeout (ms)
+    pub fn with_election_timeout_ms(mut self, ms: u64) -> Self {
+        self.election_timeout_ms = ms;
+        self
+    }
+
+    /// Set heartbeat interval (ms)
+    pub fn with_heartbeat_interval_ms(mut self, ms: u64) -> Self {
+        self.heartbeat_interval_ms = ms;
+        self
+    }
+
+    /// Set local storage path for this node
+    pub fn with_storage_path(mut self, path: impl Into<String>) -> Self {
+        self.storage_path = path.into();
+        self
+    }
+
+    /// Set whether to enable elect unclean master locally
+    pub fn with_enable_elect_unclean_master_local(mut self, enable: bool) -> Self {
+        self.enable_elect_unclean_master_local = enable;
+        self
+    }
+
+    /// Set storage backend for this node
+    pub fn with_storage_backend(mut self, backend: StorageBackendType) -> Self {
+        self.storage_backend = backend;
+        self
+    }
+
+    /// Set configuration blacklist
+    pub fn with_config_black_list(mut self, blacklist: impl Into<String>) -> Self {
+        self.config_black_list = blacklist.into();
+        self
+    }
+
+    /// Convenience constructor for a node-specific config (node id + listen addr)
+    pub fn new_node(node_id: u64, listen_addr: SocketAddr) -> Self {
+        Self::default().with_node_info(node_id, listen_addr)
+    }
+
+    /// Test config helper
+    pub fn test_config() -> Self {
+        Self::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap())
     }
 
     /// Check if a configuration key is in the blacklist

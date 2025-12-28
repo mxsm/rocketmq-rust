@@ -17,12 +17,12 @@
 
 use std::sync::Arc;
 
+use rocketmq_common::common::controller::ControllerConfig;
 use tokio::sync::RwLock;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::config::ControllerConfig;
 use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 use crate::error::Result;
 use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
@@ -347,6 +347,10 @@ impl ControllerManager {
     pub fn metrics_manager(&self) -> &Arc<ControllerMetricsManager> {
         &self.metrics_manager
     }
+
+    pub fn controller_config(&self) -> &ControllerConfig {
+        &self.config
+    }
 }
 
 impl Drop for ControllerManager {
@@ -377,7 +381,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_lifecycle() {
-        let config = ControllerConfig::new(1, "127.0.0.1:9878".parse::<SocketAddr>().unwrap());
+        let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9878".parse::<SocketAddr>().unwrap());
 
         let manager = ControllerManager::new(config)
             .await
@@ -397,7 +401,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_shutdown() {
-        let config = ControllerConfig::new(1, "127.0.0.1:9879".parse::<SocketAddr>().unwrap());
+        let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9879".parse::<SocketAddr>().unwrap());
 
         let manager = ControllerManager::new(config)
             .await

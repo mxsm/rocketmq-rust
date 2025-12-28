@@ -97,7 +97,7 @@ fn create_controller_config(node_id: u64, port: u16) -> Result<ControllerConfig>
 
     let listen_addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
 
-    let mut config = ControllerConfig::new(node_id, listen_addr);
+    let mut config = ControllerConfig::new_node(node_id, listen_addr);
 
     // Configure Raft peers (single node for this example)
     config = config.with_raft_peers(vec![RaftPeer {
@@ -106,7 +106,7 @@ fn create_controller_config(node_id: u64, port: u16) -> Result<ControllerConfig>
     }]);
 
     // Set storage path
-    config = config.with_storage_path(format!("/tmp/rocketmq-controller/node{}", node_id).into());
+    config = config.with_storage_path(format!("/tmp/rocketmq-controller/node{}", node_id));
 
     // Configure timeouts
     config.election_timeout_ms = 1000;
