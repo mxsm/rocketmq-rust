@@ -3584,7 +3584,6 @@ dependencies = [
  "dirs",
  "futures-util",
  "hashbrown 0.16.1",
- "lazy_static",
  "libc",
  "memmap2",
  "once_cell",

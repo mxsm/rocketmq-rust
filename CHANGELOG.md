@@ -7,4 +7,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **refactor(store):** Replace `lazy_static!` with `std::sync::LazyLock` in `delivery.rs` and remove `lazy_static` dependency from `rocketmq-store` ([#5091](https://github.com/mxsm/rocketmq-rust/issues/5091))
 - **perf(ArcMut):** Add the `#[inline]` attribute to the `mut_from_ref`, `downgrade`, and `get_inner` methods for `ArcMut`, improving performance ([#2876](https://github.com/mxsm/rocketmq-rust/pull/2876))
