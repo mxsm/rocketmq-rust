@@ -89,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create configuration
     let config = Arc::new(
-        ControllerConfig::new(args.node_id, current_peer.addr)
+        ControllerConfig::new_node(args.node_id, current_peer.addr)
             .with_election_timeout_ms(1000)
             .with_heartbeat_interval_ms(300)
             .with_raft_peers(peers.clone()),

@@ -30,7 +30,8 @@ use rocketmq_controller::typ::Node;
 async fn test_snapshot_creation() {
     // Create a test configuration
     let config = Arc::new(
-        ControllerConfig::new(1, "127.0.0.1:39876".parse().unwrap())
+        ControllerConfig::default()
+            .with_node_info(1, "127.0.0.1:39876".parse().unwrap())
             .with_election_timeout_ms(1000)
             .with_heartbeat_interval_ms(300),
     );

@@ -154,7 +154,7 @@ impl ControllerRequestProcessor {
     /// # Returns
     ///
     /// A HashSet containing all blacklisted configuration keys
-    fn init_config_blacklist(_controller_manager: &ControllerManager) -> HashSet<String> {
+    fn init_config_blacklist(controller_manager: &ControllerManager) -> HashSet<String> {
         let mut blacklist = HashSet::new();
 
         // Default blacklisted configs
@@ -162,18 +162,18 @@ impl ControllerRequestProcessor {
         blacklist.insert("configStorePath".to_string());
         blacklist.insert("rocketmqHome".to_string());
 
-        // TODO: Add custom blacklist from config when ControllerManager API is available
-        // if let Some(config_str) = controller_manager
-        //     .get_controller_config()
-        //     .get_config_blacklist()
-        // {
-        //     for item in config_str.split(';') {
-        //         let trimmed = item.trim();
-        //         if !trimmed.is_empty() {
-        //             blacklist.insert(trimmed.to_string());
-        //         }
-        //     }
-        // }
+        let config_black_list = controller_manager
+            .controller_config()
+            .config_black_list
+            .as_str();
+        if !config_black_list.is_empty() {
+            for item in config_black_list.split(';') {
+                let trimmed: &str = item.trim();
+                if !trimmed.is_empty() {
+                    blacklist.insert(trimmed.to_string());
+                }
+            }
+        }
 
         blacklist
     }
