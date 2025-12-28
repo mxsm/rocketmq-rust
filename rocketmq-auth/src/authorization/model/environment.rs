@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use ipnetwork::IpNetwork;
 use std::net::IpAddr;
 use std::str::FromStr;
+
+use ipnetwork::IpNetwork;
 
 /// Authorization environment model (port of Java `Environment` class)
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
