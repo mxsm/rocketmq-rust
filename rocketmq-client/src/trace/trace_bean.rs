@@ -15,16 +15,15 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
+use std::sync::LazyLock;
+
 use cheetah_string::CheetahString;
-use lazy_static::lazy_static;
 use rocketmq_common::common::message::message_enum::MessageType;
 use rocketmq_common::utils::util_all;
 
 use crate::producer::local_transaction_state::LocalTransactionState;
 
-lazy_static! {
-    static ref LOCAL_ADDRESS: CheetahString = util_all::get_ip_str();
-}
+static LOCAL_ADDRESS: LazyLock<CheetahString> = LazyLock::new(util_all::get_ip_str);
 
 #[derive(Debug, Clone)]
 pub struct TraceBean {
