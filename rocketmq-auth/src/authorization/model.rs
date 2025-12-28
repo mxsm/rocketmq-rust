@@ -15,7 +15,5 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-pub mod context;
-pub mod enums;
-mod model;
-pub mod strategy;
+pub mod environment;
+pub mod resource;

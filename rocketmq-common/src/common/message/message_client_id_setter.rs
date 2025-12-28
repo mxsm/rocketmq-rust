@@ -27,7 +27,6 @@ use chrono::Months;
 use chrono::TimeZone;
 use chrono::Timelike;
 use chrono::Utc;
-use lazy_static::lazy_static;
 use parking_lot::Mutex;
 
 use crate::common::hasher::string_hasher::JavaStringHasher;
