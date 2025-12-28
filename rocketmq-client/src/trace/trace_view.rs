@@ -16,13 +16,11 @@
 //  under the License.
 
 use cheetah_string::CheetahString;
-use lazy_static::lazy_static;
 use rocketmq_common::common::message::message_enum::MessageType;
 use rocketmq_common::utils::util_all;
 
-lazy_static! {
-    static ref LOCAL_ADDRESS: CheetahString = util_all::get_ip_str();
-}
+static LOCAL_ADDRESS: std::sync::LazyLock<CheetahString> =
+    std::sync::LazyLock::new(util_all::get_ip_str);
 
 #[derive(Debug, Clone)]
 pub struct TraceView {
