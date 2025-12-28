@@ -15,4 +15,5 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
+pub mod resource_pattern;
 pub mod resource_type;
