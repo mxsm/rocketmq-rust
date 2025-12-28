@@ -15,6 +15,7 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
+pub mod acl;
 pub mod environment;
 pub mod policy;
 pub mod policy_entry;
