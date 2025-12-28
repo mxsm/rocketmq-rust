@@ -83,3 +83,62 @@ impl EventMessage for ApplyBrokerIdEvent {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_broker_id_event_new_and_getters() {
+        let cluster_name = "test_cluster";
+        let broker_name = "test_broker";
+        let broker_address = "127.0.0.1:10911";
+        let new_broker_id = 100;
+        let register_check_code = "check_code";
+
+        let event = ApplyBrokerIdEvent::new(
+            cluster_name,
+            broker_name,
+            broker_address,
+            new_broker_id,
+            register_check_code,
+        );
+
+        assert_eq!(event.cluster_name(), cluster_name);
+        assert_eq!(event.broker_name(), broker_name);
+        assert_eq!(event.broker_address(), broker_address);
+        assert_eq!(event.new_broker_id(), new_broker_id);
+        assert_eq!(event.register_check_code(), register_check_code);
+    }
+
+    #[test]
+    fn apply_broker_id_event_get_event_type() {
+        let event = ApplyBrokerIdEvent::new("cluster", "broker", "addr", 1, "code");
+        assert_eq!(event.get_event_type(), EventType::ApplyBrokerId);
+    }
+
+    #[test]
+    fn apply_broker_id_event_as_any() {
+        let event = ApplyBrokerIdEvent::new("cluster", "broker", "addr", 1, "code");
+        let any = event.as_any();
+        assert!(any.is::<ApplyBrokerIdEvent>());
+        let downcast = any.downcast_ref::<ApplyBrokerIdEvent>().unwrap();
+        assert_eq!(downcast.cluster_name(), "cluster");
+    }
+
+    #[test]
+    fn apply_broker_id_event_serialization_and_deserialization() {
+        let event = ApplyBrokerIdEvent::new("cluster", "broker", "addr", 1, "code");
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: ApplyBrokerIdEvent = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.cluster_name(), event.cluster_name());
+        assert_eq!(deserialized.broker_name(), event.broker_name());
+        assert_eq!(deserialized.broker_address(), event.broker_address());
+        assert_eq!(deserialized.new_broker_id(), event.new_broker_id());
+        assert_eq!(
+            deserialized.register_check_code(),
+            event.register_check_code()
+        );
+    }
+}
