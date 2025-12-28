@@ -55,7 +55,7 @@ pub mod statistics;
 pub mod stats;
 pub mod sys_flag;
 
-mod action;
+pub mod action;
 pub mod metrics;
 pub mod resource;
 pub mod system_clock;
