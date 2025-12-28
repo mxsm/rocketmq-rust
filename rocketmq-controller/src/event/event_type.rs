@@ -64,3 +64,56 @@ impl fmt::Display for EventType {
         f.write_str(self.name())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_type_from_id() {
+        assert_eq!(EventType::from_id(1), Some(EventType::AlterSyncStateSet));
+        assert_eq!(EventType::from_id(2), Some(EventType::ApplyBrokerId));
+        assert_eq!(EventType::from_id(3), Some(EventType::ElectMaster));
+        assert_eq!(EventType::from_id(4), Some(EventType::ReadEvent));
+        assert_eq!(EventType::from_id(5), Some(EventType::CleanBrokerData));
+        assert_eq!(EventType::from_id(6), Some(EventType::UpdateBrokerAddress));
+        assert_eq!(EventType::from_id(0), None);
+        assert_eq!(EventType::from_id(7), None);
+    }
+
+    #[test]
+    fn event_type_id() {
+        assert_eq!(EventType::AlterSyncStateSet.id(), 1);
+        assert_eq!(EventType::ApplyBrokerId.id(), 2);
+        assert_eq!(EventType::ElectMaster.id(), 3);
+        assert_eq!(EventType::ReadEvent.id(), 4);
+        assert_eq!(EventType::CleanBrokerData.id(), 5);
+        assert_eq!(EventType::UpdateBrokerAddress.id(), 6);
+    }
+
+    #[test]
+    fn event_type_name() {
+        assert_eq!(EventType::AlterSyncStateSet.name(), "AlterSyncStateSet");
+        assert_eq!(EventType::ApplyBrokerId.name(), "ApplyBrokerId");
+        assert_eq!(EventType::ElectMaster.name(), "ElectMaster");
+        assert_eq!(EventType::ReadEvent.name(), "ReadEvent");
+        assert_eq!(EventType::CleanBrokerData.name(), "CleanBrokerData");
+        assert_eq!(EventType::UpdateBrokerAddress.name(), "UpdateBrokerAddress");
+    }
+
+    #[test]
+    fn event_type_display() {
+        assert_eq!(
+            format!("{}", EventType::AlterSyncStateSet),
+            "AlterSyncStateSet"
+        );
+        assert_eq!(format!("{}", EventType::ApplyBrokerId), "ApplyBrokerId");
+        assert_eq!(format!("{}", EventType::ElectMaster), "ElectMaster");
+        assert_eq!(format!("{}", EventType::ReadEvent), "ReadEvent");
+        assert_eq!(format!("{}", EventType::CleanBrokerData), "CleanBrokerData");
+        assert_eq!(
+            format!("{}", EventType::UpdateBrokerAddress),
+            "UpdateBrokerAddress"
+        );
+    }
+}
