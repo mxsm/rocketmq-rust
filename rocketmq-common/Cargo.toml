@@ -39,7 +39,6 @@ num_cpus.workspace = true
 futures = { version = "0.3", features = ["default", "thread-pool"] }
 
 bytes.workspace = true
-lazy_static.workspace = true
 
 
 config.workspace = true
