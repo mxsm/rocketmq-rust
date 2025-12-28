@@ -15,5 +15,5 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-mod decision;
-mod policy_type;
+pub mod decision;
+pub mod policy_type;

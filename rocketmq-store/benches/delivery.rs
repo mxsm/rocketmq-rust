@@ -18,12 +18,9 @@
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
-use lazy_static::lazy_static;
 use rocketmq_common::TimeUtils::get_current_millis;
 
-lazy_static! {
-    pub static ref A: Vec<i32> = vec![1; 64];
-}
+pub static A: std::sync::LazyLock<Vec<i32>> = std::sync::LazyLock::new(|| vec![1; 64]);
 
 pub fn delivery1() -> i32 {
     let a = A.get((get_current_millis() % 64) as usize);

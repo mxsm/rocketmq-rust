@@ -16,4 +16,5 @@
 //  under the License.
 
 pub mod environment;
+pub mod policy_entry;
 pub mod resource;
