@@ -20,7 +20,8 @@
 // Re-export common RaftPeer and StorageBackendType (from the controller_config module)
 // so examples/tests using `rocketmq_controller::config::RaftPeer` or
 // `StorageBackendType` keep working.
-pub use rocketmq_common::common::controller::controller_config::{RaftPeer, StorageBackendType};
+pub use rocketmq_common::common::controller::controller_config::RaftPeer;
+pub use rocketmq_common::common::controller::controller_config::StorageBackendType;
 pub use rocketmq_common::common::controller::ControllerConfig;
 
 // Controller node-specific configuration is now carried by the shared
