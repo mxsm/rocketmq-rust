@@ -16,6 +16,7 @@
 //  under the License.
 
 use std::env;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use serde::Deserialize;
@@ -24,7 +25,6 @@ use serde::Serialize;
 use crate::common::metrics::MetricsExporterType;
 use crate::common::mix_all::ROCKETMQ_HOME_ENV;
 use crate::utils::env_utils::EnvUtils;
-use std::net::SocketAddr;
 
 /// Controller type constant
 pub const RAFT_CONTROLLER: &str = "Raft";
@@ -54,7 +54,7 @@ pub enum StorageBackendType {
 
     /// In-memory storage (for testing)
     Memory,
-} 
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

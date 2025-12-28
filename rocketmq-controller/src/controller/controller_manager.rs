@@ -381,7 +381,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_lifecycle() {
-        let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9878".parse::<SocketAddr>().unwrap());
+        let config = ControllerConfig::default()
+            .with_node_info(1, "127.0.0.1:9878".parse::<SocketAddr>().unwrap());
 
         let manager = ControllerManager::new(config)
             .await
@@ -401,7 +402,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_shutdown() {
-        let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9879".parse::<SocketAddr>().unwrap());
+        let config = ControllerConfig::default()
+            .with_node_info(1, "127.0.0.1:9879".parse::<SocketAddr>().unwrap());
 
         let manager = ControllerManager::new(config)
             .await

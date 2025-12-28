@@ -17,12 +17,11 @@
 
 // Re-export the shared ControllerConfig from rocketmq-common so downstream code in
 // this crate and tests can continue to refer to `crate::config::ControllerConfig`.
-pub use rocketmq_common::common::controller::ControllerConfig;
-
 // Re-export common RaftPeer and StorageBackendType (from the controller_config module)
 // so examples/tests using `rocketmq_controller::config::RaftPeer` or
 // `StorageBackendType` keep working.
 pub use rocketmq_common::common::controller::controller_config::{RaftPeer, StorageBackendType};
+pub use rocketmq_common::common::controller::ControllerConfig;
 
 // Controller node-specific configuration is now carried by the shared
 // `rocketmq_common::common::controller::ControllerConfig` type. Use that type
@@ -31,4 +30,3 @@ pub use rocketmq_common::common::controller::controller_config::{RaftPeer, Stora
 // NOTE: crate-local node tests should construct node-aware configs via
 // `rocketmq_common::common::controller::ControllerConfig::new_node(...)` or
 // `::test_config()` helpers.
-
