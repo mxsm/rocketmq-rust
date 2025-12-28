@@ -16,11 +16,12 @@
 // under the License.
 
 use rocketmq_common::common::action::Action;
-use crate::authorization::enums::policy_type::PolicyType;
-use crate::authorization::enums::decision::Decision;
+
+use super::environment::Environment;
 use super::policy_entry::PolicyEntry;
 use super::resource::Resource;
-use super::environment::Environment;
+use crate::authorization::enums::decision::Decision;
+use crate::authorization::enums::policy_type::PolicyType;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
@@ -29,19 +30,43 @@ pub struct Policy {
 }
 
 impl Policy {
-    pub fn of(resources: Vec<Resource>, actions: Vec<Action>, environment: Option<Environment>, decision: Decision) -> Self {
-        Self::of_type(PolicyType::Custom, resources, actions, environment, decision)
+    pub fn of(
+        resources: Vec<Resource>,
+        actions: Vec<Action>,
+        environment: Option<Environment>,
+        decision: Decision,
+    ) -> Self {
+        Self::of_type(
+            PolicyType::Custom,
+            resources,
+            actions,
+            environment,
+            decision,
+        )
     }
 
-    pub fn of_type(policy_type: PolicyType, resources: Vec<Resource>, actions: Vec<Action>, environment: Option<Environment>, decision: Decision) -> Self {
-        let entries = resources.into_iter()
+    pub fn of_type(
+        policy_type: PolicyType,
+        resources: Vec<Resource>,
+        actions: Vec<Action>,
+        environment: Option<Environment>,
+        decision: Decision,
+    ) -> Self {
+        let entries = resources
+            .into_iter()
             .map(|r| PolicyEntry::of(r, actions.clone(), environment.clone(), decision))
             .collect();
-        Policy { policy_type, entries }
+        Policy {
+            policy_type,
+            entries,
+        }
     }
 
     pub fn of_entries(policy_type: PolicyType, entries: Vec<PolicyEntry>) -> Self {
-        Policy { policy_type, entries }
+        Policy {
+            policy_type,
+            entries,
+        }
     }
 
     pub fn update_entry(&mut self, new_entries: Vec<PolicyEntry>) {
@@ -51,7 +76,11 @@ impl Policy {
         for new_entry in new_entries {
             match self.get_entry_mut(new_entry.resource()) {
                 None => self.entries.push(new_entry),
-                Some(entry) => entry.update_entry(new_entry.actions().clone(), new_entry.environment().cloned(), new_entry.decision()),
+                Some(entry) => entry.update_entry(
+                    new_entry.actions().clone(),
+                    new_entry.environment().cloned(),
+                    new_entry.decision(),
+                ),
             }
         }
     }
@@ -90,21 +119,35 @@ impl Policy {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rocketmq_common::common::action::Action;
     use rocketmq_common::common::resource::resource_pattern::ResourcePattern;
     use rocketmq_common::common::resource::resource_type::ResourceType;
+
+    use super::*;
     use crate::authorization::enums::policy_type::PolicyType;
 
     #[test]
     fn test_of_and_update_delete() {
-        let r1 = Resource::of(ResourceType::Topic, Some("t1".to_string()), ResourcePattern::Literal);
-        let r2 = Resource::of(ResourceType::Topic, Some("t2".to_string()), ResourcePattern::Literal);
+        let r1 = Resource::of(
+            ResourceType::Topic,
+            Some("t1".to_string()),
+            ResourcePattern::Literal,
+        );
+        let r2 = Resource::of(
+            ResourceType::Topic,
+            Some("t2".to_string()),
+            ResourcePattern::Literal,
+        );
         let mut p = Policy::of(vec![r1.clone()], vec![Action::Pub], None, Decision::Allow);
         assert_eq!(p.entries().len(), 1);
 
         // update: add r2
-        p.update_entry(vec![PolicyEntry::of(r2.clone(), vec![Action::Pub], None, Decision::Allow)]);
+        p.update_entry(vec![PolicyEntry::of(
+            r2.clone(),
+            vec![Action::Pub],
+            None,
+            Decision::Allow,
+        )]);
         assert_eq!(p.entries().len(), 2);
 
         // delete r1
@@ -113,7 +156,12 @@ mod tests {
         assert!(p.entries().iter().all(|e| e.resource() != &r1));
 
         // set entries directly
-        p.set_entries(vec![PolicyEntry::of(r1.clone(), vec![Action::Sub], None, Decision::Deny)]);
+        p.set_entries(vec![PolicyEntry::of(
+            r1.clone(),
+            vec![Action::Sub],
+            None,
+            Decision::Deny,
+        )]);
         assert_eq!(p.entries().len(), 1);
         assert_eq!(p.policy_type(), PolicyType::Custom);
     }
