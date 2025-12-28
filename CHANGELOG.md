@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-
+- **refactor(store):** Replace `lazy_static!` with `std::sync::LazyLock` in `delivery.rs` and remove `lazy_static` dependency from `rocketmq-store` ([#5091](https://github.com/mxsm/rocketmq-rust/issues/5091))
 - **refactor(common):** Replace `lazy_static!` with `std::sync::LazyLock` in `name_server_address_utils.rs` ([#5068](https://github.com/mxsm/rocketmq-rust/issues/5068))
 - **refactor(common):** Replace `lazy_static!` with `std::sync::LazyLock` in `broker_config.rs` ([#5056](https://github.com/mxsm/rocketmq-rust/issues/5056))
 - **refactor(remoting):** Replace `lazy_static!` with `std::sync::LazyLock` in `remoting_command.rs` and remove `lazy_static` dependency from `rocketmq-remoting` ([#5060](https://github.com/mxsm/rocketmq-rust/issues/5060))
