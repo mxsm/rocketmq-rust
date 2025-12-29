@@ -156,8 +156,8 @@ impl ProducerConfig {
         self.auto_batch
     }
 
-    pub fn produce_accumulator(&self) -> &Option<ArcMut<ProduceAccumulator>> {
-        &self.produce_accumulator
+    pub fn produce_accumulator(&self) -> Option<&ArcMut<ProduceAccumulator>> {
+        self.produce_accumulator.as_ref()
     }
 
     pub fn enable_backpressure_for_async_mode(&self) -> bool {
@@ -309,8 +309,8 @@ impl DefaultMQProducer {
         self.producer_config.auto_batch
     }
 
-    pub fn produce_accumulator(&self) -> &Option<ArcMut<ProduceAccumulator>> {
-        &self.producer_config.produce_accumulator
+    pub fn produce_accumulator(&self) -> Option<&ArcMut<ProduceAccumulator>> {
+        self.producer_config.produce_accumulator()
     }
 
     pub fn enable_backpressure_for_async_mode(&self) -> bool {
