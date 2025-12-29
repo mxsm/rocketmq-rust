@@ -18,6 +18,6 @@
 #![allow(dead_code)]
 
 pub mod authentication;
-mod authorization;
+pub mod authorization;
 pub mod config;
 pub mod migration;
