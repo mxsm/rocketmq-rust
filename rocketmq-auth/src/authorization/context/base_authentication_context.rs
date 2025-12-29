@@ -120,7 +120,7 @@ mod tests {
         assert_eq!(
             Some(&CheetahString::from("rpc-456")),
             base_authentication_context.rpc_code()
-        )
+        );
     }
 
     #[test]
@@ -134,7 +134,7 @@ mod tests {
             base_authentication_context
                 .get_ext_info::<i32>(&CheetahString::from("info-1"))
                 .copied()
-        )
+        );
     }
 
     #[test]
@@ -163,7 +163,7 @@ mod tests {
             base_authentication_context
                 .get_ext_info::<u32>(&CheetahString::from("info-3"))
                 .copied()
-        )
+        );
     }
 
     #[test]
