@@ -220,7 +220,6 @@ mod tests {
         for invalid_code in ["6", "99", "255"] {
             let result: Result<ResourceType, _> = serde_json::from_str(invalid_code);
             assert!(result.is_err());
-            
             let err = result.unwrap_err();
             let err_msg = err.to_string();
             assert!(err_msg.contains("invalid ResourceType code"));
