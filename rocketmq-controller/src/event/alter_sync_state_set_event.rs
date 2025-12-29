@@ -61,3 +61,49 @@ impl EventMessage for AlterSyncStateSetEvent {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alter_sync_state_set_event_new_and_getters() {
+        let broker_name = "test_broker";
+        let sync_state_set = vec![1, 2, 3];
+        let event = AlterSyncStateSetEvent::new(broker_name, sync_state_set.clone());
+
+        assert_eq!(event.broker_name(), broker_name);
+        assert_eq!(event.new_sync_state_set().len(), 3);
+        for id in sync_state_set {
+            assert!(event.new_sync_state_set().contains(&id));
+        }
+    }
+
+    #[test]
+    fn alter_sync_state_set_event_get_event_type() {
+        let event = AlterSyncStateSetEvent::new("broker", vec![1]);
+        assert_eq!(event.get_event_type(), EventType::AlterSyncStateSet);
+    }
+
+    #[test]
+    fn alter_sync_state_set_event_as_any() {
+        let event = AlterSyncStateSetEvent::new("broker", vec![1]);
+        let any = event.as_any();
+        assert!(any.is::<AlterSyncStateSetEvent>());
+        let downcast = any.downcast_ref::<AlterSyncStateSetEvent>().unwrap();
+        assert_eq!(downcast.broker_name(), "broker");
+    }
+
+    #[test]
+    fn alter_sync_state_set_event_serialization_and_deserialization() {
+        let event = AlterSyncStateSetEvent::new("broker", vec![1, 2]);
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: AlterSyncStateSetEvent = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.broker_name(), event.broker_name());
+        assert_eq!(
+            deserialized.new_sync_state_set(),
+            event.new_sync_state_set()
+        );
+    }
+}
