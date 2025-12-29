@@ -78,17 +78,27 @@ impl<'de> Deserialize<'de> for UserStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json;
+
+    use super::*;
 
     #[test]
     fn test_get_by_name() {
         assert_eq!(UserStatus::get_by_name("enable"), Some(UserStatus::Enable));
         assert_eq!(UserStatus::get_by_name("ENABLE"), Some(UserStatus::Enable));
         assert_eq!(UserStatus::get_by_name("Enable"), Some(UserStatus::Enable));
-        assert_eq!(UserStatus::get_by_name("disable"), Some(UserStatus::Disable));
-        assert_eq!(UserStatus::get_by_name("DISABLE"), Some(UserStatus::Disable));
-        assert_eq!(UserStatus::get_by_name("Disable"), Some(UserStatus::Disable));
+        assert_eq!(
+            UserStatus::get_by_name("disable"),
+            Some(UserStatus::Disable)
+        );
+        assert_eq!(
+            UserStatus::get_by_name("DISABLE"),
+            Some(UserStatus::Disable)
+        );
+        assert_eq!(
+            UserStatus::get_by_name("Disable"),
+            Some(UserStatus::Disable)
+        );
         assert_eq!(UserStatus::get_by_name("invalid"), None);
         assert_eq!(UserStatus::get_by_name(""), None);
     }
