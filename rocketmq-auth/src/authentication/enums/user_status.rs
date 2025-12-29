@@ -75,3 +75,76 @@ impl<'de> Deserialize<'de> for UserStatus {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json;
+
+    #[test]
+    fn test_get_by_name() {
+        assert_eq!(UserStatus::get_by_name("enable"), Some(UserStatus::Enable));
+        assert_eq!(UserStatus::get_by_name("ENABLE"), Some(UserStatus::Enable));
+        assert_eq!(UserStatus::get_by_name("Enable"), Some(UserStatus::Enable));
+        assert_eq!(UserStatus::get_by_name("disable"), Some(UserStatus::Disable));
+        assert_eq!(UserStatus::get_by_name("DISABLE"), Some(UserStatus::Disable));
+        assert_eq!(UserStatus::get_by_name("Disable"), Some(UserStatus::Disable));
+        assert_eq!(UserStatus::get_by_name("invalid"), None);
+        assert_eq!(UserStatus::get_by_name(""), None);
+    }
+
+    #[test]
+    fn test_code() {
+        assert_eq!(UserStatus::Enable.code(), 1);
+        assert_eq!(UserStatus::Disable.code(), 2);
+    }
+
+    #[test]
+    fn test_name() {
+        assert_eq!(UserStatus::Enable.name(), "enable");
+        assert_eq!(UserStatus::Disable.name(), "disable");
+    }
+
+    #[test]
+    fn test_serialize() {
+        let enable_json = serde_json::to_string(&UserStatus::Enable).unwrap();
+        assert_eq!(enable_json, "1");
+
+        let disable_json = serde_json::to_string(&UserStatus::Disable).unwrap();
+        assert_eq!(disable_json, "2");
+    }
+
+    #[test]
+    fn test_deserialize() {
+        let enable: UserStatus = serde_json::from_str("1").unwrap();
+        assert_eq!(enable, UserStatus::Enable);
+
+        let disable: UserStatus = serde_json::from_str("2").unwrap();
+        assert_eq!(disable, UserStatus::Disable);
+    }
+
+    #[test]
+    fn test_deserialize_invalid() {
+        let result: Result<UserStatus, _> = serde_json::from_str("0");
+        assert!(result.is_err());
+
+        let result: Result<UserStatus, _> = serde_json::from_str("3");
+        assert!(result.is_err());
+
+        let result: Result<UserStatus, _> = serde_json::from_str("\"invalid\"");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_round_trip_serialization() {
+        let original = UserStatus::Enable;
+        let serialized = serde_json::to_string(&original).unwrap();
+        let deserialized: UserStatus = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(original, deserialized);
+
+        let original = UserStatus::Disable;
+        let serialized = serde_json::to_string(&original).unwrap();
+        let deserialized: UserStatus = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(original, deserialized);
+    }
+}
