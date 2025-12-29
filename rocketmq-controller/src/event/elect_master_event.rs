@@ -90,3 +90,67 @@ impl EventMessage for ElectMasterEvent {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn elect_master_event_new_and_getters() {
+        let event = ElectMasterEvent::new(true, "test_broker", Some(100));
+
+        assert!(event.new_master_elected());
+        assert_eq!(event.broker_name(), "test_broker");
+        assert_eq!(event.new_master_broker_id(), Some(100));
+    }
+
+    #[test]
+    fn elect_master_event_with_new_master() {
+        let event = ElectMasterEvent::with_new_master("test_broker", 100);
+
+        assert!(event.new_master_elected());
+        assert_eq!(event.broker_name(), "test_broker");
+        assert_eq!(event.new_master_broker_id(), Some(100));
+    }
+
+    #[test]
+    fn elect_master_event_without_new_master() {
+        let event = ElectMasterEvent::without_new_master(false, "test_broker");
+
+        assert!(!event.new_master_elected());
+        assert_eq!(event.broker_name(), "test_broker");
+        assert_eq!(event.new_master_broker_id(), None);
+    }
+
+    #[test]
+    fn elect_master_event_get_event_type() {
+        let event = ElectMasterEvent::without_new_master(false, "broker");
+        assert_eq!(event.get_event_type(), EventType::ElectMaster);
+    }
+
+    #[test]
+    fn elect_master_event_as_any() {
+        let event = ElectMasterEvent::without_new_master(false, "broker");
+        let any = event.as_any();
+        assert!(any.is::<ElectMasterEvent>());
+        let downcast = any.downcast_ref::<ElectMasterEvent>().unwrap();
+        assert_eq!(downcast.broker_name(), "broker");
+    }
+
+    #[test]
+    fn elect_master_event_serialization_and_deserialization() {
+        let event = ElectMasterEvent::with_new_master("broker", 100);
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: ElectMasterEvent = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            deserialized.new_master_elected(),
+            event.new_master_elected()
+        );
+        assert_eq!(deserialized.broker_name(), event.broker_name());
+        assert_eq!(
+            deserialized.new_master_broker_id(),
+            event.new_master_broker_id()
+        );
+    }
+}
