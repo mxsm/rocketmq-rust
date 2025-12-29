@@ -17,5 +17,6 @@
 
 pub mod context;
 pub mod enums;
-mod model;
+pub mod model;
+pub mod provider;
 pub mod strategy;
