@@ -75,3 +75,83 @@ impl<'de> Deserialize<'de> for UserType {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json;
+
+    #[test]
+    fn test_get_by_name() {
+        // 测试 Super
+        assert_eq!(UserType::get_by_name("Super"), Some(UserType::Super));
+        assert_eq!(UserType::get_by_name("super"), Some(UserType::Super));
+        
+        // 测试 Normal
+        assert_eq!(UserType::get_by_name("Normal"), Some(UserType::Normal));
+        assert_eq!(UserType::get_by_name("NORMAL"), Some(UserType::Normal));
+        
+        // 测试无效值
+        assert_eq!(UserType::get_by_name("invalid"), None);
+    }
+
+    #[test]
+    fn test_code() {
+        assert_eq!(UserType::Super.code(), 1);
+        assert_eq!(UserType::Normal.code(), 2);
+    }
+
+    #[test]
+    fn test_name() {
+        assert_eq!(UserType::Super.name(), "Super");
+        assert_eq!(UserType::Normal.name(), "Normal");
+    }
+
+    #[test]
+    fn test_serialize() {
+        let super_json = serde_json::to_string(&UserType::Super).unwrap();
+        assert_eq!(super_json, "1");
+
+        let normal_json = serde_json::to_string(&UserType::Normal).unwrap();
+        assert_eq!(normal_json, "2");
+    }
+
+    #[test]
+    fn test_deserialize() {
+        let super_user: UserType = serde_json::from_str("1").unwrap();
+        assert_eq!(super_user, UserType::Super);
+
+        let normal_user: UserType = serde_json::from_str("2").unwrap();
+        assert_eq!(normal_user, UserType::Normal);
+    }
+
+    #[test]
+    fn test_deserialize_invalid() {
+        // 0 是无效的
+        let result: Result<UserType, _> = serde_json::from_str("0");
+        assert!(result.is_err());
+
+        // 3 超出了范围
+        let result: Result<UserType, _> = serde_json::from_str("3");
+        assert!(result.is_err());
+        
+        // 字符串也是无效的
+        let result: Result<UserType, _> = serde_json::from_str("\"Super\"");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_round_trip_serialization() {
+        // 验证 Super 闭环
+        let original = UserType::Super;
+        let serialized = serde_json::to_string(&original).unwrap();
+        let deserialized: UserType = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(original, deserialized);
+
+        // 验证 Normal 闭环
+        let original = UserType::Normal;
+        let serialized = serde_json::to_string(&original).unwrap();
+        let deserialized: UserType = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(original, deserialized);
+    }
+}
