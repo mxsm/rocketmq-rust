@@ -216,15 +216,12 @@ mod tests {
 
     #[test]
     fn test_deserialize_invalid_code() {
-        let json = "6"; // Invalid code (valid range is 0-5)
-        let result: Result<ResourceType, _> = serde_json::from_str(json);
-        assert!(result.is_err());
-
-        let json = "99";
-        let result: Result<ResourceType, _> = serde_json::from_str(json);
-        assert!(result.is_err());
-
-        if let Err(err) = result {
+        // Test invalid codes
+        for invalid_code in ["6", "99", "255"] {
+            let result: Result<ResourceType, _> = serde_json::from_str(invalid_code);
+            assert!(result.is_err());
+            
+            let err = result.unwrap_err();
             let err_msg = err.to_string();
             assert!(err_msg.contains("invalid ResourceType code"));
         }
