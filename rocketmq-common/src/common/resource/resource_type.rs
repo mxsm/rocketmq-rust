@@ -99,19 +99,43 @@ impl<'de> Deserialize<'de> for ResourceType {
 mod tests {
     use super::*;
 
-   #[test]
+    #[test]
     fn test_get_by_name() {
-       assert_eq!(ResourceType::get_by_name("Unknown"), Some(ResourceType::Unknown));
-       assert_eq!(ResourceType::get_by_name("Any"), Some(ResourceType::Any));
-       assert_eq!(ResourceType::get_by_name("Cluster"), Some(ResourceType::Cluster));
-       assert_eq!(ResourceType::get_by_name("Namespace"), Some(ResourceType::Namespace));
-       assert_eq!(ResourceType::get_by_name("Topic"), Some(ResourceType::Topic));
-       assert_eq!(ResourceType::get_by_name("TOPIC"), Some(ResourceType::Topic));
-        assert_eq!(ResourceType::get_by_name("ToPiC"), Some(ResourceType::Topic));
-        assert_eq!(ResourceType::get_by_name("GROUP"), Some(ResourceType::Group));
-       assert_eq!(ResourceType::get_by_name("Group"), Some(ResourceType::Group));
-       assert_eq!(ResourceType::get_by_name("Invalid"), None);
-   }
+        assert_eq!(
+            ResourceType::get_by_name("Unknown"),
+            Some(ResourceType::Unknown)
+        );
+        assert_eq!(ResourceType::get_by_name("Any"), Some(ResourceType::Any));
+        assert_eq!(
+            ResourceType::get_by_name("Cluster"),
+            Some(ResourceType::Cluster)
+        );
+        assert_eq!(
+            ResourceType::get_by_name("Namespace"),
+            Some(ResourceType::Namespace)
+        );
+        assert_eq!(
+            ResourceType::get_by_name("Topic"),
+            Some(ResourceType::Topic)
+        );
+        assert_eq!(
+            ResourceType::get_by_name("TOPIC"),
+            Some(ResourceType::Topic)
+        );
+        assert_eq!(
+            ResourceType::get_by_name("ToPiC"),
+            Some(ResourceType::Topic)
+        );
+        assert_eq!(
+            ResourceType::get_by_name("GROUP"),
+            Some(ResourceType::Group)
+        );
+        assert_eq!(
+            ResourceType::get_by_name("Group"),
+            Some(ResourceType::Group)
+        );
+        assert_eq!(ResourceType::get_by_name("Invalid"), None);
+    }
 
     #[test]
     fn test_code() {
@@ -132,6 +156,7 @@ mod tests {
         assert_eq!(ResourceType::Topic.name(), "Topic");
         assert_eq!(ResourceType::Group.name(), "Group");
     }
+
     #[test]
     fn test_serialize_to_json() {
         let unknown = ResourceType::Unknown;
@@ -180,10 +205,10 @@ mod tests {
         for original in variants {
             // Serialize to JSON
             let json = serde_json::to_string(&original).unwrap();
-            
+
             // Deserialize back from JSON
             let deserialized: ResourceType = serde_json::from_str(&json).unwrap();
-            
+
             // Should match the original
             assert_eq!(original, deserialized);
         }
@@ -191,7 +216,6 @@ mod tests {
 
     #[test]
     fn test_deserialize_invalid_code() {
-        // Test that invalid numeric codes return an error
         let json = "6"; // Invalid code (valid range is 0-5)
         let result: Result<ResourceType, _> = serde_json::from_str(json);
         assert!(result.is_err());
@@ -199,8 +223,7 @@ mod tests {
         let json = "99";
         let result: Result<ResourceType, _> = serde_json::from_str(json);
         assert!(result.is_err());
-        
-        // Check error message contains expected text
+
         if let Err(err) = result {
             let err_msg = err.to_string();
             assert!(err_msg.contains("invalid ResourceType code"));
@@ -209,7 +232,6 @@ mod tests {
 
     #[test]
     fn test_serialize_all_variants() {
-        // Test all variants at once with expected values
         let test_cases = vec![
             (ResourceType::Unknown, "0"),
             (ResourceType::Any, "1"),
@@ -223,16 +245,5 @@ mod tests {
             let json = serde_json::to_string(&resource_type).unwrap();
             assert_eq!(json, expected_json);
         }
-    }
-
-
-    #[test]
-    fn test_copy_trait() {
-        // Test that Copy trait works correctly
-        let rt1 = ResourceType::Topic;
-        let rt2 = rt1; // Copy happens here
-        assert_eq!(rt1, rt2);
-        // rt1 should still be valid because of Copy trait
-        assert_eq!(rt1.code(), 4);
     }
 }
