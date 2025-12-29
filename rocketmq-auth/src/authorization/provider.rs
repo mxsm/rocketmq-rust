@@ -114,6 +114,7 @@ pub enum AuthorizationError {
 ///     }
 /// }
 /// ```
+#[allow(async_fn_in_trait)]
 pub trait AuthorizationProvider: Send + Sync {
     /// Initialize the authorization provider with configuration.
     ///
