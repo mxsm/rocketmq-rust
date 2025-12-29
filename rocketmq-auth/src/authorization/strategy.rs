@@ -25,8 +25,10 @@
 pub mod abstract_authorization_strategy;
 mod authorization_strategy;
 pub mod stateful_authorization_strategy;
+pub mod stateless_authorization_strategy;
 
 pub use abstract_authorization_strategy::AbstractAuthorizationStrategy;
 pub use abstract_authorization_strategy::AuthorizationStrategy;
 pub use abstract_authorization_strategy::StrategyResult;
 pub use stateful_authorization_strategy::StatefulAuthorizationStrategy;
+pub use stateless_authorization_strategy::StatelessAuthorizationStrategy;
