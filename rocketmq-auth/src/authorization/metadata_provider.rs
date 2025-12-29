@@ -24,7 +24,13 @@
 //! - Remote databases (MySQL, PostgreSQL)
 //! - Distributed configuration services (etcd, Consul)
 
+// Sub-modules
+pub mod local;
+
 use std::any::Any;
+
+// Re-export commonly used types
+pub use local::LocalAuthorizationMetadataProvider;
 
 use crate::authentication::model::subject::Subject;
 use crate::authorization::model::acl::Acl;
