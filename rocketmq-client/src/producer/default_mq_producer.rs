@@ -418,10 +418,10 @@ impl DefaultMQProducer {
         self.producer_config.auto_batch = auto_batch;
     }
 
-    pub fn set_produce_accumulator(&mut self, produce_accumulator: Option<ProduceAccumulator>) {
-        if let Some(produce_accumulator) = produce_accumulator {
+    pub fn set_produce_accumulator(&mut self, produce_accumulator: ProduceAccumulator) {
+       
             self.producer_config.produce_accumulator = Some(ArcMut::new(produce_accumulator));
-        }
+        
     }
 
     pub fn set_enable_backpressure_for_async_mode(
