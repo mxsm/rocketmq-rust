@@ -118,3 +118,70 @@ impl PlainAccessResource {
         self.content = Some(content);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_access_resource_new_and_getters() {
+        let mut resource = PlainAccessResource::new();
+        assert_eq!(resource.default_topic_perm, 1);
+        assert_eq!(resource.default_group_perm, 1);
+        assert!(resource.access_key().is_none());
+
+        resource.set_access_key(CheetahString::from("ak"));
+        assert_eq!(resource.access_key(), Some(&CheetahString::from("ak")));
+
+        resource.set_secret_key(CheetahString::from("sk"));
+        assert_eq!(resource.secret_key, Some(CheetahString::from("sk")));
+
+        resource.set_white_remote_address(CheetahString::from("127.0.0.1"));
+        assert_eq!(
+            resource.white_remote_address,
+            Some(CheetahString::from("127.0.0.1"))
+        );
+
+        resource.set_admin(true);
+        assert!(resource.admin);
+
+        resource.set_default_topic_perm(2);
+        assert_eq!(resource.default_topic_perm, 2);
+
+        resource.set_default_group_perm(3);
+        assert_eq!(resource.default_group_perm, 3);
+
+        resource.set_request_code(10);
+        assert_eq!(resource.request_code, 10);
+
+        resource.set_signature(CheetahString::from("sig"));
+        assert_eq!(resource.signature, Some(CheetahString::from("sig")));
+
+        resource.set_secret_token(CheetahString::from("token"));
+        assert_eq!(resource.secret_token, Some(CheetahString::from("token")));
+
+        resource.set_recognition(CheetahString::from("rec"));
+        assert_eq!(resource.recognition, Some(CheetahString::from("rec")));
+
+        resource.set_content(vec![1, 2, 3]);
+        assert_eq!(resource.content, Some(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn plain_access_resource_get_group_from_retry_topic() {
+        let retry_topic = CheetahString::from("%RETRY%group1");
+        let group = PlainAccessResource::get_group_from_retry_topic(Some(&retry_topic));
+        assert_eq!(group, Some(CheetahString::from("group1")));
+
+        assert_eq!(PlainAccessResource::get_group_from_retry_topic(None), None);
+    }
+
+    #[test]
+    fn plain_access_resource_get_retry_topic() {
+        let group = CheetahString::from("group1");
+        let retry_topic = PlainAccessResource::get_retry_topic(Some(&group));
+        assert_eq!(retry_topic, Some(CheetahString::from("%RETRY%group1")));
+
+        assert_eq!(PlainAccessResource::get_retry_topic(None), None);
+    }
+}
