@@ -80,3 +80,120 @@ impl<'de> Deserialize<'de> for ResourcePattern {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::common::resource::resource_pattern::ResourcePattern;
+
+    #[test]
+    fn given_string_any_return_enum_value() {
+        let any = ResourcePattern::get_by_name("ANY");
+        assert_eq!(Some(ResourcePattern::Any), any);
+    }
+
+    #[test]
+    fn given_string_literal_return_enum_value() {
+        let literal = ResourcePattern::get_by_name("LITERAL");
+        assert_eq!(Some(ResourcePattern::Literal), literal);
+    }
+
+    #[test]
+    fn given_string_prefixed_return_enum_value() {
+        let prefixed = ResourcePattern::get_by_name("PREFIXED");
+        assert_eq!(Some(ResourcePattern::Prefixed), prefixed);
+    }
+
+    #[test]
+    fn get_by_name_is_case_insensitive() {
+        assert_eq!(
+            Some(ResourcePattern::Any),
+            ResourcePattern::get_by_name("aNy")
+        );
+        assert_eq!(
+            Some(ResourcePattern::Literal),
+            ResourcePattern::get_by_name("LiTeRaL")
+        );
+        assert_eq!(
+            Some(ResourcePattern::Prefixed),
+            ResourcePattern::get_by_name("pReFixed")
+        );
+    }
+
+    #[test]
+    fn invalid_name_returns_none() {
+        assert!(ResourcePattern::get_by_name("UNKNOWN").is_none());
+        assert!(ResourcePattern::get_by_name("123").is_none());
+        assert!(ResourcePattern::get_by_name("").is_none());
+    }
+
+    #[test]
+    fn name_and_code_methods_are_consistent() {
+        assert_eq!("ANY", ResourcePattern::Any.name());
+        assert_eq!(1, ResourcePattern::Any.code());
+        assert_eq!("LITERAL", ResourcePattern::Literal.name());
+        assert_eq!(2, ResourcePattern::Literal.code());
+        assert_eq!("PREFIXED", ResourcePattern::Prefixed.name());
+        assert_eq!(3, ResourcePattern::Prefixed.code());
+    }
+
+    #[test]
+    fn serde_json_serializes_to_number() {
+        assert_eq!(
+            "1",
+            serde_json::to_string(&ResourcePattern::Any)
+                .expect("ResourcePattern::Any must serialize")
+        );
+        assert_eq!(
+            "2",
+            serde_json::to_string(&ResourcePattern::Literal)
+                .expect("ResourcePattern::Literal must serialize")
+        );
+        assert_eq!(
+            "3",
+            serde_json::to_string(&ResourcePattern::Prefixed)
+                .expect("ResourcePattern::Prefixed must serialize")
+        );
+    }
+
+    #[test]
+    fn serde_json_deserializes_from_number() {
+        let any: ResourcePattern = serde_json::from_str("1").expect("Must deserialize 1");
+        assert_eq!(ResourcePattern::Any, any);
+
+        let literal: ResourcePattern = serde_json::from_str("2").expect("Must deserialize 2");
+        assert_eq!(ResourcePattern::Literal, literal);
+
+        let prefixed: ResourcePattern = serde_json::from_str("3").expect("Must deserialize 3");
+        assert_eq!(ResourcePattern::Prefixed, prefixed);
+    }
+
+    #[test]
+    fn serde_json_deserializes_invalid_fails() {
+        assert!(serde_json::from_str::<ResourcePattern>("0").is_err());
+        assert!(serde_json::from_str::<ResourcePattern>("999").is_err());
+    }
+
+    #[test]
+    fn serde_json_roundtrip_variants() {
+        for &variant in &[
+            ResourcePattern::Any,
+            ResourcePattern::Literal,
+            ResourcePattern::Prefixed,
+        ] {
+            let serialized = serde_json::to_string(&variant).unwrap_or_else(|e| {
+                panic!(
+                    "Could not serialize ResourcePattern::{:?}: {}",
+                    &variant.name(),
+                    e
+                )
+            });
+            let parsed: ResourcePattern = serde_json::from_str(&serialized).unwrap_or_else(|e| {
+                panic!(
+                    "Could not parse {:?} as ResourcePattern: {}",
+                    &serialized, e
+                )
+            });
+            assert_eq!(variant, parsed);
+        }
+    }
+}
