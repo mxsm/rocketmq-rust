@@ -75,6 +75,7 @@ impl Clone for SubjectWrapper {
 /// - Resource: what is being accessed (topic, group, cluster)
 /// - Actions: what operations are being performed (PUB, SUB, CREATE, etc.)
 /// - Source IP: where the request originates from
+/// - Channel ID: unique identifier for the communication channel
 /// - RPC code: the RocketMQ request code
 /// - Extended info: additional context-specific metadata
 #[derive(Debug, Clone, Default)]
@@ -90,6 +91,9 @@ pub struct DefaultAuthorizationContext {
 
     /// Source IP address of the request
     source_ip: Option<String>,
+
+    /// Unique identifier for the communication channel (inherited from base context)
+    channel_id: Option<String>,
 
     /// RocketMQ RPC request code (for protocol-specific authorization)
     rpc_code: Option<String>,
@@ -119,6 +123,7 @@ impl DefaultAuthorizationContext {
             resource: Some(resource),
             actions: vec![action],
             source_ip: Some(source_ip.into()),
+            channel_id: None,
             rpc_code: None,
             ext_info: HashMap::new(),
         }
@@ -144,6 +149,7 @@ impl DefaultAuthorizationContext {
             resource: Some(resource),
             actions,
             source_ip: Some(source_ip.into()),
+            channel_id: None,
             rpc_code: None,
             ext_info: HashMap::new(),
         }
@@ -186,6 +192,10 @@ impl DefaultAuthorizationContext {
         self.source_ip.as_deref()
     }
 
+    pub fn channel_id(&self) -> Option<&str> {
+        self.channel_id.as_deref()
+    }
+
     pub fn rpc_code(&self) -> Option<&str> {
         self.rpc_code.as_deref()
     }
@@ -211,6 +221,10 @@ impl DefaultAuthorizationContext {
         self.source_ip = Some(source_ip.into());
     }
 
+    pub fn set_channel_id(&mut self, channel_id: impl Into<String>) {
+        self.channel_id = Some(channel_id.into());
+    }
+
     pub fn set_rpc_code(&mut self, rpc_code: impl Into<String>) {
         self.rpc_code = Some(rpc_code.into());
     }
@@ -231,6 +245,7 @@ pub struct DefaultAuthorizationContextBuilder {
     resource: Option<Resource>,
     actions: Vec<Action>,
     source_ip: Option<String>,
+    channel_id: Option<String>,
     rpc_code: Option<String>,
     ext_info: HashMap<String, String>,
 }
@@ -261,6 +276,11 @@ impl DefaultAuthorizationContextBuilder {
         self
     }
 
+    pub fn channel_id(mut self, channel_id: impl Into<String>) -> Self {
+        self.channel_id = Some(channel_id.into());
+        self
+    }
+
     pub fn rpc_code(mut self, rpc_code: impl Into<String>) -> Self {
         self.rpc_code = Some(rpc_code.into());
         self
@@ -277,6 +297,7 @@ impl DefaultAuthorizationContextBuilder {
             resource: self.resource,
             actions: self.actions,
             source_ip: self.source_ip,
+            channel_id: self.channel_id,
             rpc_code: self.rpc_code,
             ext_info: self.ext_info,
         }
