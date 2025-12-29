@@ -78,7 +78,7 @@ mod tests {
     #[test]
     fn test_get_by_name() {
         assert_eq!(SubjectType::get_by_name("User"), Some(SubjectType::User));
-        assert_eq!(SubjectType::get_by_name("user"), Some(SubjectType::User)); // 测试忽略大小写
+        assert_eq!(SubjectType::get_by_name("user"), Some(SubjectType::User)); 
         assert_eq!(SubjectType::get_by_name("USER"), Some(SubjectType::User));
         assert_eq!(SubjectType::get_by_name("invalid"), None);
     }
@@ -107,14 +107,12 @@ mod tests {
 
     #[test]
     fn test_deserialize_invalid() {
-        // 测试无效数字
         let result: Result<SubjectType, _> = serde_json::from_str("0");
         assert!(result.is_err());
 
         let result: Result<SubjectType, _> = serde_json::from_str("2");
         assert!(result.is_err());
 
-        // 测试无效类型
         let result: Result<SubjectType, _> = serde_json::from_str("\"User\"");
         assert!(result.is_err());
     }
