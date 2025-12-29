@@ -78,8 +78,9 @@ impl<'de> Deserialize<'de> for UserType {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json;
+
+    use super::*;
 
     #[test]
     fn test_get_by_name() {
@@ -129,7 +130,7 @@ mod tests {
 
         let result: Result<UserType, _> = serde_json::from_str("3");
         assert!(result.is_err());
-        
+
         let result: Result<UserType, _> = serde_json::from_str("\"Super\"");
         assert!(result.is_err());
     }
