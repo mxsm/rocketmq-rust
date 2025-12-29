@@ -370,6 +370,9 @@ pub enum RocketMQError {
     #[deprecated(since = "0.7.0", note = "Use specific error types instead")]
     #[error("{0}")]
     Legacy(String),
+
+    #[error("Not initialized: {0}")]
+    NotInitialized(String),
 }
 
 // ============================================================================
@@ -520,6 +523,12 @@ impl RocketMQError {
     #[inline]
     pub fn nameserver_config_invalid(reason: impl Into<String>) -> Self {
         Self::Tools(ToolsError::nameserver_config_invalid(reason))
+    }
+
+    /// Create a not initialized error
+    #[inline]
+    pub fn not_initialized(reason: impl Into<String>) -> Self {
+        Self::NotInitialized(reason.into())
     }
 }
 
