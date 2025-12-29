@@ -138,6 +138,17 @@ mod tests {
     }
 
     #[test]
+    fn ext_info_nonexistent_key_returns_none() {
+        let base_authentication_context = BaseAuthenticationContext::new();
+
+        assert!(!base_authentication_context.has_ext_info(&CheetahString::from("nonexistent")));
+        assert_eq!(
+            None,
+            base_authentication_context.get_ext_info::<i32>(&CheetahString::from("nonexistent"))
+        );
+    }
+
+    #[test]
     fn ext_info_wrong_type_returns_none() {
         let mut base_authentication_context = BaseAuthenticationContext::new();
         base_authentication_context
