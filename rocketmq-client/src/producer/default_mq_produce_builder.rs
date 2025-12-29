@@ -298,7 +298,9 @@ impl DefaultMQProducerBuilder {
             mq_producer.set_max_message_size(max_message_size);
         }
 
-        mq_producer.set_trace_dispatcher(self.trace_dispatcher);
+        if let Some(trace_dispatcher) = self.trace_dispatcher {
+            mq_producer.set_trace_dispatcher(trace_dispatcher);
+        }
         if let Some(auto_batch) = self.auto_batch {
             mq_producer.set_auto_batch(auto_batch);
         }
