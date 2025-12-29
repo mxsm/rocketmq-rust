@@ -103,3 +103,91 @@ impl fmt::Display for Action {
         write!(f, "{}", self.name())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Action;
+
+    #[test]
+    fn test_action_code() {
+        assert_eq!(Action::Unknown.code(), 0);
+        assert_eq!(Action::All.code(), 1);
+        assert_eq!(Action::Any.code(), 2);
+        assert_eq!(Action::Pub.code(), 3);
+        assert_eq!(Action::Sub.code(), 4);
+        assert_eq!(Action::Create.code(), 5);
+        assert_eq!(Action::Update.code(), 6);
+        assert_eq!(Action::Delete.code(), 7);
+        assert_eq!(Action::Get.code(), 8);
+        assert_eq!(Action::List.code(), 9);
+    }
+
+    #[test]
+    fn test_action_name() {
+        assert_eq!(Action::Unknown.name(), "Unknown");
+        assert_eq!(Action::All.name(), "All");
+        assert_eq!(Action::Any.name(), "Any");
+        assert_eq!(Action::Pub.name(), "Pub");
+        assert_eq!(Action::Sub.name(), "Sub");
+        assert_eq!(Action::Create.name(), "Create");
+        assert_eq!(Action::Update.name(), "Update");
+        assert_eq!(Action::Delete.name(), "Delete");
+        assert_eq!(Action::Get.name(), "Get");
+        assert_eq!(Action::List.name(), "List");
+    }
+
+    #[test]
+    fn test_get_by_name_case_insensitive() {
+        let test_cases = [
+            ("unknown", Some(Action::Unknown)),
+            ("UNKNOWN", Some(Action::Unknown)),
+            ("aLL", Some(Action::All)),
+            ("CrEaTe", Some(Action::Create)),
+            ("  all  ", Some(Action::All)),
+            ("\tpub\t", Some(Action::Pub)),
+            (" sub ", Some(Action::Sub)),
+            ("invalid", None),
+            ("", None),
+            ("publish", None),
+        ];
+
+        for (input, expected) in test_cases {
+            assert_eq!(Action::get_by_name(input), expected, "input: {:?}", input);
+        }
+    }
+
+    #[test]
+    fn test_try_from_u8_valid() {
+        assert_eq!(Action::try_from(0), Ok(Action::Unknown));
+        assert_eq!(Action::try_from(1), Ok(Action::All));
+        assert_eq!(Action::try_from(2), Ok(Action::Any));
+        assert_eq!(Action::try_from(3), Ok(Action::Pub));
+        assert_eq!(Action::try_from(4), Ok(Action::Sub));
+        assert_eq!(Action::try_from(5), Ok(Action::Create));
+        assert_eq!(Action::try_from(6), Ok(Action::Update));
+        assert_eq!(Action::try_from(7), Ok(Action::Delete));
+        assert_eq!(Action::try_from(8), Ok(Action::Get));
+        assert_eq!(Action::try_from(9), Ok(Action::List));
+    }
+
+    #[test]
+    fn test_try_from_u8_invalid() {
+        assert_eq!(Action::try_from(10), Err(()));
+        assert_eq!(Action::try_from(100), Err(()));
+        assert_eq!(Action::try_from(255), Err(()));
+    }
+
+    #[test]
+    fn test_display() {
+        assert_eq!(format!("{}", Action::Unknown), "Unknown");
+        assert_eq!(format!("{}", Action::All), "All");
+        assert_eq!(format!("{}", Action::Any), "Any");
+        assert_eq!(format!("{}", Action::Pub), "Pub");
+        assert_eq!(format!("{}", Action::Sub), "Sub");
+        assert_eq!(format!("{}", Action::Create), "Create");
+        assert_eq!(format!("{}", Action::Update), "Update");
+        assert_eq!(format!("{}", Action::Delete), "Delete");
+        assert_eq!(format!("{}", Action::Get), "Get");
+        assert_eq!(format!("{}", Action::List), "List");
+    }
+}
