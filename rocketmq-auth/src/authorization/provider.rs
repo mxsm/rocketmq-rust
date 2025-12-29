@@ -35,7 +35,7 @@ pub type AuthorizationResult<T> = Result<T, AuthorizationError>;
 /// - Policy evaluation failures
 /// - Configuration errors
 /// - Internal errors
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum AuthorizationError {
     /// Authorization denied: subject does not have permission to perform the requested action.
     #[error("Authorization denied for subject '{subject}' on resource '{resource}': {reason}")]
