@@ -29,6 +29,13 @@ tracing-subscriber = { workspace = true }
 # IP utilities for authorization models
 ipnetwork = "0.21.1"
 
+# Error handling
+thiserror = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+
 [dev-dependencies]
 tempfile = "3"
 tracing = { workspace = true }
