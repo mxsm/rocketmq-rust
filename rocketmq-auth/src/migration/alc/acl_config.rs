@@ -60,3 +60,44 @@ impl fmt::Display for AclConfig {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn acl_config_default_and_new() {
+        let config = AclConfig::default();
+        assert!(config.global_white_addrs().is_none());
+        assert!(config.plain_access_configs().is_none());
+
+        let config = AclConfig::new();
+        assert!(config.global_white_addrs().is_none());
+        assert!(config.plain_access_configs().is_none());
+    }
+
+    #[test]
+    fn acl_config_setters_and_getters() {
+        let mut config = AclConfig::new();
+
+        let addrs = vec![CheetahString::from("127.0.0.1")];
+        config.set_global_white_addrs(addrs.clone());
+        assert_eq!(config.global_white_addrs(), Some(addrs.as_slice()));
+
+        let plain_configs = vec![PlainAccessConfig::default()];
+        config.set_plain_access_configs(plain_configs.clone());
+        assert_eq!(
+            config.plain_access_configs(),
+            Some(plain_configs.as_slice())
+        );
+    }
+
+    #[test]
+    fn acl_config_display() {
+        let config = AclConfig::new();
+        let display = format!("{}", config);
+        assert!(display.contains("AclConfig"));
+        assert!(display.contains("global_white_addrs=None"));
+        assert!(display.contains("plain_access_configs=None"));
+    }
+}
