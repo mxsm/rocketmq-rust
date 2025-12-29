@@ -653,7 +653,7 @@ impl MQProducer for DefaultMQProducer {
         }
 
         if let Some(ref mut trace_dispatcher) = self.producer_config.trace_dispatcher {
-            //TODO: trace
+            unimplemented!("unimplemented trace dispatcher start");
         }
         Ok(())
     }
