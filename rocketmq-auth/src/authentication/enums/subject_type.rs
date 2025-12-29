@@ -72,13 +72,14 @@ impl<'de> Deserialize<'de> for SubjectType {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json;
+
+    use super::*;
 
     #[test]
     fn test_get_by_name() {
         assert_eq!(SubjectType::get_by_name("User"), Some(SubjectType::User));
-        assert_eq!(SubjectType::get_by_name("user"), Some(SubjectType::User)); 
+        assert_eq!(SubjectType::get_by_name("user"), Some(SubjectType::User));
         assert_eq!(SubjectType::get_by_name("USER"), Some(SubjectType::User));
         assert_eq!(SubjectType::get_by_name("invalid"), None);
     }
