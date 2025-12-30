@@ -95,6 +95,7 @@ use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 
@@ -253,23 +254,98 @@ impl ControllerRequestProcessor {
     /// Handle ALTER_SYNC_STATE_SET request
     ///
     /// This changes the in-sync replica set for a broker group.
+    /// Equivalent to Java's handleAlterSyncStateSet method.
+    ///
+    /// # Request Flow
+    ///
+    /// 1. Decode AlterSyncStateSetRequestHeader from request
+    /// 2. Decode SyncStateSet from request body
+    /// 3. Forward to controller.alter_sync_state_set()
+    /// 4. Wait for response with WAIT_TIMEOUT_SECONDS timeout
+    /// 5. Return response command
     ///
     /// # Arguments
     ///
-    /// * `channel` - Network channel
-    /// * `ctx` - Connection context
+    /// * `channel` - Network channel (unused, for compatibility)
+    /// * `ctx` - Connection context (unused, for compatibility)
     /// * `request` - Request command containing header and sync state set
     ///
     /// # Returns
     ///
     /// Result containing response command
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - Request decoding fails
+    /// - Controller operation times out
+    /// - Controller returns error response
+    ///
+    /// # Implementation Note
+    ///
+    /// This method requires the Controller (RaftController or DLedgerController) to implement
+    /// the `alter_sync_state_set` method. The actual logic is delegated to the controller layer
+    /// which handles:
+    /// - Leader state validation
+    /// - Raft consensus (proposal submission)
+    /// - State machine application via ReplicasInfoManager
+    ///
+    /// **TODO**: Implement Controller::alter_sync_state_set() in the controller layer
     async fn handle_alter_sync_state_set(
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
-        _request: &mut RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        unimplemented!("unimplemented handle_alter_sync_state_set")
+        use rocketmq_error::RocketMQError;
+        use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
+        use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
+
+        // Decode request header
+        let _request_header = request
+            .decode_command_custom_header::<AlterSyncStateSetRequestHeader>()
+            .map_err(|e| {
+                RocketMQError::request_header_error(format!(
+                    "Failed to decode AlterSyncStateSetRequestHeader: {:?}",
+                    e
+                ))
+            })?;
+
+        // Decode request body (SyncStateSet)
+        let _sync_state_set = if let Some(body) = request.body() {
+            SyncStateSet::decode(body)?
+        } else {
+            return Err(RocketMQError::request_body_invalid(
+                "ALTER_SYNC_STATE_SET",
+                "Request body is empty",
+            ));
+        };
+
+        // TODO: Forward to controller with timeout
+        // This requires implementing Controller::alter_sync_state_set() method
+        //
+        // Expected implementation (once Controller trait is ready):
+        // ```
+        // use std::time::Duration;
+        // use tokio::time::timeout;
+        //
+        // let controller = self.controller_manager.get_controller();
+        // let future = controller.alter_sync_state_set(&request_header, sync_state_set);
+        //
+        // match timeout(Duration::from_secs(WAIT_TIMEOUT_SECONDS), future).await {
+        //     Ok(Ok(response)) => Ok(Some(response)),
+        //     Ok(Err(e)) => Err(e),
+        //     Err(_) => Err(RocketMQError::Timeout {
+        //         operation: "alter_sync_state_set",
+        //         timeout_ms: (WAIT_TIMEOUT_SECONDS * 1000),
+        //     }),
+        // }
+        // ```
+
+        Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            rocketmq_remoting::code::response_code::ResponseCode::SystemError,
+            "Controller::alter_sync_state_set() not implemented yet. See ALIGNMENT_REPORT_ALTER_SYNC_STATE_SET.md for implementation details.",
+        )))
     }
 
     /// Handle ELECT_MASTER request
