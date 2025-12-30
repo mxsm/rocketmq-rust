@@ -39,10 +39,7 @@ impl User {
         }
     }
 
-    pub fn of_with_password(
-        username: impl Into<CheetahString>,
-        password: impl Into<CheetahString>,
-    ) -> Self {
+    pub fn of_with_password(username: impl Into<CheetahString>, password: impl Into<CheetahString>) -> Self {
         User {
             username: username.into(),
             password: Some(password.into()),

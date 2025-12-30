@@ -164,12 +164,8 @@ impl StatefulAuthorizationStrategy {
     /// let config = AuthConfig::default();
     /// let strategy = StatefulAuthorizationStrategy::new(config, None)?;
     /// ```
-    pub fn new(
-        auth_config: AuthConfig,
-        metadata_service: Option<Box<dyn Any + Send + Sync>>,
-    ) -> StrategyResult<Self> {
-        let cache_ttl =
-            Duration::from_secs(auth_config.stateful_authorization_cache_expired_second as u64);
+    pub fn new(auth_config: AuthConfig, metadata_service: Option<Box<dyn Any + Send + Sync>>) -> StrategyResult<Self> {
+        let cache_ttl = Duration::from_secs(auth_config.stateful_authorization_cache_expired_second as u64);
         let cache_max_size = auth_config.stateful_authorization_cache_max_num as usize;
 
         let base = AbstractAuthorizationStrategy::new(auth_config, metadata_service)?;
@@ -193,14 +189,8 @@ impl StatefulAuthorizationStrategy {
     /// Format: `{channel_id}#{subject_key}#{resource_key}#{actions}#{source_ip}`
     fn build_key(&self, context: &DefaultAuthorizationContext) -> String {
         let channel_id = context.channel_id().unwrap_or("");
-        let subject_key = context
-            .subject()
-            .map(|s| s.subject_key())
-            .unwrap_or_default();
-        let resource_key = context
-            .resource()
-            .map(|r| format!("{:?}", r))
-            .unwrap_or_default();
+        let subject_key = context.subject().map(|s| s.subject_key()).unwrap_or_default();
+        let resource_key = context.resource().map(|r| format!("{:?}", r)).unwrap_or_default();
         let actions = context
             .actions()
             .iter()

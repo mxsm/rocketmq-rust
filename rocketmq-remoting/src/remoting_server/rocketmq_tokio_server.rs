@@ -105,10 +105,7 @@ impl<RP> Drop for ConnectionHandler<RP> {
     fn drop(&mut self) {
         if let Some(ref sender) = self.conn_disconnect_notify {
             let socket_addr = self.connection_handler_context.remote_address();
-            warn!(
-                "connection[{}] disconnected, Send notify message.",
-                socket_addr
-            );
+            warn!("connection[{}] disconnected, Send notify message.", socket_addr);
             let _ = sender.send(socket_addr);
         }
     }
@@ -449,10 +446,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
                 Err(err) => {
                     if backoff > MAX_BACKOFF {
                         // Exceeded retry limit - fatal error
-                        error!(
-                            "Accept failed after {} retries, last error: {}",
-                            MAX_BACKOFF, err
-                        );
+                        error!("Accept failed after {} retries, last error: {}", MAX_BACKOFF, err);
                         return Err(err.into());
                     }
 
@@ -493,11 +487,7 @@ impl<RP> RocketMQServer<RP> {
 }
 
 impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
-    pub async fn run(
-        &mut self,
-        request_processor: RP,
-        channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
-    ) {
+    pub async fn run(&mut self, request_processor: RP, channel_event_listener: Option<Arc<dyn ChannelEventListener>>) {
         let addr = format!("{}:{}", self.config.bind_address, self.config.listen_port);
         let listener = TcpListener::bind(&addr).await.unwrap();
         let rpc_hooks = self.rpc_hooks.take().unwrap_or_default();

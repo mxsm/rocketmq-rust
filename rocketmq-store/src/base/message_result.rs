@@ -66,8 +66,8 @@ impl Display for AppendMessageResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "AppendMessageResult [status={:?}, wrote_offset={}, wrote_bytes={}, msg_id={:?}, \
-             store_timestamp={}, logics_offset={}, page_cache_rt={}, msg_num={}]",
+            "AppendMessageResult [status={:?}, wrote_offset={}, wrote_bytes={}, msg_id={:?}, store_timestamp={}, \
+             logics_offset={}, page_cache_rt={}, msg_num={}]",
             self.status,
             self.wrote_offset,
             self.wrote_bytes,
@@ -160,10 +160,7 @@ impl PutMessageResult {
     }
 
     #[inline]
-    pub fn set_append_message_result(
-        &mut self,
-        append_message_result: Option<AppendMessageResult>,
-    ) {
+    pub fn set_append_message_result(&mut self, append_message_result: Option<AppendMessageResult>) {
         self.append_message_result = append_message_result;
     }
 
@@ -180,8 +177,7 @@ impl PutMessageResult {
                 || self.put_message_status == PutMessageStatus::FlushSlaveTimeout
                 || self.put_message_status == PutMessageStatus::SlaveNotAvailable
         } else {
-            self.append_message_result.is_some()
-                && self.append_message_result.as_ref().unwrap().is_ok()
+            self.append_message_result.is_some() && self.append_message_result.as_ref().unwrap().is_ok()
         }
     }
 }

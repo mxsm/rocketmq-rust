@@ -48,10 +48,7 @@ impl ConsumeOrderlyContext {
         self.suspend_current_queue_time_millis
     }
 
-    pub fn set_suspend_current_queue_time_millis(
-        &mut self,
-        suspend_current_queue_time_millis: i64,
-    ) {
+    pub fn set_suspend_current_queue_time_millis(&mut self, suspend_current_queue_time_millis: i64) {
         self.suspend_current_queue_time_millis = suspend_current_queue_time_millis;
     }
 }

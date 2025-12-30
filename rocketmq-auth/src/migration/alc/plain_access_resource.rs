@@ -58,9 +58,7 @@ impl PlainAccessResource {
 }
 
 impl PlainAccessResource {
-    pub fn get_group_from_retry_topic(
-        retry_topic: Option<&CheetahString>,
-    ) -> Option<CheetahString> {
+    pub fn get_group_from_retry_topic(retry_topic: Option<&CheetahString>) -> Option<CheetahString> {
         retry_topic.map(|t| CheetahString::from_string(KeyBuilder::parse_group(t)))
     }
 
@@ -137,10 +135,7 @@ mod tests {
         assert_eq!(resource.secret_key, Some(CheetahString::from("sk")));
 
         resource.set_white_remote_address(CheetahString::from("127.0.0.1"));
-        assert_eq!(
-            resource.white_remote_address,
-            Some(CheetahString::from("127.0.0.1"))
-        );
+        assert_eq!(resource.white_remote_address, Some(CheetahString::from("127.0.0.1")));
 
         resource.set_admin(true);
         assert!(resource.admin);

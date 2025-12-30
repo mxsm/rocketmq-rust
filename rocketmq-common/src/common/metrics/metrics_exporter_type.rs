@@ -101,23 +101,11 @@ mod tests {
 
     #[test]
     fn test_from_value() {
-        assert_eq!(
-            MetricsExporterType::from_value(0),
-            MetricsExporterType::Disable
-        );
-        assert_eq!(
-            MetricsExporterType::from_value(1),
-            MetricsExporterType::OtlpGrpc
-        );
-        assert_eq!(
-            MetricsExporterType::from_value(2),
-            MetricsExporterType::Prom
-        );
+        assert_eq!(MetricsExporterType::from_value(0), MetricsExporterType::Disable);
+        assert_eq!(MetricsExporterType::from_value(1), MetricsExporterType::OtlpGrpc);
+        assert_eq!(MetricsExporterType::from_value(2), MetricsExporterType::Prom);
         assert_eq!(MetricsExporterType::from_value(3), MetricsExporterType::Log);
-        assert_eq!(
-            MetricsExporterType::from_value(100),
-            MetricsExporterType::Disable
-        );
+        assert_eq!(MetricsExporterType::from_value(100), MetricsExporterType::Disable);
     }
 
     #[test]
@@ -158,10 +146,7 @@ mod tests {
             MetricsExporterType::from_str("prometheus").unwrap(),
             MetricsExporterType::Prom
         );
-        assert_eq!(
-            MetricsExporterType::from_str("log").unwrap(),
-            MetricsExporterType::Log
-        );
+        assert_eq!(MetricsExporterType::from_str("log").unwrap(), MetricsExporterType::Log);
 
         assert!(MetricsExporterType::from_str("unknown").is_err());
     }

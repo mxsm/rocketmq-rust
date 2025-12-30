@@ -67,21 +67,14 @@ fn create_test_commit_log() -> (CommitLog, TempDir) {
     (commit_log, temp_dir)
 }
 
-fn create_commit_log_with_config(
-    _config: Arc<MessageStoreConfig>,
-    _broker_config: Arc<BrokerConfig>,
-) -> CommitLog {
+fn create_commit_log_with_config(_config: Arc<MessageStoreConfig>, _broker_config: Arc<BrokerConfig>) -> CommitLog {
     // Note: This is a simplified creation. In real tests, you'd need all dependencies.
     // For now, we'll focus on the structure.
     todo!("Implement full CommitLog creation with all dependencies")
 }
 
 /// Create a test message with specified size
-fn create_test_message(
-    topic: &'static str,
-    _queue_id: i32,
-    body_size: usize,
-) -> MessageExtBrokerInner {
+fn create_test_message(topic: &'static str, _queue_id: i32, body_size: usize) -> MessageExtBrokerInner {
     let body = vec![b'X'; body_size];
     let mut message = Message::new(CheetahString::from_static_str(topic), body.as_ref());
     message.set_tags(CheetahString::from_static_str("TagA"));
@@ -105,21 +98,17 @@ fn bench_single_message_throughput(c: &mut Criterion) {
     for size in [256, 1024, 4096].iter() {
         group.throughput(Throughput::Bytes(*size as u64));
 
-        group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{}B", size)),
-            size,
-            |b, &size| {
-                let rt = Runtime::new().unwrap();
-                let (mut commit_log, _temp_dir) = create_test_commit_log();
+        group.bench_with_input(BenchmarkId::from_parameter(format!("{}B", size)), size, |b, &size| {
+            let rt = Runtime::new().unwrap();
+            let (mut commit_log, _temp_dir) = create_test_commit_log();
 
-                b.iter(|| {
-                    rt.block_on(async {
-                        let msg = create_test_message("BenchTopic", 0, size);
-                        commit_log.put_message(msg).await
-                    })
-                });
-            },
-        );
+            b.iter(|| {
+                rt.block_on(async {
+                    let msg = create_test_message("BenchTopic", 0, size);
+                    commit_log.put_message(msg).await
+                })
+            });
+        });
     }
 
     group.finish();
@@ -201,16 +190,8 @@ fn bench_latency_distribution(c: &mut Criterion) {
         println!("  P999: {:?}", p999);
 
         // Assert performance targets
-        assert!(
-            p99 < Duration::from_millis(25),
-            "P99 latency too high: {:?}",
-            p99
-        );
-        assert!(
-            p999 < Duration::from_millis(50),
-            "P999 latency too high: {:?}",
-            p999
-        );
+        assert!(p99 < Duration::from_millis(25), "P99 latency too high: {:?}", p99);
+        assert!(p999 < Duration::from_millis(50), "P999 latency too high: {:?}", p999);
     });
 
     group.finish();

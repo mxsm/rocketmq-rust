@@ -136,17 +136,13 @@ impl ToolsError {
     /// Create a topic not found error
     #[inline]
     pub fn topic_not_found(topic: impl Into<String>) -> Self {
-        Self::TopicNotFound {
-            topic: topic.into(),
-        }
+        Self::TopicNotFound { topic: topic.into() }
     }
 
     /// Create a topic already exists error
     #[inline]
     pub fn topic_already_exists(topic: impl Into<String>) -> Self {
-        Self::TopicAlreadyExists {
-            topic: topic.into(),
-        }
+        Self::TopicAlreadyExists { topic: topic.into() }
     }
 
     /// Create a cluster not found error
@@ -160,9 +156,7 @@ impl ToolsError {
     /// Create a broker not found error
     #[inline]
     pub fn broker_not_found(broker: impl Into<String>) -> Self {
-        Self::BrokerNotFound {
-            broker: broker.into(),
-        }
+        Self::BrokerNotFound { broker: broker.into() }
     }
 
     /// Create a validation error
@@ -183,9 +177,7 @@ impl ToolsError {
     /// Create a nameserver config invalid error
     #[inline]
     pub fn nameserver_config_invalid(reason: impl Into<String>) -> Self {
-        Self::NameServerConfigInvalid {
-            reason: reason.into(),
-        }
+        Self::NameServerConfigInvalid { reason: reason.into() }
     }
 
     /// Create an internal error
@@ -210,10 +202,7 @@ mod tests {
     #[test]
     fn test_validation_error() {
         let err = ToolsError::validation_error("topic_name", "name too long");
-        assert_eq!(
-            err.to_string(),
-            "Validation failed for 'topic_name': name too long"
-        );
+        assert_eq!(err.to_string(), "Validation failed for 'topic_name': name too long");
     }
 
     #[test]

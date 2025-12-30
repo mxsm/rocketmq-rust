@@ -291,10 +291,7 @@ mod tests {
         assert_eq!(unit_no_bitmap.calc_unit_size(), MIN_EXT_UNIT_SIZE as i32);
 
         let unit_with_bitmap = CqExtUnit::new(0, 0, Some(vec![1, 2, 3, 4, 5]));
-        assert_eq!(
-            unit_with_bitmap.calc_unit_size(),
-            MIN_EXT_UNIT_SIZE as i32 + 5
-        );
+        assert_eq!(unit_with_bitmap.calc_unit_size(), MIN_EXT_UNIT_SIZE as i32 + 5);
     }
 
     #[test]

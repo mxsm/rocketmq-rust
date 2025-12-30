@@ -134,8 +134,8 @@ impl Display for AckMsg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "AckMsg [ack_offset={}, start_offset={}, consumer_group={}, topic={}, queue_id={}, \
-             pop_time={}, broker_name={}]",
+            "AckMsg [ack_offset={}, start_offset={}, consumer_group={}, topic={}, queue_id={}, pop_time={}, \
+             broker_name={}]",
             self.ack_offset,
             self.start_offset,
             self.consumer_group,
@@ -164,8 +164,8 @@ mod tests {
             pop_time: 789,
             broker_name: CheetahString::from_static_str("test_broker"),
         };
-        let expected = "AckMsg [ack_offset=123, start_offset=456, consumer_group=test_group, \
-                        topic=test_topic, queue_id=1, pop_time=789, broker_name=test_broker]";
+        let expected = "AckMsg [ack_offset=123, start_offset=456, consumer_group=test_group, topic=test_topic, \
+                        queue_id=1, pop_time=789, broker_name=test_broker]";
         assert_eq!(format!("{}", ack_msg), expected);
     }
 
@@ -191,16 +191,10 @@ mod tests {
         let ack_msg: AckMsg = serde_json::from_str(json).unwrap();
         assert_eq!(ack_msg.ack_offset, 123);
         assert_eq!(ack_msg.start_offset, 456);
-        assert_eq!(
-            ack_msg.consumer_group,
-            CheetahString::from_static_str("test_group")
-        );
+        assert_eq!(ack_msg.consumer_group, CheetahString::from_static_str("test_group"));
         assert_eq!(ack_msg.topic, CheetahString::from_static_str("test_topic"));
         assert_eq!(ack_msg.queue_id, 1);
         assert_eq!(ack_msg.pop_time, 789);
-        assert_eq!(
-            ack_msg.broker_name,
-            CheetahString::from_static_str("test_broker")
-        );
+        assert_eq!(ack_msg.broker_name, CheetahString::from_static_str("test_broker"));
     }
 }

@@ -68,9 +68,7 @@ impl RequestProcessor for ClientRemotingProcessor {
         let request_code = RequestCode::from(request.code());
         info!("process_request: {:?}", request_code);
         match request_code {
-            RequestCode::CheckTransactionState => {
-                self.check_transaction_state(channel, ctx, request).await
-            }
+            RequestCode::CheckTransactionState => self.check_transaction_state(channel, ctx, request).await,
             RequestCode::ResetConsumerClientOffset => {
                 unimplemented!("ResetConsumerClientOffset")
             }
@@ -80,14 +78,10 @@ impl RequestProcessor for ClientRemotingProcessor {
             RequestCode::GetConsumerRunningInfo => {
                 unimplemented!("GetConsumerRunningInfo")
             }
-            RequestCode::ConsumeMessageDirectly => {
-                self.consume_message_directly(channel, ctx, request).await
-            }
+            RequestCode::ConsumeMessageDirectly => self.consume_message_directly(channel, ctx, request).await,
             //RPC message handle code
             RequestCode::PushReplyMessageToClient => self.receive_reply_message(ctx, request).await,
-            RequestCode::NotifyConsumerIdsChanged => {
-                self.notify_consumer_ids_changed(channel, ctx, request)
-            }
+            RequestCode::NotifyConsumerIdsChanged => self.notify_consumer_ids_changed(channel, ctx, request),
 
             _ => {
                 info!("Unknown request code: {:?}", request_code);
@@ -143,9 +137,8 @@ impl ClientRemotingProcessor {
         let sys_flag = request_header.sys_flag;
 
         if (sys_flag & MessageSysFlag::COMPRESSED_FLAG) == MessageSysFlag::COMPRESSED_FLAG {
-            let de_result =
-                CompressorFactory::get_compressor(MessageSysFlag::get_compression_type(sys_flag))
-                    .decompress(body.unwrap());
+            let de_result = CompressorFactory::get_compressor(MessageSysFlag::get_compression_type(sys_flag))
+                .decompress(body.unwrap());
             if let Ok(decompressed) = de_result {
                 msg.message.body = Some(decompressed);
             } else {
@@ -173,22 +166,16 @@ impl ClientRemotingProcessor {
     async fn process_reply_message(reply_msg: MessageExt) {
         let correlation_id = reply_msg
             .message
-            .get_property(&CheetahString::from_static_str(
-                MessageConst::PROPERTY_CORRELATION_ID,
-            ))
+            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
             .unwrap_or_default();
-        if let Some(request_response_future) = REQUEST_FUTURE_HOLDER
-            .get_request(correlation_id.as_str())
-            .await
-        {
+        if let Some(request_response_future) = REQUEST_FUTURE_HOLDER.get_request(correlation_id.as_str()).await {
             request_response_future.put_response_message(Some(Box::new(reply_msg)));
             if request_response_future.get_request_callback().is_some() {
                 request_response_future.on_success();
             }
         } else {
             warn!(
-                "receive reply message, but not matched any request, CorrelationId: {} , reply \
-                 from host: {}",
+                "receive reply message, but not matched any request, CorrelationId: {} , reply from host: {}",
                 correlation_id, reply_msg.born_host
             )
         }
@@ -205,8 +192,7 @@ impl ClientRemotingProcessor {
             .unwrap();
 
         info!(
-            "receive broker's notification[{}], the consumer group: {} changed, rebalance \
-             immediately",
+            "receive broker's notification[{}], the consumer group: {} changed, rebalance immediately",
             channel.remote_address(),
             request_header.consumer_group
         );
@@ -225,14 +211,7 @@ impl ClientRemotingProcessor {
         let request_header = request
             .decode_command_custom_header::<CheckTransactionStateRequestHeader>()
             .unwrap();
-        let message_ext = MessageDecoder::decode(
-            request.get_body_mut().unwrap(),
-            true,
-            true,
-            false,
-            false,
-            false,
-        );
+        let message_ext = MessageDecoder::decode(request.get_body_mut().unwrap(), true, true, false, false, false);
         if let Some(mut message_ext) = message_ext {
             if let Some(ref namespace) = self.client_instance.client_config.get_namespace() {
                 let topic = NamespaceUtil::without_namespace_with_namespace(
@@ -253,9 +232,8 @@ impl ClientRemotingProcessor {
                     message_ext.set_transaction_id(transaction_id);
                 }
             }
-            let group = message_ext.get_property(&CheetahString::from_static_str(
-                MessageConst::PROPERTY_PRODUCER_GROUP,
-            ));
+            let group =
+                message_ext.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP));
             if let Some(group) = group {
                 let producer = self.client_instance.select_producer(&group).await;
                 if let Some(producer) = producer {
@@ -279,8 +257,7 @@ impl ClientRemotingProcessor {
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_header =
-            request.decode_command_custom_header::<ConsumeMessageDirectlyResultRequestHeader>()?;
+        let request_header = request.decode_command_custom_header::<ConsumeMessageDirectlyResultRequestHeader>()?;
         let body = request
             .get_body_mut()
             .ok_or(rocketmq_error::RocketMQError::IllegalArgument(
@@ -292,27 +269,20 @@ impl ClientRemotingProcessor {
 
         let result = self
             .client_instance
-            .consume_message_directly(
-                msg,
-                &request_header.consumer_group,
-                request_header.broker_name.clone(),
-            )
+            .consume_message_directly(msg, &request_header.consumer_group, request_header.broker_name.clone())
             .await;
         if let Some(result) = result {
-            let body = result.encode().map_err(|_| {
-                rocketmq_error::RocketMQError::IllegalArgument("encode result failed".to_string())
-            })?;
-            Ok(Some(
-                RemotingCommand::create_response_command().set_body(body),
-            ))
+            let body = result
+                .encode()
+                .map_err(|_| rocketmq_error::RocketMQError::IllegalArgument("encode result failed".to_string()))?;
+            Ok(Some(RemotingCommand::create_response_command().set_body(body)))
         } else {
             warn!("consumeMessageDirectly, consume message failed");
             Ok(Some(
-                RemotingCommand::create_response_command_with_code(ResponseCode::SystemError)
-                    .set_remark(format!(
-                        "The Consumer Group <{}> not exist in this consumer",
-                        request_header.consumer_group
-                    )),
+                RemotingCommand::create_response_command_with_code(ResponseCode::SystemError).set_remark(format!(
+                    "The Consumer Group <{}> not exist in this consumer",
+                    request_header.consumer_group
+                )),
             ))
         }
     }

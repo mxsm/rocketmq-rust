@@ -140,16 +140,8 @@ fn main() {
 
     let (eb_time, eb_cap, bm_time, bm_cap) = spike_test();
 
-    println!(
-        "  EncodeBuffer: {} ns, final capacity: {} KB",
-        eb_time,
-        eb_cap / 1024
-    );
-    println!(
-        "  BytesMut:     {} ns, final capacity: {} KB",
-        bm_time,
-        bm_cap / 1024
-    );
+    println!("  EncodeBuffer: {} ns, final capacity: {} KB", eb_time, eb_cap / 1024);
+    println!("  BytesMut:     {} ns, final capacity: {} KB", bm_time, bm_cap / 1024);
     println!(
         "  Memory saved: {} KB ({:.1}%)",
         (bm_cap - eb_cap) / 1024,

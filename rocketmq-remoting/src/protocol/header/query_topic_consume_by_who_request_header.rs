@@ -49,14 +49,8 @@ mod tests {
             topic_request_header: Some(TopicRequestHeader::default()),
         };
         let map = header.to_map().unwrap();
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("topic")).unwrap(),
-            "test_topic"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("topicRequestHeader")),
-            None
-        );
+        assert_eq!(map.get(&CheetahString::from_static_str("topic")).unwrap(), "test_topic");
+        assert_eq!(map.get(&CheetahString::from_static_str("topicRequestHeader")), None);
     }
 
     #[test]

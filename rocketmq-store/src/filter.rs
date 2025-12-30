@@ -33,11 +33,7 @@ pub trait MessageFilter: Send + Sync {
     /// # Returns
     ///
     /// * `true` if the message is matched, `false` otherwise.
-    fn is_matched_by_consume_queue(
-        &self,
-        tags_code: Option<i64>,
-        cq_ext_unit: Option<&CqExtUnit>,
-    ) -> bool;
+    fn is_matched_by_consume_queue(&self, tags_code: Option<i64>, cq_ext_unit: Option<&CqExtUnit>) -> bool;
 
     /// Checks if the message is matched by the commit log.
     ///

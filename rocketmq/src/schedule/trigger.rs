@@ -60,10 +60,7 @@ impl CronTrigger {
         let schedule = Schedule::from_str(&expression)
             .map_err(|e| SchedulerError::TriggerError(format!("Invalid cron expression: {e}")))?;
 
-        Ok(Self {
-            schedule,
-            expression,
-        })
+        Ok(Self { schedule, expression })
     }
 
     /// Create a trigger that fires every minute
@@ -95,10 +92,7 @@ impl CronTrigger {
 impl Trigger for CronTrigger {
     fn next_execution_time(&self, after: SystemTime) -> Option<SystemTime> {
         let after_datetime = system_time_to_datetime(after);
-        self.schedule
-            .after(&after_datetime)
-            .next()
-            .map(datetime_to_system_time)
+        self.schedule.after(&after_datetime).next().map(datetime_to_system_time)
     }
 
     fn has_next(&self, after: SystemTime) -> bool {
@@ -383,16 +377,9 @@ impl Trigger for DelayedIntervalTrigger {
                     Some(first_time)
                 } else {
                     // Calculate next proper interval if first time passed
-                    let elapsed_since_first =
-                        after.duration_since(first_time).unwrap_or(Duration::ZERO);
-                    let intervals_passed =
-                        (elapsed_since_first.as_millis() / self.interval.as_millis()) + 1;
-                    Some(
-                        first_time
-                            + Duration::from_millis(
-                                (intervals_passed * self.interval.as_millis()) as u64,
-                            ),
-                    )
+                    let elapsed_since_first = after.duration_since(first_time).unwrap_or(Duration::ZERO);
+                    let intervals_passed = (elapsed_since_first.as_millis() / self.interval.as_millis()) + 1;
+                    Some(first_time + Duration::from_millis((intervals_passed * self.interval.as_millis()) as u64))
                 }
             }
             Some(last) => {
@@ -404,10 +391,8 @@ impl Trigger for DelayedIntervalTrigger {
                     // Calculate proper next interval if time passed
                     let elapsed = after.duration_since(last).unwrap_or(Duration::ZERO);
                     let intervals_passed = (elapsed.as_millis() / self.interval.as_millis()) + 1;
-                    let calculated_next = last
-                        + Duration::from_millis(
-                            (intervals_passed * self.interval.as_millis()) as u64,
-                        );
+                    let calculated_next =
+                        last + Duration::from_millis((intervals_passed * self.interval.as_millis()) as u64);
 
                     if !self.should_stop(calculated_next) {
                         Some(calculated_next)

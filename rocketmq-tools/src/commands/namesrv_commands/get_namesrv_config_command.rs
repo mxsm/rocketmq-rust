@@ -98,9 +98,7 @@ struct ConfigEntry {
 }
 
 /// Display configurations using tabled for formatted output
-fn display_configs_with_table(
-    configs: &HashMap<CheetahString, HashMap<CheetahString, CheetahString>>,
-) {
+fn display_configs_with_table(configs: &HashMap<CheetahString, HashMap<CheetahString, CheetahString>>) {
     for (server_addr, properties) in configs {
         println!("============Name server: {server_addr}============",);
 

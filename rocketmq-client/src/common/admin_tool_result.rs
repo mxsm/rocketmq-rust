@@ -48,11 +48,7 @@ impl<T> AdminToolResult<T> {
         Self::new(false, error_code_enum.get_code(), error_msg, None)
     }
 
-    pub fn failure_with_data(
-        error_code_enum: AdminToolsResultCodeEnum,
-        error_msg: String,
-        data: T,
-    ) -> Self {
+    pub fn failure_with_data(error_code_enum: AdminToolsResultCodeEnum, error_msg: String, data: T) -> Self {
         Self::new(false, error_code_enum.get_code(), error_msg, Some(data))
     }
 
@@ -122,10 +118,7 @@ mod tests {
 
     #[test]
     fn failure_initializes_correctly() {
-        let result = AdminToolResult::<i32>::failure(
-            AdminToolsResultCodeEnum::RemotingError,
-            "error".to_string(),
-        );
+        let result = AdminToolResult::<i32>::failure(AdminToolsResultCodeEnum::RemotingError, "error".to_string());
         assert!(!result.is_success());
         assert_eq!(result.get_code(), -1001);
         assert_eq!(result.get_error_msg(), "error");
@@ -134,11 +127,8 @@ mod tests {
 
     #[test]
     fn failure_with_data_initializes_correctly() {
-        let result = AdminToolResult::failure_with_data(
-            AdminToolsResultCodeEnum::RemotingError,
-            "error".to_string(),
-            42,
-        );
+        let result =
+            AdminToolResult::failure_with_data(AdminToolsResultCodeEnum::RemotingError, "error".to_string(), 42);
         assert!(!result.is_success());
         assert_eq!(result.get_code(), -1001);
         assert_eq!(result.get_error_msg(), "error");

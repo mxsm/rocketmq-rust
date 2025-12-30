@@ -92,10 +92,7 @@ mod tests {
     #[test]
     fn get_by_name_is_case_insensitive() {
         assert_eq!(Some(PolicyType::Custom), PolicyType::get_by_name("cUsToM"));
-        assert_eq!(
-            Some(PolicyType::Default),
-            PolicyType::get_by_name("DeFaUlT")
-        );
+        assert_eq!(Some(PolicyType::Default), PolicyType::get_by_name("DeFaUlT"));
     }
 
     #[test]
@@ -121,8 +118,7 @@ mod tests {
         );
         assert_eq!(
             "2",
-            serde_json::to_string(&PolicyType::Default)
-                .expect("PolicyType::Default must serialize")
+            serde_json::to_string(&PolicyType::Default).expect("PolicyType::Default must serialize")
         );
     }
 
@@ -144,16 +140,10 @@ mod tests {
     #[test]
     fn serde_json_roundtrip_variants() {
         for &variant in &[PolicyType::Custom, PolicyType::Default] {
-            let serialized = serde_json::to_string(&variant).unwrap_or_else(|e| {
-                panic!(
-                    "Could not serialize PolicyType::{:?}: {}",
-                    &variant.name(),
-                    e
-                )
-            });
-            let parsed: PolicyType = serde_json::from_str(&serialized).unwrap_or_else(|e| {
-                panic!("Could not parse {:?} as PolicyType: {}", &serialized, e)
-            });
+            let serialized = serde_json::to_string(&variant)
+                .unwrap_or_else(|e| panic!("Could not serialize PolicyType::{:?}: {}", &variant.name(), e));
+            let parsed: PolicyType = serde_json::from_str(&serialized)
+                .unwrap_or_else(|e| panic!("Could not parse {:?} as PolicyType: {}", &serialized, e));
             assert_eq!(variant, parsed);
         }
     }

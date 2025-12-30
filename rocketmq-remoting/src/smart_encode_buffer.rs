@@ -322,10 +322,7 @@ mod tests {
         // write bigger than initial capacity
         let big = vec![0u8; initial_cap * 4 + 10];
         eb.append(&big);
-        assert!(
-            eb.capacity() >= big.len(),
-            "capacity did not expand as expected"
-        );
+        assert!(eb.capacity() >= big.len(), "capacity did not expand as expected");
         let _ = eb.take_bytes();
         assert_eq!(eb.len(), 0);
     }
@@ -352,10 +349,7 @@ mod tests {
         }
 
         let stats_after_increase = eb.stats();
-        println!(
-            "After increasing writes - EMA: {:.1}",
-            stats_after_increase.ema_size
-        );
+        println!("After increasing writes - EMA: {:.1}", stats_after_increase.ema_size);
 
         // EMA should be somewhere in the middle range
         assert!(
@@ -412,11 +406,7 @@ mod tests {
             let _ = eb.take_bytes();
         }
         let stats = eb.stats();
-        println!(
-            "After 10 writes - capacity: {}, ema: {}",
-            eb.capacity(),
-            stats.ema_size
-        );
+        println!("After 10 writes - capacity: {}, ema: {}", eb.capacity(), stats.ema_size);
 
         // EMA should converge towards 32 (approx)
         assert!(
@@ -424,20 +414,11 @@ mod tests {
             "EMA should be reasonable"
         );
         // Capacity should remain stable and not shrink below min_capacity
-        assert!(
-            eb.capacity() >= min_cap,
-            "Capacity should not go below min_capacity"
-        );
+        assert!(eb.capacity() >= min_cap, "Capacity should not go below min_capacity");
         // With stable moderate load, capacity should be stable
-        assert!(
-            eb.capacity() <= initial_cap * 2,
-            "Capacity should not grow excessively"
-        );
+        assert!(eb.capacity() <= initial_cap * 2, "Capacity should not grow excessively");
         // Should not have shrunk with stable load
-        assert_eq!(
-            stats.shrink_count, 0,
-            "Should not shrink with stable moderate load"
-        );
+        assert_eq!(stats.shrink_count, 0, "Should not shrink with stable moderate load");
     }
 
     /// Jitter test: ensure frequent tiny spikes do not cause frequent shrinks.

@@ -105,14 +105,8 @@ mod tests {
 
     #[test]
     fn get_by_name_is_case_insensitive() {
-        assert_eq!(
-            Some(ResourcePattern::Any),
-            ResourcePattern::get_by_name("aNy")
-        );
-        assert_eq!(
-            Some(ResourcePattern::Literal),
-            ResourcePattern::get_by_name("LiTeRaL")
-        );
+        assert_eq!(Some(ResourcePattern::Any), ResourcePattern::get_by_name("aNy"));
+        assert_eq!(Some(ResourcePattern::Literal), ResourcePattern::get_by_name("LiTeRaL"));
         assert_eq!(
             Some(ResourcePattern::Prefixed),
             ResourcePattern::get_by_name("pReFixed")
@@ -140,18 +134,15 @@ mod tests {
     fn serde_json_serializes_to_number() {
         assert_eq!(
             "1",
-            serde_json::to_string(&ResourcePattern::Any)
-                .expect("ResourcePattern::Any must serialize")
+            serde_json::to_string(&ResourcePattern::Any).expect("ResourcePattern::Any must serialize")
         );
         assert_eq!(
             "2",
-            serde_json::to_string(&ResourcePattern::Literal)
-                .expect("ResourcePattern::Literal must serialize")
+            serde_json::to_string(&ResourcePattern::Literal).expect("ResourcePattern::Literal must serialize")
         );
         assert_eq!(
             "3",
-            serde_json::to_string(&ResourcePattern::Prefixed)
-                .expect("ResourcePattern::Prefixed must serialize")
+            serde_json::to_string(&ResourcePattern::Prefixed).expect("ResourcePattern::Prefixed must serialize")
         );
     }
 
@@ -180,19 +171,10 @@ mod tests {
             ResourcePattern::Literal,
             ResourcePattern::Prefixed,
         ] {
-            let serialized = serde_json::to_string(&variant).unwrap_or_else(|e| {
-                panic!(
-                    "Could not serialize ResourcePattern::{:?}: {}",
-                    &variant.name(),
-                    e
-                )
-            });
-            let parsed: ResourcePattern = serde_json::from_str(&serialized).unwrap_or_else(|e| {
-                panic!(
-                    "Could not parse {:?} as ResourcePattern: {}",
-                    &serialized, e
-                )
-            });
+            let serialized = serde_json::to_string(&variant)
+                .unwrap_or_else(|e| panic!("Could not serialize ResourcePattern::{:?}: {}", &variant.name(), e));
+            let parsed: ResourcePattern = serde_json::from_str(&serialized)
+                .unwrap_or_else(|e| panic!("Could not parse {:?} as ResourcePattern: {}", &serialized, e));
             assert_eq!(variant, parsed);
         }
     }

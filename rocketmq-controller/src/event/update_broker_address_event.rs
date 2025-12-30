@@ -87,12 +87,7 @@ mod tests {
 
     #[test]
     fn new_method() {
-        let event = UpdateBrokerAddressEvent::new(
-            TEST_CLUSTER_NAME,
-            TEST_BROKER_NAME,
-            TEST_BROKER_ADDRESS,
-            0,
-        );
+        let event = UpdateBrokerAddressEvent::new(TEST_CLUSTER_NAME, TEST_BROKER_NAME, TEST_BROKER_ADDRESS, 0);
 
         assert_eq!(event.cluster_name(), TEST_CLUSTER_NAME);
         assert_eq!(event.broker_name(), TEST_BROKER_NAME);
@@ -102,12 +97,7 @@ mod tests {
 
     #[test]
     fn new_without_broker_id() {
-        let event = UpdateBrokerAddressEvent::new(
-            TEST_CLUSTER_NAME,
-            TEST_BROKER_NAME,
-            TEST_BROKER_ADDRESS,
-            1,
-        );
+        let event = UpdateBrokerAddressEvent::new(TEST_CLUSTER_NAME, TEST_BROKER_NAME, TEST_BROKER_ADDRESS, 1);
 
         assert_eq!(event.broker_id(), 1);
     }
@@ -128,12 +118,7 @@ mod tests {
 
     #[test]
     fn correct_event_type() {
-        let event = UpdateBrokerAddressEvent::new(
-            TEST_CLUSTER_NAME,
-            TEST_BROKER_NAME,
-            TEST_BROKER_ADDRESS,
-            0,
-        );
+        let event = UpdateBrokerAddressEvent::new(TEST_CLUSTER_NAME, TEST_BROKER_NAME, TEST_BROKER_ADDRESS, 0);
 
         assert_eq!(event.get_event_type(), EventType::UpdateBrokerAddress);
     }

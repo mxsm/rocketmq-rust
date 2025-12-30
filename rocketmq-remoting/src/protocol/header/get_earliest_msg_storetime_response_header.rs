@@ -33,9 +33,7 @@ mod tests {
 
     #[test]
     fn get_earliest_msg_storetime_response_header_display_format() {
-        let header = GetEarliestMsgStoretimeResponseHeader {
-            timestamp: 1234567890,
-        };
+        let header = GetEarliestMsgStoretimeResponseHeader { timestamp: 1234567890 };
         assert_eq!(
             format!("{:?}", header),
             "GetEarliestMsgStoretimeResponseHeader { timestamp: 1234567890 }"
@@ -44,9 +42,7 @@ mod tests {
 
     #[test]
     fn get_earliest_msg_storetime_response_header_serialize() {
-        let header = GetEarliestMsgStoretimeResponseHeader {
-            timestamp: 1234567890,
-        };
+        let header = GetEarliestMsgStoretimeResponseHeader { timestamp: 1234567890 };
         let serialized = serde_json::to_string(&header).unwrap();
         assert_eq!(serialized, r#"{"timestamp":1234567890}"#);
     }

@@ -26,8 +26,7 @@ use crate::protocol::subscription::exponential_retry_policy::ExponentialRetryPol
 use crate::protocol::subscription::group_retry_policy_type::GroupRetryPolicyType;
 use crate::protocol::subscription::retry_policy::RetryPolicy;
 
-static DEFAULT_RETRY_POLICY: LazyLock<CustomizedRetryPolicy> =
-    LazyLock::new(CustomizedRetryPolicy::default);
+static DEFAULT_RETRY_POLICY: LazyLock<CustomizedRetryPolicy> = LazyLock::new(CustomizedRetryPolicy::default);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,17 +66,11 @@ impl GroupRetryPolicy {
         self.type_ = type_;
     }
 
-    pub fn set_exponential_retry_policy(
-        &mut self,
-        exponential_retry_policy: Option<ExponentialRetryPolicy>,
-    ) {
+    pub fn set_exponential_retry_policy(&mut self, exponential_retry_policy: Option<ExponentialRetryPolicy>) {
         self.exponential_retry_policy = exponential_retry_policy;
     }
 
-    pub fn set_customized_retry_policy(
-        &mut self,
-        customized_retry_policy: Option<CustomizedRetryPolicy>,
-    ) {
+    pub fn set_customized_retry_policy(&mut self, customized_retry_policy: Option<CustomizedRetryPolicy>) {
         self.customized_retry_policy = customized_retry_policy;
     }
 

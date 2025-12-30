@@ -44,9 +44,7 @@ impl Hash for ConsumerData {
         self.consume_type.hash(state);
         self.message_model.hash(state);
         self.consume_from_where.hash(state);
-        self.subscription_data_set
-            .iter()
-            .for_each(|code| code.hash(state));
+        self.subscription_data_set.iter().for_each(|code| code.hash(state));
         self.unit_mode.hash(state);
     }
 }
@@ -69,10 +67,7 @@ mod tests {
         assert_eq!(consumer_data.group_name, CheetahString::new());
         assert_eq!(consumer_data.consume_type, ConsumeType::default());
         assert_eq!(consumer_data.message_model, MessageModel::default());
-        assert_eq!(
-            consumer_data.consume_from_where,
-            ConsumeFromWhere::default()
-        );
+        assert_eq!(consumer_data.consume_from_where, ConsumeFromWhere::default());
         assert!(consumer_data.subscription_data_set.is_empty());
         assert!(!consumer_data.unit_mode);
     }

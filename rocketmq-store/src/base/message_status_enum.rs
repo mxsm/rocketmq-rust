@@ -150,10 +150,7 @@ mod tests {
 
     #[test]
     fn append_message_status_display_unknown_error() {
-        assert_eq!(
-            AppendMessageStatus::UnknownError.to_string(),
-            "UNKNOWN_ERROR"
-        );
+        assert_eq!(AppendMessageStatus::UnknownError.to_string(), "UNKNOWN_ERROR");
     }
 
     #[test]

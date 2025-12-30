@@ -68,21 +68,14 @@ async fn test_cluster_initialization() {
     );
 
     let result = node.initialize_cluster(nodes).await;
-    assert!(
-        result.is_ok(),
-        "Failed to initialize cluster: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "Failed to initialize cluster: {:?}", result.err());
 
     // Wait a bit for election
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // Check if this node becomes leader
     let is_leader = node.is_leader().await.unwrap();
-    assert!(
-        is_leader,
-        "Node should be the leader in a single-node cluster"
-    );
+    assert!(is_leader, "Node should be the leader in a single-node cluster");
 }
 
 #[tokio::test]
@@ -129,10 +122,7 @@ async fn test_state_machine() {
     // Note: StateMachine doesn't have direct register methods as it's managed by Raft
     // We can only verify getter methods
     let retrieved = sm.get_broker("test-broker");
-    assert!(
-        retrieved.is_none(),
-        "Should not have broker before registration"
-    );
+    assert!(retrieved.is_none(), "Should not have broker before registration");
 
     // Test topic operations
     let _topic = TopicConfig {

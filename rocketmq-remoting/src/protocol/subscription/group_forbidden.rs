@@ -28,11 +28,7 @@ pub struct GroupForbidden {
 
 impl GroupForbidden {
     pub fn new(topic: CheetahString, group: CheetahString, readable: Option<bool>) -> Self {
-        Self {
-            topic,
-            group,
-            readable,
-        }
+        Self { topic, group, readable }
     }
 
     #[inline]
@@ -110,11 +106,8 @@ mod tests {
 
     #[test]
     fn group_forbidden_new_creates_instance_with_none_readable() {
-        let group_forbidden = GroupForbidden::new(
-            CheetahString::from("testTopic"),
-            CheetahString::from("testGroup"),
-            None,
-        );
+        let group_forbidden =
+            GroupForbidden::new(CheetahString::from("testTopic"), CheetahString::from("testGroup"), None);
         assert_eq!(group_forbidden.topic(), &CheetahString::from("testTopic"));
         assert_eq!(group_forbidden.group(), "testGroup");
         assert_eq!(group_forbidden.readable(), None);

@@ -84,10 +84,7 @@ async fn test_state_machine_snapshot() {
     let snapshot = snapshot_result.unwrap();
 
     // Verify snapshot metadata
-    assert!(
-        !snapshot.snapshot.get_ref().is_empty(),
-        "Snapshot should contain data"
-    );
+    assert!(!snapshot.snapshot.get_ref().is_empty(), "Snapshot should contain data");
     println!("Snapshot size: {} bytes", snapshot.snapshot.get_ref().len());
     println!("Snapshot ID: {}", snapshot.meta.snapshot_id);
 }
@@ -110,9 +107,7 @@ async fn test_snapshot_install() {
     let mut sm2 = StateMachine::new();
 
     // Install snapshot into sm2
-    let result = sm2
-        .install_snapshot(&snapshot.meta, snapshot.snapshot)
-        .await;
+    let result = sm2.install_snapshot(&snapshot.meta, snapshot.snapshot).await;
     assert!(result.is_ok(), "Failed to install snapshot");
 
     println!("Successfully installed snapshot");

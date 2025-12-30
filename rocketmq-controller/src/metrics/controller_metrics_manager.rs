@@ -224,10 +224,7 @@ impl ControllerMetricsManager {
             // TODO: Add actual address/group/peer_id from config when available
             // This will depend on whether using DLedger or JRaft controller
             map.insert(LABEL_ADDRESS.to_string(), "localhost:9876".to_string());
-            map.insert(
-                LABEL_GROUP.to_string(),
-                "DefaultControllerGroup".to_string(),
-            );
+            map.insert(LABEL_GROUP.to_string(), "DefaultControllerGroup".to_string());
             map.insert(LABEL_PEER_ID.to_string(), "controller-1".to_string());
         }
 
@@ -246,10 +243,7 @@ impl ControllerMetricsManager {
         let meter_provider = match Self::build_meter_provider(&config, metrics_type) {
             Ok(provider) => provider,
             Err(e) => {
-                error!(
-                    "Failed to build meter provider: {:?}, falling back to no-op",
-                    e
-                );
+                error!("Failed to build meter provider: {:?}, falling back to no-op", e);
                 return Self::create_noop_manager(config);
             }
         };
@@ -378,17 +372,11 @@ impl ControllerMetricsManager {
     }
 
     /// Initialize all metrics with the given meter
-    fn init_metrics(
-        meter: Meter,
-        config: Arc<ControllerConfig>,
-        meter_provider: Option<SdkMeterProvider>,
-    ) -> Self {
+    fn init_metrics(meter: Meter, config: Arc<ControllerConfig>, meter_provider: Option<SdkMeterProvider>) -> Self {
         // Node status metrics
         let role = meter
             .i64_up_down_counter(GAUGE_ROLE)
-            .with_description(
-                "Role of current controller node (0=UNKNOWN, 1=CANDIDATE, 2=FOLLOWER, 3=LEADER)",
-            )
+            .with_description("Role of current controller node (0=UNKNOWN, 1=CANDIDATE, 2=FOLLOWER, 3=LEADER)")
             .build();
 
         // Register observable gauges
@@ -479,8 +467,7 @@ impl ControllerMetricsManager {
         DLEDGER_OP_TOTAL.get_or_init(|| CounterWrapper::Real(manager.dledger_op_total.clone()));
         ELECTION_TOTAL.get_or_init(|| CounterWrapper::Real(manager.election_total.clone()));
         REQUEST_LATENCY.get_or_init(|| HistogramWrapper::Real(manager.request_latency.clone()));
-        DLEDGER_OP_LATENCY
-            .get_or_init(|| HistogramWrapper::Real(manager.dledger_op_latency.clone()));
+        DLEDGER_OP_LATENCY.get_or_init(|| HistogramWrapper::Real(manager.dledger_op_latency.clone()));
     }
 
     /// Create a new attributes builder with base labels
@@ -488,9 +475,7 @@ impl ControllerMetricsManager {
         let label_map = LABEL_MAP.get_or_init(|| RwLock::new(HashMap::new()));
         let map = label_map.read().unwrap();
 
-        map.iter()
-            .map(|(k, v)| KeyValue::new(k.clone(), v.clone()))
-            .collect()
+        map.iter().map(|(k, v)| KeyValue::new(k.clone(), v.clone())).collect()
     }
 
     // ========================================================================
@@ -517,10 +502,7 @@ impl ControllerMetricsManager {
     pub fn inc_request_total(&self, request_type: &str, status: RequestHandleStatus) {
         let mut attrs = Self::new_attributes_builder();
         attrs.push(KeyValue::new(LABEL_REQUEST_TYPE, request_type.to_string()));
-        attrs.push(KeyValue::new(
-            LABEL_REQUEST_HANDLE_STATUS,
-            status.get_lower_case_name(),
-        ));
+        attrs.push(KeyValue::new(LABEL_REQUEST_HANDLE_STATUS, status.get_lower_case_name()));
 
         self.request_total.add(1, &attrs);
     }
@@ -542,16 +524,9 @@ impl ControllerMetricsManager {
     /// # Arguments
     /// * `operation` - DLedger operation type
     /// * `status` - Operation status
-    pub fn inc_dledger_op_total(
-        &self,
-        operation: DLedgerOperation,
-        status: DLedgerOperationStatus,
-    ) {
+    pub fn inc_dledger_op_total(&self, operation: DLedgerOperation, status: DLedgerOperationStatus) {
         let mut attrs = Self::new_attributes_builder();
-        attrs.push(KeyValue::new(
-            LABEL_DLEDGER_OPERATION,
-            operation.get_lower_case_name(),
-        ));
+        attrs.push(KeyValue::new(LABEL_DLEDGER_OPERATION, operation.get_lower_case_name()));
         attrs.push(KeyValue::new(
             LABEL_DLEDGER_OPERATION_STATUS,
             status.get_lower_case_name(),
@@ -567,10 +542,7 @@ impl ControllerMetricsManager {
     /// * `latency_us` - Latency in microseconds
     pub fn record_dledger_op_latency(&self, operation: DLedgerOperation, latency_us: u64) {
         let mut attrs = Self::new_attributes_builder();
-        attrs.push(KeyValue::new(
-            LABEL_DLEDGER_OPERATION,
-            operation.get_lower_case_name(),
-        ));
+        attrs.push(KeyValue::new(LABEL_DLEDGER_OPERATION, operation.get_lower_case_name()));
 
         self.dledger_op_latency.record(latency_us, &attrs);
     }
@@ -581,10 +553,7 @@ impl ControllerMetricsManager {
     /// * `result` - Election result
     pub fn inc_election_total(&self, result: ElectionResult) {
         let mut attrs = Self::new_attributes_builder();
-        attrs.push(KeyValue::new(
-            LABEL_ELECTION_RESULT,
-            result.get_lower_case_name(),
-        ));
+        attrs.push(KeyValue::new(LABEL_ELECTION_RESULT, result.get_lower_case_name()));
 
         self.election_total.add(1, &attrs);
     }
@@ -598,10 +567,7 @@ impl ControllerMetricsManager {
         if let Some(counter) = REQUEST_TOTAL.get() {
             let mut attrs = Self::new_attributes_builder();
             attrs.push(KeyValue::new(LABEL_REQUEST_TYPE, request_type.to_string()));
-            attrs.push(KeyValue::new(
-                LABEL_REQUEST_HANDLE_STATUS,
-                status.get_lower_case_name(),
-            ));
+            attrs.push(KeyValue::new(LABEL_REQUEST_HANDLE_STATUS, status.get_lower_case_name()));
             counter.add(1, &attrs);
         }
     }
@@ -616,16 +582,10 @@ impl ControllerMetricsManager {
     }
 
     /// Static method to increment DLedger operation total
-    pub fn inc_dledger_op_total_static(
-        operation: DLedgerOperation,
-        status: DLedgerOperationStatus,
-    ) {
+    pub fn inc_dledger_op_total_static(operation: DLedgerOperation, status: DLedgerOperationStatus) {
         if let Some(counter) = DLEDGER_OP_TOTAL.get() {
             let mut attrs = Self::new_attributes_builder();
-            attrs.push(KeyValue::new(
-                LABEL_DLEDGER_OPERATION,
-                operation.get_lower_case_name(),
-            ));
+            attrs.push(KeyValue::new(LABEL_DLEDGER_OPERATION, operation.get_lower_case_name()));
             attrs.push(KeyValue::new(
                 LABEL_DLEDGER_OPERATION_STATUS,
                 status.get_lower_case_name(),
@@ -638,10 +598,7 @@ impl ControllerMetricsManager {
     pub fn record_dledger_op_latency_static(operation: DLedgerOperation, latency_us: u64) {
         if let Some(histogram) = DLEDGER_OP_LATENCY.get() {
             let mut attrs = Self::new_attributes_builder();
-            attrs.push(KeyValue::new(
-                LABEL_DLEDGER_OPERATION,
-                operation.get_lower_case_name(),
-            ));
+            attrs.push(KeyValue::new(LABEL_DLEDGER_OPERATION, operation.get_lower_case_name()));
             histogram.record(latency_us, &attrs);
         }
     }
@@ -650,10 +607,7 @@ impl ControllerMetricsManager {
     pub fn inc_election_total_static(result: ElectionResult) {
         if let Some(counter) = ELECTION_TOTAL.get() {
             let mut attrs = Self::new_attributes_builder();
-            attrs.push(KeyValue::new(
-                LABEL_ELECTION_RESULT,
-                result.get_lower_case_name(),
-            ));
+            attrs.push(KeyValue::new(LABEL_ELECTION_RESULT, result.get_lower_case_name()));
             counter.add(1, &attrs);
         }
     }
@@ -704,15 +658,9 @@ mod tests {
 
     #[test]
     fn test_request_handle_status() {
-        assert_eq!(
-            RequestHandleStatus::Success.get_lower_case_name(),
-            "success"
-        );
+        assert_eq!(RequestHandleStatus::Success.get_lower_case_name(), "success");
         assert_eq!(RequestHandleStatus::Failed.get_lower_case_name(), "failed");
-        assert_eq!(
-            RequestHandleStatus::Timeout.get_lower_case_name(),
-            "timeout"
-        );
+        assert_eq!(RequestHandleStatus::Timeout.get_lower_case_name(), "timeout");
     }
 
     #[test]

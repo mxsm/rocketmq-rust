@@ -109,10 +109,7 @@ mod tests {
         };
         assert_eq!(trace_bean.topic, CheetahString::from("topic"));
         assert_eq!(trace_bean.msg_id, CheetahString::from("msg_id"));
-        assert_eq!(
-            trace_bean.offset_msg_id,
-            CheetahString::from("offset_msg_id")
-        );
+        assert_eq!(trace_bean.offset_msg_id, CheetahString::from("offset_msg_id"));
         assert_eq!(trace_bean.tags, CheetahString::from("tags"));
         assert_eq!(trace_bean.keys, CheetahString::from("keys"));
         assert_eq!(trace_bean.store_host, CheetahString::from("store_host"));
@@ -121,14 +118,8 @@ mod tests {
         assert_eq!(trace_bean.retry_times, 3);
         assert_eq!(trace_bean.body_length, 1024);
         assert_eq!(trace_bean.msg_type, Some(MessageType::NormalMsg));
-        assert_eq!(
-            trace_bean.transaction_state,
-            Some(LocalTransactionState::CommitMessage)
-        );
-        assert_eq!(
-            trace_bean.transaction_id,
-            Some(CheetahString::from("transaction_id"))
-        );
+        assert_eq!(trace_bean.transaction_state, Some(LocalTransactionState::CommitMessage));
+        assert_eq!(trace_bean.transaction_id, Some(CheetahString::from("transaction_id")));
         assert!(trace_bean.from_transaction_check);
     }
 }

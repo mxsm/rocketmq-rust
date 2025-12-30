@@ -142,9 +142,7 @@ impl<'a> BatchMessageIterator<'a> {
                 // Message spans beyond current buffer, fetch larger chunk
                 if msg_size > PARSE_BATCH_SIZE {
                     // Large message, fetch directly
-                    if let Some(msg_bytes) =
-                        self.mapped_file.get_bytes(self.current_offset, msg_size)
-                    {
+                    if let Some(msg_bytes) = self.mapped_file.get_bytes(self.current_offset, msg_size) {
                         self.current_offset += msg_size;
                         // Clear buffer to force refill on next call
                         self.buffer = Bytes::new();
@@ -204,11 +202,7 @@ impl RecoveryContext {
 
     /// Process a single message and return dispatch request
     #[inline]
-    pub fn process_message(
-        &mut self,
-        msg_bytes: &mut Bytes,
-        absolute_offset: usize,
-    ) -> DispatchRequest {
+    pub fn process_message(&mut self, msg_bytes: &mut Bytes, absolute_offset: usize) -> DispatchRequest {
         let dispatch_request = check_message_and_return_size(
             msg_bytes,
             self.check_crc,

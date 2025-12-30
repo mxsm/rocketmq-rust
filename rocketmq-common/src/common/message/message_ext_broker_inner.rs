@@ -213,8 +213,8 @@ impl fmt::Display for MessageExtBrokerInner {
 
         write!(
             f,
-            "MessageExtBrokerInner {{ message_ext_inner: {}, properties_string: {}, tags_code: \
-             {}, encoded_buff: {}, encode_completed: {}, version: {} }}",
+            "MessageExtBrokerInner {{ message_ext_inner: {}, properties_string: {}, tags_code: {}, encoded_buff: {}, \
+             encode_completed: {}, version: {} }}",
             self.message_ext_inner,
             self.properties_string,
             self.tags_code,
@@ -238,8 +238,8 @@ impl Debug for MessageExtBrokerInner {
 
         write!(
             f,
-            "MessageExtBrokerInner {{ message_ext_inner: {:?}, properties_string: {}, tags_code: \
-             {}, encoded_buff: {}, encode_completed: {}, version: {} }}",
+            "MessageExtBrokerInner {{ message_ext_inner: {:?}, properties_string: {}, tags_code: {}, encoded_buff: \
+             {}, encode_completed: {}, version: {} }}",
             self.message_ext_inner,
             self.properties_string,
             self.tags_code,
@@ -328,8 +328,7 @@ impl MessageTrait for MessageExtBrokerInner {
 
     #[inline]
     fn set_compressed_body_mut(&mut self, compressed_body: Bytes) {
-        self.message_ext_inner
-            .set_compressed_body_mut(compressed_body);
+        self.message_ext_inner.set_compressed_body_mut(compressed_body);
     }
 
     #[inline]

@@ -51,11 +51,7 @@ impl Acl {
     }
 
     /// Create from subject key/type and policies
-    pub fn of_with_policies(
-        subject_key: impl Into<String>,
-        subject_type: SubjectType,
-        policies: Vec<Policy>,
-    ) -> Self {
+    pub fn of_with_policies(subject_key: impl Into<String>, subject_type: SubjectType, policies: Vec<Policy>) -> Self {
         Acl {
             subject_key: subject_key.into(),
             subject_type,
@@ -86,11 +82,7 @@ impl Acl {
             policy.delete_entry(resource);
             if policy.entries().is_empty() {
                 // remove policy entirely
-                if let Some(pos) = self
-                    .policies
-                    .iter()
-                    .position(|p| p.policy_type() == policy_type)
-                {
+                if let Some(pos) = self.policies.iter().position(|p| p.policy_type() == policy_type) {
                     self.policies.remove(pos);
                 }
             }
@@ -98,15 +90,11 @@ impl Acl {
     }
 
     pub fn get_policy(&self, policy_type: PolicyType) -> Option<&Policy> {
-        self.policies
-            .iter()
-            .find(|p| p.policy_type() == policy_type)
+        self.policies.iter().find(|p| p.policy_type() == policy_type)
     }
 
     fn get_policy_mut(&mut self, policy_type: PolicyType) -> Option<&mut Policy> {
-        self.policies
-            .iter_mut()
-            .find(|p| p.policy_type() == policy_type)
+        self.policies.iter_mut().find(|p| p.policy_type() == policy_type)
     }
 
     // getters / setters
@@ -161,34 +149,16 @@ mod tests {
     #[test]
     fn test_of_and_update_delete() {
         let user = User::of("alice");
-        let r1 = Resource::of(
-            ResourceType::Topic,
-            Some("t1".to_string()),
-            ResourcePattern::Literal,
-        );
-        let r2 = Resource::of(
-            ResourceType::Topic,
-            Some("t2".to_string()),
-            ResourcePattern::Literal,
-        );
+        let r1 = Resource::of(ResourceType::Topic, Some("t1".to_string()), ResourcePattern::Literal);
+        let r2 = Resource::of(ResourceType::Topic, Some("t2".to_string()), ResourcePattern::Literal);
         let mut acl = Acl::of_subject_and_policies(
             &user,
-            vec![Policy::of(
-                vec![r1.clone()],
-                vec![Action::Pub],
-                None,
-                Decision::Allow,
-            )],
+            vec![Policy::of(vec![r1.clone()], vec![Action::Pub], None, Decision::Allow)],
         );
         assert_eq!(acl.policies().len(), 1);
 
         // update: add resource r2 to the existing CUSTOM policy (entries should increase)
-        acl.update_policy(Policy::of(
-            vec![r2.clone()],
-            vec![Action::Pub],
-            None,
-            Decision::Allow,
-        ));
+        acl.update_policy(Policy::of(vec![r2.clone()], vec![Action::Pub], None, Decision::Allow));
         assert_eq!(acl.policies().len(), 1);
         assert_eq!(acl.policies().first().unwrap().entries().len(), 2);
 

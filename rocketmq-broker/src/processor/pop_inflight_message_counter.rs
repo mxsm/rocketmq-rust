@@ -94,9 +94,7 @@ impl PopInflightMessageCounter {
             .or_insert_with(|| Arc::new(DashMap::with_capacity(8)));
 
         // Get or create counter for this queue
-        let counter = queue_map
-            .entry(queue_id)
-            .or_insert_with(|| Arc::new(AtomicI64::new(0)));
+        let counter = queue_map.entry(queue_id).or_insert_with(|| Arc::new(AtomicI64::new(0)));
 
         counter.fetch_add(num, Ordering::SeqCst);
     }
@@ -140,12 +138,7 @@ impl PopInflightMessageCounter {
         if check_point.pop_time < self.should_start_time.load(Ordering::SeqCst) as i64 {
             return;
         }
-        self.decrement_in_flight_message_num_internal(
-            &check_point.topic,
-            &check_point.cid,
-            check_point.queue_id,
-            1,
-        );
+        self.decrement_in_flight_message_num_internal(&check_point.topic, &check_point.cid, check_point.queue_id, 1);
     }
 
     /// Internal method to decrement counter with automatic cleanup.
@@ -217,8 +210,8 @@ impl PopInflightMessageCounter {
                 if &group_name == group {
                     self.topic_in_flight_message_num.remove(&key);
                     info!(
-                        "PopInflightMessageCounter#clearInFlightMessageNumByGroupName: clean by \
-                         group, topic={}, group={}",
+                        "PopInflightMessageCounter#clearInFlightMessageNumByGroupName: clean by group, topic={}, \
+                         group={}",
                         topic, group_name
                     );
                 }
@@ -247,8 +240,8 @@ impl PopInflightMessageCounter {
                 if topic_name.as_str() == topic.as_str() {
                     self.topic_in_flight_message_num.remove(&key);
                     info!(
-                        "PopInflightMessageCounter#clearInFlightMessageNumByTopicName: clean by \
-                         topic, topic={}, group={}",
+                        "PopInflightMessageCounter#clearInFlightMessageNumByTopicName: clean by topic, topic={}, \
+                         group={}",
                         topic_name, group
                     );
                 }
@@ -266,12 +259,7 @@ impl PopInflightMessageCounter {
     /// # Behavior
     /// - Removes counter for specific queue
     /// - Auto-cleanup: removes topic@group entry if no queues remain
-    pub fn clear_in_flight_message_num(
-        &self,
-        topic: &CheetahString,
-        group: &CheetahString,
-        queue_id: QueueId,
-    ) {
+    pub fn clear_in_flight_message_num(&self, topic: &CheetahString, group: &CheetahString, queue_id: QueueId) {
         let key = Self::build_key(topic, group);
 
         let should_remove_key = {
@@ -373,10 +361,7 @@ mod tests {
 
         counter.increment_in_flight_message_num(&topic, &group, 1, 5);
 
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic, &group, 1),
-            5
-        );
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group, 1), 5);
     }
 
     #[test]
@@ -386,16 +371,10 @@ mod tests {
         let group = CheetahString::from("test_group");
 
         counter.increment_in_flight_message_num(&topic, &group, 1, 0);
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic, &group, 1),
-            0
-        );
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group, 1), 0);
 
         counter.increment_in_flight_message_num(&topic, &group, 1, -5);
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic, &group, 1),
-            0
-        );
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group, 1), 0);
     }
 
     #[test]
@@ -407,10 +386,7 @@ mod tests {
         counter.increment_in_flight_message_num(&topic, &group, 1, 5);
         counter.decrement_in_flight_message_num(&topic, &group, 0, 1, 3);
 
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic, &group, 1),
-            2
-        );
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group, 1), 2);
     }
 
     #[test]
@@ -423,10 +399,7 @@ mod tests {
         counter.decrement_in_flight_message_num(&topic, &group, 0, 1, 5);
 
         // Entry should be removed, count returns 0
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic, &group, 1),
-            0
-        );
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group, 1), 0);
     }
 
     #[test]
@@ -439,10 +412,7 @@ mod tests {
         counter.decrement_in_flight_message_num(&topic, &group, 0, 1, 10);
 
         // Should not go negative (matches Java's Math.max(0, ...))
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic, &group, 1),
-            0
-        );
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group, 1), 0);
     }
 
     // ============ Timestamp Validation Tests ============
@@ -466,10 +436,7 @@ mod tests {
         // pop_time >= should_start_time, should work
         counter.decrement_in_flight_message_num(&topic, &group, 1000, 1, 5);
 
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic, &group, 1),
-            5
-        );
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group, 1), 5);
     }
 
     #[test]
@@ -520,20 +487,11 @@ mod tests {
         counter.clear_in_flight_message_num_by_group_name(&group);
 
         // test_group entries should be removed
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic1, &group, 1),
-            0
-        );
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic2, &group, 1),
-            0
-        );
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic1, &group, 1), 0);
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic2, &group, 1), 0);
 
         // other_group should remain
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic1, &other_group, 1),
-            7
-        );
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic1, &other_group, 1), 7);
     }
 
     #[test]
@@ -551,20 +509,11 @@ mod tests {
         counter.clear_in_flight_message_num_by_topic_name(&topic);
 
         // test_topic entries should be removed
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic, &group1, 1),
-            0
-        );
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic, &group2, 1),
-            0
-        );
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group1, 1), 0);
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group2, 1), 0);
 
         // other_topic should remain
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&other_topic, &group1, 1),
-            7
-        );
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&other_topic, &group1, 1), 7);
     }
 
     #[test]
@@ -579,16 +528,10 @@ mod tests {
         counter.clear_in_flight_message_num(&topic, &group, 1);
 
         // Queue 1 should be cleared
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic, &group, 1),
-            0
-        );
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group, 1), 0);
 
         // Queue 2 should remain
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic, &group, 2),
-            3
-        );
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group, 2), 3);
     }
 
     // ============ Checkpoint Tests ============
@@ -617,10 +560,7 @@ mod tests {
         counter.increment_in_flight_message_num(&topic, &group, 1, 5);
         counter.decrement_in_flight_message_num_checkpoint(&checkpoint);
 
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic, &group, 1),
-            4
-        );
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group, 1), 4);
     }
 
     // ============ Topic/Group Isolation Tests ============
@@ -635,14 +575,8 @@ mod tests {
         counter.increment_in_flight_message_num(&topic1, &group, 1, 10);
         counter.increment_in_flight_message_num(&topic2, &group, 1, 20);
 
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic1, &group, 1),
-            10
-        );
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic2, &group, 1),
-            20
-        );
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic1, &group, 1), 10);
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic2, &group, 1), 20);
     }
 
     #[test]
@@ -655,14 +589,8 @@ mod tests {
         counter.increment_in_flight_message_num(&topic, &group1, 1, 10);
         counter.increment_in_flight_message_num(&topic, &group2, 1, 20);
 
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic, &group1, 1),
-            10
-        );
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic, &group2, 1),
-            20
-        );
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group1, 1), 10);
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group2, 1), 20);
     }
 
     #[test]
@@ -675,18 +603,9 @@ mod tests {
         counter.increment_in_flight_message_num(&topic, &group, 2, 20);
         counter.increment_in_flight_message_num(&topic, &group, 3, 30);
 
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic, &group, 1),
-            10
-        );
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic, &group, 2),
-            20
-        );
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic, &group, 3),
-            30
-        );
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group, 1), 10);
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group, 2), 20);
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group, 3), 30);
     }
 
     // ============ Concurrent Operations Tests ============
@@ -718,10 +637,7 @@ mod tests {
         }
 
         // 10 threads * 100 increments = 1000
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic, &group, 1),
-            1000
-        );
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group, 1), 1000);
     }
 
     #[test]
@@ -758,13 +674,7 @@ mod tests {
 
             let handle = thread::spawn(move || {
                 for _ in 0..100 {
-                    counter_clone.decrement_in_flight_message_num(
-                        &topic_clone,
-                        &group_clone,
-                        0,
-                        1,
-                        1,
-                    );
+                    counter_clone.decrement_in_flight_message_num(&topic_clone, &group_clone, 0, 1, 1);
                 }
             });
 
@@ -776,10 +686,7 @@ mod tests {
         }
 
         // 1000 + (5*100) - (5*100) = 1000
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic, &group, 1),
-            1000
-        );
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group, 1), 1000);
     }
 
     // ============ Edge Cases Tests ============
@@ -790,10 +697,7 @@ mod tests {
         let topic = CheetahString::from("nonexistent_topic");
         let group = CheetahString::from("nonexistent_group");
 
-        assert_eq!(
-            counter.get_group_pop_in_flight_message_num(&topic, &group, 99),
-            0
-        );
+        assert_eq!(counter.get_group_pop_in_flight_message_num(&topic, &group, 99), 0);
     }
 
     #[test]

@@ -87,9 +87,7 @@ impl ConsumerGroupInfo {
     }
 
     pub fn find_channel_by_channel(&self, channel: &Channel) -> Option<ClientChannelInfo> {
-        self.channel_info_table
-            .get(channel)
-            .map(|item| item.value().clone())
+        self.channel_info_table.get(channel).map(|item| item.value().clone())
     }
 
     pub fn get_channel_info_table(&self) -> Arc<DashMap<Channel, ClientChannelInfo>> {
@@ -111,11 +109,7 @@ impl ConsumerGroupInfo {
     }
 
     pub fn unregister_channel(&self, client_channel_info: &ClientChannelInfo) -> bool {
-        if self
-            .channel_info_table
-            .remove(client_channel_info.channel())
-            .is_some()
-        {
+        if self.channel_info_table.remove(client_channel_info.channel()).is_some() {
             info!(
                 "Unregister a consumer [{}] from consumerGroupInfo {}",
                 self.group_name,
@@ -130,8 +124,8 @@ impl ConsumerGroupInfo {
     pub fn handle_channel_close_event(&self, channel: &Channel) -> Option<ClientChannelInfo> {
         if let Some((_, info)) = self.channel_info_table.remove(channel) {
             warn!(
-                "Channel close event: remove not active channel [{}] from ConsumerGroupInfo \
-                 groupChannelTable, consumer group: {}",
+                "Channel close event: remove not active channel [{}] from ConsumerGroupInfo groupChannelTable, \
+                 consumer group: {}",
                 info.channel().remote_address(),
                 self.group_name
             );
@@ -159,8 +153,8 @@ impl ConsumerGroupInfo {
         if let Some(mut info_old) = self.channel_info_table.get_mut(info_new.channel()) {
             if info_old.client_id() != info_new.client_id() {
                 error!(
-                    "ConsumerGroupInfo: consumer channel exists in broker, but clientId is not \
-                     the same one, group={}, old clientChannelInfo={}, new clientChannelInfo={}",
+                    "ConsumerGroupInfo: consumer channel exists in broker, but clientId is not the same one, \
+                     group={}, old clientChannelInfo={}, new clientChannelInfo={}",
                     self.group_name,
                     info_old.client_id(),
                     info_new.client_id()
@@ -197,12 +191,10 @@ impl ConsumerGroupInfo {
                         );
                     }
                     drop(old); //release lock
-                    self.subscription_table
-                        .insert(sub.topic.clone(), sub.clone());
+                    self.subscription_table.insert(sub.topic.clone(), sub.clone());
                 }
             } else {
-                self.subscription_table
-                    .insert(sub.topic.clone(), sub.clone());
+                self.subscription_table.insert(sub.topic.clone(), sub.clone());
                 info!(
                     "Subscription changed, add new topic, group: {} {}",
                     self.group_name, sub.topic
@@ -228,16 +220,11 @@ impl ConsumerGroupInfo {
     }
 
     pub fn get_subscribe_topics(&self) -> HashSet<CheetahString> {
-        self.subscription_table
-            .iter()
-            .map(|item| item.key().clone())
-            .collect()
+        self.subscription_table.iter().map(|item| item.key().clone()).collect()
     }
 
     pub fn find_subscription_data(&self, topic: &CheetahString) -> Option<SubscriptionData> {
-        self.subscription_table
-            .get(topic)
-            .map(|item| item.value().clone())
+        self.subscription_table.get(topic).map(|item| item.value().clone())
     }
 
     pub fn get_consume_type(&self) -> ConsumeType {
@@ -295,20 +282,13 @@ mod tests {
         let message_model = MessageModel::Clustering;
         let consume_from_where = ConsumeFromWhere::ConsumeFromLastOffset;
 
-        let consumer_group_info = ConsumerGroupInfo::new(
-            group_name.clone(),
-            consume_type,
-            message_model,
-            consume_from_where,
-        );
+        let consumer_group_info =
+            ConsumerGroupInfo::new(group_name.clone(), consume_type, message_model, consume_from_where);
 
         assert_eq!(consumer_group_info.get_group_name(), &group_name);
         assert_eq!(consumer_group_info.get_consume_type(), consume_type);
         assert_eq!(consumer_group_info.get_message_model(), message_model);
-        assert_eq!(
-            consumer_group_info.get_consume_from_where(),
-            consume_from_where
-        );
+        assert_eq!(consumer_group_info.get_consume_from_where(), consume_from_where);
     }
 
     #[test]
@@ -318,14 +298,8 @@ mod tests {
         let consumer_group_info = ConsumerGroupInfo::with_group_name(group_name.clone());
 
         assert_eq!(consumer_group_info.get_group_name(), &group_name);
-        assert_eq!(
-            consumer_group_info.get_consume_type(),
-            ConsumeType::ConsumePassively
-        );
-        assert_eq!(
-            consumer_group_info.get_message_model(),
-            MessageModel::Clustering
-        );
+        assert_eq!(consumer_group_info.get_consume_type(), ConsumeType::ConsumePassively);
+        assert_eq!(consumer_group_info.get_message_model(), MessageModel::Clustering);
         assert_eq!(
             consumer_group_info.get_consume_from_where(),
             ConsumeFromWhere::ConsumeFromLastOffset
@@ -372,12 +346,8 @@ mod tests {
         let message_model = MessageModel::Clustering;
         let consume_from_where = ConsumeFromWhere::ConsumeFromLastOffset;
 
-        let mut consumer_group_info = ConsumerGroupInfo::new(
-            group_name.clone(),
-            consume_type,
-            message_model,
-            consume_from_where,
-        );
+        let mut consumer_group_info =
+            ConsumerGroupInfo::new(group_name.clone(), consume_type, message_model, consume_from_where);
 
         let mut sub_list = HashSet::new();
         let subscription_data = SubscriptionData {

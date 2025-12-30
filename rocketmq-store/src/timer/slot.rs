@@ -43,13 +43,7 @@ impl Slot {
         }
     }
 
-    pub fn new_with_num_magic(
-        time_ms: i64,
-        first_pos: i64,
-        last_pos: i64,
-        num: i32,
-        magic: i32,
-    ) -> Self {
+    pub fn new_with_num_magic(time_ms: i64, first_pos: i64, last_pos: i64, num: i32, magic: i32) -> Self {
         Slot {
             time_ms,
             first_pos,

@@ -59,8 +59,7 @@ impl NetworkManager {
         }
 
         // Create transport
-        let (transport, outgoing_rx, incoming_rx) =
-            RaftTransport::new(config.node_id, config.listen_addr, peer_addrs);
+        let (transport, outgoing_rx, incoming_rx) = RaftTransport::new(config.node_id, config.listen_addr, peer_addrs);
 
         let incoming_tx = transport.message_sender();
 
@@ -101,11 +100,7 @@ impl NetworkManager {
                     }
 
                     let to = msg.get_to();
-                    debug!(
-                        "Sending message to peer {}, type: {:?}",
-                        to,
-                        msg.get_msg_type()
-                    );
+                    debug!("Sending message to peer {}, type: {:?}", to, msg.get_msg_type());
 
                     if let Err(e) = transport.send_to_peer(to, msg).await {
                         error!("Failed to send message to peer {}: {}", to, e);

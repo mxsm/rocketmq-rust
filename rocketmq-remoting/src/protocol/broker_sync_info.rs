@@ -39,8 +39,7 @@ impl Display for BrokerSyncInfo {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "BrokerSyncInfo {{ master_ha_address: {}, master_flush_offset: {}, master_address: {} \
-             }}",
+            "BrokerSyncInfo {{ master_ha_address: {}, master_flush_offset: {}, master_address: {} }}",
             match &self.master_ha_address {
                 Some(addr) => addr.as_str(),
                 None => "None",

@@ -45,20 +45,14 @@ mod tests {
         };
         let map = header.to_map().unwrap();
         assert_eq!(
-            map.get(&CheetahString::from_static_str("brokerName"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("brokerName")).unwrap(),
             "test_broker"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("masterBrokerId"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("masterBrokerId")).unwrap(),
             "1234567890"
         );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("masterEpoch"))
-                .unwrap(),
-            "5"
-        );
+        assert_eq!(map.get(&CheetahString::from_static_str("masterEpoch")).unwrap(), "5");
     }
 
     #[test]

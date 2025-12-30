@@ -65,11 +65,7 @@ pub trait LitePullConsumerLocal: Sync {
     /// # Returns
     ///
     /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
-    async fn subscribe_with_expression(
-        &self,
-        topic: &str,
-        sub_expression: &str,
-    ) -> rocketmq_error::RocketMQResult<()>;
+    async fn subscribe_with_expression(&self, topic: &str, sub_expression: &str) -> rocketmq_error::RocketMQResult<()>;
 
     /// Subscribes to a topic with a subscription expression and a message queue listener.
     ///
@@ -164,11 +160,7 @@ pub trait LitePullConsumerLocal: Sync {
     /// # Returns
     ///
     /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
-    async fn seek(
-        &self,
-        message_queue: &MessageQueue,
-        offset: i64,
-    ) -> rocketmq_error::RocketMQResult<()>;
+    async fn seek(&self, message_queue: &MessageQueue, offset: i64) -> rocketmq_error::RocketMQResult<()>;
 
     /// Pauses message consumption for the specified message queues.
     ///
@@ -208,10 +200,7 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// * `rocketmq_error::RocketMQResult<Vec<MessageQueue>>` - A vector of message queues or an
     ///   error.
-    async fn fetch_message_queues(
-        &self,
-        topic: &str,
-    ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>>;
+    async fn fetch_message_queues(&self, topic: &str) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>>;
     /// Retrieves the offset for a given timestamp in a message queue.
     ///
     /// # Arguments
@@ -304,10 +293,7 @@ pub trait LitePullConsumerLocal: Sync {
     /// # Returns
     ///
     /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
-    async fn seek_to_begin(
-        &self,
-        message_queue: &MessageQueue,
-    ) -> rocketmq_error::RocketMQResult<()>;
+    async fn seek_to_begin(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<()>;
 
     /// Seeks to the end of a message queue.
     ///
@@ -318,6 +304,5 @@ pub trait LitePullConsumerLocal: Sync {
     /// # Returns
     ///
     /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
-    async fn seek_to_end(&self, message_queue: &MessageQueue)
-        -> rocketmq_error::RocketMQResult<()>;
+    async fn seek_to_end(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<()>;
 }

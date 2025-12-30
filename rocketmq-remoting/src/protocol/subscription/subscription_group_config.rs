@@ -218,10 +218,7 @@ impl SubscriptionGroupConfig {
     }
 
     #[inline]
-    pub fn set_notify_consumer_ids_changed_enable(
-        &mut self,
-        notify_consumer_ids_changed_enable: bool,
-    ) {
+    pub fn set_notify_consumer_ids_changed_enable(&mut self, notify_consumer_ids_changed_enable: bool) {
         self.notify_consumer_ids_changed_enable = notify_consumer_ids_changed_enable;
     }
 
@@ -236,10 +233,7 @@ impl SubscriptionGroupConfig {
     }
 
     #[inline]
-    pub fn set_subscription_data_set(
-        &mut self,
-        subscription_data_set: Option<HashSet<SimpleSubscriptionData>>,
-    ) {
+    pub fn set_subscription_data_set(&mut self, subscription_data_set: Option<HashSet<SimpleSubscriptionData>>) {
         self.subscription_data_set = subscription_data_set;
     }
 
@@ -310,9 +304,6 @@ mod subscription_group_config_tests {
         assert_eq!(config.group_sys_flag(), 1);
         assert_eq!(config.consume_timeout_minute(), 30);
         assert!(config.subscription_data_set().is_some());
-        assert_eq!(
-            config.attributes(),
-            &HashMap::from([("key".into(), "value".into())])
-        );
+        assert_eq!(config.attributes(), &HashMap::from([("key".into(), "value".into())]));
     }
 }

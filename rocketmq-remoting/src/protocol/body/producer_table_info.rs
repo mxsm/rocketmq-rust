@@ -69,9 +69,7 @@ impl ProducerTableInfo {
 /// Default implementation that creates an empty producer table
 impl Default for ProducerTableInfo {
     fn default() -> Self {
-        Self {
-            data: HashMap::new(),
-        }
+        Self { data: HashMap::new() }
     }
 }
 
@@ -124,10 +122,7 @@ mod tests {
 
         // Test the From trait implementation
         let mut new_data = HashMap::new();
-        new_data.insert(
-            "group3".to_string(),
-            vec![producer1.clone(), producer2.clone()],
-        );
+        new_data.insert("group3".to_string(), vec![producer1.clone(), producer2.clone()]);
         let from_table = ProducerTableInfo::from(new_data);
         assert_eq!(from_table.data().len(), 1);
         assert_eq!(from_table.data()["group3"].len(), 2);

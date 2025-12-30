@@ -56,9 +56,7 @@ pub struct TopicQueueTable {
 impl TopicQueueTable {
     /// Create a new topic queue table
     pub fn new() -> Self {
-        Self {
-            inner: DashMap::new(),
-        }
+        Self { inner: DashMap::new() }
     }
 
     /// Create with estimated capacity
@@ -82,12 +80,7 @@ impl TopicQueueTable {
     ///
     /// # Returns
     /// Previous queue data if existed
-    pub fn insert(
-        &self,
-        topic: TopicName,
-        broker: BrokerName,
-        queue_data: QueueData,
-    ) -> Option<Arc<QueueData>> {
+    pub fn insert(&self, topic: TopicName, broker: BrokerName, queue_data: QueueData) -> Option<Arc<QueueData>> {
         self.inner
             .entry(topic)
             .or_default()

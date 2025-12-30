@@ -85,10 +85,7 @@ mod tests {
     #[test]
     fn test_get_flush_disk_type_string() {
         assert_eq!(FlushDiskType::SyncFlush.get_flush_disk_type(), "SYNC_FLUSH");
-        assert_eq!(
-            FlushDiskType::AsyncFlush.get_flush_disk_type(),
-            "ASYNC_FLUSH"
-        );
+        assert_eq!(FlushDiskType::AsyncFlush.get_flush_disk_type(), "ASYNC_FLUSH");
     }
 
     #[test]

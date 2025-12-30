@@ -213,19 +213,14 @@ impl RaftController {
     }
 
     /// Message processing loop
-    async fn message_loop(
-        node: Arc<RwLock<Option<RaftNode>>>,
-        mut rx: mpsc::UnboundedReceiver<RaftMessage>,
-    ) {
+    async fn message_loop(node: Arc<RwLock<Option<RaftNode>>>, mut rx: mpsc::UnboundedReceiver<RaftMessage>) {
         while let Some(msg) = rx.recv().await {
             match msg {
                 RaftMessage::Propose { data, response } => {
                     let result = if let Some(n) = node.read().await.as_ref() {
                         n.propose(data).await
                     } else {
-                        Err(ControllerError::Internal(
-                            "Node not initialized".to_string(),
-                        ))
+                        Err(ControllerError::Internal("Node not initialized".to_string()))
                     };
                     let _ = response.send(result);
                 }
@@ -247,9 +242,7 @@ impl RaftController {
                     let result = if let Some(n) = node.read().await.as_ref() {
                         n.query(data).await
                     } else {
-                        Err(ControllerError::Internal(
-                            "Node not initialized".to_string(),
-                        ))
+                        Err(ControllerError::Internal("Node not initialized".to_string()))
                     };
                     let _ = response.send(result);
                 }
@@ -269,10 +262,7 @@ impl RaftController {
         info!("Starting incoming message loop");
 
         while let Some(message) = incoming_rx.recv().await {
-            debug!(
-                "Received Raft message from network: {:?}",
-                message.get_msg_type()
-            );
+            debug!("Received Raft message from network: {:?}", message.get_msg_type());
 
             if tx.send(RaftMessage::Step { message }).is_err() {
                 error!("Failed to forward incoming message to Raft");

@@ -101,12 +101,7 @@ impl BrokerReplicaInfo {
     }
 
     /// Create a new slave replica
-    pub fn new_slave(
-        cluster_name: String,
-        broker_name: String,
-        broker_id: u64,
-        broker_addr: String,
-    ) -> Self {
+    pub fn new_slave(cluster_name: String, broker_name: String, broker_id: u64, broker_addr: String) -> Self {
         Self {
             cluster_name,
             broker_name,
@@ -277,8 +272,7 @@ impl ReplicasManager {
 
         // If this is a master, initialize or update sync state set
         if is_master {
-            let mut sync_state_set =
-                SyncStateSet::new(broker_name.clone(), broker_id, replica.broker_addr.clone());
+            let mut sync_state_set = SyncStateSet::new(broker_name.clone(), broker_id, replica.broker_addr.clone());
             sync_state_set.master_epoch = replica.epoch;
             self.sync_state_sets.insert(broker_name, sync_state_set);
         }
@@ -309,12 +303,9 @@ impl ReplicasManager {
 
     /// Get the master replica for a broker set
     pub async fn get_master(&self, broker_name: &str) -> Option<BrokerReplicaInfo> {
-        self.replicas.get(broker_name).and_then(|replicas| {
-            replicas
-                .values()
-                .find(|replica| replica.is_master())
-                .cloned()
-        })
+        self.replicas
+            .get(broker_name)
+            .and_then(|replicas| replicas.values().find(|replica| replica.is_master()).cloned())
     }
 
     /// Get all replicas for a broker set
@@ -326,11 +317,7 @@ impl ReplicasManager {
     }
 
     /// Get a specific replica
-    pub async fn get_replica(
-        &self,
-        broker_name: &str,
-        broker_id: u64,
-    ) -> Option<BrokerReplicaInfo> {
+    pub async fn get_replica(&self, broker_name: &str, broker_id: u64) -> Option<BrokerReplicaInfo> {
         self.replicas
             .get(broker_name)
             .and_then(|replicas| replicas.get(&broker_id).cloned())
@@ -345,10 +332,7 @@ impl ReplicasManager {
     pub async fn add_to_sync_state_set(&self, broker_name: &str, broker_id: u64) -> Result<()> {
         if let Some(mut sync_state_set) = self.sync_state_sets.get_mut(broker_name) {
             sync_state_set.add_broker(broker_id);
-            debug!(
-                "Added broker {} to sync state set for {}",
-                broker_id, broker_name
-            );
+            debug!("Added broker {} to sync state set for {}", broker_id, broker_name);
         }
 
         // Update replica in-sync status
@@ -362,17 +346,10 @@ impl ReplicasManager {
     }
 
     /// Remove a broker from the sync state set
-    pub async fn remove_from_sync_state_set(
-        &self,
-        broker_name: &str,
-        broker_id: u64,
-    ) -> Result<()> {
+    pub async fn remove_from_sync_state_set(&self, broker_name: &str, broker_id: u64) -> Result<()> {
         if let Some(mut sync_state_set) = self.sync_state_sets.get_mut(broker_name) {
             sync_state_set.remove_broker(broker_id);
-            warn!(
-                "Removed broker {} from sync state set for {}",
-                broker_id, broker_name
-            );
+            warn!("Removed broker {} from sync state set for {}", broker_id, broker_name);
         }
 
         // Update replica in-sync status
@@ -386,11 +363,7 @@ impl ReplicasManager {
     }
 
     /// Update sync state set
-    pub async fn update_sync_state_set(
-        &self,
-        broker_name: &str,
-        new_sync_state_set: Vec<u64>,
-    ) -> Result<()> {
+    pub async fn update_sync_state_set(&self, broker_name: &str, new_sync_state_set: Vec<u64>) -> Result<()> {
         if let Some(mut sync_state_set) = self.sync_state_sets.get_mut(broker_name) {
             sync_state_set.sync_state_set = new_sync_state_set.clone();
             sync_state_set.last_update_timestamp = SystemTime::now()
@@ -398,10 +371,7 @@ impl ReplicasManager {
                 .unwrap()
                 .as_secs();
 
-            debug!(
-                "Updated sync state set for {}: {:?}",
-                broker_name, new_sync_state_set
-            );
+            debug!("Updated sync state set for {}: {:?}", broker_name, new_sync_state_set);
         }
 
         // Update replica in-sync status
@@ -467,10 +437,9 @@ impl ReplicasManager {
         }
 
         // Update sync state set
-        if let (Some(master), Some(mut sync_state_set)) = (
-            new_master.as_ref(),
-            self.sync_state_sets.get_mut(broker_name),
-        ) {
+        if let (Some(master), Some(mut sync_state_set)) =
+            (new_master.as_ref(), self.sync_state_sets.get_mut(broker_name))
+        {
             sync_state_set.master_broker_id = new_master_id;
             sync_state_set.master_addr = master.broker_addr.clone();
             sync_state_set.master_epoch = master.epoch;
@@ -485,10 +454,7 @@ impl ReplicasManager {
 
     /// List all broker sets
     pub async fn list_broker_sets(&self) -> Vec<String> {
-        self.replicas
-            .iter()
-            .map(|entry| entry.key().clone())
-            .collect()
+        self.replicas.iter().map(|entry| entry.key().clone()).collect()
     }
 
     /// Get statistics
@@ -538,8 +504,7 @@ mod tests {
 
     #[test]
     fn test_sync_state_set() {
-        let mut sync_state =
-            SyncStateSet::new("broker-a".to_string(), 0, "127.0.0.1:10911".to_string());
+        let mut sync_state = SyncStateSet::new("broker-a".to_string(), 0, "127.0.0.1:10911".to_string());
 
         assert_eq!(sync_state.size(), 1);
         assert!(sync_state.contains(0));
@@ -557,10 +522,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_replicas_manager() {
-        let config = Arc::new(ControllerConfig::new_node(
-            1,
-            "127.0.0.1:9876".parse().unwrap(),
-        ));
+        let config = Arc::new(ControllerConfig::new_node(1, "127.0.0.1:9876".parse().unwrap()));
         let manager = ReplicasManager::new(config);
 
         // Register master

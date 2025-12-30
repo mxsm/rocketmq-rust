@@ -114,9 +114,7 @@ pub struct BrokerLiveTable {
 impl BrokerLiveTable {
     /// Create a new broker live table
     pub fn new() -> Self {
-        Self {
-            inner: DashMap::new(),
-        }
+        Self { inner: DashMap::new() }
     }
 
     /// Create with estimated capacity
@@ -172,9 +170,7 @@ impl BrokerLiveTable {
     /// # Returns
     /// Cloned Arc to live info if exists
     pub fn get(&self, broker_addr_info: &BrokerAddrInfo) -> Option<Arc<BrokerLiveInfo>> {
-        self.inner
-            .get(broker_addr_info)
-            .map(|entry| Arc::clone(entry.value()))
+        self.inner.get(broker_addr_info).map(|entry| Arc::clone(entry.value()))
     }
 
     /// Check if broker is registered
@@ -263,10 +259,7 @@ impl BrokerLiveTable {
     ///
     /// # Returns
     /// Vector of broker address info with stale versions
-    pub fn get_stale_version_brokers(
-        &self,
-        expected_version: &DataVersion,
-    ) -> Vec<Arc<BrokerAddrInfo>> {
+    pub fn get_stale_version_brokers(&self, expected_version: &DataVersion) -> Vec<Arc<BrokerAddrInfo>> {
         self.inner
             .iter()
             .filter(|entry| &entry.value().data_version != expected_version)
@@ -355,10 +348,7 @@ mod tests {
     use super::*;
 
     fn create_test_broker_addr_info(name: &str, _id: u64) -> Arc<BrokerAddrInfo> {
-        Arc::new(BrokerAddrInfo::new(
-            "DefaultCluster",
-            format!("{}:10911", name),
-        ))
+        Arc::new(BrokerAddrInfo::new("DefaultCluster", format!("{}:10911", name)))
     }
 
     fn create_test_live_info(timestamp: u64) -> BrokerLiveInfo {
@@ -451,8 +441,7 @@ mod tests {
 
     #[test]
     fn test_with_ha_server() {
-        let live_info =
-            BrokerLiveInfo::new(1000, DataVersion::default()).with_ha_server("ha-server:10912");
+        let live_info = BrokerLiveInfo::new(1000, DataVersion::default()).with_ha_server("ha-server:10912");
 
         assert_eq!(
             live_info.ha_server_addr,

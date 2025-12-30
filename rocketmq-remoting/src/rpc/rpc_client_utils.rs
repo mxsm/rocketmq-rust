@@ -45,8 +45,7 @@ impl RpcClientUtils {
     pub fn create_command_for_rpc_response(mut rpc_response: RpcResponse) -> RemotingCommand {
         let mut cmd = match rpc_response.header.take() {
             None => RemotingCommand::create_response_command_with_code(rpc_response.code),
-            Some(value) => RemotingCommand::create_response_command()
-                .set_command_custom_header_origin(Some(value)),
+            Some(value) => RemotingCommand::create_response_command().set_command_custom_header_origin(Some(value)),
         };
         match rpc_response.exception {
             None => {}
@@ -63,11 +62,8 @@ impl RpcClientUtils {
             None
         } else if let Some(bytes) = body.downcast_ref::<Bytes>() {
             Some(bytes.clone())
-        } else if let Some(remoting_serializable) = body.downcast_ref::<&dyn RemotingSerializable>()
-        {
-            Some(Bytes::from(
-                remoting_serializable.encode().expect("encode failed"),
-            ))
+        } else if let Some(remoting_serializable) = body.downcast_ref::<&dyn RemotingSerializable>() {
+            Some(Bytes::from(remoting_serializable.encode().expect("encode failed")))
         } else if let Some(buffer) = body.downcast_ref::<BytesMut>() {
             let data = buffer.clone().freeze();
             Some(data)

@@ -30,12 +30,7 @@ pub struct PolicyEntry {
 }
 
 impl PolicyEntry {
-    pub fn of(
-        resource: Resource,
-        actions: Vec<Action>,
-        environment: Option<Environment>,
-        decision: Decision,
-    ) -> Self {
+    pub fn of(resource: Resource, actions: Vec<Action>, environment: Option<Environment>, decision: Decision) -> Self {
         Self {
             resource,
             actions,
@@ -44,12 +39,7 @@ impl PolicyEntry {
         }
     }
 
-    pub fn update_entry(
-        &mut self,
-        actions: Vec<Action>,
-        environment: Option<Environment>,
-        decision: Decision,
-    ) {
+    pub fn update_entry(&mut self, actions: Vec<Action>, environment: Option<Environment>, decision: Decision) {
         self.actions = actions;
         self.environment = environment;
         self.decision = decision;
@@ -148,17 +138,9 @@ mod tests {
             Some("foo".to_string()),
             rocketmq_common::common::resource::resource_pattern::ResourcePattern::Literal,
         );
-        let p = PolicyEntry::of(
-            r.clone(),
-            vec![Action::Pub, Action::Sub],
-            None,
-            Decision::Allow,
-        );
+        let p = PolicyEntry::of(r.clone(), vec![Action::Pub, Action::Sub], None, Decision::Allow);
         assert_eq!(p.to_resource_str(), Some("Topic:foo".to_string()));
-        assert_eq!(
-            p.to_actions_str().unwrap(),
-            vec!["Pub".to_string(), "Sub".to_string()]
-        );
+        assert_eq!(p.to_actions_str().unwrap(), vec!["Pub".to_string(), "Sub".to_string()]);
         assert_eq!(p.decision(), Decision::Allow);
     }
 
@@ -205,11 +187,11 @@ mod tests {
             rocketmq_common::common::resource::resource_pattern::ResourcePattern::Literal,
         );
         assert!(rule.is_match_resource(&res));
-        assert!(rule.is_match_environment(
-            &crate::authorization::model::environment::Environment::of("1.2.3.4").unwrap()
-        ));
-        assert!(!rule.is_match_environment(
-            &crate::authorization::model::environment::Environment::of("8.8.8.8").unwrap()
-        ));
+        assert!(
+            rule.is_match_environment(&crate::authorization::model::environment::Environment::of("1.2.3.4").unwrap())
+        );
+        assert!(
+            !rule.is_match_environment(&crate::authorization::model::environment::Environment::of("8.8.8.8").unwrap())
+        );
     }
 }

@@ -57,9 +57,7 @@ pub async fn main() -> RocketMQResult<()> {
 
     for _ in 0..10 {
         let message = Message::with_tags(TOPIC, TAG, "Hello RocketMQ".as_bytes());
-        let send_result = producer
-            .send_message_in_transaction::<(), _>(message, None)
-            .await?;
+        let send_result = producer.send_message_in_transaction::<(), _>(message, None).await?;
         println!("send result: {}", send_result);
     }
     let _ = tokio::signal::ctrl_c().await;
@@ -88,15 +86,10 @@ impl TransactionListener for TransactionListenerImpl {
         msg: &dyn MessageTrait,
         _arg: Option<&(dyn Any + Send + Sync)>,
     ) -> LocalTransactionState {
-        let value = self
-            .transaction_index
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        let value = self.transaction_index.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         let status = value % 3;
         let mut guard = self.local_trans.lock();
-        guard.insert(
-            msg.get_transaction_id().cloned().unwrap_or_default(),
-            status,
-        );
+        guard.insert(msg.get_transaction_id().cloned().unwrap_or_default(), status);
         LocalTransactionState::Unknown
     }
 

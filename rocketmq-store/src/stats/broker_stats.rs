@@ -56,14 +56,10 @@ impl<MS: MessageStore> BrokerStats<MS> {
         let broker_stats_manager = self.default_message_store.get_broker_stats_manager();
         match broker_stats_manager {
             Some(manager) => {
-                self.msg_put_total_today_morning.store(
-                    manager.get_broker_puts_num_without_system_topic(),
-                    Ordering::Relaxed,
-                );
-                self.msg_get_total_today_morning.store(
-                    manager.get_broker_gets_num_without_system_topic(),
-                    Ordering::Relaxed,
-                );
+                self.msg_put_total_today_morning
+                    .store(manager.get_broker_puts_num_without_system_topic(), Ordering::Relaxed);
+                self.msg_get_total_today_morning
+                    .store(manager.get_broker_gets_num_without_system_topic(), Ordering::Relaxed);
 
                 info!(
                     "yesterday put message total: {}",

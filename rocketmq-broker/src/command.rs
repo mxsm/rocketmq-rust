@@ -20,11 +20,7 @@ use std::path::PathBuf;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(
-    author = "mxsm",
-    version = "0.2.0",
-    about = "RocketMQ Broker Server(Rust)"
-)]
+#[command(author = "mxsm", version = "0.2.0", about = "RocketMQ Broker Server(Rust)")]
 pub struct Args {
     /// Broker config properties file
     #[arg(short, long, value_name = "FILE", default_missing_value = "None")]
@@ -35,13 +31,7 @@ pub struct Args {
     pub print_important_config: bool,
 
     /// Name remoting_server address list, eg: '192.168.0.1:9876;192.168.0.2:9876'
-    #[arg(
-        short,
-        long,
-        value_name = "IP",
-        default_value = "127.0.0.1:9876",
-        required = false
-    )]
+    #[arg(short, long, value_name = "IP", default_value = "127.0.0.1:9876", required = false)]
     pub namesrv_addr: String,
 
     ///Print all config item

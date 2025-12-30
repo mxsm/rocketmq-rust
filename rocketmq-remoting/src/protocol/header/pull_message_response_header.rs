@@ -69,38 +69,25 @@ mod tests {
             "123"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("nextBeginOffset"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("nextBeginOffset")).unwrap(),
             "456"
         );
+        assert_eq!(map.get(&CheetahString::from_static_str("minOffset")).unwrap(), "789");
+        assert_eq!(map.get(&CheetahString::from_static_str("maxOffset")).unwrap(), "101112");
         assert_eq!(
-            map.get(&CheetahString::from_static_str("minOffset"))
-                .unwrap(),
-            "789"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("maxOffset"))
-                .unwrap(),
-            "101112"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("offsetDelta"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("offsetDelta")).unwrap(),
             "131415"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("topicSysFlag"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("topicSysFlag")).unwrap(),
             "161718"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("groupSysFlag"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("groupSysFlag")).unwrap(),
             "192021"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("forbiddenType"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("forbiddenType")).unwrap(),
             "222324"
         );
     }
@@ -141,8 +128,7 @@ mod tests {
             CheetahString::from_static_str("222324"),
         );
 
-        let header: PullMessageResponseHeader =
-            <PullMessageResponseHeader as FromMap>::from(&map).unwrap();
+        let header: PullMessageResponseHeader = <PullMessageResponseHeader as FromMap>::from(&map).unwrap();
         assert_eq!(header.suggest_which_broker_id, 123);
         assert_eq!(header.next_begin_offset, 456);
         assert_eq!(header.min_offset, 789);

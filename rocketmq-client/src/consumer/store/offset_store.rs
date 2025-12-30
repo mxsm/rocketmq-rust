@@ -135,14 +135,10 @@ impl OffsetStore {
         is_oneway: bool,
     ) -> rocketmq_error::RocketMQResult<()> {
         if let Some(ref mut store) = self.remote_broker_offset_store {
-            store
-                .update_consume_offset_to_broker(mq, offset, is_oneway)
-                .await?;
+            store.update_consume_offset_to_broker(mq, offset, is_oneway).await?;
         }
         if let Some(ref mut store) = self.local_file_offset_store {
-            store
-                .update_consume_offset_to_broker(mq, offset, is_oneway)
-                .await?;
+            store.update_consume_offset_to_broker(mq, offset, is_oneway).await?;
         }
         Ok(())
     }

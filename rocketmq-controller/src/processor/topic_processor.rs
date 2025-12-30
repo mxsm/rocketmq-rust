@@ -49,10 +49,7 @@ impl CreateTopicProcessor {
     }
 
     /// Process create topic request
-    pub async fn process_request(
-        &self,
-        request: CreateTopicRequest,
-    ) -> Result<CreateTopicResponse> {
+    pub async fn process_request(&self, request: CreateTopicRequest) -> Result<CreateTopicResponse> {
         info!("Processing create topic request: {}", request.topic_name);
 
         // Check if we are the leader
@@ -108,13 +105,12 @@ impl CreateTopicProcessor {
 #[async_trait::async_trait]
 impl RequestProcessor for CreateTopicProcessor {
     async fn process(&self, request: &[u8]) -> Result<Vec<u8>> {
-        let req: CreateTopicRequest = serde_json::from_slice(request)
-            .map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
+        let req: CreateTopicRequest =
+            serde_json::from_slice(request).map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
 
         let response = self.process_request(req).await?;
 
-        serde_json::to_vec(&response)
-            .map_err(|e| ControllerError::SerializationError(e.to_string()))
+        serde_json::to_vec(&response).map_err(|e| ControllerError::SerializationError(e.to_string()))
     }
 }
 
@@ -134,10 +130,7 @@ impl UpdateTopicProcessor {
     }
 
     /// Process update topic request
-    pub async fn process_request(
-        &self,
-        request: UpdateTopicRequest,
-    ) -> Result<UpdateTopicResponse> {
+    pub async fn process_request(&self, request: UpdateTopicRequest) -> Result<UpdateTopicResponse> {
         info!("Processing update topic request: {}", request.topic_name);
 
         // Check if we are the leader
@@ -184,13 +177,12 @@ impl UpdateTopicProcessor {
 #[async_trait::async_trait]
 impl RequestProcessor for UpdateTopicProcessor {
     async fn process(&self, request: &[u8]) -> Result<Vec<u8>> {
-        let req: UpdateTopicRequest = serde_json::from_slice(request)
-            .map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
+        let req: UpdateTopicRequest =
+            serde_json::from_slice(request).map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
 
         let response = self.process_request(req).await?;
 
-        serde_json::to_vec(&response)
-            .map_err(|e| ControllerError::SerializationError(e.to_string()))
+        serde_json::to_vec(&response).map_err(|e| ControllerError::SerializationError(e.to_string()))
     }
 }
 
@@ -210,10 +202,7 @@ impl DeleteTopicProcessor {
     }
 
     /// Process delete topic request
-    pub async fn process_request(
-        &self,
-        request: DeleteTopicRequest,
-    ) -> Result<DeleteTopicResponse> {
+    pub async fn process_request(&self, request: DeleteTopicRequest) -> Result<DeleteTopicResponse> {
         info!("Processing delete topic request: {}", request.topic_name);
 
         // Check if we are the leader
@@ -226,12 +215,7 @@ impl DeleteTopicProcessor {
         }
 
         // Delete topic
-        match self
-            .metadata
-            .topic_manager()
-            .delete_topic(&request.topic_name)
-            .await
-        {
+        match self.metadata.topic_manager().delete_topic(&request.topic_name).await {
             Ok(()) => {
                 info!("Successfully deleted topic: {}", request.topic_name);
                 Ok(DeleteTopicResponse {
@@ -253,12 +237,11 @@ impl DeleteTopicProcessor {
 #[async_trait::async_trait]
 impl RequestProcessor for DeleteTopicProcessor {
     async fn process(&self, request: &[u8]) -> Result<Vec<u8>> {
-        let req: DeleteTopicRequest = serde_json::from_slice(request)
-            .map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
+        let req: DeleteTopicRequest =
+            serde_json::from_slice(request).map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
 
         let response = self.process_request(req).await?;
 
-        serde_json::to_vec(&response)
-            .map_err(|e| ControllerError::SerializationError(e.to_string()))
+        serde_json::to_vec(&response).map_err(|e| ControllerError::SerializationError(e.to_string()))
     }
 }

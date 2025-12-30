@@ -208,9 +208,9 @@ pub fn parse_request_header(
     }
     // Match on the result of the V2 header decoding
     match request_header_v2 {
-        Some(header) => {
-            Ok(SendMessageRequestHeaderV2::create_send_message_request_header_v1(&header))
-        }
+        Some(header) => Ok(SendMessageRequestHeaderV2::create_send_message_request_header_v1(
+            &header,
+        )),
         None => request.decode_command_custom_header::<SendMessageRequestHeader>(),
     }
 }
@@ -263,17 +263,12 @@ mod tests {
         };
         let map = header.to_map().unwrap();
         assert_eq!(
-            map.get(&CheetahString::from_static_str("producerGroup"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("producerGroup")).unwrap(),
             "test_producer_group"
         );
+        assert_eq!(map.get(&CheetahString::from_static_str("topic")).unwrap(), "test_topic");
         assert_eq!(
-            map.get(&CheetahString::from_static_str("topic")).unwrap(),
-            "test_topic"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("defaultTopic"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("defaultTopic")).unwrap(),
             "test_default_topic"
         );
         assert_eq!(
@@ -281,45 +276,22 @@ mod tests {
                 .unwrap(),
             "8"
         );
+        assert_eq!(map.get(&CheetahString::from_static_str("queueId")).unwrap(), "1");
+        assert_eq!(map.get(&CheetahString::from_static_str("sysFlag")).unwrap(), "0");
         assert_eq!(
-            map.get(&CheetahString::from_static_str("queueId")).unwrap(),
-            "1"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("sysFlag")).unwrap(),
-            "0"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("bornTimestamp"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("bornTimestamp")).unwrap(),
             "1622547800000"
         );
+        assert_eq!(map.get(&CheetahString::from_static_str("flag")).unwrap(), "0");
         assert_eq!(
-            map.get(&CheetahString::from_static_str("flag")).unwrap(),
-            "0"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("properties"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("properties")).unwrap(),
             "test_properties"
         );
+        assert_eq!(map.get(&CheetahString::from_static_str("reconsumeTimes")).unwrap(), "3");
+        assert_eq!(map.get(&CheetahString::from_static_str("unitMode")).unwrap(), "true");
+        assert_eq!(map.get(&CheetahString::from_static_str("batch")).unwrap(), "false");
         assert_eq!(
-            map.get(&CheetahString::from_static_str("reconsumeTimes"))
-                .unwrap(),
-            "3"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("unitMode"))
-                .unwrap(),
-            "true"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("batch")).unwrap(),
-            "false"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("maxReconsumeTimes"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("maxReconsumeTimes")).unwrap(),
             "5"
         );
     }

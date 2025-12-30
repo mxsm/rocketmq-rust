@@ -34,9 +34,7 @@ where
     MS: MessageStore + Send + Sync,
 {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self {
-            broker_runtime_inner,
-        }
+        Self { broker_runtime_inner }
     }
 }
 

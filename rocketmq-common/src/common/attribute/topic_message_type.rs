@@ -132,10 +132,7 @@ mod tests {
     #[test]
     fn test_parse_from_message_property_delay() {
         let mut message_property = HashMap::new();
-        message_property.insert(
-            MessageConst::PROPERTY_DELAY_TIME_LEVEL.to_string(),
-            "1".to_string(),
-        );
+        message_property.insert(MessageConst::PROPERTY_DELAY_TIME_LEVEL.to_string(), "1".to_string());
         assert_eq!(
             TopicMessageType::parse_from_message_property(&message_property),
             TopicMessageType::Delay
@@ -145,10 +142,7 @@ mod tests {
     #[test]
     fn test_parse_from_message_property_fifo() {
         let mut message_property = HashMap::new();
-        message_property.insert(
-            MessageConst::PROPERTY_SHARDING_KEY.to_string(),
-            "key".to_string(),
-        );
+        message_property.insert(MessageConst::PROPERTY_SHARDING_KEY.to_string(), "key".to_string());
         assert_eq!(
             TopicMessageType::parse_from_message_property(&message_property),
             TopicMessageType::Fifo

@@ -33,9 +33,7 @@ impl AttributeParser {
         }
 
         let mut attributes = HashMap::new();
-        let kvs: Vec<&str> = attributes_modification
-            .split(ATTR_ARRAY_SEPARATOR_COMMA)
-            .collect();
+        let kvs: Vec<&str> = attributes_modification.split(ATTR_ARRAY_SEPARATOR_COMMA).collect();
         for kv in kvs {
             let mut key = String::new();
             let mut value = String::new();

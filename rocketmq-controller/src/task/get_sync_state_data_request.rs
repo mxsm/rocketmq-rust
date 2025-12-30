@@ -30,10 +30,7 @@ pub struct GetSyncStateDataRequest {
 impl GetSyncStateDataRequest {
     pub fn new() -> Self {
         Self {
-            invoke_time: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as u64,
+            invoke_time: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
         }
     }
 
@@ -50,10 +47,6 @@ impl Default for GetSyncStateDataRequest {
 
 impl fmt::Display for GetSyncStateDataRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "GetSyncStateDataRequest{{invokeTime={}}}",
-            self.invoke_time
-        )
+        write!(f, "GetSyncStateDataRequest{{invokeTime={}}}", self.invoke_time)
     }
 }

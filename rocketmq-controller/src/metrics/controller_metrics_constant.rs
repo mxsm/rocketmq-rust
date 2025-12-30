@@ -191,15 +191,9 @@ mod tests {
 
     #[test]
     fn test_request_handle_status() {
-        assert_eq!(
-            RequestHandleStatus::Success.get_lower_case_name(),
-            "success"
-        );
+        assert_eq!(RequestHandleStatus::Success.get_lower_case_name(), "success");
         assert_eq!(RequestHandleStatus::Failed.get_lower_case_name(), "failed");
-        assert_eq!(
-            RequestHandleStatus::Timeout.get_lower_case_name(),
-            "timeout"
-        );
+        assert_eq!(RequestHandleStatus::Timeout.get_lower_case_name(), "timeout");
     }
 
     #[test]
@@ -209,18 +203,9 @@ mod tests {
 
     #[test]
     fn test_dledger_operation_status() {
-        assert_eq!(
-            DLedgerOperationStatus::Success.get_lower_case_name(),
-            "success"
-        );
-        assert_eq!(
-            DLedgerOperationStatus::Failed.get_lower_case_name(),
-            "failed"
-        );
-        assert_eq!(
-            DLedgerOperationStatus::Timeout.get_lower_case_name(),
-            "timeout"
-        );
+        assert_eq!(DLedgerOperationStatus::Success.get_lower_case_name(), "success");
+        assert_eq!(DLedgerOperationStatus::Failed.get_lower_case_name(), "failed");
+        assert_eq!(DLedgerOperationStatus::Timeout.get_lower_case_name(), "timeout");
     }
 
     #[test]

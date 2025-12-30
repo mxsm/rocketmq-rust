@@ -62,14 +62,12 @@ pub async fn main() -> RocketMQResult<()> {
 
 async fn switch_pop_consumer() -> RocketMQResult<()> {
     let mut mq_admin_ext = DefaultMQAdminExt::new();
-    mq_admin_ext.client_config_mut().namesrv_addr =
-        Some(CheetahString::from_static_str(DEFAULT_NAMESRVADDR));
+    mq_admin_ext.client_config_mut().namesrv_addr = Some(CheetahString::from_static_str(DEFAULT_NAMESRVADDR));
     MQAdminExt::start(&mut mq_admin_ext).await.unwrap();
-    let broker_datas =
-        MQAdminExt::examine_topic_route_info(&mq_admin_ext, CheetahString::from_static_str(TOPIC))
-            .await
-            .unwrap()
-            .unwrap();
+    let broker_datas = MQAdminExt::examine_topic_route_info(&mq_admin_ext, CheetahString::from_static_str(TOPIC))
+        .await
+        .unwrap()
+        .unwrap();
     for broker_data in broker_datas.broker_datas {
         let broker_addrs = broker_data
             .broker_addrs()

@@ -28,9 +28,7 @@ static ZSTD_COMPRESSOR: ZstdCompressor = ZstdCompressor;
 pub struct CompressorFactory;
 
 impl CompressorFactory {
-    pub fn get_compressor(
-        compressor_type: CompressionType,
-    ) -> &'static (dyn Compressor + Send + Sync) {
+    pub fn get_compressor(compressor_type: CompressionType) -> &'static (dyn Compressor + Send + Sync) {
         match compressor_type {
             CompressionType::LZ4 => &LZ4_COMPRESSOR,
             CompressionType::Zlib => &ZLIB_COMPRESSOR,

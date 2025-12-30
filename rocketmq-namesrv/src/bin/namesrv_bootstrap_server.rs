@@ -92,19 +92,12 @@ fn parse_config_file() -> Result<(NamesrvConfig, u32, String)> {
         NamesrvConfig::default()
     };
 
-    info!(
-        "Rocketmq name server(Rust) running on: {}:{}",
-        args.ip, args.port
-    );
+    info!("Rocketmq name server(Rust) running on: {}:{}", args.ip, args.port);
     Ok((namesrv_config, args.port, args.ip))
 }
 
 #[derive(Parser, Debug)]
-#[command(
-    author = "mxsm",
-    version = "0.1.0",
-    about = "RocketMQ Name server(Rust)"
-)]
+#[command(author = "mxsm", version = "0.1.0", about = "RocketMQ Name server(Rust)")]
 struct Args {
     /// rocketmq name server port
     #[arg(
@@ -118,21 +111,10 @@ struct Args {
     port: u32,
 
     /// rocketmq name server ip
-    #[arg(
-        short,
-        long,
-        value_name = "IP",
-        default_value = "0.0.0.0",
-        required = false
-    )]
+    #[arg(short, long, value_name = "IP", default_value = "0.0.0.0", required = false)]
     ip: String,
 
     /// Name server config properties file
-    #[arg(
-        short,
-        long,
-        value_name = "CONFIG FILE",
-        default_missing_value = "None"
-    )]
+    #[arg(short, long, value_name = "CONFIG FILE", default_missing_value = "None")]
     config_file: Option<PathBuf>,
 }

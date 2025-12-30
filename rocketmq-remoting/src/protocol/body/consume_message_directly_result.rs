@@ -49,8 +49,8 @@ impl Display for ConsumeMessageDirectlyResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "ConsumeMessageDirectlyResult [order={}, auto_commit={}, consume_result={:?}, \
-             remark={:?}, spent_time_mills={}]",
+            "ConsumeMessageDirectlyResult [order={}, auto_commit={}, consume_result={:?}, remark={:?}, \
+             spent_time_mills={}]",
             self.order, self.auto_commit, self.consume_result, self.remark, self.spent_time_mills
         )
     }
@@ -145,8 +145,7 @@ mod tests {
     fn consume_message_directly_result_new_initializes_correctly() {
         let consume_result = CMResult::default();
         let remark = CheetahString::from_static_str("test remark");
-        let result =
-            ConsumeMessageDirectlyResult::new(true, false, consume_result, remark.clone(), 12345);
+        let result = ConsumeMessageDirectlyResult::new(true, false, consume_result, remark.clone(), 12345);
         assert!(result.order());
         assert!(!result.auto_commit());
         assert_eq!(result.consume_result().unwrap(), &consume_result);
@@ -176,12 +175,11 @@ mod tests {
     fn consume_message_directly_result_display_formats_correctly() {
         let consume_result = CMResult::default();
         let remark = CheetahString::from_static_str("test remark");
-        let result =
-            ConsumeMessageDirectlyResult::new(true, false, consume_result, remark.clone(), 12345);
+        let result = ConsumeMessageDirectlyResult::new(true, false, consume_result, remark.clone(), 12345);
         let display = format!("{}", result);
         let expected = format!(
-            "ConsumeMessageDirectlyResult [order=true, auto_commit=false, consume_result={:?}, \
-             remark={:?}, spent_time_mills=12345]",
+            "ConsumeMessageDirectlyResult [order=true, auto_commit=false, consume_result={:?}, remark={:?}, \
+             spent_time_mills=12345]",
             Some(consume_result),
             Some(remark)
         );

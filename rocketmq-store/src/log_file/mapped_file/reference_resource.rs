@@ -85,14 +85,12 @@ pub trait ReferenceResource: Send + Sync {
                 .store(get_current_millis(), Ordering::Release);
             self.release();
         } else if self.get_ref_count() > 0 {
-            let elapsed = get_current_millis()
-                .saturating_sub(self.base().first_shutdown_timestamp.load(Ordering::Acquire));
+            let elapsed =
+                get_current_millis().saturating_sub(self.base().first_shutdown_timestamp.load(Ordering::Acquire));
 
             if elapsed >= interval_forcibly {
                 let current_count = self.get_ref_count();
-                self.base()
-                    .ref_count
-                    .store(-1000 - current_count, Ordering::Release);
+                self.base().ref_count.store(-1000 - current_count, Ordering::Release);
                 self.release();
             }
         }
@@ -117,9 +115,7 @@ pub trait ReferenceResource: Send + Sync {
         // Relaxed is fine here as we're protected by the lock
         if !self.base().cleanup_over.load(Ordering::Relaxed) {
             let cleanup_result = self.cleanup(value);
-            self.base()
-                .cleanup_over
-                .store(cleanup_result, Ordering::Release);
+            self.base().cleanup_over.store(cleanup_result, Ordering::Release);
         }
     }
 
@@ -151,7 +147,6 @@ pub trait ReferenceResource: Send + Sync {
     /// * `false` otherwise.
     #[inline]
     fn is_cleanup_over(&self) -> bool {
-        self.base().cleanup_over.load(Ordering::Relaxed)
-            && self.base().ref_count.load(Ordering::Relaxed) <= 0
+        self.base().cleanup_over.load(Ordering::Relaxed) && self.base().ref_count.load(Ordering::Relaxed) <= 0
     }
 }

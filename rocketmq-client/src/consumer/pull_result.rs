@@ -80,8 +80,7 @@ impl std::fmt::Display for PullResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "PullResult [pull_status: {:?}, next_begin_offset: {}, min_offset: {}, max_offset: \
-             {}, msg_found_list: {}]",
+            "PullResult [pull_status: {:?}, next_begin_offset: {}, min_offset: {}, max_offset: {}, msg_found_list: {}]",
             self.pull_status,
             self.next_begin_offset,
             self.min_offset,

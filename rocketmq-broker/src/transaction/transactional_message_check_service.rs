@@ -45,10 +45,7 @@ impl<MS: MessageStore> ServiceTask for TransactionalMessageCheckServiceInner<MS>
         info!("Starting transactional check service");
 
         while !context.is_stopped() {
-            let transaction_check_interval = self
-                .broker_runtime_inner
-                .broker_config()
-                .transaction_check_interval;
+            let transaction_check_interval = self.broker_runtime_inner.broker_config().transaction_check_interval;
             context
                 .wait_for_running(Duration::from_millis(transaction_check_interval))
                 .await;
@@ -59,14 +56,8 @@ impl<MS: MessageStore> ServiceTask for TransactionalMessageCheckServiceInner<MS>
 
     #[inline]
     async fn on_wait_end(&self) {
-        let transaction_timeout = self
-            .broker_runtime_inner
-            .broker_config()
-            .transaction_timeout;
-        let transaction_check_max = self
-            .broker_runtime_inner
-            .broker_config()
-            .transaction_check_max;
+        let transaction_timeout = self.broker_runtime_inner.broker_config().transaction_timeout;
+        let transaction_check_max = self.broker_runtime_inner.broker_config().transaction_check_max;
         let begin = Instant::now();
         info!(
             "Transactional check service is running, waiting for {} ms",
@@ -93,9 +84,7 @@ impl<MS: MessageStore> ServiceTask for TransactionalMessageCheckServiceInner<MS>
 
 impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        let task_impl = ServiceManager::new(TransactionalMessageCheckServiceInner {
-            broker_runtime_inner,
-        });
+        let task_impl = ServiceManager::new(TransactionalMessageCheckServiceInner { broker_runtime_inner });
         TransactionalMessageCheckService { task_impl }
     }
 }
@@ -110,9 +99,6 @@ impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
     }
 
     pub async fn shutdown_interrupt(&mut self, interrupt: bool) {
-        self.task_impl
-            .shutdown_with_interrupt(interrupt)
-            .await
-            .unwrap();
+        self.task_impl.shutdown_with_interrupt(interrupt).await.unwrap();
     }
 }

@@ -30,12 +30,7 @@ pub struct ClientChannelInfo {
 }
 
 impl ClientChannelInfo {
-    pub fn new(
-        channel: Channel,
-        client_id: CheetahString,
-        language: LanguageCode,
-        version: i32,
-    ) -> Self {
+    pub fn new(channel: Channel, client_id: CheetahString, language: LanguageCode, version: i32) -> Self {
         Self {
             channel,
             client_id,

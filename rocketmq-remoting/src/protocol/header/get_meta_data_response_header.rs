@@ -46,16 +46,12 @@ mod tests {
             controller_leader_id: Some(CheetahString::from_static_str("1")),
             controller_leader_address: Some(CheetahString::from_static_str("192.168.1.1:9876")),
             is_leader: Some(true),
-            peers: Some(CheetahString::from_static_str(
-                "192.168.1.1:9876,192.168.1.2:9876",
-            )),
+            peers: Some(CheetahString::from_static_str("192.168.1.1:9876,192.168.1.2:9876")),
         };
         let map = header.to_map().unwrap();
         assert_eq!(
-            map.get(&CheetahString::from_static_str(
-                GetMetaDataResponseHeader::GROUP
-            ))
-            .unwrap(),
+            map.get(&CheetahString::from_static_str(GetMetaDataResponseHeader::GROUP))
+                .unwrap(),
             "test_group"
         );
         assert_eq!(
@@ -73,17 +69,13 @@ mod tests {
             "192.168.1.1:9876"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str(
-                GetMetaDataResponseHeader::IS_LEADER
-            ))
-            .unwrap(),
+            map.get(&CheetahString::from_static_str(GetMetaDataResponseHeader::IS_LEADER))
+                .unwrap(),
             "true"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str(
-                GetMetaDataResponseHeader::PEERS
-            ))
-            .unwrap(),
+            map.get(&CheetahString::from_static_str(GetMetaDataResponseHeader::PEERS))
+                .unwrap(),
             "192.168.1.1:9876,192.168.1.2:9876"
         );
     }
@@ -112,14 +104,8 @@ mod tests {
             CheetahString::from("192.168.1.1:9876,192.168.1.2:9876"),
         );
         let header = <GetMetaDataResponseHeader as FromMap>::from(&map).unwrap();
-        assert_eq!(
-            header.group,
-            Some(CheetahString::from_static_str("test_group"))
-        );
-        assert_eq!(
-            header.controller_leader_id,
-            Some(CheetahString::from_static_str("1"))
-        );
+        assert_eq!(header.group, Some(CheetahString::from_static_str("test_group")));
+        assert_eq!(header.controller_leader_id, Some(CheetahString::from_static_str("1")));
         assert_eq!(
             header.controller_leader_address,
             Some(CheetahString::from_static_str("192.168.1.1:9876"))
@@ -127,9 +113,7 @@ mod tests {
         assert_eq!(header.is_leader, Some(true));
         assert_eq!(
             header.peers,
-            Some(CheetahString::from_static_str(
-                "192.168.1.1:9876,192.168.1.2:9876"
-            ))
+            Some(CheetahString::from_static_str("192.168.1.1:9876,192.168.1.2:9876"))
         );
     }
 

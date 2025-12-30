@@ -74,11 +74,10 @@ impl Display for DispatchRequest {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "DispatchRequest {{ topic: {}, queue_id: {}, commit_log_offset: {}, msg_size: {}, \
-             tags_code: {}, store_timestamp: {}, consume_queue_offset: {}, keys: {}, success: {}, \
-             uniq_key: {:?}, sys_flag: {}, prepared_transaction_offset: {}, properties_map: {:?}, \
-             bit_map: {:?}, buffer_size: {}, msg_base_offset: {}, batch_size: {}, \
-             next_reput_from_offset: {}, offset_id: {:?} }}",
+            "DispatchRequest {{ topic: {}, queue_id: {}, commit_log_offset: {}, msg_size: {}, tags_code: {}, \
+             store_timestamp: {}, consume_queue_offset: {}, keys: {}, success: {}, uniq_key: {:?}, sys_flag: {}, \
+             prepared_transaction_offset: {}, properties_map: {:?}, bit_map: {:?}, buffer_size: {}, msg_base_offset: \
+             {}, batch_size: {}, next_reput_from_offset: {}, offset_id: {:?} }}",
             self.topic,
             self.queue_id,
             self.commit_log_offset,

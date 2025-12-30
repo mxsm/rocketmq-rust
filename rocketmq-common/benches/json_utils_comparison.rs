@@ -109,40 +109,28 @@ fn create_medium_data() -> TopicRouteData {
         broker_datas: vec![
             BrokerData {
                 broker_name: "broker-a".to_string(),
-                broker_addrs: vec![
-                    "192.168.1.100:10911".to_string(),
-                    "192.168.1.101:10911".to_string(),
-                ],
+                broker_addrs: vec!["192.168.1.100:10911".to_string(), "192.168.1.101:10911".to_string()],
                 cluster: "DefaultCluster".to_string(),
                 enable_acting_master: false,
                 zone_name: "zone-1".to_string(),
             },
             BrokerData {
                 broker_name: "broker-b".to_string(),
-                broker_addrs: vec![
-                    "192.168.1.102:10911".to_string(),
-                    "192.168.1.103:10911".to_string(),
-                ],
+                broker_addrs: vec!["192.168.1.102:10911".to_string(), "192.168.1.103:10911".to_string()],
                 cluster: "DefaultCluster".to_string(),
                 enable_acting_master: false,
                 zone_name: "zone-2".to_string(),
             },
             BrokerData {
                 broker_name: "broker-c".to_string(),
-                broker_addrs: vec![
-                    "192.168.1.104:10911".to_string(),
-                    "192.168.1.105:10911".to_string(),
-                ],
+                broker_addrs: vec!["192.168.1.104:10911".to_string(), "192.168.1.105:10911".to_string()],
                 cluster: "DefaultCluster".to_string(),
                 enable_acting_master: false,
                 zone_name: "zone-3".to_string(),
             },
             BrokerData {
                 broker_name: "broker-d".to_string(),
-                broker_addrs: vec![
-                    "192.168.1.106:10911".to_string(),
-                    "192.168.1.107:10911".to_string(),
-                ],
+                broker_addrs: vec!["192.168.1.106:10911".to_string(), "192.168.1.107:10911".to_string()],
                 cluster: "DefaultCluster".to_string(),
                 enable_acting_master: false,
                 zone_name: "zone-4".to_string(),

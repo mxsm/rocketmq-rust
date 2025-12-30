@@ -108,10 +108,7 @@ impl DefaultTopAddressing {
                         error!("fetch nameserver address is null");
                     }
                 } else {
-                    error!(
-                        "fetch nameserver address failed. statusCode={}",
-                        response.code
-                    );
+                    error!("fetch nameserver address failed. statusCode={}", response.code);
                 }
             }
             Err(e) => {

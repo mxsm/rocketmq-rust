@@ -131,8 +131,8 @@ impl Display for ConsumerFilterData {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "ConsumerFilterData {{ group: {}, topic: {}, expression: {:?}, type: {:?}, \
-             has_compiled: {}, born: {}, dead: {}, has_bloom: {}, client_ver: {} }}",
+            "ConsumerFilterData {{ group: {}, topic: {}, expression: {:?}, type: {:?}, has_compiled: {}, born: {}, \
+             dead: {}, has_bloom: {}, client_ver: {} }}",
             self.consumer_group,
             self.topic,
             self.expression,

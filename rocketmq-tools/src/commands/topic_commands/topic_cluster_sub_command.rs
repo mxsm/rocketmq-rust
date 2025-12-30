@@ -51,10 +51,7 @@ impl TopicClusterSubCommand {
         admin_ext
     }
 
-    async fn get_topic_clusters(
-        &self,
-        admin_ext: &mut DefaultMQAdminExt,
-    ) -> RocketMQResult<HashSet<CheetahString>> {
+    async fn get_topic_clusters(&self, admin_ext: &mut DefaultMQAdminExt) -> RocketMQResult<HashSet<CheetahString>> {
         admin_ext
             .get_topic_cluster_list(self.topic.trim().to_string())
             .await
@@ -73,16 +70,10 @@ impl TopicClusterSubCommand {
     }
 }
 impl CommandExecute for TopicClusterSubCommand {
-    async fn execute(
-        &self,
-        _rpc_hook: Option<Arc<dyn RPCHook>>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> rocketmq_error::RocketMQResult<()> {
         let mut admin_ext = self.init_admin_ext();
         MQAdminExt::start(&mut admin_ext).await.map_err(|e| {
-            RocketMQError::Internal(format!(
-                "TopicClusterSubCommand: Failed to start MQAdminExt: {}",
-                e
-            ))
+            RocketMQError::Internal(format!("TopicClusterSubCommand: Failed to start MQAdminExt: {}", e))
         })?;
         let operation_result = async {
             let clusters = self.get_topic_clusters(&mut admin_ext).await?;
@@ -112,23 +103,14 @@ mod tests {
 
     #[test]
     fn topic_cluster_sub_command_with_namesrv() {
-        let args = vec![
-            "topicClusterList",
-            "-t",
-            "test-topic",
-            "-n",
-            "127.0.0.1:9876",
-        ];
+        let args = vec!["topicClusterList", "-t", "test-topic", "-n", "127.0.0.1:9876"];
 
         let cmd = TopicClusterSubCommand::try_parse_from(args);
         assert!(cmd.is_ok());
 
         let cmd = cmd.unwrap();
         assert_eq!(cmd.topic, "test-topic");
-        assert_eq!(
-            cmd.common_args.namesrv_addr,
-            Some("127.0.0.1:9876".to_string())
-        );
+        assert_eq!(cmd.common_args.namesrv_addr, Some("127.0.0.1:9876".to_string()));
     }
 
     #[test]

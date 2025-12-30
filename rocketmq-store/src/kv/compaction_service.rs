@@ -22,10 +22,7 @@ pub struct CompactionService {}
 
 impl CompactionService {
     pub fn load(&mut self, exit_ok: bool) -> bool {
-        error!(
-            "[unimplemented]load compaction service, exit ok: {}",
-            exit_ok
-        );
+        error!("[unimplemented]load compaction service, exit ok: {}", exit_ok);
         true
     }
 

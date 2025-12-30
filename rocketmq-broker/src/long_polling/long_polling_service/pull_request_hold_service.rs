@@ -82,16 +82,10 @@ where
                     }
                 }
                 let instant = Instant::now();
-                this.pull_request_hold_service()
-                    .as_ref()
-                    .unwrap()
-                    .check_hold_request();
+                this.pull_request_hold_service().as_ref().unwrap().check_hold_request();
                 let elapsed = instant.elapsed().as_millis();
                 if elapsed > 5000 {
-                    warn!(
-                        "PullRequestHoldService: check hold pull request cost {}ms",
-                        elapsed
-                    );
+                    warn!("PullRequestHoldService: check hold pull request cost {}ms", elapsed);
                 }
             }
         });
@@ -167,20 +161,17 @@ where
                     }
 
                     if newest_offset > request.pull_from_this_offset() {
-                        let match_by_consume_queue =
-                            request.message_filter().is_matched_by_consume_queue(
-                                tags_code,
-                                Some(&CqExtUnit::new(
-                                    tags_code.unwrap_or(0),
-                                    msg_store_time,
-                                    filter_bit_map.clone(),
-                                )),
-                            );
+                        let match_by_consume_queue = request.message_filter().is_matched_by_consume_queue(
+                            tags_code,
+                            Some(&CqExtUnit::new(
+                                tags_code.unwrap_or(0),
+                                msg_store_time,
+                                filter_bit_map.clone(),
+                            )),
+                        );
                         let mut match_by_commit_log = match_by_consume_queue;
                         if match_by_consume_queue && properties.is_some() {
-                            match_by_commit_log = request
-                                .message_filter()
-                                .is_matched_by_commit_log(None, properties);
+                            match_by_commit_log = request.message_filter().is_matched_by_commit_log(None, properties);
                         }
 
                         if match_by_commit_log {
@@ -195,9 +186,7 @@ where
                         }
                     }
 
-                    if get_current_millis()
-                        >= (request.suspend_timestamp() + request.timeout_millis())
-                    {
+                    if get_current_millis() >= (request.suspend_timestamp() + request.timeout_millis()) {
                         let pull_message_this = self.pull_message_processor.clone();
                         self.pull_message_processor.execute_request_when_wakeup(
                             pull_message_this,

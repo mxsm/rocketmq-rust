@@ -31,10 +31,7 @@ pub struct AlterSyncStateSetEvent {
 }
 
 impl AlterSyncStateSetEvent {
-    pub fn new(
-        broker_name: impl Into<CheetahString>,
-        new_sync_state_set: impl IntoIterator<Item = u64>,
-    ) -> Self {
+    pub fn new(broker_name: impl Into<CheetahString>, new_sync_state_set: impl IntoIterator<Item = u64>) -> Self {
         Self {
             broker_name: broker_name.into(),
             new_sync_state_set: new_sync_state_set.into_iter().collect(),
@@ -101,9 +98,6 @@ mod tests {
         let deserialized: AlterSyncStateSetEvent = serde_json::from_str(&json).unwrap();
 
         assert_eq!(deserialized.broker_name(), event.broker_name());
-        assert_eq!(
-            deserialized.new_sync_state_set(),
-            event.new_sync_state_set()
-        );
+        assert_eq!(deserialized.new_sync_state_set(), event.new_sync_state_set());
     }
 }

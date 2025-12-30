@@ -371,9 +371,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         );
 
         // Update cached selection
-        self.namesrv_addr_choosed
-            .mut_from_ref()
-            .replace(selected_addr.clone());
+        self.namesrv_addr_choosed.mut_from_ref().replace(selected_addr.clone());
 
         //Create connection to selected nameserver ===
         self.create_client(
@@ -422,10 +420,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
                 return Some(client); // Return healthy cached client
             }
             // Client unhealthy - will create new connection
-            debug!(
-                "Cached client for {} is unhealthy, reconnecting...",
-                target_addr
-            );
+            debug!("Cached client for {} is unhealthy, reconnecting...", target_addr);
         }
 
         // Slow path: Create new connection
@@ -509,10 +504,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
 
         // Check if request allowed (CLOSED or HALF_OPEN)
         if !breaker.allow_request() {
-            warn!(
-                "Circuit breaker OPEN for {}, rejecting connection attempt",
-                addr
-            );
+            warn!("Circuit breaker OPEN for {}, rejecting connection attempt", addr);
             return None;
         }
 
@@ -534,11 +526,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
                 // Insert into connection pool (if enabled) ===
                 if let Some(ref pool) = self.connection_pool {
                     if pool.insert(addr.clone(), new_client.clone()) {
-                        info!(
-                            "Added connection to pool: {} (pool size: {})",
-                            addr,
-                            pool.stats().total
-                        );
+                        info!("Added connection to pool: {} (pool size: {})", addr, pool.stats().total);
                     } else {
                         warn!("Connection pool at capacity, falling back to DashMap");
                     }
@@ -698,13 +686,8 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             .collect();
 
         for stale_addr in stale_addrs {
-            warn!(
-                "Removing stale nameserver from available set: {}",
-                stale_addr
-            );
-            self.available_namesrv_addr_set
-                .mut_from_ref()
-                .remove(&stale_addr);
+            warn!("Removing stale nameserver from available set: {}", stale_addr);
+            self.available_namesrv_addr_set.mut_from_ref().remove(&stale_addr);
         }
 
         // Parallel probe all configured nameservers ===
@@ -738,11 +721,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
                 }
             } else {
                 // Connection failed - mark as unavailable
-                if self
-                    .available_namesrv_addr_set
-                    .mut_from_ref()
-                    .remove(&namesrv_addr)
-                {
+                if self.available_namesrv_addr_set.mut_from_ref().remove(&namesrv_addr) {
                     warn!("Nameserver {} is now unavailable", namesrv_addr);
                 }
             }
@@ -761,16 +740,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for Rocketmq
     async fn start(&self, this: WeakArcMut<Self>) {
         if let Some(client) = this.upgrade() {
             let connect_timeout_millis = self.tokio_client_config.connect_timeout_millis as u64;
-            self.client_runtime
-                .as_ref()
-                .unwrap()
-                .get_handle()
-                .spawn(async move {
-                    loop {
-                        client.scan_available_name_srv().await;
-                        time::sleep(Duration::from_millis(connect_timeout_millis)).await;
-                    }
-                });
+            self.client_runtime.as_ref().unwrap().get_handle().spawn(async move {
+                loop {
+                    client.scan_available_name_srv().await;
+                    time::sleep(Duration::from_millis(connect_timeout_millis)).await;
+                }
+            });
         }
     }
 
@@ -842,11 +817,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
     }
 
     fn get_available_name_srv_list(&self) -> Vec<CheetahString> {
-        self.available_namesrv_addr_set
-            .as_ref()
-            .clone()
-            .into_iter()
-            .collect()
+        self.available_namesrv_addr_set.as_ref().clone().into_iter().collect()
     }
 
     /// Send request and wait for response with timeout.
@@ -908,9 +879,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         let start = time::Instant::now();
 
         // Determine target address (for metrics recording)
-        let target_addr = addr
-            .cloned()
-            .or_else(|| self.namesrv_addr_choosed.as_ref().clone());
+        let target_addr = addr.cloned().or_else(|| self.namesrv_addr_choosed.as_ref().clone());
 
         // === Get client connection ===
         let mut client = self.get_and_create_client(addr).await.ok_or_else(|| {
@@ -922,10 +891,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                 self.latency_tracker.record_error(addr);
             }
 
-            rocketmq_error::RocketMQError::network_connection_failed(
-                target.to_string(),
-                "Failed to connect",
-            )
+            rocketmq_error::RocketMQError::network_connection_failed(target.to_string(), "Failed to connect")
         })?;
 
         // === Send request with timeout ===
@@ -1004,37 +970,28 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         }
     }
 
-    async fn invoke_request_oneway(
-        &self,
-        addr: &CheetahString,
-        request: RemotingCommand,
-        timeout_millis: u64,
-    ) {
+    async fn invoke_request_oneway(&self, addr: &CheetahString, request: RemotingCommand, timeout_millis: u64) {
         let client = self.get_and_create_client(Some(addr)).await;
         match client {
             None => {
                 error!("get client failed");
             }
             Some(mut client) => {
-                self.client_runtime
-                    .as_ref()
-                    .unwrap()
-                    .get_handle()
-                    .spawn(async move {
-                        match time::timeout(Duration::from_millis(timeout_millis), async move {
-                            let mut request = request;
-                            request.mark_oneway_rpc_ref();
-                            client.send(request).await
-                        })
-                        .await
-                        {
-                            Ok(_) => Ok::<(), rocketmq_error::RocketMQError>(()),
-                            Err(_) => Err(rocketmq_error::RocketMQError::Timeout {
-                                operation: "send_oneway",
-                                timeout_ms: timeout_millis,
-                            }),
-                        }
-                    });
+                self.client_runtime.as_ref().unwrap().get_handle().spawn(async move {
+                    match time::timeout(Duration::from_millis(timeout_millis), async move {
+                        let mut request = request;
+                        request.mark_oneway_rpc_ref();
+                        client.send(request).await
+                    })
+                    .await
+                    {
+                        Ok(_) => Ok::<(), rocketmq_error::RocketMQError>(()),
+                        Err(_) => Err(rocketmq_error::RocketMQError::Timeout {
+                            operation: "send_oneway",
+                            timeout_ms: timeout_millis,
+                        }),
+                    }
+                });
             }
         }
     }

@@ -61,10 +61,8 @@ mod tests {
             "test_address"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str(
-                ElectMasterResponseHeader::MASTER_EPOCH
-            ))
-            .unwrap(),
+            map.get(&CheetahString::from_static_str(ElectMasterResponseHeader::MASTER_EPOCH))
+                .unwrap(),
             "2"
         );
         assert_eq!(

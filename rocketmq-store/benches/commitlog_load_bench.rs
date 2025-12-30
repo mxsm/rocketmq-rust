@@ -52,11 +52,7 @@ use rocketmq_store::log_file::mapped_file::MappedFile;
 use tempfile::TempDir;
 
 /// Create a temporary directory with N commit log files of given size
-fn create_test_commitlog_files(
-    dir: &TempDir,
-    num_files: usize,
-    file_size: u64,
-) -> Vec<std::path::PathBuf> {
+fn create_test_commitlog_files(dir: &TempDir, num_files: usize, file_size: u64) -> Vec<std::path::PathBuf> {
     let mut paths = Vec::with_capacity(num_files);
 
     for i in 0..num_files {
@@ -97,11 +93,8 @@ fn bench_sequential_load(c: &mut Criterion) {
                 || {
                     let temp_dir = TempDir::new().unwrap();
                     create_test_commitlog_files(&temp_dir, n, file_size as u64);
-                    let queue = MappedFileQueue::new(
-                        temp_dir.path().to_string_lossy().to_string(),
-                        file_size as u64,
-                        None,
-                    );
+                    let queue =
+                        MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), file_size as u64, None);
                     (temp_dir, queue)
                 },
                 |(temp_dir, mut queue)| {
@@ -140,11 +133,8 @@ fn bench_optimized_load(c: &mut Criterion) {
                 || {
                     let temp_dir = TempDir::new().unwrap();
                     create_test_commitlog_files(&temp_dir, n, file_size as u64);
-                    let queue = MappedFileQueue::new(
-                        temp_dir.path().to_string_lossy().to_string(),
-                        file_size as u64,
-                        None,
-                    );
+                    let queue =
+                        MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), file_size as u64, None);
                     (temp_dir, queue)
                 },
                 |(temp_dir, mut queue)| {
@@ -178,11 +168,7 @@ fn bench_load_comparison(c: &mut Criterion) {
             || {
                 let temp_dir = TempDir::new().unwrap();
                 create_test_commitlog_files(&temp_dir, num_files, file_size);
-                let queue = MappedFileQueue::new(
-                    temp_dir.path().to_string_lossy().to_string(),
-                    file_size,
-                    None,
-                );
+                let queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), file_size, None);
                 (temp_dir, queue)
             },
             |(temp_dir, mut queue)| {
@@ -200,11 +186,7 @@ fn bench_load_comparison(c: &mut Criterion) {
             || {
                 let temp_dir = TempDir::new().unwrap();
                 create_test_commitlog_files(&temp_dir, num_files, file_size);
-                let queue = MappedFileQueue::new(
-                    temp_dir.path().to_string_lossy().to_string(),
-                    file_size,
-                    None,
-                );
+                let queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), file_size, None);
                 (temp_dir, queue)
             },
             |(temp_dir, mut queue)| {
@@ -231,11 +213,7 @@ fn bench_post_load_access(c: &mut Criterion) {
     let temp_dir = TempDir::new().unwrap();
     create_test_commitlog_files(&temp_dir, num_files, file_size);
 
-    let mut queue = MappedFileQueue::new(
-        temp_dir.path().to_string_lossy().to_string(),
-        file_size,
-        None,
-    );
+    let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), file_size, None);
     queue.load();
     let files = queue.get_mapped_files();
     let files_guard = files.load();

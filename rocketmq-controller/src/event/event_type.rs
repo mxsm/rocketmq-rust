@@ -103,17 +103,11 @@ mod tests {
 
     #[test]
     fn event_type_display() {
-        assert_eq!(
-            format!("{}", EventType::AlterSyncStateSet),
-            "AlterSyncStateSet"
-        );
+        assert_eq!(format!("{}", EventType::AlterSyncStateSet), "AlterSyncStateSet");
         assert_eq!(format!("{}", EventType::ApplyBrokerId), "ApplyBrokerId");
         assert_eq!(format!("{}", EventType::ElectMaster), "ElectMaster");
         assert_eq!(format!("{}", EventType::ReadEvent), "ReadEvent");
         assert_eq!(format!("{}", EventType::CleanBrokerData), "CleanBrokerData");
-        assert_eq!(
-            format!("{}", EventType::UpdateBrokerAddress),
-            "UpdateBrokerAddress"
-        );
+        assert_eq!(format!("{}", EventType::UpdateBrokerAddress), "UpdateBrokerAddress");
     }
 }

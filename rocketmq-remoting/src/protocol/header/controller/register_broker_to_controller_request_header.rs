@@ -62,28 +62,20 @@ mod tests {
         };
         let map = header.to_map().unwrap();
         assert_eq!(
-            map.get(&CheetahString::from_static_str("clusterName"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("clusterName")).unwrap(),
             "test_cluster"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("brokerName"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("brokerName")).unwrap(),
             "test_broker"
         );
+        assert_eq!(map.get(&CheetahString::from_static_str("brokerId")).unwrap(), "123");
         assert_eq!(
-            map.get(&CheetahString::from_static_str("brokerId"))
-                .unwrap(),
-            "123"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("brokerAddress"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("brokerAddress")).unwrap(),
             "127.0.0.1:10911"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("invokeTime"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("invokeTime")).unwrap(),
             "1234567890"
         );
     }
@@ -117,10 +109,7 @@ mod tests {
             header.cluster_name,
             Some(CheetahString::from_static_str("test_cluster"))
         );
-        assert_eq!(
-            header.broker_name,
-            Some(CheetahString::from_static_str("test_broker"))
-        );
+        assert_eq!(header.broker_name, Some(CheetahString::from_static_str("test_broker")));
         assert_eq!(header.broker_id, Some(123));
         assert_eq!(
             header.broker_address,

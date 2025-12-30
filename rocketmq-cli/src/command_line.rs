@@ -50,8 +50,7 @@ pub enum Commands {
             long,
             value_name = "FROM",
             default_missing_value = "None",
-            help = "The number of data started to be read, default to read from the beginning. \
-                    start from 0"
+            help = "The number of data started to be read, default to read from the beginning. start from 0"
         )]
         from: Option<u32>,
 
@@ -60,8 +59,7 @@ pub enum Commands {
             long,
             value_name = "TO",
             default_missing_value = "None",
-            help = "The position of the data for ending the reading, defaults to reading until \
-                    the end of the file."
+            help = "The position of the data for ending the reading, defaults to reading until the end of the file."
         )]
         to: Option<u32>,
     },

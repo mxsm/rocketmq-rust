@@ -93,15 +93,9 @@ mod tests {
     #[test]
     fn topic_route_data_with_values() {
         let mut filter_server_table = HashMap::new();
-        filter_server_table.insert(
-            CheetahString::from("key"),
-            vec![CheetahString::from("value")],
-        );
+        filter_server_table.insert(CheetahString::from("key"), vec![CheetahString::from("value")]);
         let mut topic_queue_mapping_by_broker = HashMap::new();
-        topic_queue_mapping_by_broker.insert(
-            CheetahString::from("broker"),
-            TopicQueueMappingInfo::default(),
-        );
+        topic_queue_mapping_by_broker.insert(CheetahString::from("broker"), TopicQueueMappingInfo::default());
         let topic_route_data = TopicRouteData {
             order_topic_conf: Some(CheetahString::from("conf")),
             queue_datas: vec![QueueData::default()],
@@ -109,10 +103,7 @@ mod tests {
             filter_server_table,
             topic_queue_mapping_by_broker: Some(topic_queue_mapping_by_broker),
         };
-        assert_eq!(
-            topic_route_data.order_topic_conf,
-            Some(CheetahString::from("conf"))
-        );
+        assert_eq!(topic_route_data.order_topic_conf, Some(CheetahString::from("conf")));
         assert_eq!(topic_route_data.queue_datas.len(), 1);
         assert_eq!(topic_route_data.broker_datas.len(), 1);
         assert_eq!(topic_route_data.filter_server_table.len(), 1);
@@ -122,15 +113,9 @@ mod tests {
     #[test]
     fn serialize_topic_route_data() {
         let mut filter_server_table = HashMap::new();
-        filter_server_table.insert(
-            CheetahString::from("key"),
-            vec![CheetahString::from("value")],
-        );
+        filter_server_table.insert(CheetahString::from("key"), vec![CheetahString::from("value")]);
         let mut topic_queue_mapping_by_broker = HashMap::new();
-        topic_queue_mapping_by_broker.insert(
-            CheetahString::from("broker"),
-            TopicQueueMappingInfo::default(),
-        );
+        topic_queue_mapping_by_broker.insert(CheetahString::from("broker"), TopicQueueMappingInfo::default());
         let topic_route_data = TopicRouteData {
             order_topic_conf: Some(CheetahString::from("conf")),
             queue_datas: vec![QueueData::default()],

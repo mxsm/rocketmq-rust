@@ -80,8 +80,7 @@ impl TaskContext {
 }
 
 /// Task execution function type
-pub type TaskFn =
-    dyn Fn(TaskContext) -> Pin<Box<dyn Future<Output = TaskResult> + Send>> + Send + Sync;
+pub type TaskFn = dyn Fn(TaskContext) -> Pin<Box<dyn Future<Output = TaskResult> + Send>> + Send + Sync;
 
 /// Schedulable task
 #[derive(Clone)]

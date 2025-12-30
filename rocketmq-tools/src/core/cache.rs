@@ -76,8 +76,7 @@ impl RocketMQCache {
 
     /// Get cached cluster info
     pub async fn get_cluster_info(&self) -> Option<ClusterInfo> {
-        let cache: tokio::sync::RwLockReadGuard<'_, Option<CacheEntry<ClusterInfo>>> =
-            self.cluster_info.read().await;
+        let cache: tokio::sync::RwLockReadGuard<'_, Option<CacheEntry<ClusterInfo>>> = self.cluster_info.read().await;
         cache.as_ref().and_then(|entry: &CacheEntry<ClusterInfo>| {
             if entry.is_expired() {
                 None
@@ -129,10 +128,8 @@ impl RocketMQCache {
             if let Some(entry) = cache.as_ref() {
                 if entry.is_expired() {
                     drop(cache);
-                    let mut write_cache: tokio::sync::RwLockWriteGuard<
-                        '_,
-                        Option<CacheEntry<ClusterInfo>>,
-                    > = self.cluster_info.write().await;
+                    let mut write_cache: tokio::sync::RwLockWriteGuard<'_, Option<CacheEntry<ClusterInfo>>> =
+                        self.cluster_info.write().await;
                     *write_cache = None;
                 }
             }

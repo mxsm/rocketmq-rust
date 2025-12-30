@@ -42,12 +42,8 @@ impl Display for NotifyBrokerRoleChangedRequestHeader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "(master_address={:?}, master_epoch={:?}, sync_state_set_epoch={:?}, \
-             master_broker_id={:?})",
-            self.master_address,
-            self.master_epoch,
-            self.sync_state_set_epoch,
-            self.master_broker_id
+            "(master_address={:?}, master_epoch={:?}, sync_state_set_epoch={:?}, master_broker_id={:?})",
+            self.master_address, self.master_epoch, self.sync_state_set_epoch, self.master_broker_id
         )
     }
 }

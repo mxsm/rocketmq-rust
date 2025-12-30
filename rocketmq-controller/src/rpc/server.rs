@@ -116,9 +116,7 @@ impl RpcServer {
                         // Spawn handler for this connection
                         let processor_manager = processor_manager.clone();
                         tokio::spawn(async move {
-                            if let Err(e) =
-                                Self::handle_connection(stream, addr, processor_manager).await
-                            {
+                            if let Err(e) = Self::handle_connection(stream, addr, processor_manager).await {
                                 error!("Error handling connection from {}: {}", addr, e);
                             }
                         });
@@ -175,10 +173,7 @@ impl RpcServer {
     }
 
     /// Process a single request
-    async fn process_request(
-        request: RpcRequest,
-        processor_manager: &Arc<ProcessorManager>,
-    ) -> RpcResponse {
+    async fn process_request(request: RpcRequest, processor_manager: &Arc<ProcessorManager>) -> RpcResponse {
         debug!(
             "Processing request: id={}, type={:?}",
             request.request_id, request.request_type

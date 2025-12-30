@@ -31,10 +31,7 @@ pub struct CleanBrokerDataEvent {
 }
 
 impl CleanBrokerDataEvent {
-    pub fn new(
-        broker_name: impl Into<CheetahString>,
-        broker_id_set_to_clean: Option<HashSet<u64>>,
-    ) -> Self {
+    pub fn new(broker_name: impl Into<CheetahString>, broker_id_set_to_clean: Option<HashSet<u64>>) -> Self {
         Self {
             broker_name: broker_name.into(),
             broker_id_set_to_clean,
@@ -106,9 +103,6 @@ mod tests {
         let deserialized: CleanBrokerDataEvent = serde_json::from_str(&json).unwrap();
 
         assert_eq!(deserialized.broker_name(), event.broker_name());
-        assert_eq!(
-            deserialized.broker_id_set_to_clean(),
-            event.broker_id_set_to_clean()
-        );
+        assert_eq!(deserialized.broker_id_set_to_clean(), event.broker_id_set_to_clean());
     }
 }

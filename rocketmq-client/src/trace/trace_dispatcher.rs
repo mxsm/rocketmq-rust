@@ -25,11 +25,7 @@ pub enum Type {
 }
 
 pub trait TraceDispatcher: Any {
-    fn start(
-        &self,
-        name_srv_addr: &str,
-        access_channel: AccessChannel,
-    ) -> rocketmq_error::RocketMQResult<()>;
+    fn start(&self, name_srv_addr: &str, access_channel: AccessChannel) -> rocketmq_error::RocketMQResult<()>;
     fn append(&self, ctx: &dyn std::any::Any) -> bool;
     fn flush(&self) -> rocketmq_error::RocketMQResult<()>;
     fn shutdown(&self);

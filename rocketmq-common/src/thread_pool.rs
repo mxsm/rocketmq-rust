@@ -201,12 +201,8 @@ impl ScheduledExecutorService {
         }
     }
 
-    pub fn schedule_at_fixed_rate<F>(
-        &self,
-        mut task: F,
-        initial_delay: Option<Duration>,
-        period: Duration,
-    ) where
+    pub fn schedule_at_fixed_rate<F>(&self, mut task: F, initial_delay: Option<Duration>, period: Duration)
+    where
         F: FnMut() + Send + 'static,
     {
         self.inner.spawn(async move {
@@ -225,8 +221,7 @@ impl ScheduledExecutorService {
                 let next_execution_time = current_execution_time + period;
 
                 // Wait until the next execution
-                let delay =
-                    next_execution_time.saturating_duration_since(tokio::time::Instant::now());
+                let delay = next_execution_time.saturating_duration_since(tokio::time::Instant::now());
                 tokio::time::sleep(delay).await;
             }
         });

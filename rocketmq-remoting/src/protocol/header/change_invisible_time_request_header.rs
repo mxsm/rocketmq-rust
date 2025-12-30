@@ -53,14 +53,9 @@ impl Display for ChangeInvisibleTimeRequestHeader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "ChangeInvisibleTimeRequestHeader {{ consumer_group: {}, topic: {}, queue_id: {}, \
-             extra_info: {}, offset: {}, invisible_time: {} }}",
-            self.consumer_group,
-            self.topic,
-            self.queue_id,
-            self.extra_info,
-            self.offset,
-            self.invisible_time
+            "ChangeInvisibleTimeRequestHeader {{ consumer_group: {}, topic: {}, queue_id: {}, extra_info: {}, offset: \
+             {}, invisible_time: {} }}",
+            self.consumer_group, self.topic, self.queue_id, self.extra_info, self.offset, self.invisible_time
         )
     }
 }
@@ -85,8 +80,8 @@ mod tests {
         };
         assert_eq!(
             format!("{}", header),
-            "ChangeInvisibleTimeRequestHeader { consumer_group: group1, topic: topic1, queue_id: \
-             1, extra_info: info, offset: 12345, invisible_time: 67890 }"
+            "ChangeInvisibleTimeRequestHeader { consumer_group: group1, topic: topic1, queue_id: 1, extra_info: info, \
+             offset: 12345, invisible_time: 67890 }"
         );
     }
 
@@ -106,8 +101,8 @@ mod tests {
         };
         assert_eq!(
             format!("{}", header),
-            "ChangeInvisibleTimeRequestHeader { consumer_group: group1, topic: topic1, queue_id: \
-             1, extra_info: info, offset: 12345, invisible_time: 67890 }"
+            "ChangeInvisibleTimeRequestHeader { consumer_group: group1, topic: topic1, queue_id: 1, extra_info: info, \
+             offset: 12345, invisible_time: 67890 }"
         );
     }
 

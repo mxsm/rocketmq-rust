@@ -61,8 +61,7 @@ mod query_message_request_header_tests {
         map.insert("beginTimestamp".into(), "1000".into());
         map.insert("endTimestamp".into(), "2000".into());
 
-        let header: QueryMessageRequestHeader =
-            <QueryMessageRequestHeader as FromMap>::from(&map).unwrap();
+        let header: QueryMessageRequestHeader = <QueryMessageRequestHeader as FromMap>::from(&map).unwrap();
 
         assert_eq!(header.topic, "test_topic");
         assert_eq!(header.key, "test_key");
@@ -80,8 +79,7 @@ mod query_message_request_header_tests {
         map.insert("beginTimestamp".into(), "1000".into());
         map.insert("endTimestamp".into(), "2000".into());
 
-        let header: QueryMessageRequestHeader =
-            <QueryMessageRequestHeader as FromMap>::from(&map).unwrap();
+        let header: QueryMessageRequestHeader = <QueryMessageRequestHeader as FromMap>::from(&map).unwrap();
 
         assert_eq!(header.topic, "test_topic");
         assert_eq!(header.key, "test_key");

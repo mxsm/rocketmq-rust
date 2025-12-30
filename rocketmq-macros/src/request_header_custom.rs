@@ -34,9 +34,7 @@ use crate::is_option_type;
 use crate::is_struct_type;
 use crate::snake_to_camel_case;
 
-pub(super) fn request_header_codec_inner(
-    input: proc_macro::TokenStream,
-) -> proc_macro::TokenStream {
+pub(super) fn request_header_codec_inner(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = &input.ident;
     //For Java code, all class attributes have names,
@@ -491,11 +489,7 @@ impl FieldMetadata {
         let local_ident = format_ident!("__{}", self.ident);
 
         // Optimized field construction based on type and optionality
-        match (
-            &self.type_category,
-            self.inner_type.is_some(),
-            self.is_required,
-        ) {
+        match (&self.type_category, self.inner_type.is_some(), self.is_required) {
             // StructFlattened should never reach here (handled above)
             (TypeCategory::StructFlattened, _, _) => quote! {},
             // Option<CheetahString>
@@ -564,9 +558,7 @@ impl FieldMetadata {
     }
 }
 
-pub(super) fn request_header_codec_inner_v2(
-    input: proc_macro::TokenStream,
-) -> proc_macro::TokenStream {
+pub(super) fn request_header_codec_inner_v2(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = &input.ident;
 
@@ -590,20 +582,11 @@ pub(super) fn request_header_codec_inner_v2(
     let fields_count = field_metas.len();
 
     // Generate from_map() implementation with single-pass iteration
-    let local_decls: Vec<_> = field_metas
-        .iter()
-        .filter_map(|m| m.gen_local_decl())
-        .collect();
+    let local_decls: Vec<_> = field_metas.iter().filter_map(|m| m.gen_local_decl()).collect();
 
-    let match_arms: Vec<_> = field_metas
-        .iter()
-        .filter_map(|m| m.gen_match_arm())
-        .collect();
+    let match_arms: Vec<_> = field_metas.iter().filter_map(|m| m.gen_match_arm()).collect();
 
-    let construct_fields: Vec<_> = field_metas
-        .iter()
-        .map(|m| m.gen_field_construct())
-        .collect();
+    let construct_fields: Vec<_> = field_metas.iter().map(|m| m.gen_field_construct()).collect();
 
     // Generate final implementation
     let expanded = quote! {

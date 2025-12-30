@@ -37,8 +37,7 @@ pub mod referred_iterator;
 pub mod single_consume_queue;
 
 pub type ArcConsumeQueue = ArcMut<Box<dyn ConsumeQueueTrait>>;
-pub type ConsumeQueueTable =
-    parking_lot::Mutex<HashMap<CheetahString, HashMap<i32, ArcConsumeQueue>>>;
+pub type ConsumeQueueTable = parking_lot::Mutex<HashMap<CheetahString, HashMap<i32, ArcConsumeQueue>>>;
 
 pub struct CqUnit {
     pub queue_offset: i64,
@@ -136,10 +135,7 @@ mod tests {
             enable_multi_dispatch: true,
             ..Default::default()
         };
-        assert!(multi_dispatch_utils::is_need_handle_multi_dispatch(
-            &cfg,
-            "user_topic"
-        ));
+        assert!(multi_dispatch_utils::is_need_handle_multi_dispatch(&cfg, "user_topic"));
         assert!(!multi_dispatch_utils::is_need_handle_multi_dispatch(
             &cfg,
             "%RETRY%group"
@@ -185,14 +181,8 @@ mod tests {
 
         // With required props
         let mut props = HashMap::new();
-        props.insert(
-            MessageConst::PROPERTY_INNER_MULTI_DISPATCH.into(),
-            "q1,q2".into(),
-        );
-        props.insert(
-            MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET.into(),
-            "1,2".into(),
-        );
+        props.insert(MessageConst::PROPERTY_INNER_MULTI_DISPATCH.into(), "q1,q2".into());
+        props.insert(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET.into(), "1,2".into());
         let dr = DispatchRequest {
             properties_map: Some(props),
             ..Default::default()
@@ -201,14 +191,8 @@ mod tests {
 
         // Blank value fails
         let mut props_blank = HashMap::new();
-        props_blank.insert(
-            MessageConst::PROPERTY_INNER_MULTI_DISPATCH.into(),
-            " ".into(),
-        );
-        props_blank.insert(
-            MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET.into(),
-            "2".into(),
-        );
+        props_blank.insert(MessageConst::PROPERTY_INNER_MULTI_DISPATCH.into(), " ".into());
+        props_blank.insert(MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET.into(), "2".into());
         let dr = DispatchRequest {
             properties_map: Some(props_blank),
             ..Default::default()

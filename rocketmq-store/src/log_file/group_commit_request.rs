@@ -40,9 +40,7 @@ impl GroupCommitResponse {
     }
 
     /// Get a future that resolves when the flush operation completes
-    pub async fn wait_for_result(
-        mut self,
-    ) -> Result<PutMessageStatus, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn wait_for_result(mut self) -> Result<PutMessageStatus, Box<dyn std::error::Error + Send + Sync>> {
         if let Some(receiver) = self.flush_ok_receiver.take() {
             match receiver.await {
                 Ok(status) => Ok(status),
@@ -99,20 +97,12 @@ impl GroupCommitRequest {
     }
 
     /// Create a new GroupCommitRequest with timeout and ack numbers
-    pub fn with_ack_nums(
-        next_offset: i64,
-        timeout_millis: u64,
-        ack_nums: i32,
-    ) -> (Self, GroupCommitResponse) {
+    pub fn with_ack_nums(next_offset: i64, timeout_millis: u64, ack_nums: i32) -> (Self, GroupCommitResponse) {
         Self::create_request(next_offset, timeout_millis, ack_nums)
     }
 
     #[inline]
-    fn create_request(
-        next_offset: i64,
-        timeout_millis: u64,
-        ack_nums: i32,
-    ) -> (Self, GroupCommitResponse) {
+    fn create_request(next_offset: i64, timeout_millis: u64, ack_nums: i32) -> (Self, GroupCommitResponse) {
         let (sender, receiver) = oneshot::channel();
         let instant = Instant::now() + Duration::from_millis(timeout_millis);
         (

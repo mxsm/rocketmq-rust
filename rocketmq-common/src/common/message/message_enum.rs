@@ -129,30 +129,15 @@ mod tests {
 
     #[test]
     fn test_get_by_short_name() {
-        assert_eq!(
-            MessageType::get_by_short_name("Normal"),
-            MessageType::NormalMsg
-        );
-        assert_eq!(
-            MessageType::get_by_short_name("Trans"),
-            MessageType::TransMsgHalf
-        );
+        assert_eq!(MessageType::get_by_short_name("Normal"), MessageType::NormalMsg);
+        assert_eq!(MessageType::get_by_short_name("Trans"), MessageType::TransMsgHalf);
         assert_eq!(
             MessageType::get_by_short_name("TransCommit"),
             MessageType::TransMsgCommit
         );
-        assert_eq!(
-            MessageType::get_by_short_name("Delay"),
-            MessageType::DelayMsg
-        );
-        assert_eq!(
-            MessageType::get_by_short_name("Order"),
-            MessageType::OrderMsg
-        );
-        assert_eq!(
-            MessageType::get_by_short_name("Invalid"),
-            MessageType::NormalMsg
-        );
+        assert_eq!(MessageType::get_by_short_name("Delay"), MessageType::DelayMsg);
+        assert_eq!(MessageType::get_by_short_name("Order"), MessageType::OrderMsg);
+        assert_eq!(MessageType::get_by_short_name("Invalid"), MessageType::NormalMsg);
     }
 
     #[test]

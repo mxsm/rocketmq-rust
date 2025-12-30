@@ -45,25 +45,18 @@ impl FlowMonitor {
         self.server_manager.shutdown().await.unwrap();
     }
     pub async fn shutdown_with_interrupt(&self, interrupt: bool) {
-        self.server_manager
-            .shutdown_with_interrupt(interrupt)
-            .await
-            .unwrap();
+        self.server_manager.shutdown_with_interrupt(interrupt).await.unwrap();
     }
 
     pub fn get_transferred_byte_in_second(&self) -> i64 {
-        self.server_manager
-            .as_ref()
-            .get_transferred_byte_in_second()
+        self.server_manager.as_ref().get_transferred_byte_in_second()
     }
     pub fn can_transfer_max_byte_num(&self) -> i32 {
         self.server_manager.as_ref().can_transfer_max_byte_num()
     }
 
     pub fn add_byte_count_transferred(&self, count: i64) {
-        self.server_manager
-            .as_ref()
-            .add_byte_count_transferred(count);
+        self.server_manager.as_ref().add_byte_count_transferred(count);
     }
 
     pub fn max_transfer_byte_in_second(&self) -> usize {

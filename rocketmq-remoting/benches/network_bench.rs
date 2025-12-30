@@ -64,17 +64,13 @@ fn bench_single_connection_throughput(c: &mut Criterion) {
     // Test different message sizes
     for size in [64, 256, 1024, 4096].iter() {
         group.throughput(Throughput::Bytes(*size as u64));
-        group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{}B", size)),
-            size,
-            |b, &size| {
-                // TODO: Setup server and client
-                b.iter(|| {
-                    // TODO: Send request and wait for response
-                    black_box(size);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(format!("{}B", size)), size, |b, &size| {
+            // TODO: Setup server and client
+            b.iter(|| {
+                // TODO: Send request and wait for response
+                black_box(size);
+            });
+        });
     }
     group.finish();
 }

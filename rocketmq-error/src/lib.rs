@@ -288,18 +288,15 @@ macro_rules! client_broker_err {
     // Handle errors with a custom ResponseCode and formatted string
     ($response_code:expr, $error_message:expr, $broker_addr:expr) => {{
         std::result::Result::Err($crate::RocketmqError::MQClientBrokerError(
-            $crate::MQBrokerErr::new_with_broker(
-                $response_code as i32,
-                $error_message,
-                $broker_addr,
-            ),
+            $crate::MQBrokerErr::new_with_broker($response_code as i32, $error_message, $broker_addr),
         ))
     }};
     // Handle errors without a ResponseCode, using only the error message
     ($response_code:expr, $error_message:expr) => {{
-        std::result::Result::Err($crate::RocketmqError::MQClientBrokerError(
-            $crate::MQBrokerErr::new($response_code as i32, $error_message),
-        ))
+        std::result::Result::Err($crate::RocketmqError::MQClientBrokerError($crate::MQBrokerErr::new(
+            $response_code as i32,
+            $error_message,
+        )))
     }};
 }
 
@@ -402,8 +399,8 @@ impl RequestTimeoutErr {
         // let message = FAQUrl::attach_default_url(Some(
         //     format!("CODE: {}  DESC: {}", response_code, error_message,).as_str(),
         // ));
-        let message = "FAQUrl::attach_default_url(Some(format!(\"CODE: {}  DESC: {}\", \
-                       response_code, error_message,).as_str()))";
+        let message =
+            "FAQUrl::attach_default_url(Some(format!(\"CODE: {}  DESC: {}\", response_code, error_message,).as_str()))";
         Self {
             response_code,
             error_message: Some(error_message),
@@ -487,9 +484,7 @@ impl From<RocketmqError> for unified::RocketMQError {
         match err {
             // Network errors
             RocketmqError::RemoteError(msg) => Self::network_connection_failed("unknown", msg),
-            RocketmqError::RemotingConnectError(addr) => {
-                Self::network_connection_failed(addr, "connection failed")
-            }
+            RocketmqError::RemotingConnectError(addr) => Self::network_connection_failed(addr, "connection failed"),
             RocketmqError::RemotingSendRequestError(addr) => {
                 Self::network_connection_failed(addr, "send request failed")
             }
@@ -508,12 +503,10 @@ impl From<RocketmqError> for unified::RocketMQError {
                     message: msg,
                 })
             }
-            RocketmqError::RemotingCommandDecoderError(_msg) => {
-                Self::Protocol(unified::ProtocolError::DecodeError {
-                    ext_fields_len: 0,
-                    header_len: 0,
-                })
-            }
+            RocketmqError::RemotingCommandDecoderError(_msg) => Self::Protocol(unified::ProtocolError::DecodeError {
+                ext_fields_len: 0,
+                header_len: 0,
+            }),
             RocketmqError::DecodingError(required, available) => {
                 Self::Serialization(unified::SerializationError::DecodeFailed {
                     format: "binary",
@@ -521,9 +514,7 @@ impl From<RocketmqError> for unified::RocketMQError {
                 })
             }
             RocketmqError::NotSupportSerializeType(t) => {
-                Self::Protocol(unified::ProtocolError::UnsupportedSerializationType {
-                    serialize_type: t,
-                })
+                Self::Protocol(unified::ProtocolError::UnsupportedSerializationType { serialize_type: t })
             }
 
             // Broker errors
@@ -563,12 +554,8 @@ impl From<RocketmqError> for unified::RocketMQError {
             RocketmqError::IpError(msg) => Self::illegal_argument(format!("IP error: {}", msg)),
             RocketmqError::ChannelError(msg) => Self::Internal(format!("Channel error: {}", msg)),
             RocketmqError::NoneError(msg) => Self::Internal(format!("None error: {}", msg)),
-            RocketmqError::TokioHandlerError(msg) => {
-                Self::Internal(format!("Tokio handler error: {}", msg))
-            }
-            RocketmqError::SubCommand(cmd, msg) => {
-                Self::Internal(format!("{} command failed: {}", cmd, msg))
-            }
+            RocketmqError::TokioHandlerError(msg) => Self::Internal(format!("Tokio handler error: {}", msg)),
+            RocketmqError::SubCommand(cmd, msg) => Self::Internal(format!("{} command failed: {}", cmd, msg)),
             RocketmqError::StoreCustomError(msg) => Self::StorageReadFailed {
                 path: "unknown".to_string(),
                 reason: msg,
@@ -591,21 +578,13 @@ impl From<RocketmqError> for unified::RocketMQError {
             // Handle remaining variants
             RocketmqError::RpcError(code, msg) => Self::broker_operation_failed("RPC", code, msg),
             RocketmqError::FromStrErr(msg) => Self::illegal_argument(msg),
-            RocketmqError::Utf8Error(err) => {
-                Self::Serialization(unified::SerializationError::Utf8Error(err))
-            }
-            RocketmqError::ConnectionInvalid(msg) => {
-                Self::network_connection_failed("unknown", msg)
-            }
+            RocketmqError::Utf8Error(err) => Self::Serialization(unified::SerializationError::Utf8Error(err)),
+            RocketmqError::ConnectionInvalid(msg) => Self::network_connection_failed("unknown", msg),
             RocketmqError::AbortProcessError(code, msg) => {
                 Self::Internal(format!("Abort process error {}: {}", code, msg))
             }
-            RocketmqError::ChannelSendRequestFailed(msg) => {
-                Self::network_connection_failed("channel", msg)
-            }
-            RocketmqError::ChannelRecvRequestFailed(msg) => {
-                Self::network_connection_failed("channel", msg)
-            }
+            RocketmqError::ChannelSendRequestFailed(msg) => Self::network_connection_failed("channel", msg),
+            RocketmqError::ChannelRecvRequestFailed(msg) => Self::network_connection_failed("channel", msg),
             RocketmqError::RemotingCommandEncoderError(msg) => {
                 Self::Serialization(unified::SerializationError::EncodeFailed {
                     format: "command",

@@ -253,11 +253,7 @@ mod tests {
         for data in test_data {
             if !data.is_empty() {
                 let checksum = crc32(data);
-                assert!(
-                    checksum <= 0x7FFFFFFF,
-                    "Checksum should be positive: {}",
-                    checksum
-                );
+                assert!(checksum <= 0x7FFFFFFF, "Checksum should be positive: {}", checksum);
             }
         }
     }

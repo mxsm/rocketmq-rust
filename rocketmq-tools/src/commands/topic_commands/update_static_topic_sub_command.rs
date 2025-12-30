@@ -33,12 +33,7 @@ pub struct UpdateStaticTopicSubCommand {
     )]
     broker_addr: String,
     /// "totalQueueNum"
-    #[arg(
-        short = 'q',
-        long = "totalQueueNum",
-        required = true,
-        help = "totalQueueNum"
-    )]
+    #[arg(short = 'q', long = "totalQueueNum", required = true, help = "totalQueueNum")]
     queue_num: String,
     /// Cluster name
     #[arg(
@@ -49,12 +44,7 @@ pub struct UpdateStaticTopicSubCommand {
     )]
     cluster_name: Option<String>,
     /// Map file
-    #[arg(
-        short = 'm',
-        long = "mapFile",
-        required = false,
-        help = "The mapping data file name"
-    )]
+    #[arg(short = 'm', long = "mapFile", required = false, help = "The mapping data file name")]
     mapping_file: Option<String>,
     /// Force replace
     #[arg(
@@ -96,11 +86,8 @@ impl UpdateStaticTopicSubCommand {
                 )?;
                 TopicQueueMappingUtils::check_and_build_mapping_items(vec![], force, true)?;
 
-                MQAdminUtils::complete_no_target_brokers(
-                    wrapper.broker_config_map().clone(),
-                    &default_mq_admin_ext,
-                )
-                .await?;
+                MQAdminUtils::complete_no_target_brokers(wrapper.broker_config_map().clone(), &default_mq_admin_ext)
+                    .await?;
                 MQAdminUtils::update_topic_config_mapping_all(
                     wrapper.broker_config_map(),
                     &default_mq_admin_ext,
@@ -164,15 +151,13 @@ impl CommandExecute for UpdateStaticTopicSubCommand {
 
         //get the existed topic config and mapping
 
-        let mut broker_config_map = MQAdminUtils::examine_topic_config_all(
-            &CheetahString::from(topic),
-            &default_mq_admin_ext,
-        )
-        .await?;
-        let queue_num =
-            self.queue_num.trim().parse::<i32>().map_err(|_e| {
-                RocketMQError::Internal("queue num parse to i32 failed".to_string())
-            })?;
+        let mut broker_config_map =
+            MQAdminUtils::examine_topic_config_all(&CheetahString::from(topic), &default_mq_admin_ext).await?;
+        let queue_num = self
+            .queue_num
+            .trim()
+            .parse::<i32>()
+            .map_err(|_e| RocketMQError::Internal("queue num parse to i32 failed".to_string()))?;
 
         let mut max_epoch_and_num = (get_current_millis(), queue_num);
         if !broker_config_map.is_empty() {
@@ -193,10 +178,7 @@ impl CommandExecute for UpdateStaticTopicSubCommand {
             HashSet::new(),
         );
         let old_mapping_data_file = TopicQueueMappingUtils::write_to_temp(&old_wrapper, false)?;
-        println!(
-            "The old mapping data is written to file {}",
-            old_mapping_data_file
-        );
+        println!("The old mapping data is written to file {}", old_mapping_data_file);
 
         //add the existed brokers to target brokers
         target_brokers.extend(broker_config_map.keys().cloned());
@@ -210,19 +192,10 @@ impl CommandExecute for UpdateStaticTopicSubCommand {
         )?;
 
         let new_mapping_data_file = TopicQueueMappingUtils::write_to_temp(&new_wrapper, true)?;
-        println!(
-            "The new mapping data is written to file {}",
-            new_mapping_data_file
-        );
+        println!("The new mapping data is written to file {}", new_mapping_data_file);
 
-        MQAdminUtils::complete_no_target_brokers(broker_config_map.clone(), &default_mq_admin_ext)
-            .await?;
-        MQAdminUtils::update_topic_config_mapping_all(
-            &broker_config_map,
-            &default_mq_admin_ext,
-            false,
-        )
-        .await?;
+        MQAdminUtils::complete_no_target_brokers(broker_config_map.clone(), &default_mq_admin_ext).await?;
+        MQAdminUtils::update_topic_config_mapping_all(&broker_config_map, &default_mq_admin_ext, false).await?;
 
         default_mq_admin_ext.shutdown().await;
         Ok(())

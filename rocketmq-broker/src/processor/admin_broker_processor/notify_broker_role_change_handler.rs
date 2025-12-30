@@ -36,9 +36,7 @@ pub struct NotifyBrokerRoleChangeHandler<MS: MessageStore> {
 
 impl<MS: MessageStore> NotifyBrokerRoleChangeHandler<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self {
-            broker_runtime_inner,
-        }
+        Self { broker_runtime_inner }
     }
 
     pub async fn notify_broker_role_changed(
@@ -48,11 +46,9 @@ impl<MS: MessageStore> NotifyBrokerRoleChangeHandler<MS> {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_header =
-            request.decode_command_custom_header::<NotifyBrokerRoleChangedRequestHeader>();
+        let request_header = request.decode_command_custom_header::<NotifyBrokerRoleChangedRequestHeader>();
 
-        let sync_state_set_info =
-            SyncStateSet::decode(request.get_body().unwrap()).unwrap_or_default();
+        let sync_state_set_info = SyncStateSet::decode(request.get_body().unwrap()).unwrap_or_default();
 
         let response = RemotingCommand::create_response_command();
 

@@ -90,9 +90,7 @@ impl DefaultHAConnection {
         remote_addr: SocketAddr,
     ) -> Result<Self, HAConnectionError> {
         // Configure socket options early
-        socket_stream
-            .set_nodelay(true)
-            .map_err(HAConnectionError::Io)?;
+        socket_stream.set_nodelay(true).map_err(HAConnectionError::Io)?;
 
         // Get client address
         let client_address = socket_stream
@@ -109,9 +107,7 @@ impl DefaultHAConnection {
         let flow_monitor = Arc::new(FlowMonitor::new(message_store_config.clone()));
 
         // Increment connection count
-        ha_service
-            .get_connection_count()
-            .fetch_add(1, Ordering::SeqCst);
+        ha_service.get_connection_count().fetch_add(1, Ordering::SeqCst);
 
         let (shutdown_sender, shutdown_receiver) = mpsc::channel::<()>(1);
 
@@ -142,10 +138,7 @@ impl DefaultHAConnection {
 }
 
 impl HAConnection for DefaultHAConnection {
-    async fn start(
-        &mut self,
-        conn: WeakArcMut<GeneralHAConnection>,
-    ) -> Result<(), HAConnectionError> {
+    async fn start(&mut self, conn: WeakArcMut<GeneralHAConnection>) -> Result<(), HAConnectionError> {
         const CAPACITY: usize = 1024 * 8;
         self.change_current_state(HAConnectionState::Transfer).await;
 
@@ -382,8 +375,7 @@ impl ReadSocketService {
                     break;
                 }
                 Some(Ok(OffsetFrame(offset))) => {
-                    self.last_read_timestamp
-                        .store(get_current_millis(), Ordering::Relaxed);
+                    self.last_read_timestamp.store(get_current_millis(), Ordering::Relaxed);
                     self.slave_ack_offset.store(offset, Ordering::Relaxed);
 
                     if self.slave_request_offset.load(Ordering::Acquire) < 0 {
@@ -419,10 +411,7 @@ impl ReadSocketService {
         info!("{} service end", self.get_service_name());
     }
 
-    async fn process_incoming_data(
-        &mut self,
-        data: BytesMut,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn process_incoming_data(&mut self, data: BytesMut) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if self.buffer.len() + data.len() > READ_MAX_BUFFER_SIZE {
             self.compact_buffer();
         }
@@ -466,12 +455,8 @@ impl ReadSocketService {
                 self.process_position = pos;
                 self.slave_ack_offset.store(read_offset, Ordering::Relaxed);
                 if self.slave_request_offset.load(Ordering::Acquire) < 0 {
-                    self.slave_request_offset
-                        .store(read_offset, Ordering::Release);
-                    info!(
-                        "slave[{}] request offset {}",
-                        self.client_address, read_offset
-                    );
+                    self.slave_request_offset.store(read_offset, Ordering::Release);
+                    info!("slave[{}] request offset {}", self.client_address, read_offset);
                 }
 
                 self.ha_service.notify_transfer_some(read_offset).await;
@@ -497,10 +482,7 @@ impl ReadSocketService {
     async fn cleanup(&self) {}
 
     async fn is_stopped(&self) -> bool {
-        matches!(
-            *self.current_state.read().await,
-            HAConnectionState::Shutdown
-        )
+        matches!(*self.current_state.read().await, HAConnectionState::Shutdown)
     }
 
     fn get_service_name(&self) -> String {
@@ -624,8 +606,7 @@ impl WriteSocketService {
                 slave_request_offset
             };
             //set next_transfer_from_where to the next_offset
-            self.next_transfer_from_where
-                .store(next_offset, Ordering::Relaxed);
+            self.next_transfer_from_where.store(next_offset, Ordering::Relaxed);
             info!(
                 "master transfer data from {} to slave[{}], and slave request {}",
                 next_offset, self.client_address, slave_request_offset
@@ -682,13 +663,11 @@ impl WriteSocketService {
 
                 if current_time - last_print > 1000 {
                     warn!(
-                        "Trigger HA flow control, max transfer speed {:.2}KB/s, current speed: \
-                         {:.2}KB/s",
+                        "Trigger HA flow control, max transfer speed {:.2}KB/s, current speed: {:.2}KB/s",
                         self.flow_monitor.max_transfer_byte_in_second() as f64 / 1024.0,
                         self.flow_monitor.get_transferred_byte_in_second() as f64 / 1024.0
                     );
-                    self.last_print_timestamp
-                        .store(current_time, Ordering::Relaxed);
+                    self.last_print_timestamp.store(current_time, Ordering::Relaxed);
                 }
                 size = can_transfer_max_bytes as usize;
             }
@@ -697,8 +676,7 @@ impl WriteSocketService {
             self.next_transfer_from_where
                 .store(next_offset + size as i64, Ordering::Relaxed);
 
-            self.send_data(this_offset, select_result.get_bytes(), size)
-                .await?;
+            self.send_data(this_offset, select_result.get_bytes(), size).await?;
         } else {
             //self.ha_service.wait_for_running(100).await;
         }
@@ -715,8 +693,7 @@ impl WriteSocketService {
         let bytes = self.byte_buffer_header.split().freeze();
         self.writer.send(bytes).await?;
 
-        self.last_write_timestamp
-            .store(get_current_millis(), Ordering::Relaxed);
+        self.last_write_timestamp.store(get_current_millis(), Ordering::Relaxed);
         self.flow_monitor
             .add_byte_count_transferred(TRANSFER_HEADER_SIZE as i64);
         self.last_write_over.store(true, Ordering::Relaxed);
@@ -742,8 +719,7 @@ impl WriteSocketService {
             warn!("No data to send for offset {}", offset);
         }
 
-        self.last_write_timestamp
-            .store(get_current_millis(), Ordering::Relaxed);
+        self.last_write_timestamp.store(get_current_millis(), Ordering::Relaxed);
         self.flow_monitor
             .add_byte_count_transferred((TRANSFER_HEADER_SIZE + size) as i64);
         self.last_write_over.store(true, Ordering::Relaxed);
@@ -766,10 +742,7 @@ impl WriteSocketService {
     }
 
     async fn is_stopped(&self) -> bool {
-        matches!(
-            *self.current_state.read().await,
-            HAConnectionState::Shutdown
-        )
+        matches!(*self.current_state.read().await, HAConnectionState::Shutdown)
     }
 
     fn get_service_name(&self) -> String {

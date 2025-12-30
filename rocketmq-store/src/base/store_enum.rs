@@ -72,10 +72,7 @@ impl<'de> Deserialize<'de> for StoreType {
                 match value {
                     "LocalFile" => Ok(StoreType::LocalFile),
                     "RocksDB" => Ok(StoreType::RocksDB),
-                    _ => Err(serde::de::Error::unknown_variant(
-                        value,
-                        &["SingleTag", "MultiTag"],
-                    )),
+                    _ => Err(serde::de::Error::unknown_variant(value, &["SingleTag", "MultiTag"])),
                 }
             }
         }
@@ -101,10 +98,7 @@ mod tests {
         let local_file = StoreType::LocalFile;
         let rocks_db = StoreType::RocksDB;
 
-        assert_eq!(
-            serde_json::to_value(local_file).unwrap(),
-            json!("LocalFile")
-        );
+        assert_eq!(serde_json::to_value(local_file).unwrap(), json!("LocalFile"));
         assert_eq!(serde_json::to_value(rocks_db).unwrap(), json!("RocksDB"));
     }
 

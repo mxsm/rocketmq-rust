@@ -48,10 +48,7 @@ impl RaftBrokerHeartBeatEventRequest {
         Self::default()
     }
 
-    pub fn from_broker_info(
-        broker_identity_info: &BrokerIdentityInfo,
-        broker_live_info: &BrokerLiveInfo,
-    ) -> Self {
+    pub fn from_broker_info(broker_identity_info: &BrokerIdentityInfo, broker_live_info: &BrokerLiveInfo) -> Self {
         Self {
             cluster_name_identity_info: Some(broker_identity_info.cluster_name.clone()),
             broker_name_identity_info: Some(broker_identity_info.broker_name.clone()),
@@ -174,10 +171,9 @@ impl fmt::Display for RaftBrokerHeartBeatEventRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "RaftBrokerHeartBeatEventRequest{{brokerIdentityInfo={}, \
-             brokerLiveInfo=BrokerLiveInfo{{brokerName={:?}, brokerAddr={:?}, brokerId={:?}, \
-             lastUpdateTimestamp={:?}, heartbeatTimeoutMillis={:?}, epoch={:?}, maxOffset={:?}, \
-             confirmOffset={:?}, electionPriority={:?}}}}}",
+            "RaftBrokerHeartBeatEventRequest{{brokerIdentityInfo={}, brokerLiveInfo=BrokerLiveInfo{{brokerName={:?}, \
+             brokerAddr={:?}, brokerId={:?}, lastUpdateTimestamp={:?}, heartbeatTimeoutMillis={:?}, epoch={:?}, \
+             maxOffset={:?}, confirmOffset={:?}, electionPriority={:?}}}}}",
             self.broker_identity_info(),
             self.broker_name,
             self.broker_addr,
@@ -218,14 +214,8 @@ mod tests {
         request.set_heartbeat_timeout_millis(5000);
         request.set_election_priority(Some(1));
 
-        assert_eq!(
-            request.broker_name(),
-            Some(&CheetahString::from("test_broker"))
-        );
-        assert_eq!(
-            request.broker_addr(),
-            Some(&CheetahString::from("127.0.0.1:8080"))
-        );
+        assert_eq!(request.broker_name(), Some(&CheetahString::from("test_broker")));
+        assert_eq!(request.broker_addr(), Some(&CheetahString::from("127.0.0.1:8080")));
         assert_eq!(request.broker_id(), Some(10));
         assert_eq!(request.epoch(), Some(5));
         assert_eq!(request.max_offset(), Some(1000));

@@ -21,10 +21,8 @@ use cheetah_string::CheetahString;
 
 use crate::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
 
-pub type MessageRequestModeMap = HashMap<
-    CheetahString, /* Topic */
-    HashMap<CheetahString /* Group */, SetMessageRequestModeRequestBody>,
->;
+pub type MessageRequestModeMap =
+    HashMap<CheetahString /* Topic */, HashMap<CheetahString /* Group */, SetMessageRequestModeRequestBody>>;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]

@@ -24,17 +24,11 @@ use thiserror::Error;
 pub enum SerializationError {
     /// Encoding failed
     #[error("Encoding failed ({format}): {message}")]
-    EncodeFailed {
-        format: &'static str,
-        message: String,
-    },
+    EncodeFailed { format: &'static str, message: String },
 
     /// Decoding failed
     #[error("Decoding failed ({format}): {message}")]
-    DecodeFailed {
-        format: &'static str,
-        message: String,
-    },
+    DecodeFailed { format: &'static str, message: String },
 
     /// Invalid data format
     #[error("Invalid format: expected {expected}, got {got}")]

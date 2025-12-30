@@ -51,9 +51,7 @@ impl PollingHeader {
         }
     }
 
-    pub fn new_from_notification_request_header(
-        request_header: &NotificationRequestHeader,
-    ) -> Self {
+    pub fn new_from_notification_request_header(request_header: &NotificationRequestHeader) -> Self {
         Self {
             consumer_group: request_header.consumer_group.clone(),
             topic: request_header.topic.clone(),
@@ -105,8 +103,8 @@ mod tests {
         let display = format!("{}", header);
         assert_eq!(
             display,
-            "PollingHeader [consumer_group=test_group, topic=test_topic, queue_id=1, \
-             born_time=1234567890, poll_time=1234567890]"
+            "PollingHeader [consumer_group=test_group, topic=test_topic, queue_id=1, born_time=1234567890, \
+             poll_time=1234567890]"
         );
     }
 
@@ -129,10 +127,7 @@ mod tests {
         };
 
         let header = PollingHeader::new_from_pop_message_request_header(&request_header);
-        assert_eq!(
-            header.get_consumer_group(),
-            &CheetahString::from("test_group")
-        );
+        assert_eq!(header.get_consumer_group(), &CheetahString::from("test_group"));
         assert_eq!(header.get_topic(), &CheetahString::from("test_topic"));
         assert_eq!(header.get_queue_id(), 1);
         assert_eq!(header.get_born_time(), 1234567890);
@@ -153,10 +148,7 @@ mod tests {
         };
 
         let header = PollingHeader::new_from_notification_request_header(&request_header);
-        assert_eq!(
-            header.get_consumer_group(),
-            &CheetahString::from("test_group")
-        );
+        assert_eq!(header.get_consumer_group(), &CheetahString::from("test_group"));
         assert_eq!(header.get_topic(), &CheetahString::from("test_topic"));
         assert_eq!(header.get_queue_id(), 1);
         assert_eq!(header.get_born_time(), 1234567890);
@@ -173,10 +165,7 @@ mod tests {
             poll_time: 1234567890,
         };
 
-        assert_eq!(
-            header.get_consumer_group(),
-            &CheetahString::from("test_group")
-        );
+        assert_eq!(header.get_consumer_group(), &CheetahString::from("test_group"));
         assert_eq!(header.get_topic(), &CheetahString::from("test_topic"));
         assert_eq!(header.get_queue_id(), 1);
         assert_eq!(header.get_born_time(), 1234567890);

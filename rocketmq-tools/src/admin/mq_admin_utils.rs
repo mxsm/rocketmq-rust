@@ -93,21 +93,14 @@ impl MQAdminUtils {
             client_metadata.refresh_cluster_info(Some(info));
             return Ok(());
         }
-        Err(RocketMQError::Internal(
-            "The Cluster info is empty".to_string(),
-        ))
+        Err(RocketMQError::Internal("The Cluster info is empty".to_string()))
     }
-    pub async fn get_broker_metadata(
-        default_mq_admin_ext: &DefaultMQAdminExt,
-    ) -> RocketMQResult<ClientMetadata> {
+    pub async fn get_broker_metadata(default_mq_admin_ext: &DefaultMQAdminExt) -> RocketMQResult<ClientMetadata> {
         let client_metadata = ClientMetadata::new();
         MQAdminUtils::refresh_cluster_info(default_mq_admin_ext, &client_metadata).await?;
         Ok(client_metadata)
     }
-    pub fn check_if_master_alive(
-        brokers: Vec<CheetahString>,
-        client_metadata: &ClientMetadata,
-    ) -> RocketMQResult<()> {
+    pub fn check_if_master_alive(brokers: Vec<CheetahString>, client_metadata: &ClientMetadata) -> RocketMQResult<()> {
         for broker in &brokers {
             let addr = client_metadata.find_master_broker_addr(broker);
             if addr.is_none() {
@@ -125,10 +118,7 @@ impl MQAdminUtils {
         force: bool,
     ) -> RocketMQResult<()> {
         let client_meta_data = MQAdminUtils::get_broker_metadata(default_mq_admin_ext).await?;
-        MQAdminUtils::check_if_master_alive(
-            broker_config_map.keys().cloned().collect(),
-            &client_meta_data,
-        )?;
+        MQAdminUtils::check_if_master_alive(broker_config_map.keys().cloned().collect(), &client_meta_data)?;
         //If some succeed, and others fail, it will cause inconsistent data
         for entry in broker_config_map {
             let broker = entry.0;
@@ -194,10 +184,7 @@ impl MQAdminUtils {
         default_mq_admin_ext: &DefaultMQAdminExt,
     ) -> RocketMQResult<()> {
         let client_metadata = MQAdminUtils::get_broker_metadata(default_mq_admin_ext).await?;
-        MQAdminUtils::check_if_master_alive(
-            broker_config_map.keys().cloned().collect(),
-            &client_metadata,
-        )?;
+        MQAdminUtils::check_if_master_alive(broker_config_map.keys().cloned().collect(), &client_metadata)?;
 
         for broker in brokers_to_map_in {
             let addr = client_metadata.find_master_broker_addr(broker);
@@ -258,15 +245,12 @@ impl MQAdminUtils {
                                 let old_leader = items.get(items_len - 2).cloned();
                                 let new_leader = items.last_mut();
 
-                                if let (Some(new_leader), Some(old_leader)) =
-                                    (new_leader, old_leader)
-                                {
+                                if let (Some(new_leader), Some(old_leader)) = (new_leader, old_leader) {
                                     if new_leader.logic_offset > 0 {
                                         continue;
                                     }
 
-                                    let old_broker_name =
-                                        old_leader.bname.clone().unwrap_or_default();
+                                    let old_broker_name = old_leader.bname.clone().unwrap_or_default();
                                     let old_queue_id = old_leader.queue_id;
 
                                     let topic_offset = offset_table.get(
@@ -280,19 +264,16 @@ impl MQAdminUtils {
                                     if let Some(topic_offset) = topic_offset {
                                         if topic_offset.get_max_offset() < old_leader.start_offset {
                                             return Err(RocketMQError::Internal(format!(
-                                                "The max offset is smaller than the start offset \
-                                                 {:?} {}",
+                                                "The max offset is smaller than the start offset {:?} {}",
                                                 old_leader,
                                                 topic_offset.get_max_offset()
                                             )));
                                         }
-                                        new_leader.logic_offset =
-                                            TopicQueueMappingUtils::block_seq_round_up(
-                                                old_leader.compute_static_queue_offset_strictly(
-                                                    topic_offset.get_max_offset(),
-                                                ),
-                                                block_seq_size,
-                                            );
+                                        new_leader.logic_offset = TopicQueueMappingUtils::block_seq_round_up(
+                                            old_leader
+                                                .compute_static_queue_offset_strictly(topic_offset.get_max_offset()),
+                                            block_seq_size,
+                                        );
 
                                         // collect updates for map_in_config
                                         if let Some(new_leader_bname) = &new_leader.bname {

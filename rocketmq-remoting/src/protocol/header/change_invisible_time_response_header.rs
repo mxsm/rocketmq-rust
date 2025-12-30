@@ -47,8 +47,7 @@ mod tests {
         };
         assert_eq!(
             format!("{:?}", header),
-            "ChangeInvisibleTimeResponseHeader { pop_time: 123456789, revive_qid: 1, \
-             invisible_time: 987654321 }"
+            "ChangeInvisibleTimeResponseHeader { pop_time: 123456789, revive_qid: 1, invisible_time: 987654321 }"
         );
     }
 

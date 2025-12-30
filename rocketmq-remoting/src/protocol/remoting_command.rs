@@ -49,8 +49,7 @@ pub const SERIALIZE_TYPE_PROPERTY: &str = "rocketmq.serialize.type";
 pub const SERIALIZE_TYPE_ENV: &str = "ROCKETMQ_SERIALIZE_TYPE";
 pub const REMOTING_VERSION_KEY: &str = "rocketmq.remoting.version";
 
-static REQUEST_ID: std::sync::LazyLock<Arc<AtomicI32>> =
-    std::sync::LazyLock::new(|| Arc::new(AtomicI32::new(0)));
+static REQUEST_ID: std::sync::LazyLock<Arc<AtomicI32>> = std::sync::LazyLock::new(|| Arc::new(AtomicI32::new(0)));
 
 static CONFIG_VERSION: std::sync::LazyLock<i32> = std::sync::LazyLock::new(|| {
     EnvUtils::get_property(REMOTING_VERSION_KEY)
@@ -59,17 +58,15 @@ static CONFIG_VERSION: std::sync::LazyLock<i32> = std::sync::LazyLock::new(|| {
         .unwrap_or(0)
 });
 
-pub static SERIALIZE_TYPE_CONFIG_IN_THIS_SERVER: std::sync::LazyLock<SerializeType> =
-    std::sync::LazyLock::new(|| {
-        let protocol = std::env::var(SERIALIZE_TYPE_PROPERTY).unwrap_or_else(|_| {
-            std::env::var(SERIALIZE_TYPE_ENV).unwrap_or_else(|_| "".to_string())
-        });
-        match protocol.as_str() {
-            "JSON" => SerializeType::JSON,
-            "ROCKETMQ" => SerializeType::ROCKETMQ,
-            _ => SerializeType::JSON,
-        }
-    });
+pub static SERIALIZE_TYPE_CONFIG_IN_THIS_SERVER: std::sync::LazyLock<SerializeType> = std::sync::LazyLock::new(|| {
+    let protocol = std::env::var(SERIALIZE_TYPE_PROPERTY)
+        .unwrap_or_else(|_| std::env::var(SERIALIZE_TYPE_ENV).unwrap_or_else(|_| "".to_string()));
+    match protocol.as_str() {
+        "JSON" => SerializeType::JSON,
+        "ROCKETMQ" => SerializeType::ROCKETMQ,
+        _ => SerializeType::JSON,
+    }
+});
 
 fn set_cmd_version(cmd: &mut RemotingCommand) {
     cmd.set_version_ref(*CONFIG_VERSION);
@@ -125,8 +122,8 @@ impl fmt::Display for RemotingCommand {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "RemotingCommand [code={}, language={}, version={}, opaque={}, flag(B)={:b}, \
-             remark={}, extFields={:?}, serializeTypeCurrentRPC={}]",
+            "RemotingCommand [code={}, language={}, version={}, opaque={}, flag(B)={:b}, remark={}, extFields={:?}, \
+             serializeTypeCurrentRPC={}]",
             self.code,
             self.language,
             self.version,
@@ -172,9 +169,7 @@ impl RemotingCommand {
     where
         T: CommandCustomHeader + Sync + Send + 'static,
     {
-        let mut command = Self::default()
-            .set_code(code.into())
-            .set_command_custom_header(header);
+        let mut command = Self::default().set_code(code.into()).set_command_custom_header(header);
         set_cmd_version(&mut command);
         command
     }
@@ -192,10 +187,7 @@ impl RemotingCommand {
         Self::default().set_code(code).mark_response_type()
     }
 
-    pub fn create_response_command_with_code_remark(
-        code: impl Into<i32>,
-        remark: impl Into<CheetahString>,
-    ) -> Self {
+    pub fn create_response_command_with_code_remark(code: impl Into<i32>, remark: impl Into<CheetahString>) -> Self {
         Self::default()
             .set_code(code)
             .set_remark_option(Some(remark.into()))
@@ -208,9 +200,7 @@ impl RemotingCommand {
             .mark_response_type()
     }
 
-    pub fn create_response_command_with_header(
-        header: impl CommandCustomHeader + Sync + Send + 'static,
-    ) -> Self {
+    pub fn create_response_command_with_header(header: impl CommandCustomHeader + Sync + Send + 'static) -> Self {
         Self::default()
             .set_code(RemotingSysResponseCode::Success)
             .set_command_custom_header(header)
@@ -377,9 +367,7 @@ impl RemotingCommand {
     pub fn header_encode(&mut self) -> Option<Bytes> {
         self.make_custom_header_to_net();
         match self.serialize_type {
-            SerializeType::ROCKETMQ => {
-                Some(RocketMQSerializable::rocket_mq_protocol_encode_bytes(self))
-            }
+            SerializeType::ROCKETMQ => Some(RocketMQSerializable::rocket_mq_protocol_encode_bytes(self)),
             SerializeType::JSON => {
                 #[cfg(feature = "simd")]
                 {
@@ -497,10 +485,7 @@ impl RemotingCommand {
 
                 // Write frame header
                 dst.put_i32(total_length);
-                dst.put_i32(RemotingCommand::mark_serialize_type(
-                    header_length,
-                    SerializeType::JSON,
-                ));
+                dst.put_i32(RemotingCommand::mark_serialize_type(header_length, SerializeType::JSON));
 
                 // Write header bytes (zero-copy from Vec)
                 dst.put_slice(&header_bytes);
@@ -535,8 +520,7 @@ impl RemotingCommand {
         let body_length = self.body.as_ref().map_or(0, |b| b.len()) as i32;
 
         // Calculate serialize type with header length embedded
-        let serialize_type =
-            RemotingCommand::mark_serialize_type(header_size as i32, SerializeType::ROCKETMQ);
+        let serialize_type = RemotingCommand::mark_serialize_type(header_size as i32, SerializeType::ROCKETMQ);
 
         // Write total_length and serialize_type at the beginning (in-place update)
         let total_length = (header_size as i32 + body_length).to_be_bytes();
@@ -558,10 +542,7 @@ impl RemotingCommand {
 
         if let Some(ref ext) = self.ext_fields {
             // Approximate: each entry adds ~30 bytes overhead + key/value lengths
-            size += ext
-                .iter()
-                .map(|(k, v)| k.len() + v.len() + 30)
-                .sum::<usize>();
+            size += ext.iter().map(|(k, v)| k.len() + v.len() + 30).sum::<usize>();
         }
 
         size
@@ -605,9 +586,7 @@ impl RemotingCommand {
             return Err(rocketmq_error::RocketMQError::Serialization(
                 rocketmq_error::SerializationError::DecodeFailed {
                     format: "remoting_command",
-                    message: format!(
-                        "Invalid total_size {total_size}, minimum required is {MIN_PAYLOAD_SIZE}"
-                    ),
+                    message: format!("Invalid total_size {total_size}, minimum required is {MIN_PAYLOAD_SIZE}"),
                 },
             ));
         }
@@ -635,9 +614,7 @@ impl RemotingCommand {
             return Err(rocketmq_error::RocketMQError::Serialization(
                 rocketmq_error::SerializationError::DecodeFailed {
                     format: "remoting_command",
-                    message: format!(
-                        "Invalid header length {header_length}, total size {total_size}"
-                    ),
+                    message: format!("Invalid header length {header_length}, total size {total_size}"),
                 },
             ));
         }
@@ -648,8 +625,7 @@ impl RemotingCommand {
         let mut header_data = cmd_data.split_to(header_length);
 
         // Decode header
-        let mut cmd =
-            RemotingCommand::header_decode(&mut header_data, header_length, protocol_type)?;
+        let mut cmd = RemotingCommand::header_decode(&mut header_data, header_length, protocol_type)?;
 
         // Attach body if present (zero-copy freeze)
         if let Some(ref mut cmd) = cmd {
@@ -688,25 +664,20 @@ impl RemotingCommand {
                 let cmd = {
                     let mut slice = src.split_to(header_length).to_vec();
                     simd_json::from_slice::<RemotingCommand>(&mut slice).map_err(|error| {
-                        rocketmq_error::RocketMQError::Serialization(
-                            rocketmq_error::SerializationError::DecodeFailed {
-                                format: "json",
-                                message: format!("SIMD JSON deserialization error: {error}"),
-                            },
-                        )
+                        rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+                            format: "json",
+                            message: format!("SIMD JSON deserialization error: {error}"),
+                        })
                     })?
                 };
 
                 #[cfg(not(feature = "simd"))]
-                let cmd =
-                    SerdeJsonUtils::from_json_slice::<RemotingCommand>(src).map_err(|error| {
-                        rocketmq_error::RocketMQError::Serialization(
-                            rocketmq_error::SerializationError::DecodeFailed {
-                                format: "json",
-                                message: format!("JSON deserialization error: {error}"),
-                            },
-                        )
-                    })?;
+                let cmd = SerdeJsonUtils::from_json_slice::<RemotingCommand>(src).map_err(|error| {
+                    rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+                        format: "json",
+                        message: format!("JSON deserialization error: {error}"),
+                    })
+                })?;
 
                 Ok(Some(cmd.set_serialize_type(SerializeType::JSON)))
             }
@@ -867,11 +838,7 @@ impl RemotingCommand {
         self
     }
 
-    pub fn add_ext_field(
-        &mut self,
-        key: impl Into<CheetahString>,
-        value: impl Into<CheetahString>,
-    ) -> &mut Self {
+    pub fn add_ext_field(&mut self, key: impl Into<CheetahString>, value: impl Into<CheetahString>) -> &mut Self {
         if let Some(ref mut ext) = self.ext_fields {
             ext.insert(key.into(), value.into());
         }
@@ -964,11 +931,7 @@ impl RemotingCommand {
     }
 
     #[inline]
-    pub fn add_ext_field_if_not_exist(
-        &mut self,
-        key: impl Into<CheetahString>,
-        value: impl Into<CheetahString>,
-    ) {
+    pub fn add_ext_field_if_not_exist(&mut self, key: impl Into<CheetahString>, value: impl Into<CheetahString>) {
         if let Some(ref mut ext) = self.ext_fields {
             ext.entry(key.into()).or_insert(value.into());
         }
@@ -992,11 +955,9 @@ pub fn mark_protocol_type(source: i32, serialize_type: SerializeType) -> i32 {
 pub fn parse_serialize_type(size: i32) -> rocketmq_error::RocketMQResult<SerializeType> {
     let code = (size >> 24) as u8;
     SerializeType::value_of(code).ok_or({
-        rocketmq_error::RocketMQError::Protocol(
-            rocketmq_error::ProtocolError::UnsupportedSerializationType {
-                serialize_type: code,
-            },
-        )
+        rocketmq_error::RocketMQError::Protocol(rocketmq_error::ProtocolError::UnsupportedSerializationType {
+            serialize_type: code,
+        })
     })
 }
 
@@ -1029,8 +990,8 @@ mod tests {
             .set_remark_option(Some("remark".to_string()));
 
         assert_eq!(
-            "{\"code\":1,\"language\":\"JAVA\",\"version\":0,\"opaque\":1,\"flag\":1,\"remark\":\"\
-             remark\",\"extFields\":{},\"serializeTypeCurrentRPC\":\"JSON\"}",
+            "{\"code\":1,\"language\":\"JAVA\",\"version\":0,\"opaque\":1,\"flag\":1,\"remark\":\"remark\",\"\
+             extFields\":{},\"serializeTypeCurrentRPC\":\"JSON\"}",
             serde_json::to_string(&command).unwrap()
         );
     }

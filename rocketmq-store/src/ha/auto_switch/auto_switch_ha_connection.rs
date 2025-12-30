@@ -27,10 +27,7 @@ use crate::ha::HAConnectionError;
 pub struct AutoSwitchHAConnection;
 
 impl HAConnection for AutoSwitchHAConnection {
-    async fn start(
-        &mut self,
-        conn: WeakArcMut<GeneralHAConnection>,
-    ) -> Result<(), HAConnectionError> {
+    async fn start(&mut self, conn: WeakArcMut<GeneralHAConnection>) -> Result<(), HAConnectionError> {
         todo!()
     }
 

@@ -24,8 +24,8 @@ use clap::Parser;
     author = "mxsm",
     version = "0.8.0",
     about = "RocketMQ Controller Server (Rust)",
-    long_about = "RocketMQ Controller Server implemented in Rust.\nResponsible for broker \
-                  metadata management and leader election."
+    long_about = "RocketMQ Controller Server implemented in Rust.\nResponsible for broker metadata management and \
+                  leader election."
 )]
 pub struct Args {
     /// Controller configuration file path

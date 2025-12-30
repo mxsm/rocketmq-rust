@@ -36,8 +36,8 @@ impl Display for RollbackStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "RollbackStats [brokerName={}, queueId={}, brokerOffset={}, consumerOffset={}, \
-             timestampOffset={}, rollbackOffset={}]",
+            "RollbackStats [brokerName={}, queueId={}, brokerOffset={}, consumerOffset={}, timestampOffset={}, \
+             rollbackOffset={}]",
             self.broker_name,
             self.queue_id,
             self.broker_offset,
@@ -107,8 +107,8 @@ mod tests {
         let display = format!("{}", stats);
         assert_eq!(
             display,
-            "RollbackStats [brokerName=broker1, queueId=1, brokerOffset=100, consumerOffset=200, \
-             timestampOffset=300, rollbackOffset=400]"
+            "RollbackStats [brokerName=broker1, queueId=1, brokerOffset=100, consumerOffset=200, timestampOffset=300, \
+             rollbackOffset=400]"
         );
     }
 }

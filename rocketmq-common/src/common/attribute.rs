@@ -105,8 +105,7 @@ mod tests {
 
     #[test]
     fn set_attribute_changeable() {
-        let mut attribute =
-            AttributeBase::new(CheetahString::from_static_str("test_attribute"), false);
+        let mut attribute = AttributeBase::new(CheetahString::from_static_str("test_attribute"), false);
         attribute.set_changeable(true);
         assert!(attribute.is_changeable());
     }

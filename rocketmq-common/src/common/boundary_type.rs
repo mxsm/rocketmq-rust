@@ -202,30 +202,15 @@ mod tests {
 
     #[test]
     fn boundary_type_from_str_parses_correctly() {
-        assert_eq!(
-            "UPPER".parse::<BoundaryType>().unwrap(),
-            BoundaryType::Upper
-        );
-        assert_eq!(
-            "upper".parse::<BoundaryType>().unwrap(),
-            BoundaryType::Upper
-        );
-        assert_eq!(
-            "LOWER".parse::<BoundaryType>().unwrap(),
-            BoundaryType::Lower
-        );
-        assert_eq!(
-            "lower".parse::<BoundaryType>().unwrap(),
-            BoundaryType::Lower
-        );
+        assert_eq!("UPPER".parse::<BoundaryType>().unwrap(), BoundaryType::Upper);
+        assert_eq!("upper".parse::<BoundaryType>().unwrap(), BoundaryType::Upper);
+        assert_eq!("LOWER".parse::<BoundaryType>().unwrap(), BoundaryType::Lower);
+        assert_eq!("lower".parse::<BoundaryType>().unwrap(), BoundaryType::Lower);
     }
 
     #[test]
     fn boundary_type_from_str_defaults_to_lower_for_invalid() {
-        assert_eq!(
-            "invalid".parse::<BoundaryType>().unwrap(),
-            BoundaryType::Lower
-        );
+        assert_eq!("invalid".parse::<BoundaryType>().unwrap(), BoundaryType::Lower);
         assert_eq!("".parse::<BoundaryType>().unwrap(), BoundaryType::Lower);
     }
 }

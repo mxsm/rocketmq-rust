@@ -268,11 +268,7 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     /// // Both filters
     /// let filtered = provider.list_acl(Some("user:alice"), Some("Topic:")).await?;
     /// ```
-    async fn list_acl(
-        &self,
-        subject_filter: Option<&str>,
-        resource_filter: Option<&str>,
-    ) -> MetadataResult<Vec<Acl>>;
+    async fn list_acl(&self, subject_filter: Option<&str>, resource_filter: Option<&str>) -> MetadataResult<Vec<Acl>>;
 }
 
 /// No-op authorization metadata provider for testing and disabled scenarios.
@@ -427,9 +423,7 @@ mod tests {
     async fn test_noop_provider_list_with_filters() {
         let provider = NoopMetadataProvider::new();
 
-        let result = provider
-            .list_acl(Some("user:test"), Some("Topic:test"))
-            .await;
+        let result = provider.list_acl(Some("user:test"), Some("Topic:test")).await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
     }

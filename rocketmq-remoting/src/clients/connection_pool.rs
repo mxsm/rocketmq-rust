@@ -393,9 +393,7 @@ impl<PR> ConnectionPool<PR> {
     /// * `Some(metrics)` - Metrics for the connection
     /// * `None` - Connection not in pool
     pub fn get_metrics(&self, addr: &CheetahString) -> Option<Arc<ConnectionMetrics>> {
-        self.connections
-            .get(addr)
-            .map(|entry| entry.value().metrics.clone())
+        self.connections.get(addr).map(|entry| entry.value().metrics.clone())
     }
 
     /// Record successful request on connection.
@@ -573,10 +571,7 @@ impl<PR> ConnectionPool<PR> {
                     }
                 }
 
-                debug!(
-                    "Connection pool size: {} (after cleanup)",
-                    connections.len()
-                );
+                debug!("Connection pool size: {} (after cleanup)", connections.len());
             }
         })
     }

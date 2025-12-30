@@ -221,11 +221,7 @@ fn has_serde_flatten_attribute(field: &syn::Field) -> bool {
                 // Parse the nested metadata of the `serde` attribute
                 let _ = attr.parse_nested_meta(|meta| {
                     // Check if any segment within the `serde` path is named "flatten"
-                    has_serde_flatten_attribute = meta
-                        .path
-                        .segments
-                        .iter()
-                        .any(|segment| segment.ident == "flatten");
+                    has_serde_flatten_attribute = meta.path.segments.iter().any(|segment| segment.ident == "flatten");
                     Ok(())
                 });
 

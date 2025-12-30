@@ -123,9 +123,7 @@ impl<T: Default> AsyncSegmentedLock<T> {
         let segment_count = segment_count.next_power_of_two();
         let segment_mask = segment_count - 1;
 
-        let segments = (0..segment_count)
-            .map(|_| RwLock::new(T::default()))
-            .collect();
+        let segments = (0..segment_count).map(|_| RwLock::new(T::default())).collect();
 
         Self {
             segments,

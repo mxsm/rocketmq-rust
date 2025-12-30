@@ -184,9 +184,9 @@ impl AttributeUtil {
             }
 
             if !delete {
-                attribute.verify(value).map_err(|e| {
-                    AttributeError::AttributeVerificationFailed(format!("Key: {key}, Error: {e}"))
-                })?;
+                attribute
+                    .verify(value)
+                    .map_err(|e| AttributeError::AttributeVerificationFailed(format!("Key: {key}, Error: {e}")))?;
             }
         }
 
@@ -220,12 +220,7 @@ mod tests {
         let mut new_attributes = HashMap::new();
         new_attributes.insert("-key1".into(), "".into());
 
-        let result = AttributeUtil::alter_current_attributes(
-            true,
-            &all,
-            &current_attributes,
-            &new_attributes,
-        );
+        let result = AttributeUtil::alter_current_attributes(true, &all, &current_attributes, &new_attributes);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
@@ -240,12 +235,7 @@ mod tests {
         let mut new_attributes = HashMap::new();
         new_attributes.insert("-key1".into(), "".into());
 
-        let result = AttributeUtil::alter_current_attributes(
-            false,
-            &all,
-            &current_attributes,
-            &new_attributes,
-        );
+        let result = AttributeUtil::alter_current_attributes(false, &all, &current_attributes, &new_attributes);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
@@ -260,12 +250,7 @@ mod tests {
         let mut new_attributes = HashMap::new();
         new_attributes.insert("key1".into(), "value1".into());
 
-        let result = AttributeUtil::alter_current_attributes(
-            false,
-            &all,
-            &current_attributes,
-            &new_attributes,
-        );
+        let result = AttributeUtil::alter_current_attributes(false, &all, &current_attributes, &new_attributes);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "Wrong format key: key1");
     }

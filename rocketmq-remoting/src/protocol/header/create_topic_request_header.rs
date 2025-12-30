@@ -91,17 +91,13 @@ mod tests {
 
         let map = header.to_map().unwrap();
         assert_eq!(
-            map.get(&CheetahString::from_static_str(
-                CreateTopicRequestHeader::TOPIC
-            ))
-            .unwrap(),
+            map.get(&CheetahString::from_static_str(CreateTopicRequestHeader::TOPIC))
+                .unwrap(),
             &CheetahString::from("test_topic")
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str(
-                CreateTopicRequestHeader::DEFAULT_TOPIC
-            ))
-            .unwrap(),
+            map.get(&CheetahString::from_static_str(CreateTopicRequestHeader::DEFAULT_TOPIC))
+                .unwrap(),
             &CheetahString::from("default_topic")
         );
         assert_eq!(
@@ -119,10 +115,8 @@ mod tests {
             &CheetahString::from("4")
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str(
-                CreateTopicRequestHeader::PERM
-            ))
-            .unwrap(),
+            map.get(&CheetahString::from_static_str(CreateTopicRequestHeader::PERM))
+                .unwrap(),
             &CheetahString::from("6")
         );
         assert_eq!(
@@ -140,24 +134,18 @@ mod tests {
             &CheetahString::from("1")
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str(
-                CreateTopicRequestHeader::ORDER
-            ))
-            .unwrap(),
+            map.get(&CheetahString::from_static_str(CreateTopicRequestHeader::ORDER))
+                .unwrap(),
             &CheetahString::from("true")
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str(
-                CreateTopicRequestHeader::ATTRIBUTES
-            ))
-            .unwrap(),
+            map.get(&CheetahString::from_static_str(CreateTopicRequestHeader::ATTRIBUTES))
+                .unwrap(),
             &CheetahString::from("attributes")
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str(
-                CreateTopicRequestHeader::FORCE
-            ))
-            .unwrap(),
+            map.get(&CheetahString::from_static_str(CreateTopicRequestHeader::FORCE))
+                .unwrap(),
             &CheetahString::from("true")
         );
     }

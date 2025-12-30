@@ -76,18 +76,14 @@ impl CommandExecute for TopicListSubCommand {
 
             let topic_list = default_mq_admin_ext.fetch_all_topic_list().await?;
             for topic in &topic_list.topic_list {
-                if topic.starts_with(RETRY_GROUP_TOPIC_PREFIX)
-                    || topic.starts_with(DLQ_GROUP_TOPIC_PREFIX)
-                {
+                if topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) || topic.starts_with(DLQ_GROUP_TOPIC_PREFIX) {
                     continue;
                 }
 
                 let _ = self
                     .find_topic_belong_to_which_cluster(topic, &cluster_info, &default_mq_admin_ext)
                     .await?;
-                let mut group_list = default_mq_admin_ext
-                    .query_topic_consume_by_who(topic.clone())
-                    .await?;
+                let mut group_list = default_mq_admin_ext.query_topic_consume_by_who(topic.clone()).await?;
 
                 if group_list.get_group_list().is_empty() {
                     group_list.group_list.insert("".into());

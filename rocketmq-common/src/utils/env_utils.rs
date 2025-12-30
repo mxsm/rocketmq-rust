@@ -195,13 +195,7 @@ mod tests {
         let result = EnvUtils::get_rocketmq_home();
 
         // Assert
-        assert_eq!(
-            result,
-            std::env::current_dir()
-                .unwrap()
-                .to_string_lossy()
-                .to_string()
-        );
+        assert_eq!(result, std::env::current_dir().unwrap().to_string_lossy().to_string());
     }
 
     #[test]
@@ -269,10 +263,7 @@ mod tests {
 
     #[test]
     fn returns_default_when_env_variable_as_i32_not_set() {
-        assert_eq!(
-            EnvUtils::get_property_as_i32("NON_EXISTENT_INT_KEY", 10),
-            10
-        );
+        assert_eq!(EnvUtils::get_property_as_i32("NON_EXISTENT_INT_KEY", 10), 10);
     }
 
     #[test]
@@ -284,14 +275,8 @@ mod tests {
 
     #[test]
     fn returns_default_when_env_variable_as_bool_not_set() {
-        assert!(EnvUtils::get_property_as_bool(
-            "NON_EXISTENT_BOOL_KEY",
-            true
-        ));
-        assert!(!EnvUtils::get_property_as_bool(
-            "NON_EXISTENT_BOOL_KEY",
-            false
-        ));
+        assert!(EnvUtils::get_property_as_bool("NON_EXISTENT_BOOL_KEY", true));
+        assert!(!EnvUtils::get_property_as_bool("NON_EXISTENT_BOOL_KEY", false));
     }
 
     #[test]

@@ -125,28 +125,16 @@ fn main() {
     let roundtrip_duration = start.elapsed();
 
     println!("  Total time: {:?}", roundtrip_duration);
-    println!(
-        "  Per operation: {:?}",
-        roundtrip_duration / ITERATIONS as u32
-    );
+    println!("  Per operation: {:?}", roundtrip_duration / ITERATIONS as u32);
     println!(
         "  Throughput: {:.2} ops/sec\n",
         ITERATIONS as f64 / roundtrip_duration.as_secs_f64()
     );
 
     println!("\n=== Summary ===");
-    println!(
-        "Encoding:  {:?} per op",
-        encode_duration / ITERATIONS as u32
-    );
-    println!(
-        "Decoding:  {:?} per op",
-        decode_duration / ITERATIONS as u32
-    );
-    println!(
-        "Roundtrip: {:?} per op",
-        roundtrip_duration / ITERATIONS as u32
-    );
+    println!("Encoding:  {:?} per op", encode_duration / ITERATIONS as u32);
+    println!("Decoding:  {:?} per op", decode_duration / ITERATIONS as u32);
+    println!("Roundtrip: {:?} per op", roundtrip_duration / ITERATIONS as u32);
 
     #[cfg(feature = "simd")]
     println!("\n✓ SIMD-JSON enabled");

@@ -64,9 +64,7 @@ pub trait ConfigManager {
     /// * `false` if the configuration loading fails.
     fn load_bak(&self) -> bool {
         let file_name = self.config_file_path();
-        if let Ok(ref content) =
-            FileUtils::file_to_string(format!("{}{}", file_name, ".bak").as_str())
-        {
+        if let Ok(ref content) = FileUtils::file_to_string(format!("{}{}", file_name, ".bak").as_str()) {
             if !content.is_empty() {
                 self.decode(content);
                 info!("load Config file: {}.bak -----OK", file_name);

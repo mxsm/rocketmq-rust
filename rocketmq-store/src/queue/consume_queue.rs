@@ -46,10 +46,7 @@ pub trait ConsumeQueueTrait: FileQueueLifeCycle {
     ///
     /// # Returns
     /// An iterator over CqUnits
-    fn iterate_from(
-        &self,
-        start_index: i64,
-    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>>;
+    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>>;
 
     /// Get the units from the start offset with count limit
     ///
@@ -145,11 +142,7 @@ pub trait ConsumeQueueTrait: FileQueueLifeCycle {
     ///
     /// # Returns
     /// The offset (index) of the message
-    fn get_offset_in_queue_by_time_with_boundary(
-        &self,
-        timestamp: i64,
-        boundary_type: BoundaryType,
-    ) -> i64;
+    fn get_offset_in_queue_by_time_with_boundary(&self, timestamp: i64, boundary_type: BoundaryType) -> i64;
 
     /// Get the maximum physical offset in the commit log that has been dispatched to this queue
     ///
@@ -206,11 +199,7 @@ pub trait ConsumeQueueTrait: FileQueueLifeCycle {
     ///
     /// # Returns
     /// Result indicating success or failure
-    fn assign_queue_offset(
-        &self,
-        queue_offset_assigner: &QueueOffsetOperator,
-        msg: &mut MessageExtBrokerInner,
-    );
+    fn assign_queue_offset(&self, queue_offset_assigner: &QueueOffsetOperator, msg: &mut MessageExtBrokerInner);
 
     /// Increase the queue offset for a message
     ///

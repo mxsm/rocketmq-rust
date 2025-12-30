@@ -36,9 +36,7 @@ use rocketmq_controller::typ::Node;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .init();
+    tracing_subscriber::fmt().with_max_level(tracing::Level::INFO).init();
 
     println!("=== OpenRaft Single Node Example ===\n");
 
@@ -148,10 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let all_topics = store.state_machine.get_all_topics();
     println!("   Registered Topics: {}", all_topics.len());
     for topic in all_topics {
-        println!(
-            "     - {}: {} queues",
-            topic.topic_name, topic.read_queue_nums
-        );
+        println!("     - {}: {} queues", topic.topic_name, topic.read_queue_nums);
     }
     println!();
 

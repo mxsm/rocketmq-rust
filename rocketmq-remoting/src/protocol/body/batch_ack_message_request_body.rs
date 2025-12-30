@@ -57,10 +57,7 @@ mod tests {
         let deserialized: BatchAckMessageRequestBody = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized.broker_name, CheetahString::from("broker1"));
         assert_eq!(deserialized.acks.len(), 1);
-        assert_eq!(
-            deserialized.acks[0].consumer_group,
-            CheetahString::from("group1")
-        );
+        assert_eq!(deserialized.acks[0].consumer_group, CheetahString::from("group1"));
     }
 
     #[test]

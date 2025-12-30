@@ -162,10 +162,7 @@ impl MQAdminExtInnerImpl {
         unimplemented!()
     }
 
-    async fn examine_topic_stats_concurrent(
-        &self,
-        topic: CheetahString,
-    ) -> AdminToolResult<TopicStatsTable> {
+    async fn examine_topic_stats_concurrent(&self, topic: CheetahString) -> AdminToolResult<TopicStatsTable> {
         unimplemented!()
     }
 
@@ -173,17 +170,11 @@ impl MQAdminExtInnerImpl {
         unimplemented!()
     }
 
-    async fn fetch_topics_by_cluster(
-        &self,
-        cluster_name: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<TopicList> {
+    async fn fetch_topics_by_cluster(&self, cluster_name: CheetahString) -> rocketmq_error::RocketMQResult<TopicList> {
         unimplemented!()
     }
 
-    async fn fetch_broker_runtime_stats(
-        &self,
-        broker_addr: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<KVTable> {
+    async fn fetch_broker_runtime_stats(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<KVTable> {
         unimplemented!()
     }
 
@@ -208,10 +199,7 @@ impl MQAdminExtInnerImpl {
         unimplemented!()
     }
 
-    async fn examine_topic_route_info(
-        &self,
-        topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<TopicRouteData> {
+    async fn examine_topic_route_info(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<TopicRouteData> {
         unimplemented!()
     }
 
@@ -256,12 +244,7 @@ impl MQAdminExtInnerImpl {
         unimplemented!()
     }
 
-    async fn put_kv_config(
-        &self,
-        namespace: CheetahString,
-        key: CheetahString,
-        value: CheetahString,
-    ) {
+    async fn put_kv_config(&self, namespace: CheetahString, key: CheetahString, value: CheetahString) {
         unimplemented!()
     }
 
@@ -273,10 +256,7 @@ impl MQAdminExtInnerImpl {
         unimplemented!()
     }
 
-    async fn get_kv_list_by_namespace(
-        &self,
-        namespace: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<KVTable> {
+    async fn get_kv_list_by_namespace(&self, namespace: CheetahString) -> rocketmq_error::RocketMQResult<KVTable> {
         unimplemented!()
     }
 
@@ -390,24 +370,15 @@ impl MQAdminExtInnerImpl {
         unimplemented!()
     }
 
-    async fn query_topic_consume_by_who(
-        &self,
-        topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<GroupList> {
+    async fn query_topic_consume_by_who(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<GroupList> {
         unimplemented!()
     }
 
-    async fn query_topics_by_consumer(
-        &self,
-        group: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<TopicList> {
+    async fn query_topics_by_consumer(&self, group: CheetahString) -> rocketmq_error::RocketMQResult<TopicList> {
         unimplemented!()
     }
 
-    async fn query_topics_by_consumer_concurrent(
-        &self,
-        group: CheetahString,
-    ) -> AdminToolResult<TopicList> {
+    async fn query_topics_by_consumer_concurrent(&self, group: CheetahString) -> AdminToolResult<TopicList> {
         unimplemented!()
     }
 
@@ -513,10 +484,7 @@ impl MQAdminExtInnerImpl {
         stats_key: CheetahString,
     ) -> rocketmq_error::RocketMQResult<BrokerStatsData>{ unimplemented!()}*/
 
-    async fn get_cluster_list(
-        &self,
-        topic: String,
-    ) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>> {
+    async fn get_cluster_list(&self, topic: String) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>> {
         unimplemented!()
     }
 
@@ -527,10 +495,7 @@ impl MQAdminExtInnerImpl {
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<ConsumeStatsList>{ unimplemented!()}*/
 
-    async fn get_topic_cluster_list(
-        &self,
-        topic: String,
-    ) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>> {
+    async fn get_topic_cluster_list(&self, topic: String) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>> {
         unimplemented!()
     }
 
@@ -584,8 +549,7 @@ impl MQAdminExtInnerImpl {
     async fn get_name_server_config(
         &self,
         name_servers: Vec<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>
-    {
+    ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>> {
         unimplemented!()
     }
 
@@ -693,8 +657,7 @@ impl MQAdminExtInnerImpl {
     async fn get_controller_config(
         &self,
         controller_servers: Vec<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>
-    {
+    ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>> {
         unimplemented!()
     }
 

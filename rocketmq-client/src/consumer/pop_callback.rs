@@ -81,10 +81,7 @@ where
 ///
 /// This type alias defines a callback function that takes a `PopResult` and returns a boxed future.
 pub type PopCallbackFn = Arc<
-    dyn Fn(
-            Option<PopResult>,
-            Option<Box<dyn std::error::Error>>,
-        ) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>>
+    dyn Fn(Option<PopResult>, Option<Box<dyn std::error::Error>>) -> Pin<Box<dyn Future<Output = ()> + Send + Sync>>
         + Send
         + Sync,
 >;
@@ -109,14 +106,8 @@ impl PopCallback for DefaultPopCallback {
             .await;
         match pop_result.pop_status {
             PopStatus::Found => {
-                if pop_result
-                    .msg_found_list
-                    .as_ref()
-                    .is_none_or(|value| value.is_empty())
-                {
-                    push_consumer_impl
-                        .execute_pop_request_immediately(pop_request)
-                        .await;
+                if pop_result.msg_found_list.as_ref().is_none_or(|value| value.is_empty()) {
+                    push_consumer_impl.execute_pop_request_immediately(pop_request).await;
                 } else {
                     push_consumer_impl
                         .consume_message_pop_service
@@ -132,22 +123,16 @@ impl PopCallback for DefaultPopCallback {
                     if pull_interval > 0 {
                         push_consumer_impl.execute_pop_request_later(pop_request, pull_interval);
                     } else {
-                        push_consumer_impl
-                            .execute_pop_request_immediately(pop_request)
-                            .await;
+                        push_consumer_impl.execute_pop_request_immediately(pop_request).await;
                     }
                 }
             }
             PopStatus::NoNewMsg | PopStatus::PollingNotFound => {
-                push_consumer_impl
-                    .execute_pop_request_immediately(pop_request)
-                    .await;
+                push_consumer_impl.execute_pop_request_immediately(pop_request).await;
             }
             PopStatus::PollingFull => {
-                let pull_time_delay_mills_when_exception =
-                    push_consumer_impl.pull_time_delay_mills_when_exception;
-                push_consumer_impl
-                    .execute_pop_request_later(pop_request, pull_time_delay_mills_when_exception);
+                let pull_time_delay_mills_when_exception = push_consumer_impl.pull_time_delay_mills_when_exception;
+                push_consumer_impl.execute_pop_request_later(pop_request, pull_time_delay_mills_when_exception);
             }
         }
     }
@@ -162,9 +147,7 @@ impl PopCallback for DefaultPopCallback {
             if let Some(er) = err.downcast_ref::<RocketmqError>() {
                 match er {
                     RocketmqError::MQClientBrokerError(broker_error) => {
-                        if ResponseCode::from(broker_error.response_code())
-                            == ResponseCode::SubscriptionNotLatest
-                        {
+                        if ResponseCode::from(broker_error.response_code()) == ResponseCode::SubscriptionNotLatest {
                             warn!(
                                 "the subscription is not latest, group={}",
                                 push_consumer_impl.consumer_config.consumer_group,
@@ -193,8 +176,7 @@ impl PopCallback for DefaultPopCallback {
         let time_delay = if let Some(er) = err.downcast_ref::<RocketmqError>() {
             match er {
                 RocketmqError::MQClientBrokerError(broker_error) => {
-                    if ResponseCode::from(broker_error.response_code()) == ResponseCode::FlowControl
-                    {
+                    if ResponseCode::from(broker_error.response_code()) == ResponseCode::FlowControl {
                         PULL_TIME_DELAY_MILLS_WHEN_BROKER_FLOW_CONTROL
                     } else {
                         push_consumer_impl.pull_time_delay_mills_when_exception

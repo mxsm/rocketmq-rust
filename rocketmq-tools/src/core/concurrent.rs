@@ -89,11 +89,7 @@ where
 /// Batch process items with concurrent queries
 ///
 /// Splits items into batches and processes each batch concurrently.
-pub async fn batch_query<I, F, T>(
-    items: Vec<I>,
-    batch_size: usize,
-    query_fn: impl Fn(I) -> F,
-) -> Vec<RocketMQResult<T>>
+pub async fn batch_query<I, F, T>(items: Vec<I>, batch_size: usize, query_fn: impl Fn(I) -> F) -> Vec<RocketMQResult<T>>
 where
     F: Future<Output = RocketMQResult<T>>,
     I: Clone,

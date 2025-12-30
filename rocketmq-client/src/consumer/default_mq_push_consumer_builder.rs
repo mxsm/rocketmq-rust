@@ -155,11 +155,7 @@ impl DefaultMQPushConsumerBuilder {
         self
     }
 
-    pub fn subscribe(
-        mut self,
-        topic: impl Into<CheetahString>,
-        sub_expression: impl Into<CheetahString>,
-    ) -> Self {
+    pub fn subscribe(mut self, topic: impl Into<CheetahString>, sub_expression: impl Into<CheetahString>) -> Self {
         self.topic_sub_expression.0 = Some(topic.into());
         self.topic_sub_expression.1 = Some(sub_expression.into());
         self
@@ -191,10 +187,7 @@ impl DefaultMQPushConsumerBuilder {
         self
     }
 
-    pub fn adjust_thread_pool_nums_threshold(
-        mut self,
-        adjust_thread_pool_nums_threshold: u64,
-    ) -> Self {
+    pub fn adjust_thread_pool_nums_threshold(mut self, adjust_thread_pool_nums_threshold: u64) -> Self {
         self.adjust_thread_pool_nums_threshold = Some(adjust_thread_pool_nums_threshold);
         self
     }
@@ -264,10 +257,7 @@ impl DefaultMQPushConsumerBuilder {
         self
     }
 
-    pub fn suspend_current_queue_time_millis(
-        mut self,
-        suspend_current_queue_time_millis: u64,
-    ) -> Self {
+    pub fn suspend_current_queue_time_millis(mut self, suspend_current_queue_time_millis: u64) -> Self {
         self.suspend_current_queue_time_millis = Some(suspend_current_queue_time_millis);
         self
     }
@@ -287,18 +277,12 @@ impl DefaultMQPushConsumerBuilder {
         self
     }
 
-    pub fn await_termination_millis_when_shutdown(
-        mut self,
-        await_termination_millis_when_shutdown: u64,
-    ) -> Self {
+    pub fn await_termination_millis_when_shutdown(mut self, await_termination_millis_when_shutdown: u64) -> Self {
         self.await_termination_millis_when_shutdown = Some(await_termination_millis_when_shutdown);
         self
     }
 
-    pub fn trace_dispatcher(
-        mut self,
-        trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>,
-    ) -> Self {
+    pub fn trace_dispatcher(mut self, trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>) -> Self {
         self.trace_dispatcher = trace_dispatcher;
         self
     }
@@ -329,8 +313,7 @@ impl DefaultMQPushConsumerBuilder {
         consumer_config.consume_timestamp = self.consume_timestamp.take();
 
         if self.allocate_message_queue_strategy.is_some() {
-            consumer_config.allocate_message_queue_strategy =
-                self.allocate_message_queue_strategy.take();
+            consumer_config.allocate_message_queue_strategy = self.allocate_message_queue_strategy.take();
         }
         if let Some(subscription) = self.subscription {
             consumer_config.subscription = subscription;
@@ -400,11 +383,8 @@ impl DefaultMQPushConsumerBuilder {
         if let Some(pop_batch_nums) = self.pop_batch_nums {
             consumer_config.pop_batch_nums = pop_batch_nums;
         }
-        if let Some(await_termination_millis_when_shutdown) =
-            self.await_termination_millis_when_shutdown
-        {
-            consumer_config.await_termination_millis_when_shutdown =
-                await_termination_millis_when_shutdown;
+        if let Some(await_termination_millis_when_shutdown) = self.await_termination_millis_when_shutdown {
+            consumer_config.await_termination_millis_when_shutdown = await_termination_millis_when_shutdown;
         }
         consumer_config.trace_dispatcher = self.trace_dispatcher.clone();
         if let Some(client_rebalance) = self.client_rebalance {
@@ -412,16 +392,11 @@ impl DefaultMQPushConsumerBuilder {
         }
         consumer_config.rpc_hook = self.rpc_hook.clone();
 
-        let mut consumer = DefaultMQPushConsumer::new(
-            self.client_config.take().unwrap_or_default(),
-            consumer_config,
-        );
+        let mut consumer = DefaultMQPushConsumer::new(self.client_config.take().unwrap_or_default(), consumer_config);
         if self.topic_sub_expression.0.is_some() && self.topic_sub_expression.1.is_some() {
             let topic = self.topic_sub_expression.0.take().unwrap();
             let sub_expression = self.topic_sub_expression.1.take().unwrap();
-            consumer
-                .subscribe(&topic, &sub_expression)
-                .expect("subscribe failed");
+            consumer.subscribe(&topic, &sub_expression).expect("subscribe failed");
         }
         consumer
     }

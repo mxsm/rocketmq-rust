@@ -28,9 +28,8 @@ const ENDPOINT_PREFIX: &str = "(\\w+://|)";
 pub static NAMESRV_ENDPOINT_PATTERN: std::sync::LazyLock<Regex> =
     std::sync::LazyLock::new(|| Regex::new("^http://.*").unwrap());
 
-pub static INST_ENDPOINT_PATTERN: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    Regex::new(&format!("^{ENDPOINT_PREFIX}{INSTANCE_REGEX}")).unwrap()
-});
+pub static INST_ENDPOINT_PATTERN: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(&format!("^{ENDPOINT_PREFIX}{INSTANCE_REGEX}")).unwrap());
 
 pub struct NameServerAddressUtils;
 

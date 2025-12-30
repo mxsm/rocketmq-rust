@@ -91,8 +91,7 @@ mod tests {
         println!("{}", display);
         assert_eq!(
             display,
-            "MessageTrack [consumerGroup=test_consumer_group, trackType=CONSUMED, \
-             exceptionDesc=test_exception_desc]"
+            "MessageTrack [consumerGroup=test_consumer_group, trackType=CONSUMED, exceptionDesc=test_exception_desc]"
         );
 
         message_track.set_consumer_group("test_consumer_group2".to_string());

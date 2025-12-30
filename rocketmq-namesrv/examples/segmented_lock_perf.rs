@@ -101,10 +101,7 @@ fn main() {
     let duration = Duration::from_secs(2);
     let thread_counts = vec![1, 2, 4, 8, 16];
 
-    println!(
-        "Test parameters: each test runs for {} seconds",
-        duration.as_secs()
-    );
+    println!("Test parameters: each test runs for {} seconds", duration.as_secs());
     println!("Segment count: 16 segments\n");
 
     println!("─────────────────────────────────────────────────────────────");
@@ -173,10 +170,7 @@ fn main() {
 
     println!("📊 Conclusions:");
     println!("  • Segmented lock significantly reduces lock contention via 16-way concurrency");
-    println!(
-        "  • Performance improvement is most significant in high concurrency scenarios (8-16 \
-         threads)"
-    );
+    println!("  • Performance improvement is most significant in high concurrency scenarios (8-16 threads)");
     println!("  • Well-suited for NameServer's route query scenarios (read-heavy workloads)");
     println!("  • Implements Java global lock semantics with better performance\n");
 }

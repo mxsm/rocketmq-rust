@@ -33,9 +33,7 @@ pub struct TopicQueueMappingSerializeWrapper {
 
 impl TopicQueueMappingSerializeWrapper {
     pub fn new(
-        topic_queue_mapping_info_map: Option<
-            DashMap<CheetahString, ArcMut<TopicQueueMappingDetail>>,
-        >,
+        topic_queue_mapping_info_map: Option<DashMap<CheetahString, ArcMut<TopicQueueMappingDetail>>>,
         data_version: Option<DataVersion>,
     ) -> Self {
         Self {
@@ -46,9 +44,7 @@ impl TopicQueueMappingSerializeWrapper {
 }
 
 impl TopicQueueMappingSerializeWrapper {
-    pub fn topic_queue_mapping_info_map(
-        &self,
-    ) -> Option<&DashMap<CheetahString, ArcMut<TopicQueueMappingDetail>>> {
+    pub fn topic_queue_mapping_info_map(&self) -> Option<&DashMap<CheetahString, ArcMut<TopicQueueMappingDetail>>> {
         self.topic_queue_mapping_info_map.as_ref()
     }
 

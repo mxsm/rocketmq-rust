@@ -146,18 +146,11 @@ mod tests {
         };
         let map = header.to_map().unwrap();
         assert_eq!(
-            map.get(&CheetahString::from_static_str("consumerGroup"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("consumerGroup")).unwrap(),
             "test_consumer_group"
         );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("topic")).unwrap(),
-            "test_topic"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("queueId")).unwrap(),
-            "1"
-        );
+        assert_eq!(map.get(&CheetahString::from_static_str("topic")).unwrap(), "test_topic");
+        assert_eq!(map.get(&CheetahString::from_static_str("queueId")).unwrap(), "1");
     }
 
     #[test]

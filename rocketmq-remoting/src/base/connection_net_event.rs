@@ -83,18 +83,12 @@ mod tests {
         );
 
         // Same variant events should be equal
-        assert_eq!(
-            ConnectionNetEvent::DISCONNECTED,
-            ConnectionNetEvent::DISCONNECTED
-        );
+        assert_eq!(ConnectionNetEvent::DISCONNECTED, ConnectionNetEvent::DISCONNECTED);
         assert_eq!(ConnectionNetEvent::EXCEPTION, ConnectionNetEvent::EXCEPTION);
         assert_eq!(ConnectionNetEvent::IDLE, ConnectionNetEvent::IDLE);
 
         // Different variant events should not be equal
-        assert_ne!(
-            ConnectionNetEvent::DISCONNECTED,
-            ConnectionNetEvent::EXCEPTION
-        );
+        assert_ne!(ConnectionNetEvent::DISCONNECTED, ConnectionNetEvent::EXCEPTION);
         assert_ne!(ConnectionNetEvent::EXCEPTION, ConnectionNetEvent::IDLE);
         assert_ne!(ConnectionNetEvent::IDLE, ConnectionNetEvent::DISCONNECTED);
     }

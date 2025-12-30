@@ -86,8 +86,7 @@ pub mod error_messages {
         "Service not available. Possible causes: disk full, slave mode, or shutdown in progress.";
 
     /// Mapped file creation failed
-    pub const MAPPED_FILE_CREATE_FAILED: &str =
-        "Failed to create mapped file. Server may be busy or out of resources.";
+    pub const MAPPED_FILE_CREATE_FAILED: &str = "Failed to create mapped file. Server may be busy or out of resources.";
 
     /// Message illegal
     pub const MESSAGE_ILLEGAL: &str =
@@ -97,24 +96,20 @@ pub mod error_messages {
     pub const OS_PAGE_CACHE_BUSY: &str = "[PC_SYNCHRONIZED] Broker busy, starting flow control";
 
     /// In-sync replicas not enough
-    pub const IN_SYNC_REPLICAS_NOT_ENOUGH: &str =
-        "In-sync replicas not enough for synchronous replication";
+    pub const IN_SYNC_REPLICAS_NOT_ENOUGH: &str = "In-sync replicas not enough for synchronous replication";
 
     /// LMQ consume queue number exceeded
-    pub const LMQ_QUEUE_NUM_EXCEEDED: &str = "[LMQ_CONSUME_QUEUE_NUM_EXCEEDED] Light message \
-                                              queue number exceeds limit (default: 20000)";
+    pub const LMQ_QUEUE_NUM_EXCEEDED: &str =
+        "[LMQ_CONSUME_QUEUE_NUM_EXCEEDED] Light message queue number exceeds limit (default: 20000)";
 
     /// Timer flow control
-    pub const TIMER_FLOW_CONTROL: &str =
-        "Timer message under flow control. Check configuration limits.";
+    pub const TIMER_FLOW_CONTROL: &str = "Timer message under flow control. Check configuration limits.";
 
     /// Timer message illegal
-    pub const TIMER_MSG_ILLEGAL: &str =
-        "Timer message validation failed. Check delay time constraints.";
+    pub const TIMER_MSG_ILLEGAL: &str = "Timer message validation failed. Check delay time constraints.";
 
     /// Timer not enabled
-    pub const TIMER_NOT_ENABLED: &str =
-        "Accurate timer message not enabled. Set timerWheelEnable=true.";
+    pub const TIMER_NOT_ENABLED: &str = "Accurate timer message not enabled. Set timerWheelEnable=true.";
 }
 
 #[cfg(test)]

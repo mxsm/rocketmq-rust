@@ -66,32 +66,14 @@ impl Default for Message {
 
 impl Message {
     pub fn new(topic: impl Into<CheetahString>, body: &[u8]) -> Self {
-        Self::with_details(
-            topic,
-            CheetahString::new(),
-            CheetahString::new(),
-            0,
-            body,
-            true,
-        )
+        Self::with_details(topic, CheetahString::new(), CheetahString::new(), 0, body, true)
     }
 
     pub fn new_body(topic: impl Into<CheetahString>, body: Option<Bytes>) -> Self {
-        Self::with_details_body(
-            topic,
-            CheetahString::new(),
-            CheetahString::new(),
-            0,
-            body,
-            true,
-        )
+        Self::with_details_body(topic, CheetahString::new(), CheetahString::new(), 0, body, true)
     }
 
-    pub fn with_tags(
-        topic: impl Into<CheetahString>,
-        tags: impl Into<CheetahString>,
-        body: &[u8],
-    ) -> Self {
+    pub fn with_tags(topic: impl Into<CheetahString>, tags: impl Into<CheetahString>, body: &[u8]) -> Self {
         Self::with_details(topic, tags, String::new(), 0, body, true)
     }
 
@@ -166,18 +148,14 @@ impl Message {
 
     #[inline]
     pub fn set_tags(&mut self, tags: CheetahString) {
-        self.properties.insert(
-            CheetahString::from_static_str(MessageConst::PROPERTY_TAGS),
-            tags,
-        );
+        self.properties
+            .insert(CheetahString::from_static_str(MessageConst::PROPERTY_TAGS), tags);
     }
 
     #[inline]
     pub fn set_keys(&mut self, keys: CheetahString) {
-        self.properties.insert(
-            CheetahString::from_static_str(MessageConst::PROPERTY_KEYS),
-            keys,
-        );
+        self.properties
+            .insert(CheetahString::from_static_str(MessageConst::PROPERTY_KEYS), keys);
     }
 
     #[inline]
@@ -296,14 +274,9 @@ impl Display for Message {
 
         write!(
             f,
-            "Message {{ topic: {}, flag: {}, properties: {{ {} }}, body: {}, compressed_body: {}, \
-             transaction_id: {} }}",
-            self.topic,
-            self.flag,
-            properties_str,
-            body_str,
-            compressed_body_str,
-            transaction_id_str
+            "Message {{ topic: {}, flag: {}, properties: {{ {} }}, body: {}, compressed_body: {}, transaction_id: {} \
+             }}",
+            self.topic, self.flag, properties_str, body_str, compressed_body_str, transaction_id_str
         )
     }
 }

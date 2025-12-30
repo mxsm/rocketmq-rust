@@ -97,10 +97,7 @@ impl StatelessAuthorizationStrategy {
     /// let config = AuthConfig::default();
     /// let strategy = StatelessAuthorizationStrategy::new(config, None)?;
     /// ```
-    pub fn new(
-        auth_config: AuthConfig,
-        metadata_service: Option<Box<dyn Any + Send + Sync>>,
-    ) -> StrategyResult<Self> {
+    pub fn new(auth_config: AuthConfig, metadata_service: Option<Box<dyn Any + Send + Sync>>) -> StrategyResult<Self> {
         let base = AbstractAuthorizationStrategy::new(auth_config, metadata_service)?;
         debug!("StatelessAuthorizationStrategy initialized");
         Ok(Self { base })

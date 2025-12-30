@@ -117,11 +117,7 @@ async fn start_cluster() -> Result<Vec<Arc<ControllerManager>>> {
 }
 
 /// Create configuration for a cluster node
-fn create_cluster_config(
-    node_id: u64,
-    port: u16,
-    peers: Vec<RaftPeer>,
-) -> Result<ControllerConfig> {
+fn create_cluster_config(node_id: u64, port: u16, peers: Vec<RaftPeer>) -> Result<ControllerConfig> {
     use std::net::SocketAddr;
 
     let listen_addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();

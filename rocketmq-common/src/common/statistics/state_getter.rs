@@ -36,10 +36,5 @@ pub trait StateGetter: Send + Sync + 'static {
     ///
     /// * `bool` - The return value is `true` if the specified instance is online, and `false`
     ///   otherwise.
-    fn online(
-        &self,
-        instance_id: &CheetahString,
-        group: &CheetahString,
-        topic: &CheetahString,
-    ) -> bool;
+    fn online(&self, instance_id: &CheetahString, group: &CheetahString, topic: &CheetahString) -> bool;
 }

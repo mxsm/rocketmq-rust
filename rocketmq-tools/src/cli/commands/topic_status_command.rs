@@ -54,9 +54,7 @@ impl CommandExecute for TopicStatusCommand {
         let stats = TopicOperations::get_topic_stats(
             &mut admin,
             CheetahString::from(self.topic.clone()),
-            self.broker_addr
-                .as_ref()
-                .map(|s| CheetahString::from(s.clone())),
+            self.broker_addr.as_ref().map(|s| CheetahString::from(s.clone())),
         )
         .await?;
 
@@ -116,14 +114,8 @@ mod tests {
 
     #[test]
     fn test_topic_status_command() {
-        let cmd = TopicStatusCommand::try_parse_from([
-            "topic_status",
-            "-t",
-            "TestTopic",
-            "-n",
-            "127.0.0.1:9876",
-        ])
-        .unwrap();
+        let cmd =
+            TopicStatusCommand::try_parse_from(["topic_status", "-t", "TestTopic", "-n", "127.0.0.1:9876"]).unwrap();
 
         assert_eq!(cmd.topic, "TestTopic");
         assert_eq!(cmd.common.namesrv_addr, Some("127.0.0.1:9876".to_string()));

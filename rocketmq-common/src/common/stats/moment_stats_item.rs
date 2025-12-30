@@ -48,8 +48,7 @@ impl MomentStatsItem {
         let self_clone = self;
         tokio::spawn(async move {
             let initial_delay = Duration::from_millis(
-                (compute_next_minutes_time_millis() as i64 - get_current_millis() as i64)
-                    .unsigned_abs(),
+                (compute_next_minutes_time_millis() as i64 - get_current_millis() as i64).unsigned_abs(),
             );
             time::sleep(initial_delay).await;
             let interval = time::interval(Duration::from_secs(300));

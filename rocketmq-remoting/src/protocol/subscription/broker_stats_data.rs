@@ -12,11 +12,7 @@ pub struct BrokerStatsData {
 }
 
 impl BrokerStatsData {
-    pub fn new(
-        stats_minute: BrokerStatsItem,
-        stats_hour: BrokerStatsItem,
-        stats_day: BrokerStatsItem,
-    ) -> Self {
+    pub fn new(stats_minute: BrokerStatsItem, stats_hour: BrokerStatsItem, stats_day: BrokerStatsItem) -> Self {
         Self {
             stats_minute,
             stats_hour,
@@ -59,8 +55,7 @@ mod tests {
         let stats_hour = BrokerStatsItem::new(500, 15.0, 9.0);
         let stats_day = BrokerStatsItem::new(1000, 20.0, 10.0);
 
-        let broker_stats =
-            BrokerStatsData::new(stats_minute.clone(), stats_hour.clone(), stats_day.clone());
+        let broker_stats = BrokerStatsData::new(stats_minute.clone(), stats_hour.clone(), stats_day.clone());
 
         assert_eq!(broker_stats.get_stats_minute().get_sum(), 100);
         assert_eq!(broker_stats.get_stats_hour().get_sum(), 500);

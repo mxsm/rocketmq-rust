@@ -188,14 +188,8 @@ mod tests {
     #[test]
     fn ack_status_from_cheetah_string() {
         assert_eq!(AckStatus::from(CheetahString::from("OK")), AckStatus::Ok);
-        assert_eq!(
-            AckStatus::from(CheetahString::from("NO_EXIST")),
-            AckStatus::NotExist
-        );
-        assert_eq!(
-            AckStatus::from(CheetahString::from("UNKNOWN")),
-            AckStatus::default()
-        );
+        assert_eq!(AckStatus::from(CheetahString::from("NO_EXIST")), AckStatus::NotExist);
+        assert_eq!(AckStatus::from(CheetahString::from("UNKNOWN")), AckStatus::default());
     }
 
     #[test]

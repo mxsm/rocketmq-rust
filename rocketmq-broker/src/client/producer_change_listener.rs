@@ -36,10 +36,5 @@ pub trait ProducerChangeListener: Send + Sync {
     /// - `group`: The name of the producer group as a string slice.
     /// - `client_channel_info`: Optional reference to `ClientChannelInfo` containing details about
     ///   the client channel associated with the event.
-    fn handle(
-        &self,
-        event: ProducerGroupEvent,
-        group: &str,
-        client_channel_info: Option<&ClientChannelInfo>,
-    );
+    fn handle(&self, event: ProducerGroupEvent, group: &str, client_channel_info: Option<&ClientChannelInfo>);
 }

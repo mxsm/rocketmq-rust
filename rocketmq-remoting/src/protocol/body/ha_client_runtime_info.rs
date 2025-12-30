@@ -36,8 +36,8 @@ impl Display for HAClientRuntimeInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "HAClientRuntimeInfo [masterAddr={}, transferredBytesInSecond={}, maxOffset={}, \
-             lastReadTimestamp={}, lastWriteTimestamp={}, masterFlushOffset={}, isActivated={}]",
+            "HAClientRuntimeInfo [masterAddr={}, transferredBytesInSecond={}, maxOffset={}, lastReadTimestamp={}, \
+             lastWriteTimestamp={}, masterFlushOffset={}, isActivated={}]",
             self.master_addr,
             self.transferred_byte_in_second,
             self.max_offset,
@@ -98,9 +98,8 @@ mod tests {
         };
         let display = format!("{}", info);
         assert!(display.contains(
-            "HAClientRuntimeInfo [masterAddr=127.0.0.1:10911, transferredBytesInSecond=1024, \
-             maxOffset=1000, lastReadTimestamp=1627849200, lastWriteTimestamp=1627849300, \
-             masterFlushOffset=500, isActivated=true]"
+            "HAClientRuntimeInfo [masterAddr=127.0.0.1:10911, transferredBytesInSecond=1024, maxOffset=1000, \
+             lastReadTimestamp=1627849200, lastWriteTimestamp=1627849300, masterFlushOffset=500, isActivated=true]"
         ));
     }
 }

@@ -72,10 +72,7 @@ async fn main() {
     // Test 5: Global lock
     println!("Test 5: Global lock");
     let global_guards = lock.global_read_lock().await;
-    println!(
-        "✓ Global read lock acquired ({} segments)",
-        global_guards.len()
-    );
+    println!("✓ Global read lock acquired ({} segments)", global_guards.len());
     drop(global_guards);
     println!("✓ Global lock released\n");
 

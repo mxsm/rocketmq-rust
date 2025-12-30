@@ -51,21 +51,11 @@ impl TopicPublishInfo {
     }
 
     #[inline]
-    pub fn select_one_message_queue_filters(
-        &self,
-        filters: &[&dyn QueueFilter],
-    ) -> Option<MessageQueue> {
-        self.select_one_message_queue_with_filters_inner(
-            &self.message_queue_list,
-            &self.send_which_queue,
-            filters,
-        )
+    pub fn select_one_message_queue_filters(&self, filters: &[&dyn QueueFilter]) -> Option<MessageQueue> {
+        self.select_one_message_queue_with_filters_inner(&self.message_queue_list, &self.send_which_queue, filters)
     }
 
-    pub fn select_one_message_queue_by_broker(
-        &self,
-        last_broker_name: Option<&CheetahString>,
-    ) -> Option<MessageQueue> {
+    pub fn select_one_message_queue_by_broker(&self, last_broker_name: Option<&CheetahString>) -> Option<MessageQueue> {
         if let Some(last_broker_name) = last_broker_name {
             for mq in &self.message_queue_list {
                 if mq.get_broker_name() != last_broker_name {

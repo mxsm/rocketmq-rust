@@ -59,10 +59,7 @@ impl MessageEncoderPool {
     }
 
     /// Get or create an encoder for the current thread
-    fn get_or_create_encoder(
-        &self,
-        config: &Arc<MessageStoreConfig>,
-    ) -> std::cell::RefMut<'_, MessageExtEncoder> {
+    fn get_or_create_encoder(&self, config: &Arc<MessageStoreConfig>) -> std::cell::RefMut<'_, MessageExtEncoder> {
         let mut encoder_ref = self.encoder.borrow_mut();
         if encoder_ref.is_none() {
             *encoder_ref = Some(MessageExtEncoder::new(Arc::clone(config)));

@@ -69,16 +69,12 @@ impl BaseAuthorizationContext {
         if key.is_empty() {
             return;
         }
-        self.ext_info
-            .get_or_insert_with(HashMap::new)
-            .insert(key, value);
+        self.ext_info.get_or_insert_with(HashMap::new).insert(key, value);
     }
 
     /// Checks if an extension info key exists.
     pub fn has_ext_info(&self, key: &str) -> bool {
-        self.ext_info
-            .as_ref()
-            .is_some_and(|map| map.contains_key(key))
+        self.ext_info.as_ref().is_some_and(|map| map.contains_key(key))
     }
 
     /// Gets a reference to all extension info.

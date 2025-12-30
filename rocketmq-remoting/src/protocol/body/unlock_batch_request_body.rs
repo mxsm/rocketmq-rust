@@ -36,11 +36,8 @@ impl Display for UnlockBatchRequestBody {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "UnlockBatchRequestBody [consumer_group={}, client_id={}, only_this_broker={}, \
-             mq_set={:?}]",
-            self.consumer_group
-                .as_ref()
-                .unwrap_or(&CheetahString::new()),
+            "UnlockBatchRequestBody [consumer_group={}, client_id={}, only_this_broker={}, mq_set={:?}]",
+            self.consumer_group.as_ref().unwrap_or(&CheetahString::new()),
             self.client_id.as_ref().unwrap_or(&CheetahString::new()),
             self.only_this_broker,
             self.mq_set

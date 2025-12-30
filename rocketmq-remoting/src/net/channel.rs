@@ -26,7 +26,8 @@ use std::time::Duration;
 use cheetah_string::CheetahString;
 // Use flume for high-performance async channel (40-60% faster than tokio::mpsc)
 // Lock-free design provides better throughput under high load
-use flume::{Receiver, Sender};
+use flume::Receiver;
+use flume::Sender;
 use rocketmq_error::RocketMQError;
 use rocketmq_rust::ArcMut;
 use tokio::time::timeout;
@@ -103,11 +104,7 @@ impl Channel {
     /// # Returns
     ///
     /// A new channel with a randomly generated UUID as its ID.
-    pub fn new(
-        inner: ArcMut<ChannelInner>,
-        local_address: SocketAddr,
-        remote_address: SocketAddr,
-    ) -> Self {
+    pub fn new(inner: ArcMut<ChannelInner>, local_address: SocketAddr, remote_address: SocketAddr) -> Self {
         let channel_id = Uuid::new_v4().to_string().into();
         Self {
             inner,
@@ -283,9 +280,9 @@ impl Display for Channel {
 ///
 /// Encapsulates a command to send along with optional response tracking.
 type ChannelMessage = (
-    RemotingCommand, /* command */
+    RemotingCommand,                                                                       /* command */
     Option<tokio::sync::oneshot::Sender<rocketmq_error::RocketMQResult<RemotingCommand>>>, /* response_tx */
-    Option<u64>, /* timeout_millis */
+    Option<u64>,                                                                           /* timeout_millis */
 );
 
 /// Shared state for a `Channel` - handles I/O, async message queueing, and response tracking.
@@ -435,10 +432,7 @@ impl ChannelInner {
     /// - Lock-free operations for most cases
     /// - ~40-60% higher throughput than tokio::mpsc
     /// - Better performance under contention
-    pub fn new(
-        connection: Connection,
-        response_table: ArcMut<HashMap<i32, ResponseFuture>>,
-    ) -> Self {
+    pub fn new(connection: Connection, response_table: ArcMut<HashMap<i32, ResponseFuture>>) -> Self {
         const QUEUE_CAPACITY: usize = 1024;
 
         // Use flume bounded channel for better performance
@@ -630,11 +624,7 @@ impl ChannelInner {
         timeout_millis: Option<u64>,
     ) -> rocketmq_error::RocketMQResult<()> {
         // flume sender: use send_async() for async context
-        if let Err(err) = self
-            .outbound_queue_tx
-            .send_async((request, None, timeout_millis))
-            .await
-        {
+        if let Err(err) = self.outbound_queue_tx.send_async((request, None, timeout_millis)).await {
             error!("send request failed: {}", err);
             return Err(RocketMQError::network_connection_failed(
                 "channel",

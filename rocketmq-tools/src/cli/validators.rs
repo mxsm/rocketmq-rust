@@ -112,9 +112,7 @@ pub fn validate_perm(perm: i32) -> RocketMQResult<()> {
         2 | 4 | 6 => Ok(()),
         _ => Err(RocketMQError::Tools(ToolsError::ValidationError {
             field: "perm".to_string(),
-            reason: format!(
-                "Invalid value {perm}, valid values are: 2 (read), 4 (write), 6 (read+write)"
-            ),
+            reason: format!("Invalid value {perm}, valid values are: 2 (read), 4 (write), 6 (read+write)"),
         })),
     }
 }

@@ -27,9 +27,7 @@ impl NamespaceUtil {
     pub const STRING_BLANK: &'static str = "";
 
     pub fn without_namespace(resource_with_namespace: &str) -> String {
-        if resource_with_namespace.is_empty()
-            || NamespaceUtil::is_system_resource(resource_with_namespace)
-        {
+        if resource_with_namespace.is_empty() || NamespaceUtil::is_system_resource(resource_with_namespace) {
             return resource_with_namespace.to_string();
         }
 
@@ -41,8 +39,8 @@ impl NamespaceUtil {
             string_builder.push_str(mix_all::DLQ_GROUP_TOPIC_PREFIX);
         }
 
-        if let Some(index) = NamespaceUtil::without_retry_and_dlq(resource_with_namespace)
-            .find(NamespaceUtil::NAMESPACE_SEPARATOR)
+        if let Some(index) =
+            NamespaceUtil::without_retry_and_dlq(resource_with_namespace).find(NamespaceUtil::NAMESPACE_SEPARATOR)
         {
             let resource_without_namespace =
                 &NamespaceUtil::without_retry_and_dlq(resource_with_namespace)[index + 1..];
@@ -52,21 +50,13 @@ impl NamespaceUtil {
         resource_with_namespace.to_string()
     }
 
-    pub fn without_namespace_with_namespace(
-        resource_with_namespace: &str,
-        namespace: &str,
-    ) -> String {
+    pub fn without_namespace_with_namespace(resource_with_namespace: &str, namespace: &str) -> String {
         if resource_with_namespace.is_empty() || namespace.is_empty() {
             return resource_with_namespace.to_string();
         }
 
-        let resource_without_retry_and_dlq =
-            NamespaceUtil::without_retry_and_dlq(resource_with_namespace);
-        if resource_without_retry_and_dlq.starts_with(&format!(
-            "{}{}",
-            namespace,
-            NamespaceUtil::NAMESPACE_SEPARATOR
-        )) {
+        let resource_without_retry_and_dlq = NamespaceUtil::without_retry_and_dlq(resource_with_namespace);
+        if resource_without_retry_and_dlq.starts_with(&format!("{}{}", namespace, NamespaceUtil::NAMESPACE_SEPARATOR)) {
             return NamespaceUtil::without_namespace(resource_with_namespace);
         }
 
@@ -93,29 +83,18 @@ impl NamespaceUtil {
         if NamespaceUtil::is_dlq_topic(resource_without_namespace) {
             string_builder.push_str(mix_all::DLQ_GROUP_TOPIC_PREFIX);
         }
-        let resource_without_retry_and_dlq =
-            NamespaceUtil::without_retry_and_dlq(resource_without_namespace);
-        string_builder
-            + namespace
-            + &NamespaceUtil::NAMESPACE_SEPARATOR.to_string()
-            + resource_without_retry_and_dlq
+        let resource_without_retry_and_dlq = NamespaceUtil::without_retry_and_dlq(resource_without_namespace);
+        string_builder + namespace + &NamespaceUtil::NAMESPACE_SEPARATOR.to_string() + resource_without_retry_and_dlq
     }
 
     pub fn is_already_with_namespace(resource: &str, namespace: &str) -> bool {
-        if namespace.is_empty()
-            || resource.is_empty()
-            || NamespaceUtil::is_system_resource(resource)
-        {
+        if namespace.is_empty() || resource.is_empty() || NamespaceUtil::is_system_resource(resource) {
             return false;
         }
 
         let resource_without_retry_and_dlq = NamespaceUtil::without_retry_and_dlq(resource);
 
-        resource_without_retry_and_dlq.starts_with(&format!(
-            "{}{}",
-            namespace,
-            NamespaceUtil::NAMESPACE_SEPARATOR
-        ))
+        resource_without_retry_and_dlq.starts_with(&format!("{}{}", namespace, NamespaceUtil::NAMESPACE_SEPARATOR))
     }
 
     pub fn wrap_namespace_and_retry(namespace: &str, consumer_group: &str) -> Option<String> {
@@ -123,10 +102,7 @@ impl NamespaceUtil {
             return None;
         }
 
-        Some(
-            mix_all::RETRY_GROUP_TOPIC_PREFIX.to_string()
-                + &NamespaceUtil::wrap_namespace(namespace, consumer_group),
-        )
+        Some(mix_all::RETRY_GROUP_TOPIC_PREFIX.to_string() + &NamespaceUtil::wrap_namespace(namespace, consumer_group))
     }
 
     pub fn get_namespace_from_resource(resource: &str) -> String {
@@ -134,8 +110,7 @@ impl NamespaceUtil {
             return NamespaceUtil::STRING_BLANK.to_string();
         }
         let resource_without_retry_and_dlq = NamespaceUtil::without_retry_and_dlq(resource);
-        if let Some(index) = resource_without_retry_and_dlq.find(NamespaceUtil::NAMESPACE_SEPARATOR)
-        {
+        if let Some(index) = resource_without_retry_and_dlq.find(NamespaceUtil::NAMESPACE_SEPARATOR) {
             return resource_without_retry_and_dlq[..index].to_string();
         }
 
@@ -198,19 +173,13 @@ mod tests {
 
     #[test]
     fn without_namespace_with_namespace_returns_original_when_empty() {
-        assert_eq!(
-            NamespaceUtil::without_namespace_with_namespace("", "my_namespace"),
-            ""
-        );
+        assert_eq!(NamespaceUtil::without_namespace_with_namespace("", "my_namespace"), "");
     }
 
     #[test]
     fn without_namespace_with_namespace_removes_namespace() {
         assert_eq!(
-            NamespaceUtil::without_namespace_with_namespace(
-                "my_namespace%my_resource",
-                "my_namespace"
-            ),
+            NamespaceUtil::without_namespace_with_namespace("my_namespace%my_resource", "my_namespace"),
             "my_resource"
         );
     }
@@ -230,10 +199,7 @@ mod tests {
 
     #[test]
     fn is_already_with_namespace_returns_false_when_empty() {
-        assert!(!NamespaceUtil::is_already_with_namespace(
-            "",
-            "my_namespace"
-        ));
+        assert!(!NamespaceUtil::is_already_with_namespace("", "my_namespace"));
     }
 
     #[test]
@@ -246,10 +212,7 @@ mod tests {
 
     #[test]
     fn wrap_namespace_and_retry_returns_none_when_empty() {
-        assert_eq!(
-            NamespaceUtil::wrap_namespace_and_retry("my_namespace", ""),
-            None
-        );
+        assert_eq!(NamespaceUtil::wrap_namespace_and_retry("my_namespace", ""), None);
     }
 
     #[test]
@@ -308,12 +271,8 @@ mod tests {
 
     #[test]
     fn is_retry_topic_returns_true_when_retry_topic() {
-        assert!(!NamespaceUtil::is_retry_topic(
-            "RETRY_GROUP_TOPIC_PREFIXmy_topic"
-        ));
-        assert!(NamespaceUtil::is_retry_topic(
-            "%RETRY%RETRY_GROUP_TOPIC_PREFIXmy_topic"
-        ));
+        assert!(!NamespaceUtil::is_retry_topic("RETRY_GROUP_TOPIC_PREFIXmy_topic"));
+        assert!(NamespaceUtil::is_retry_topic("%RETRY%RETRY_GROUP_TOPIC_PREFIXmy_topic"));
     }
 
     #[test]
@@ -323,11 +282,7 @@ mod tests {
 
     #[test]
     fn is_dlq_topic_returns_true_when_dlq_topic() {
-        assert!(!NamespaceUtil::is_dlq_topic(
-            "DLQ_GROUP_TOPIC_PREFIXmy_topic"
-        ));
-        assert!(NamespaceUtil::is_dlq_topic(
-            "%DLQ%DLQ_GROUP_TOPIC_PREFIXmy_topic"
-        ));
+        assert!(!NamespaceUtil::is_dlq_topic("DLQ_GROUP_TOPIC_PREFIXmy_topic"));
+        assert!(NamespaceUtil::is_dlq_topic("%DLQ%DLQ_GROUP_TOPIC_PREFIXmy_topic"));
     }
 }

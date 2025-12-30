@@ -110,10 +110,7 @@ async fn main() {
     let duration = Duration::from_secs(2);
     let task_counts = vec![1, 2, 4, 8, 16];
 
-    println!(
-        "Test parameters: each test runs for {} seconds",
-        duration.as_secs()
-    );
+    println!("Test parameters: each test runs for {} seconds", duration.as_secs());
     println!("Segment count: 16 segments");
     println!("Runtime: Tokio async runtime\n");
 

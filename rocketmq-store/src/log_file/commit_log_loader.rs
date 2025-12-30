@@ -59,8 +59,7 @@ pub struct LoadStatistics {
 impl LoadStatistics {
     pub fn log_summary(&self) {
         info!(
-            "CommitLog load completed: {} files ({:.2} GB), {} removed, parallel: {}ms, total: \
-             {}ms",
+            "CommitLog load completed: {} files ({:.2} GB), {} removed, parallel: {}ms, total: {}ms",
             self.total_files,
             self.total_size_bytes as f64 / 1024.0 / 1024.0 / 1024.0,
             self.files_removed,
@@ -161,12 +160,8 @@ impl CommitLogLoader {
             .par_iter()
             .enumerate()
             .map(|(idx, path)| {
-                let metadata = fs::metadata(path).map_err(|e| {
-                    io::Error::new(
-                        e.kind(),
-                        format!("Failed to get metadata for {:?}: {}", path, e),
-                    )
-                })?;
+                let metadata = fs::metadata(path)
+                    .map_err(|e| io::Error::new(e.kind(), format!("Failed to get metadata for {:?}: {}", path, e)))?;
 
                 let size = metadata.len();
                 let file_name = path
@@ -254,10 +249,7 @@ impl CommitLogLoader {
     }
 
     /// Create mapped files in parallel (with synchronization for Vec::push)
-    fn create_mapped_files_parallel(
-        &self,
-        metadata: &[FileMetadata],
-    ) -> io::Result<Vec<Arc<DefaultMappedFile>>> {
+    fn create_mapped_files_parallel(&self, metadata: &[FileMetadata]) -> io::Result<Vec<Arc<DefaultMappedFile>>> {
         // Parallel creation with ordered collection
         let results: Result<Vec<_>, io::Error> = metadata
             .par_iter()
@@ -284,10 +276,7 @@ impl CommitLogLoader {
     }
 
     /// Fallback: sequential mapped file creation
-    fn create_mapped_files_sequential(
-        &self,
-        metadata: &[FileMetadata],
-    ) -> io::Result<Vec<Arc<DefaultMappedFile>>> {
+    fn create_mapped_files_sequential(&self, metadata: &[FileMetadata]) -> io::Result<Vec<Arc<DefaultMappedFile>>> {
         let mut mapped_files = Vec::with_capacity(metadata.len());
 
         for meta in metadata {
@@ -334,10 +323,7 @@ impl CommitLogLoader {
             } else {
                 // Optional debug logging (can be removed for production)
                 #[cfg(debug_assertions)]
-                tracing::debug!(
-                    "Applied MADV_SEQUENTIAL hint to {}",
-                    mapped_file.get_file_name()
-                );
+                tracing::debug!("Applied MADV_SEQUENTIAL hint to {}", mapped_file.get_file_name());
             }
         }
 
@@ -365,11 +351,7 @@ mod tests {
     #[test]
     fn test_load_empty_directory() {
         let temp_dir = TempDir::new().unwrap();
-        let loader = CommitLogLoader::new(
-            temp_dir.path().to_string_lossy().to_string(),
-            1024 * 1024,
-            true,
-        );
+        let loader = CommitLogLoader::new(temp_dir.path().to_string_lossy().to_string(), 1024 * 1024, true);
 
         let result = loader.load_optimized();
         assert!(result.is_ok());
@@ -387,11 +369,7 @@ mod tests {
         // Create a test file
         std::fs::write(&file_path, vec![0u8; file_size as usize]).unwrap();
 
-        let loader = CommitLogLoader::new(
-            temp_dir.path().to_string_lossy().to_string(),
-            file_size,
-            false,
-        );
+        let loader = CommitLogLoader::new(temp_dir.path().to_string_lossy().to_string(), file_size, false);
 
         let result = loader.load_optimized();
         assert!(result.is_ok());
@@ -413,11 +391,7 @@ mod tests {
             std::fs::write(&file_path, vec![0u8; file_size as usize]).unwrap();
         }
 
-        let loader = CommitLogLoader::new(
-            temp_dir.path().to_string_lossy().to_string(),
-            file_size,
-            true,
-        );
+        let loader = CommitLogLoader::new(temp_dir.path().to_string_lossy().to_string(), file_size, true);
 
         let result = loader.load_optimized();
         assert!(result.is_ok());
@@ -436,11 +410,7 @@ mod tests {
 
         std::fs::write(&file_path, vec![0u8; actual_size as usize]).unwrap();
 
-        let loader = CommitLogLoader::new(
-            temp_dir.path().to_string_lossy().to_string(),
-            expected_size,
-            false,
-        );
+        let loader = CommitLogLoader::new(temp_dir.path().to_string_lossy().to_string(), expected_size, false);
 
         let result = loader.load_optimized();
         assert!(result.is_err());

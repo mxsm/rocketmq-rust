@@ -97,9 +97,9 @@ impl CommandExecute for TopicRouteCommand {
         let format = OutputFormat::from(self.format.as_str());
         match format {
             OutputFormat::Json => {
-                let json = route_data.serialize_json().map_err(|e| {
-                    crate::core::ToolsError::internal(format!("Failed to serialize JSON: {e}"))
-                })?;
+                let json = route_data
+                    .serialize_json()
+                    .map_err(|e| crate::core::ToolsError::internal(format!("Failed to serialize JSON: {e}")))?;
                 println!("{json}");
             }
             OutputFormat::Yaml => {
@@ -142,16 +142,8 @@ impl CommandExecute for TopicRouteCommand {
                     table.with(Style::rounded());
                     println!("{table}");
 
-                    let total_read: i32 = route_data
-                        .queue_datas
-                        .iter()
-                        .map(|q| q.read_queue_nums() as i32)
-                        .sum();
-                    let total_write: i32 = route_data
-                        .queue_datas
-                        .iter()
-                        .map(|q| q.write_queue_nums() as i32)
-                        .sum();
+                    let total_read: i32 = route_data.queue_datas.iter().map(|q| q.read_queue_nums() as i32).sum();
+                    let total_write: i32 = route_data.queue_datas.iter().map(|q| q.write_queue_nums() as i32).sum();
 
                     println!(
                         "\nTotal: {} brokers, {} read queues, {} write queues",
@@ -173,13 +165,7 @@ mod tests {
 
     #[test]
     fn test_command_parsing() {
-        let cmd = TopicRouteCommand::try_parse_from([
-            "topicRoute",
-            "-t",
-            "TestTopic",
-            "-n",
-            "127.0.0.1:9876",
-        ]);
+        let cmd = TopicRouteCommand::try_parse_from(["topicRoute", "-t", "TestTopic", "-n", "127.0.0.1:9876"]);
         assert!(cmd.is_ok());
         let cmd = cmd.unwrap();
         assert_eq!(cmd.topic, "TestTopic");
@@ -187,8 +173,7 @@ mod tests {
 
     #[test]
     fn test_command_with_format() {
-        let cmd =
-            TopicRouteCommand::try_parse_from(["topicRoute", "-t", "TestTopic", "-f", "json"]);
+        let cmd = TopicRouteCommand::try_parse_from(["topicRoute", "-t", "TestTopic", "-f", "json"]);
         assert!(cmd.is_ok());
         let cmd = cmd.unwrap();
         assert_eq!(cmd.format, "json");

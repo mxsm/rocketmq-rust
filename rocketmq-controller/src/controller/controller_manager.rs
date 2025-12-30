@@ -117,16 +117,12 @@ impl ControllerManager {
         let metadata = Arc::new(MetadataStore::new(config.clone()).await?);
 
         // Initialize heartbeat manager
-        let heartbeat_manager = Arc::new(tokio::sync::Mutex::new(
-            DefaultBrokerHeartbeatManager::new(config.clone()),
-        ));
+        let heartbeat_manager = Arc::new(tokio::sync::Mutex::new(DefaultBrokerHeartbeatManager::new(
+            config.clone(),
+        )));
 
         // Initialize processor manager
-        let processor = Arc::new(ProcessorManager::new(
-            config.clone(),
-            raft.clone(),
-            metadata.clone(),
-        ));
+        let processor = Arc::new(ProcessorManager::new(config.clone(), raft.clone(), metadata.clone()));
 
         // Initialize metrics manager if feature is enabled
         #[cfg(feature = "metrics")]
@@ -381,12 +377,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_lifecycle() {
-        let config = ControllerConfig::default()
-            .with_node_info(1, "127.0.0.1:9878".parse::<SocketAddr>().unwrap());
+        let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9878".parse::<SocketAddr>().unwrap());
 
-        let manager = ControllerManager::new(config)
-            .await
-            .expect("Failed to create manager");
+        let manager = ControllerManager::new(config).await.expect("Failed to create manager");
 
         // Test initialization
         assert!(!manager.is_initialized().await);
@@ -402,12 +395,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_shutdown() {
-        let config = ControllerConfig::default()
-            .with_node_info(1, "127.0.0.1:9879".parse::<SocketAddr>().unwrap());
+        let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9879".parse::<SocketAddr>().unwrap());
 
-        let manager = ControllerManager::new(config)
-            .await
-            .expect("Failed to create manager");
+        let manager = ControllerManager::new(config).await.expect("Failed to create manager");
 
         // Initialize first
         manager.initialize().await.expect("Failed to initialize");

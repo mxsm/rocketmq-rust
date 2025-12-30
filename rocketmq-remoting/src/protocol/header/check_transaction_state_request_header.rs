@@ -59,18 +59,14 @@ mod tests {
             rpc_request_header: None,
         };
         let map = header.to_map().unwrap();
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("topic")).unwrap(),
-            "test_topic"
-        );
+        assert_eq!(map.get(&CheetahString::from_static_str("topic")).unwrap(), "test_topic");
         assert_eq!(
             map.get(&CheetahString::from_static_str("tranStateTableOffset"))
                 .unwrap(),
             "123"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("commitLogOffset"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("commitLogOffset")).unwrap(),
             "456"
         );
         assert_eq!(
@@ -78,13 +74,11 @@ mod tests {
             "test_msg_id"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("transactionId"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("transactionId")).unwrap(),
             "test_transaction_id"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("offsetMsgId"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("offsetMsgId")).unwrap(),
             "test_offset_msg_id"
         );
     }

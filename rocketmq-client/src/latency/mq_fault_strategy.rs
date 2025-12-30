@@ -36,8 +36,7 @@ thread_local! {
 }
 
 pub struct MQFaultStrategy {
-    latency_fault_tolerance:
-        ArcMut<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
+    latency_fault_tolerance: ArcMut<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
     send_latency_fault_enable: AtomicBool,
     start_detector_enable: AtomicBool,
     latency_max: &'static [u64],
@@ -75,8 +74,7 @@ impl MQFaultStrategy {
     }
 
     pub fn set_service_detector(&mut self, service_detector: DefaultServiceDetector) {
-        self.latency_fault_tolerance
-            .set_service_detector(service_detector);
+        self.latency_fault_tolerance.set_service_detector(service_detector);
     }
 
     pub fn is_start_detector_enable(&self) -> bool {
@@ -133,11 +131,7 @@ impl MQFaultStrategy {
         reachable: bool,
     ) {
         if self.send_latency_fault_enable.load(Ordering::Relaxed) {
-            let duration = self.compute_not_available_duration(if isolation {
-                10000
-            } else {
-                current_latency
-            });
+            let duration = self.compute_not_available_duration(if isolation { 10000 } else { current_latency });
             self.latency_fault_tolerance
                 .mut_from_ref()
                 .update_fault_item(broker_name, current_latency, duration, reachable)
@@ -177,8 +171,7 @@ impl QueueFilter for BrokerFilter {
 }
 
 struct ReachableFilter {
-    latency_fault_tolerance:
-        ArcMut<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
+    latency_fault_tolerance: ArcMut<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
 }
 
 impl QueueFilter for ReachableFilter {
@@ -189,8 +182,7 @@ impl QueueFilter for ReachableFilter {
 }
 
 struct AvailableFilter {
-    latency_fault_tolerance:
-        ArcMut<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
+    latency_fault_tolerance: ArcMut<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
 }
 
 impl QueueFilter for AvailableFilter {

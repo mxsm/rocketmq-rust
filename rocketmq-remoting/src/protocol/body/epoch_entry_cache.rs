@@ -73,35 +73,21 @@ mod tests {
     #[test]
     fn new_creates_instance_of_epoch_entry_cache() {
         let epoch_entry_cache = EpochEntryCache::new("cluster1", "broker1", 1, vec![EpochEntry], 1);
-        assert_eq!(
-            epoch_entry_cache.get_cluster_name(),
-            &CheetahString::from("cluster1")
-        );
+        assert_eq!(epoch_entry_cache.get_cluster_name(), &CheetahString::from("cluster1"));
         assert_eq!(epoch_entry_cache.get_broker_id(), 1);
-        assert_eq!(
-            epoch_entry_cache.get_broker_name(),
-            &CheetahString::from("broker1")
-        );
+        assert_eq!(epoch_entry_cache.get_broker_name(), &CheetahString::from("broker1"));
     }
     #[test]
     fn set_broker_name_updates_broker_name() {
-        let mut epoch_entry_cache =
-            EpochEntryCache::new("cluster1", "broker1", 1, vec![EpochEntry], 1);
+        let mut epoch_entry_cache = EpochEntryCache::new("cluster1", "broker1", 1, vec![EpochEntry], 1);
         epoch_entry_cache.set_broker_name("broker2");
-        assert_eq!(
-            epoch_entry_cache.get_broker_name(),
-            &CheetahString::from("broker2")
-        );
+        assert_eq!(epoch_entry_cache.get_broker_name(), &CheetahString::from("broker2"));
     }
 
     #[test]
     fn set_cluster_name_updates_cluster_name() {
-        let mut epoch_entry_cache =
-            EpochEntryCache::new("cluster1", "broker1", 1, vec![EpochEntry], 1);
+        let mut epoch_entry_cache = EpochEntryCache::new("cluster1", "broker1", 1, vec![EpochEntry], 1);
         epoch_entry_cache.set_cluster_name("cluster2");
-        assert_eq!(
-            epoch_entry_cache.get_cluster_name(),
-            &CheetahString::from("cluster2")
-        );
+        assert_eq!(epoch_entry_cache.get_cluster_name(), &CheetahString::from("cluster2"));
     }
 }

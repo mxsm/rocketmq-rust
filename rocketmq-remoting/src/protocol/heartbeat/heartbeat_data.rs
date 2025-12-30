@@ -63,8 +63,7 @@ mod tests {
         };
 
         let serialized = original.encode().expect("encode");
-        let deserialized =
-            SerdeJsonUtils::from_json_bytes::<HeartbeatData>(serialized.as_slice()).unwrap();
+        let deserialized = SerdeJsonUtils::from_json_bytes::<HeartbeatData>(serialized.as_slice()).unwrap();
 
         assert_eq!(original, deserialized);
     }
@@ -80,8 +79,7 @@ mod tests {
         };
 
         let serialized = original.encode().expect("encode");
-        let deserialized =
-            SerdeJsonUtils::from_json_bytes::<HeartbeatData>(serialized.as_slice()).unwrap();
+        let deserialized = SerdeJsonUtils::from_json_bytes::<HeartbeatData>(serialized.as_slice()).unwrap();
 
         assert_eq!(original, deserialized);
     }
@@ -97,8 +95,7 @@ mod tests {
         };
 
         let serialized = original.encode().expect("encode");
-        let deserialized =
-            SerdeJsonUtils::from_json_bytes::<HeartbeatData>(serialized.as_slice()).unwrap();
+        let deserialized = SerdeJsonUtils::from_json_bytes::<HeartbeatData>(serialized.as_slice()).unwrap();
 
         assert_eq!(original, deserialized);
     }

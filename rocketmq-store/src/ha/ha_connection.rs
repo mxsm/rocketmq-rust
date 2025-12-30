@@ -30,10 +30,7 @@ pub trait RocketmqHAConnection: Sync {
     /// Start the HA connection
     ///
     /// This initiates the connection threads and begins processing.
-    async fn start(
-        &mut self,
-        conn: WeakArcMut<GeneralHAConnection>,
-    ) -> Result<(), HAConnectionError>;
+    async fn start(&mut self, conn: WeakArcMut<GeneralHAConnection>) -> Result<(), HAConnectionError>;
 
     /// Shutdown the HA connection gracefully
     ///

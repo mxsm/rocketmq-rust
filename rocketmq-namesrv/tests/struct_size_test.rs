@@ -56,10 +56,7 @@ fn test_struct_sizes() {
 
     // Measure wrapper without Box
     println!("Enum Sizes (Hypothetical):");
-    println!(
-        "  - Without Box: {} bytes (= larger variant)",
-        v2_size.max(v1_size)
-    );
+    println!("  - Without Box: {} bytes (= larger variant)", v2_size.max(v1_size));
     println!("  - Discriminant: 8 bytes (estimated)");
     println!("  - Total without Box: {} bytes", v2_size.max(v1_size) + 8);
     println!();
@@ -83,10 +80,7 @@ fn test_struct_sizes() {
     println!("Memory Optimization:");
     println!("  - Saved: {} bytes", savings as i64);
     println!("  - Reduction: {:.1}%", savings_percent);
-    println!(
-        "  - Stack allocation: {} → {} bytes",
-        without_box_size, wrapper_size
-    );
+    println!("  - Stack allocation: {} → {} bytes", without_box_size, wrapper_size);
     println!();
 
     // Performance implications
@@ -135,10 +129,7 @@ fn test_component_sizes() {
     println!("Basic Types:");
     println!("  - Arc: {} bytes", size_of::<Arc<()>>());
     println!("  - ArcMut: {} bytes", size_of::<ArcMut<()>>());
-    println!(
-        "  - DashMap (empty): {} bytes",
-        size_of::<DashMap<String, String>>()
-    );
+    println!("  - DashMap (empty): {} bytes", size_of::<DashMap<String, String>>());
     println!(
         "  - HashMap (empty): {} bytes",
         size_of::<std::collections::HashMap<String, String>>()

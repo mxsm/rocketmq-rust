@@ -66,11 +66,7 @@ impl GetNamesrvConfigCommand {
         // Flatten the map for display (assuming only one nameserver or merging all configs)
         let config: std::collections::HashMap<String, String> = config_map
             .into_iter()
-            .flat_map(|(_, configs)| {
-                configs
-                    .into_iter()
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-            })
+            .flat_map(|(_, configs)| configs.into_iter().map(|(k, v)| (k.to_string(), v.to_string())))
             .collect();
 
         // Format and display output
@@ -94,32 +90,23 @@ impl GetNamesrvConfigCommand {
     }
 
     /// Print configuration based on format
-    fn print_config(
-        &self,
-        config: &std::collections::HashMap<String, String>,
-    ) -> RocketMQResult<()> {
+    fn print_config(&self, config: &std::collections::HashMap<String, String>) -> RocketMQResult<()> {
         match self.format.as_str() {
             "json" => {
-                let json = serde_json::to_string_pretty(&config).map_err(|e| {
-                    crate::core::ToolsError::internal(format!("Failed to serialize to JSON: {e}"))
-                })?;
+                let json = serde_json::to_string_pretty(&config)
+                    .map_err(|e| crate::core::ToolsError::internal(format!("Failed to serialize to JSON: {e}")))?;
                 println!("{json}");
             }
             "yaml" => {
-                let yaml = serde_yaml::to_string(&config).map_err(|e| {
-                    crate::core::ToolsError::internal(format!("Failed to serialize to YAML: {e}"))
-                })?;
+                let yaml = serde_yaml::to_string(&config)
+                    .map_err(|e| crate::core::ToolsError::internal(format!("Failed to serialize to YAML: {e}")))?;
                 println!("{yaml}");
             }
             "table" => {
                 self.print_table(config);
             }
             _ => {
-                return Err(crate::core::ToolsError::validation_error(
-                    "format",
-                    "Invalid format specified",
-                )
-                .into());
+                return Err(crate::core::ToolsError::validation_error("format", "Invalid format specified").into());
             }
         }
 

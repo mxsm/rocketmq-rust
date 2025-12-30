@@ -82,10 +82,7 @@ fn create_very_complex_command() -> RemotingCommand {
         .set_remark("Complex command with custom header and large body")
         .set_ext_fields(ext_fields)
         .set_body(Bytes::from(body))
-        .set_command_custom_header(GetRouteInfoRequestHeader::new(
-            "TestTopic_Complex",
-            Some(true),
-        ))
+        .set_command_custom_header(GetRouteInfoRequestHeader::new("TestTopic_Complex", Some(true)))
 }
 
 /// Benchmark: Encode simple command (JSON)
@@ -343,8 +340,7 @@ fn bench_throughput_rocketmq(c: &mut Criterion) {
         group.bench_with_input(format!("body_{}_bytes", size), size, |b, &size| {
             b.iter_batched(
                 || {
-                    let mut cmd =
-                        create_simple_command().set_serialize_type(SerializeType::ROCKETMQ);
+                    let mut cmd = create_simple_command().set_serialize_type(SerializeType::ROCKETMQ);
                     if size > 0 {
                         cmd = cmd.set_body(Bytes::from(vec![0u8; size]));
                     }
@@ -385,21 +381,8 @@ criterion_group!(
     bench_decode_rocketmq_very_complex
 );
 
-criterion_group!(
-    roundtrip_benches,
-    bench_roundtrip_json,
-    bench_roundtrip_rocketmq
-);
+criterion_group!(roundtrip_benches, bench_roundtrip_json, bench_roundtrip_rocketmq);
 
-criterion_group!(
-    throughput_benches,
-    bench_throughput_json,
-    bench_throughput_rocketmq
-);
+criterion_group!(throughput_benches, bench_throughput_json, bench_throughput_rocketmq);
 
-criterion_main!(
-    encode_benches,
-    decode_benches,
-    roundtrip_benches,
-    throughput_benches
-);
+criterion_main!(encode_benches, decode_benches, roundtrip_benches, throughput_benches);

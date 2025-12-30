@@ -72,9 +72,7 @@ mod tests {
         queue_offsets.insert(0, 100i64);
         queue_offsets.insert(1, 200i64);
 
-        wrapper
-            .offset_table
-            .insert(topic_group.clone(), queue_offsets);
+        wrapper.offset_table.insert(topic_group.clone(), queue_offsets);
 
         assert_eq!(wrapper.offset_table.len(), 1);
         assert!(wrapper.offset_table.contains_key(&topic_group));

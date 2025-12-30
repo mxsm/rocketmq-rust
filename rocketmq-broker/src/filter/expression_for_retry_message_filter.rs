@@ -25,11 +25,7 @@ pub struct ExpressionForRetryMessageFilter;
 
 #[allow(unused_variables)]
 impl MessageFilter for ExpressionForRetryMessageFilter {
-    fn is_matched_by_consume_queue(
-        &self,
-        tags_code: Option<i64>,
-        cq_ext_unit: Option<&CqExtUnit>,
-    ) -> bool {
+    fn is_matched_by_consume_queue(&self, tags_code: Option<i64>, cq_ext_unit: Option<&CqExtUnit>) -> bool {
         true
     }
 

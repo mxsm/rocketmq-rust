@@ -46,18 +46,14 @@ impl Validators {
 
         if TopicValidator::is_topic_or_group_illegal(group) {
             return Err(mq_client_err!(format!(
-                "the specified group[{}] contains illegal characters, allowing only \
-                 ^[%|a-zA-Z0-9_-]+$",
+                "the specified group[{}] contains illegal characters, allowing only ^[%|a-zA-Z0-9_-]+$",
                 group
             )));
         }
         Ok(())
     }
 
-    pub fn check_message<M>(
-        msg: Option<&M>,
-        producer_config: &ProducerConfig,
-    ) -> rocketmq_error::RocketMQResult<()>
+    pub fn check_message<M>(msg: Option<&M>, producer_config: &ProducerConfig) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait,
     {
@@ -129,8 +125,7 @@ impl Validators {
 
         if TopicValidator::is_topic_or_group_illegal(topic) {
             return Err(mq_client_err!(format!(
-                "The specified topic[{}] contains illegal characters, allowing only \
-                 ^[%|a-zA-Z0-9_-]+$",
+                "The specified topic[{}] contains illegal characters, allowing only ^[%|a-zA-Z0-9_-]+$",
                 topic
             )));
         }
@@ -170,9 +165,7 @@ impl Validators {
         Ok(())
     }
 
-    pub fn check_broker_config(
-        broker_config: &HashMap<String, String>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    pub fn check_broker_config(broker_config: &HashMap<String, String>) -> rocketmq_error::RocketMQResult<()> {
         if let Some(broker_permission) = broker_config.get("brokerPermission") {
             if !PermName::is_valid(broker_permission.parse().unwrap()) {
                 return Err(mq_client_err!(format!(

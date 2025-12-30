@@ -96,9 +96,5 @@ pub trait AuthenticationContextBuilder<Context> {
     /// - Filters out UNIQUE_MSG_QUERY_FLAG for versions <= 4.9.3
     /// - Excludes Signature field from signed content
     /// - Sorts fields for consistent signature verification
-    fn build_from_remoting(
-        &self,
-        request: &RemotingCommand,
-        channel_id: Option<&str>,
-    ) -> Result<Context, AuthError>;
+    fn build_from_remoting(&self, request: &RemotingCommand, channel_id: Option<&str>) -> Result<Context, AuthError>;
 }

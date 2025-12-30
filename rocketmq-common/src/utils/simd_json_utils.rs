@@ -93,8 +93,7 @@ impl SimdJsonUtils {
     where
         T: serde::de::DeserializeOwned,
     {
-        simd_json::from_slice(bytes)
-            .map_err(|e| SerializationError::decode_failed("SIMD-JSON", e.to_string()).into())
+        simd_json::from_slice(bytes).map_err(|e| SerializationError::decode_failed("SIMD-JSON", e.to_string()).into())
     }
 
     /// Deserialize JSON from a mutable byte slice into a Rust type.
@@ -157,8 +156,7 @@ impl SimdJsonUtils {
     where
         T: serde::Serialize,
     {
-        simd_json::to_string(value)
-            .map_err(|e| SerializationError::encode_failed("SIMD-JSON", e.to_string()).into())
+        simd_json::to_string(value).map_err(|e| SerializationError::encode_failed("SIMD-JSON", e.to_string()).into())
     }
 
     /// Serialize a Rust type into a JSON string (pretty-printed format).
@@ -203,8 +201,7 @@ impl SimdJsonUtils {
     where
         T: serde::Serialize,
     {
-        simd_json::to_vec(value)
-            .map_err(|e| SerializationError::encode_failed("SIMD-JSON", e.to_string()).into())
+        simd_json::to_vec(value).map_err(|e| SerializationError::encode_failed("SIMD-JSON", e.to_string()).into())
     }
 
     /// Serialize a Rust type into a JSON byte vector (pretty-printed format).
@@ -241,10 +238,7 @@ impl SimdJsonUtils {
     ///
     /// Returns Ok(()) on success or an error if serialization fails.
     #[inline]
-    pub fn serialize_json_to_writer<T>(
-        writer: &mut Vec<u8>,
-        value: &T,
-    ) -> rocketmq_error::RocketMQResult<()>
+    pub fn serialize_json_to_writer<T>(writer: &mut Vec<u8>, value: &T) -> rocketmq_error::RocketMQResult<()>
     where
         T: serde::Serialize,
     {
@@ -282,8 +276,7 @@ mod tests {
     #[test]
     fn test_from_json_str_error() {
         let json_str = r#"{"name":"Alice","age":"thirty"}"#;
-        let result: rocketmq_error::RocketMQResult<TestStruct> =
-            SimdJsonUtils::from_json_str(json_str);
+        let result: rocketmq_error::RocketMQResult<TestStruct> = SimdJsonUtils::from_json_str(json_str);
         assert!(result.is_err());
     }
 
@@ -301,8 +294,7 @@ mod tests {
     #[test]
     fn test_from_json_bytes_error() {
         let mut json_data = br#"{"name":"Bob","age":"twenty-five"}"#.to_vec();
-        let result: rocketmq_error::RocketMQResult<TestStruct> =
-            SimdJsonUtils::from_json_bytes(&mut json_data);
+        let result: rocketmq_error::RocketMQResult<TestStruct> = SimdJsonUtils::from_json_bytes(&mut json_data);
         assert!(result.is_err());
     }
 

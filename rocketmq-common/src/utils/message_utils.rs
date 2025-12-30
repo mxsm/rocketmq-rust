@@ -68,19 +68,15 @@ pub fn delete_property(properties_string: &str, name: &str) -> String {
             loop {
                 let mut start_idx = idx0;
                 loop {
-                    idx1 = properties_string[start_idx..]
-                        .find(name)
-                        .map(|i| i + start_idx);
+                    idx1 = properties_string[start_idx..].find(name).map(|i| i + start_idx);
                     if idx1.is_none() {
                         break;
                     }
                     let idx1 = idx1.unwrap();
                     start_idx = idx1 + name.len();
-                    if (idx1 == 0
-                        || properties_string.chars().nth(idx1 - 1) == Some(PROPERTY_SEPARATOR))
+                    if (idx1 == 0 || properties_string.chars().nth(idx1 - 1) == Some(PROPERTY_SEPARATOR))
                         && (properties_string.len() > idx1 + name.len())
-                        && properties_string.chars().nth(idx1 + name.len())
-                            == Some(NAME_VALUE_SEPARATOR)
+                        && properties_string.chars().nth(idx1 + name.len()) == Some(NAME_VALUE_SEPARATOR)
                     {
                         break;
                     }
@@ -126,10 +122,8 @@ pub fn delete_property_v2(properties_str: &str, name: &str) -> String {
                     Some(offset) => {
                         idx1 = start_idx + offset;
                         start_idx = idx1 + name.len();
-                        let before_ok = idx1 == 0
-                            || properties_str.chars().nth(idx1 - 1) == Some(PROPERTY_SEPARATOR);
-                        let after_ok = properties_str.chars().nth(idx1 + name.len())
-                            == Some(NAME_VALUE_SEPARATOR);
+                        let before_ok = idx1 == 0 || properties_str.chars().nth(idx1 - 1) == Some(PROPERTY_SEPARATOR);
+                        let after_ok = properties_str.chars().nth(idx1 + name.len()) == Some(NAME_VALUE_SEPARATOR);
                         if before_ok && after_ok {
                             break;
                         }
@@ -245,10 +239,10 @@ mod tests {
     #[test]
     fn test_get_sharding_key_index_by_msg() {
         let mut message = MessageExt::default();
-        message.message.properties.insert(
-            MessageConst::PROPERTY_SHARDING_KEY.into(),
-            "example_key".into(),
-        );
+        message
+            .message
+            .properties
+            .insert(MessageConst::PROPERTY_SHARDING_KEY.into(), "example_key".into());
         let index_size = 10;
         let result = get_sharding_key_index_by_msg(&message, index_size);
         assert!(result < index_size);
@@ -287,8 +281,7 @@ mod tests {
 
     #[test]
     fn delete_property_removes_property_correctly() {
-        let properties_string =
-            "key1\u{0001}value1\u{0002}key2\u{0001}value2\u{0002}key3\u{0001}value3";
+        let properties_string = "key1\u{0001}value1\u{0002}key2\u{0001}value2\u{0002}key3\u{0001}value3";
         let name = "key2";
         let result = delete_property(properties_string, name);
         assert_eq!(result, "key1\u{0001}value1\u{0002}key3\u{0001}value3");
@@ -331,8 +324,7 @@ mod tests {
 
     #[test]
     fn delete_property_handles_multiple_occurrences() {
-        let properties_string =
-            "key1\u{0001}value1\u{0002}key2\u{0001}value2\u{0002}key1\u{0001}value3";
+        let properties_string = "key1\u{0001}value1\u{0002}key2\u{0001}value2\u{0002}key1\u{0001}value3";
         let name = "key1";
         let result = delete_property(properties_string, name);
         assert_eq!(result, "key2\u{0001}value2\u{0002}");

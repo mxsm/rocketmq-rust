@@ -85,18 +85,14 @@ fn bench_request_latency_breakdown(c: &mut Criterion) {
     // Test different message sizes
     for size in [64, 256, 1024, 4096, 16384].iter() {
         group.throughput(Throughput::Bytes(*size as u64));
-        group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{}B", size)),
-            size,
-            |b, &size| {
-                // TODO: Setup client and server
-                b.iter(|| {
-                    // TODO: Create request of given size
-                    // TODO: Send and wait for response
-                    black_box(size);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(format!("{}B", size)), size, |b, &size| {
+            // TODO: Setup client and server
+            b.iter(|| {
+                // TODO: Create request of given size
+                // TODO: Send and wait for response
+                black_box(size);
+            });
+        });
     }
     group.finish();
 }

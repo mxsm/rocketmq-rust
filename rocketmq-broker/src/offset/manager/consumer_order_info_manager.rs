@@ -47,13 +47,9 @@ pub(crate) struct ConsumerOrderInfoManager<MS: MessageStore> {
 }
 
 impl<MS: MessageStore> ConsumerOrderInfoManager<MS> {
-    pub fn new(
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    ) -> ConsumerOrderInfoManager<MS> {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> ConsumerOrderInfoManager<MS> {
         Self {
-            consumer_order_info_wrapper: parking_lot::Mutex::new(
-                ConsumerOrderInfoWrapper::default(),
-            ),
+            consumer_order_info_wrapper: parking_lot::Mutex::new(ConsumerOrderInfoWrapper::default()),
             consumer_order_info_lock_manager: None,
             broker_runtime_inner,
         }
@@ -64,12 +60,7 @@ impl<MS: MessageStore> ConsumerOrderInfoManager<MS> {
 #[allow(unused_variables)]
 impl<MS: MessageStore> ConfigManager for ConsumerOrderInfoManager<MS> {
     fn config_file_path(&self) -> String {
-        get_consumer_order_info_path(
-            self.broker_runtime_inner
-                .broker_config()
-                .store_path_root_dir
-                .as_str(),
-        )
+        get_consumer_order_info_path(self.broker_runtime_inner.broker_config().store_path_root_dir.as_str())
     }
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
@@ -78,8 +69,7 @@ impl<MS: MessageStore> ConfigManager for ConsumerOrderInfoManager<MS> {
         match pretty_format {
             true => SerdeJsonUtils::serialize_json_pretty(&wrapper.table)
                 .expect("Failed to serialize consumer order info wrapper"),
-            false => serde_json::to_string(&wrapper.table)
-                .expect("Failed to serialize consumer order info wrapper"),
+            false => serde_json::to_string(&wrapper.table).expect("Failed to serialize consumer order info wrapper"),
         }
     }
 
@@ -87,18 +77,11 @@ impl<MS: MessageStore> ConfigManager for ConsumerOrderInfoManager<MS> {
         if json_string.is_empty() {
             return;
         }
-        let wrapper =
-            serde_json::from_str::<ConsumerOrderInfoWrapper>(json_string).unwrap_or_default();
+        let wrapper = serde_json::from_str::<ConsumerOrderInfoWrapper>(json_string).unwrap_or_default();
         if !wrapper.table.is_empty() {
-            self.consumer_order_info_wrapper
-                .lock()
-                .table
-                .clone_from(&wrapper.table);
-            if let Some(consumer_order_info_lock_manager) =
-                self.consumer_order_info_lock_manager.as_ref()
-            {
-                consumer_order_info_lock_manager
-                    .recover(self.consumer_order_info_wrapper.lock().deref());
+            self.consumer_order_info_wrapper.lock().table.clone_from(&wrapper.table);
+            if let Some(consumer_order_info_lock_manager) = self.consumer_order_info_lock_manager.as_ref() {
+                consumer_order_info_lock_manager.recover(self.consumer_order_info_wrapper.lock().deref());
             }
         }
     }
@@ -129,10 +112,7 @@ impl<MS: MessageStore> ConsumerOrderInfoManager<MS> {
                 .topic_config_manager()
                 .select_topic_config(&CheetahString::from(topic));
             if topic_config.is_none() {
-                info!(
-                    "Topic not exist, Clean order info, {}:{:?}",
-                    topic_at_group, qs
-                );
+                info!("Topic not exist, Clean order info, {}:{:?}", topic_at_group, qs);
                 keys_to_remove.push(topic_at_group.clone());
                 continue;
             }
@@ -140,22 +120,15 @@ impl<MS: MessageStore> ConsumerOrderInfoManager<MS> {
                 .broker_runtime_inner
                 .subscription_group_manager()
                 .subscription_group_table();
-            let subscription_group_config =
-                subscription_group_table.get(&CheetahString::from(group));
+            let subscription_group_config = subscription_group_table.get(&CheetahString::from(group));
             if subscription_group_config.is_none() {
-                info!(
-                    "Group not exist, Clean order info, {}:{:?}",
-                    topic_at_group, qs
-                );
+                info!("Group not exist, Clean order info, {}:{:?}", topic_at_group, qs);
                 keys_to_remove.push(topic_at_group.clone());
                 continue;
             }
 
             if qs.is_empty() {
-                info!(
-                    "Order table is empty, Clean order info, {}:{:?}",
-                    topic_at_group, qs
-                );
+                info!("Order table is empty, Clean order info, {}:{:?}", topic_at_group, qs);
                 keys_to_remove.push(topic_at_group.clone());
                 continue;
             }
@@ -176,10 +149,7 @@ impl<MS: MessageStore> ConsumerOrderInfoManager<MS> {
             // Remove stale or invalid queues
             for queue_id in queues_to_remove {
                 qs.remove(&queue_id);
-                info!(
-                    "Removed queue {} for topic@group {}",
-                    queue_id, topic_at_group
-                );
+                info!("Removed queue {} for topic@group {}", queue_id, topic_at_group);
             }
 
             // If all queues are removed, mark topic@group for removal
@@ -226,8 +196,7 @@ impl<MS: MessageStore> ConsumerOrderInfoManager<MS> {
         let order_info = order_info.unwrap();
         if pop_time != order_info.pop_time {
             warn!(
-                "popTime is not equal to orderInfo saved. key: {}, queueOffset: {}, orderInfo: \
-                 {}, popTime: {}",
+                "popTime is not equal to orderInfo saved. key: {}, queueOffset: {}, orderInfo: {}, popTime: {}",
                 key, queue_offset, queue_id, pop_time,
             );
             return;
@@ -319,9 +288,8 @@ impl Display for OrderInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "OrderInfo {{ popTime: {}, invisibleTime: {:?}, offsetList: {:?}, \
-             offsetNextVisibleTime: {:?}, offsetConsumedCount: {:?}, lastConsumeTimestamp: {}, \
-             commitOffsetBit: {}, attemptId: {} }}",
+            "OrderInfo {{ popTime: {}, invisibleTime: {:?}, offsetList: {:?}, offsetNextVisibleTime: {:?}, \
+             offsetConsumedCount: {:?}, lastConsumeTimestamp: {}, commitOffsetBit: {}, attemptId: {} }}",
             self.pop_time,
             self.invisible_time,
             self.offset_list,
@@ -433,8 +401,7 @@ impl OrderInfo {
     /// * `next_visible_time` - The next visible time to set.
     #[inline]
     pub fn update_offset_next_visible_time(&mut self, queue_offset: u64, next_visible_time: u64) {
-        self.offset_next_visible_time
-            .insert(queue_offset, next_visible_time);
+        self.offset_next_visible_time.insert(queue_offset, next_visible_time);
     }
 
     /// Gets the next offset for the current order info.

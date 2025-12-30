@@ -80,13 +80,8 @@ impl CommandExecute for UpdateTopicPermCommand {
         }
         let mut admin = builder.build_with_guard().await?;
 
-        TopicOperations::update_topic_perm(
-            &mut admin,
-            CheetahString::from(self.topic.clone()),
-            self.perm,
-            target,
-        )
-        .await?;
+        TopicOperations::update_topic_perm(&mut admin, CheetahString::from(self.topic.clone()), self.perm, target)
+            .await?;
 
         let perm_str = match self.perm {
             2 => "W (Write only)",

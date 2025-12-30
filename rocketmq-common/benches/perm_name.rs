@@ -42,10 +42,7 @@ fn bench_perm2string(c: &mut Criterion) {
             "with_priority",
         ),
         (
-            PermName::PERM_READ
-                | PermName::PERM_WRITE
-                | PermName::PERM_INHERIT
-                | PermName::PERM_PRIORITY,
+            PermName::PERM_READ | PermName::PERM_WRITE | PermName::PERM_INHERIT | PermName::PERM_PRIORITY,
             "all_flags",
         ),
     ];
@@ -77,10 +74,7 @@ fn bench_perm_to_string(c: &mut Criterion) {
             "with_priority",
         ),
         (
-            PermName::PERM_READ
-                | PermName::PERM_WRITE
-                | PermName::PERM_INHERIT
-                | PermName::PERM_PRIORITY,
+            PermName::PERM_READ | PermName::PERM_WRITE | PermName::PERM_INHERIT | PermName::PERM_PRIORITY,
             "all_flags",
         ),
     ];

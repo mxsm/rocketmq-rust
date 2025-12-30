@@ -52,14 +52,8 @@ impl RemoteBrokerOffsetStore {
         }
     }
 
-    async fn fetch_consume_offset_from_broker(
-        &self,
-        mq: &MessageQueue,
-    ) -> rocketmq_error::RocketMQResult<i64> {
-        let broker_name = self
-            .client_instance
-            .get_broker_name_from_message_queue(mq)
-            .await;
+    async fn fetch_consume_offset_from_broker(&self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
+        let broker_name = self.client_instance.get_broker_name_from_message_queue(mq).await;
         let mut find_broker_result = self
             .client_instance
             .mut_from_ref()
@@ -71,10 +65,7 @@ impl RemoteBrokerOffsetStore {
                 .mut_from_ref()
                 .update_topic_route_info_from_name_server_topic(mq.get_topic_cs())
                 .await;
-            let broker_name = self
-                .client_instance
-                .get_broker_name_from_message_queue(mq)
-                .await;
+            let broker_name = self.client_instance.get_broker_name_from_message_queue(mq).await;
             find_broker_result = self
                 .client_instance
                 .mut_from_ref()
@@ -92,9 +83,7 @@ impl RemoteBrokerOffsetStore {
                     rpc: Some(RpcRequestHeader {
                         namespace: None,
                         namespaced: None,
-                        broker_name: Some(CheetahString::from_string(
-                            mq.get_broker_name().to_string(),
-                        )),
+                        broker_name: Some(CheetahString::from_string(mq.get_broker_name().to_string())),
                         oneway: None,
                     }),
                 }),
@@ -104,17 +93,10 @@ impl RemoteBrokerOffsetStore {
                 .mq_client_api_impl
                 .as_mut()
                 .unwrap()
-                .query_consumer_offset(
-                    find_broker_result.broker_addr.as_str(),
-                    request_header,
-                    5_000,
-                )
+                .query_consumer_offset(find_broker_result.broker_addr.as_str(), request_header, 5_000)
                 .await
         } else {
-            Err(mq_client_err!(format!(
-                "broker not found, {}",
-                mq.get_broker_name()
-            )))
+            Err(mq_client_err!(format!("broker not found, {}", mq.get_broker_name())))
         }
     }
 }
@@ -162,7 +144,10 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
                     }
                     Err(e) => match e {
                         rocketmq_error::RocketMQError::BrokerOperationFailed { code, .. }
-                        if code == rocketmq_remoting::code::response_code::ResponseCode::QueryNotFound as i32 => -1,
+                            if code == rocketmq_remoting::code::response_code::ResponseCode::QueryNotFound as i32 =>
+                        {
+                            -1
+                        }
                         _ => {
                             warn!("fetchConsumeOffsetFromBroker exception: {:?}", mq);
                             -2
@@ -196,10 +181,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
         drop(offset_table);
 
         for (mq, offset) in used_mq {
-            match self
-                .update_consume_offset_to_broker(&mq, offset, true)
-                .await
-            {
+            match self.update_consume_offset_to_broker(&mq, offset, true).await {
                 Ok(_) => {
                     info!(
                         "[persistAll] Group: {} ClientId: {} updateConsumeOffsetToBroker {} {}",
@@ -260,10 +242,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
         offset: i64,
         is_oneway: bool,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let broker_name = self
-            .client_instance
-            .get_broker_name_from_message_queue(mq)
-            .await;
+        let broker_name = self.client_instance.get_broker_name_from_message_queue(mq).await;
         let mut find_broker_result = self
             .client_instance
             .find_broker_address_in_subscribe(&broker_name, mix_all::MASTER_ID, false)
@@ -273,10 +252,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
             self.client_instance
                 .update_topic_route_info_from_name_server_topic(mq.get_topic_cs())
                 .await;
-            let broker_name = self
-                .client_instance
-                .get_broker_name_from_message_queue(mq)
-                .await;
+            let broker_name = self.client_instance.get_broker_name_from_message_queue(mq).await;
             find_broker_result = self
                 .client_instance
                 .find_broker_address_in_subscribe(&broker_name, mix_all::MASTER_ID, false)
@@ -294,9 +270,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
                     rpc: Some(RpcRequestHeader {
                         namespace: None,
                         namespaced: None,
-                        broker_name: Some(CheetahString::from_string(
-                            mq.get_broker_name().to_string(),
-                        )),
+                        broker_name: Some(CheetahString::from_string(mq.get_broker_name().to_string())),
                         oneway: None,
                     }),
                 }),
@@ -306,11 +280,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
                     .mq_client_api_impl
                     .as_mut()
                     .unwrap()
-                    .update_consumer_offset_oneway(
-                        find_broker_result.broker_addr.as_str(),
-                        request_header,
-                        5_000,
-                    )
+                    .update_consumer_offset_oneway(find_broker_result.broker_addr.as_str(), request_header, 5_000)
                     .await?;
             } else {
                 self.client_instance
@@ -322,10 +292,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
             };
             Ok(())
         } else {
-            Err(mq_client_err!(format!(
-                "broker not found, {}",
-                mq.get_broker_name()
-            )))
+            Err(mq_client_err!(format!("broker not found, {}", mq.get_broker_name())))
         }
     }
 }

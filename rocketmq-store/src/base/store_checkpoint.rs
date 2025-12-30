@@ -91,36 +91,16 @@ impl StoreCheckpoint {
     #[inline]
     pub fn flush(&self) -> std::io::Result<()> {
         let mut buffer = &mut self.mmap.lock()[..8];
-        buffer.write_all(
-            self.physic_msg_timestamp
-                .load(Ordering::Relaxed)
-                .to_be_bytes()
-                .as_ref(),
-        )?;
-        buffer.write_all(
-            self.logics_msg_timestamp
-                .load(Ordering::Relaxed)
-                .to_be_bytes()
-                .as_ref(),
-        )?;
-        buffer.write_all(
-            self.index_msg_timestamp
-                .load(Ordering::Relaxed)
-                .to_be_bytes()
-                .as_ref(),
-        )?;
+        buffer.write_all(self.physic_msg_timestamp.load(Ordering::Relaxed).to_be_bytes().as_ref())?;
+        buffer.write_all(self.logics_msg_timestamp.load(Ordering::Relaxed).to_be_bytes().as_ref())?;
+        buffer.write_all(self.index_msg_timestamp.load(Ordering::Relaxed).to_be_bytes().as_ref())?;
         buffer.write_all(
             self.master_flushed_offset
                 .load(Ordering::Relaxed)
                 .to_be_bytes()
                 .as_ref(),
         )?;
-        buffer.write_all(
-            self.confirm_phy_offset
-                .load(Ordering::Relaxed)
-                .to_be_bytes()
-                .as_ref(),
-        )?;
+        buffer.write_all(self.confirm_phy_offset.load(Ordering::Relaxed).to_be_bytes().as_ref())?;
         self.mmap.lock().flush()?;
         Ok(())
     }
@@ -132,20 +112,17 @@ impl StoreCheckpoint {
 
     #[inline]
     pub fn set_physic_msg_timestamp(&self, physic_msg_timestamp: u64) {
-        self.physic_msg_timestamp
-            .store(physic_msg_timestamp, Ordering::Relaxed);
+        self.physic_msg_timestamp.store(physic_msg_timestamp, Ordering::Relaxed);
     }
 
     #[inline]
     pub fn set_logics_msg_timestamp(&self, logics_msg_timestamp: u64) {
-        self.logics_msg_timestamp
-            .store(logics_msg_timestamp, Ordering::Relaxed);
+        self.logics_msg_timestamp.store(logics_msg_timestamp, Ordering::Relaxed);
     }
 
     #[inline]
     pub fn set_index_msg_timestamp(&self, index_msg_timestamp: u64) {
-        self.index_msg_timestamp
-            .store(index_msg_timestamp, Ordering::Relaxed);
+        self.index_msg_timestamp.store(index_msg_timestamp, Ordering::Relaxed);
     }
 
     #[inline]
@@ -156,8 +133,7 @@ impl StoreCheckpoint {
 
     #[inline]
     pub fn set_confirm_phy_offset(&self, confirm_phy_offset: u64) {
-        self.confirm_phy_offset
-            .store(confirm_phy_offset, Ordering::Relaxed);
+        self.confirm_phy_offset.store(confirm_phy_offset, Ordering::Relaxed);
     }
 
     #[inline]

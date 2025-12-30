@@ -42,8 +42,7 @@ impl Display for UnRegisterBrokerRequestHeader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "UnRegisterBrokerRequestHeader {{ brokerName: {}, brokerAddr: {}, clusterName: {}, \
-             brokerId: {} }}",
+            "UnRegisterBrokerRequestHeader {{ brokerName: {}, brokerAddr: {}, clusterName: {}, brokerId: {} }}",
             self.broker_name, self.broker_addr, self.cluster_name, self.broker_id
         )
     }
@@ -78,10 +77,7 @@ pub struct GetBrokerMemberGroupRequestHeader {
 }
 
 impl GetBrokerMemberGroupRequestHeader {
-    pub fn new(
-        cluster_name: impl Into<CheetahString>,
-        broker_name: impl Into<CheetahString>,
-    ) -> Self {
+    pub fn new(cluster_name: impl Into<CheetahString>, broker_name: impl Into<CheetahString>) -> Self {
         Self {
             cluster_name: cluster_name.into(),
 

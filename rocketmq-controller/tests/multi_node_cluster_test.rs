@@ -49,11 +49,7 @@ async fn create_cluster(node_count: u64, base_port: u16) -> Vec<(u64, Arc<RaftNo
         let addr = format!("127.0.0.1:{}", port).parse().unwrap();
 
         // Get peers excluding self
-        let peers: Vec<RaftPeer> = all_peers
-            .iter()
-            .filter(|p| p.id != node_id)
-            .cloned()
-            .collect();
+        let peers: Vec<RaftPeer> = all_peers.iter().filter(|p| p.id != node_id).cloned().collect();
 
         let config = ControllerConfig::default()
             .with_node_info(node_id, addr)
@@ -204,8 +200,7 @@ async fn test_cluster_client_write() {
     // This is expected behavior in OpenRaft 0.10 after simple initialize_cluster
     if learner_count > 0 {
         println!(
-            " Cluster has {} learner(s), writes will timeout (learners can't participate in \
-             quorum)",
+            " Cluster has {} learner(s), writes will timeout (learners can't participate in quorum)",
             learner_count
         );
         println!("  In OpenRaft 0.10, initialize_cluster only makes the first node a voter.");
@@ -216,8 +211,7 @@ async fn test_cluster_client_write() {
 
     // All nodes are voters, write should succeed
     println!(" All nodes are voters, sending write request to leader...");
-    let write_result =
-        tokio::time::timeout(Duration::from_secs(3), leader_node.client_write(request)).await;
+    let write_result = tokio::time::timeout(Duration::from_secs(3), leader_node.client_write(request)).await;
 
     match write_result {
         Ok(Ok(_)) => {
@@ -236,10 +230,7 @@ async fn test_cluster_client_write() {
         }
         Ok(Err(e)) => {
             println!(" Write failed: {:?}", e);
-            panic!(
-                "Write should succeed with all voters, but got error: {:?}",
-                e
-            );
+            panic!("Write should succeed with all voters, but got error: {:?}", e);
         }
         Err(_) => {
             println!(" Write operation timed out after 10 seconds");
@@ -350,24 +341,15 @@ async fn test_five_node_cluster() {
         };
 
         // Add timeout for each write operation
-        let write_result =
-            tokio::time::timeout(Duration::from_secs(5), leader_node.client_write(request)).await;
+        let write_result = tokio::time::timeout(Duration::from_secs(5), leader_node.client_write(request)).await;
 
         match write_result {
             Ok(result) => {
-                assert!(
-                    result.is_ok(),
-                    "Write {} should succeed: {:?}",
-                    i,
-                    result.err()
-                );
+                assert!(result.is_ok(), "Write {} should succeed: {:?}", i, result.err());
                 println!("Write {} completed", i);
             }
             Err(_) => {
-                println!(
-                    "Write {} timed out after 10 seconds - this is a known issue",
-                    i
-                );
+                println!("Write {} timed out after 10 seconds - this is a known issue", i);
                 // Don't fail the test, just log it
                 break;
             }
@@ -408,9 +390,7 @@ async fn test_cluster_metrics() {
         // Basic sanity checks - allow term 0 for learners during initialization
         if matches!(
             metrics.state,
-            openraft::ServerState::Leader
-                | openraft::ServerState::Follower
-                | openraft::ServerState::Candidate
+            openraft::ServerState::Leader | openraft::ServerState::Follower | openraft::ServerState::Candidate
         ) {
             assert!(
                 metrics.current_term > 0,

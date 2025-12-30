@@ -62,37 +62,20 @@ mod tests {
             rpc_request_header: None,
         };
         let map = header.to_map().unwrap();
+        assert_eq!(map.get(&CheetahString::from_static_str("offset")).unwrap(), "12345");
+        assert_eq!(map.get(&CheetahString::from_static_str("group")).unwrap(), "test_group");
+        assert_eq!(map.get(&CheetahString::from_static_str("delayLevel")).unwrap(), "2");
         assert_eq!(
-            map.get(&CheetahString::from_static_str("offset")).unwrap(),
-            "12345"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("group")).unwrap(),
-            "test_group"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("delayLevel"))
-                .unwrap(),
-            "2"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("originMsgId"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("originMsgId")).unwrap(),
             "msg_id"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("originTopic"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("originTopic")).unwrap(),
             "topic"
         );
+        assert_eq!(map.get(&CheetahString::from_static_str("unitMode")).unwrap(), "true");
         assert_eq!(
-            map.get(&CheetahString::from_static_str("unitMode"))
-                .unwrap(),
-            "true"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("maxReconsumeTimes"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("maxReconsumeTimes")).unwrap(),
             "3"
         );
     }

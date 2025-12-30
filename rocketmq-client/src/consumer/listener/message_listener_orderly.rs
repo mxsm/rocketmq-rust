@@ -33,10 +33,7 @@ pub trait MessageListenerOrderly: Sync + Send {
 pub type ArcBoxMessageListenerOrderly = Arc<Box<dyn MessageListenerOrderly>>;
 
 pub type MessageListenerOrderlyFn = Arc<
-    dyn Fn(
-            &[&MessageExt],
-            &ConsumeOrderlyContext,
-        ) -> rocketmq_error::RocketMQResult<ConsumeOrderlyStatus>
+    dyn Fn(&[&MessageExt], &ConsumeOrderlyContext) -> rocketmq_error::RocketMQResult<ConsumeOrderlyStatus>
         + Send
         + Sync,
 >;

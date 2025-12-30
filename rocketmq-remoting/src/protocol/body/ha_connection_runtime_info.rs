@@ -35,8 +35,8 @@ impl Display for HAConnectionRuntimeInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "HAConnectionRuntimeInfo [addr={}, slaveAckOffset={}, diff={}, inSync={}, \
-             transferredBytesInSecond={}, transferFromWhere={}]",
+            "HAConnectionRuntimeInfo [addr={}, slaveAckOffset={}, diff={}, inSync={}, transferredBytesInSecond={}, \
+             transferFromWhere={}]",
             self.addr,
             self.slave_ack_offset,
             self.diff,
@@ -92,8 +92,8 @@ mod tests {
         };
         let display = format!("{}", info);
         assert!(display.contains(
-            "HAConnectionRuntimeInfo [addr=127.0.0.1:10911, slaveAckOffset=100, diff=50, \
-             inSync=true, transferredBytesInSecond=1024, transferFromWhere=200]"
+            "HAConnectionRuntimeInfo [addr=127.0.0.1:10911, slaveAckOffset=100, diff=50, inSync=true, \
+             transferredBytesInSecond=1024, transferFromWhere=200]"
         ));
     }
 }

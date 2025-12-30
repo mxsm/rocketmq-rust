@@ -52,8 +52,7 @@ mod tests {
             rpc_request_header: None,
         };
         let serialized = serde_json::to_string(&header).unwrap();
-        let expected =
-            r#"{"consumerGroup":"test_group","clientId":"client_id","jstackEnable":true}"#;
+        let expected = r#"{"consumerGroup":"test_group","clientId":"client_id","jstackEnable":true}"#;
         assert_eq!(serialized, expected);
     }
 
@@ -61,14 +60,8 @@ mod tests {
     fn get_consumer_running_info_request_header_deserializes_correctly() {
         let data = r#"{"consumerGroup":"test_group","clientId":"client_id","jstackEnable":true}"#;
         let header: GetConsumerRunningInfoRequestHeader = serde_json::from_str(data).unwrap();
-        assert_eq!(
-            header.consumer_group,
-            CheetahString::from_static_str("test_group")
-        );
-        assert_eq!(
-            header.client_id,
-            CheetahString::from_static_str("client_id")
-        );
+        assert_eq!(header.consumer_group, CheetahString::from_static_str("test_group"));
+        assert_eq!(header.client_id, CheetahString::from_static_str("client_id"));
         assert!(header.jstack_enable);
         assert!(header.rpc_request_header.is_some());
     }
@@ -77,14 +70,8 @@ mod tests {
     fn get_consumer_running_info_request_header_handles_missing_optional_fields() {
         let data = r#"{"consumerGroup":"test_group","clientId":"client_id","jstackEnable":false}"#;
         let header: GetConsumerRunningInfoRequestHeader = serde_json::from_str(data).unwrap();
-        assert_eq!(
-            header.consumer_group,
-            CheetahString::from_static_str("test_group")
-        );
-        assert_eq!(
-            header.client_id,
-            CheetahString::from_static_str("client_id")
-        );
+        assert_eq!(header.consumer_group, CheetahString::from_static_str("test_group"));
+        assert_eq!(header.client_id, CheetahString::from_static_str("client_id"));
         assert!(!header.jstack_enable);
         assert!(header.rpc_request_header.is_some());
     }

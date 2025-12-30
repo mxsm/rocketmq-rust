@@ -88,19 +88,9 @@ impl MessageListenerOrderly for MyMessageListener {
             println!("Receive message: {:?}", msg);
             info!("Receive message: {:?}", msg);
         }
-        if self
-            .consume_times
-            .load(std::sync::atomic::Ordering::Acquire)
-            % 2
-            == 0
-        {
+        if self.consume_times.load(std::sync::atomic::Ordering::Acquire) % 2 == 0 {
             return Ok(ConsumeOrderlyStatus::Success);
-        } else if self
-            .consume_times
-            .load(std::sync::atomic::Ordering::Acquire)
-            % 5
-            == 0
-        {
+        } else if self.consume_times.load(std::sync::atomic::Ordering::Acquire) % 5 == 0 {
             context.set_suspend_current_queue_time_millis(3000);
             return Ok(ConsumeOrderlyStatus::SuspendCurrentQueueAMoment);
         }

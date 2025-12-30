@@ -78,28 +78,19 @@ mod request_source_tests {
 
     #[test]
     fn parse_integer_returns_unknown_for_out_of_range_positive_values() {
-        assert_eq!(
-            RequestSource::parse_integer(Some(3)),
-            RequestSource::Unknown
-        );
+        assert_eq!(RequestSource::parse_integer(Some(3)), RequestSource::Unknown);
     }
 
     #[test]
     fn parse_integer_returns_unknown_for_out_of_range_negative_values() {
-        assert_eq!(
-            RequestSource::parse_integer(Some(-3)),
-            RequestSource::Unknown
-        );
+        assert_eq!(RequestSource::parse_integer(Some(-3)), RequestSource::Unknown);
     }
 
     #[test]
     fn from_value_returns_correct_variant_for_known_values() {
         assert_eq!(RequestSource::from_value(-1), RequestSource::SDK);
         assert_eq!(RequestSource::from_value(0), RequestSource::ProxyForOrder);
-        assert_eq!(
-            RequestSource::from_value(1),
-            RequestSource::ProxyForBroadcast
-        );
+        assert_eq!(RequestSource::from_value(1), RequestSource::ProxyForBroadcast);
         assert_eq!(RequestSource::from_value(2), RequestSource::ProxyForStream);
     }
 

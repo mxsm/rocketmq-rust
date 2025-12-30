@@ -72,16 +72,11 @@ impl IndexHeader {
 
     pub fn load(&self) {
         let mut buffer = self.mapped_file.get_bytes(0, INDEX_HEADER_SIZE).unwrap();
-        self.begin_timestamp
-            .store(buffer.get_i64(), Ordering::Relaxed);
-        self.end_timestamp
-            .store(buffer.get_i64(), Ordering::Relaxed);
-        self.begin_phy_offset
-            .store(buffer.get_i64(), Ordering::Relaxed);
-        self.end_phy_offset
-            .store(buffer.get_i64(), Ordering::Relaxed);
-        self.hash_slot_count
-            .store(buffer.get_i32(), Ordering::Relaxed);
+        self.begin_timestamp.store(buffer.get_i64(), Ordering::Relaxed);
+        self.end_timestamp.store(buffer.get_i64(), Ordering::Relaxed);
+        self.begin_phy_offset.store(buffer.get_i64(), Ordering::Relaxed);
+        self.end_phy_offset.store(buffer.get_i64(), Ordering::Relaxed);
+        self.hash_slot_count.store(buffer.get_i32(), Ordering::Relaxed);
         self.index_count.store(buffer.get_i32(), Ordering::Relaxed);
         if self.index_count.load(Ordering::Relaxed) <= 0 {
             self.index_count.store(1, Ordering::Relaxed);
@@ -122,8 +117,7 @@ impl IndexHeader {
     }
 
     pub fn set_begin_timestamp(&self, begin_timestamp: i64) {
-        self.begin_timestamp
-            .store(begin_timestamp, Ordering::Release);
+        self.begin_timestamp.store(begin_timestamp, Ordering::Release);
         self.mapped_file.write_bytes_segment(
             begin_timestamp.to_be_bytes().as_ref(),
             BEGIN_TIMESTAMP_INDEX,
@@ -153,8 +147,7 @@ impl IndexHeader {
     }
 
     pub fn set_begin_phy_offset(&self, begin_phy_offset: i64) {
-        self.begin_phy_offset
-            .store(begin_phy_offset, Ordering::Release);
+        self.begin_phy_offset.store(begin_phy_offset, Ordering::Release);
         self.mapped_file.write_bytes_segment(
             begin_phy_offset.to_be_bytes().as_ref(),
             BEGIN_PHY_OFFSET_INDEX,

@@ -50,9 +50,9 @@ impl ServiceThreadStd {
 
 impl ServiceThreadStd {
     pub fn start(&mut self) {
-        if let Ok(value) =
-            self.started
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
+        if let Ok(value) = self
+            .started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
         {
             if value {
                 return;
@@ -82,9 +82,9 @@ impl ServiceThreadStd {
     }
 
     pub fn shutdown_interrupt(&mut self, interrupt: bool) {
-        if let Ok(value) =
-            self.started
-                .compare_exchange(true, false, Ordering::SeqCst, Ordering::Relaxed)
+        if let Ok(value) = self
+            .started
+            .compare_exchange(true, false, Ordering::SeqCst, Ordering::Relaxed)
         {
             if !value {
                 return;
@@ -116,10 +116,9 @@ impl ServiceThreadStd {
 
     pub fn wait_for_running(&mut self, interval: i64) {
         let mut guard = self.notified.0.lock();
-        self.notified.1.wait_for(
-            &mut guard,
-            std::time::Duration::from_millis(interval as u64),
-        );
+        self.notified
+            .1
+            .wait_for(&mut guard, std::time::Duration::from_millis(interval as u64));
     }
 
     pub fn is_stopped(&self) -> bool {

@@ -57,9 +57,7 @@ impl OpenRaftService for GrpcRaftService {
         debug!("Received append_entries: {} entries", req.entries.len());
 
         // Convert protobuf to OpenRaft types
-        let vote = req
-            .vote
-            .ok_or_else(|| Status::invalid_argument("Missing vote"))?;
+        let vote = req.vote.ok_or_else(|| Status::invalid_argument("Missing vote"))?;
 
         let raft_vote = openraft::Vote::new(vote.term, vote.node_id);
 
@@ -73,12 +71,10 @@ impl OpenRaftService for GrpcRaftService {
             .into_iter()
             .filter_map(|e| {
                 let log_id = e.log_id?;
-                let payload: crate::typ::ControllerRequest =
-                    serde_json::from_slice(&e.payload).ok()?;
+                let payload: crate::typ::ControllerRequest = serde_json::from_slice(&e.payload).ok()?;
                 Some(openraft::Entry {
                     log_id: crate::typ::LogId {
-                        leader_id: crate::typ::Vote::new(log_id.leader_id, log_id.leader_id)
-                            .leader_id,
+                        leader_id: crate::typ::Vote::new(log_id.leader_id, log_id.leader_id).leader_id,
                         index: log_id.index,
                     },
                     payload: openraft::EntryPayload::Normal(payload),
@@ -119,16 +115,11 @@ impl OpenRaftService for GrpcRaftService {
         }
     }
 
-    async fn vote(
-        &self,
-        request: Request<OpenRaftVoteRequest>,
-    ) -> Result<Response<OpenRaftVoteResponse>, Status> {
+    async fn vote(&self, request: Request<OpenRaftVoteRequest>) -> Result<Response<OpenRaftVoteResponse>, Status> {
         let req = request.into_inner();
         debug!("Received vote request");
 
-        let vote = req
-            .vote
-            .ok_or_else(|| Status::invalid_argument("Missing vote"))?;
+        let vote = req.vote.ok_or_else(|| Status::invalid_argument("Missing vote"))?;
 
         let raft_vote = openraft::Vote::new(vote.term, vote.node_id);
 
@@ -150,12 +141,10 @@ impl OpenRaftService for GrpcRaftService {
                     committed: resp.vote.committed,
                 }),
                 vote_granted: resp.vote_granted,
-                last_log_id: resp
-                    .last_log_id
-                    .map(|id| crate::protobuf::openraft::OpenRaftLogId {
-                        leader_id: id.leader_id.node_id,
-                        index: id.index,
-                    }),
+                last_log_id: resp.last_log_id.map(|id| crate::protobuf::openraft::OpenRaftLogId {
+                    leader_id: id.leader_id.node_id,
+                    index: id.index,
+                }),
             })),
             Err(e) => {
                 error!("Vote failed: {}", e);
@@ -178,8 +167,7 @@ impl OpenRaftService for GrpcRaftService {
 
         // Receive all chunks
         while let Some(chunk_result) = stream.next().await {
-            let chunk =
-                chunk_result.map_err(|e| Status::internal(format!("Stream error: {}", e)))?;
+            let chunk = chunk_result.map_err(|e| Status::internal(format!("Stream error: {}", e)))?;
 
             // Extract vote and meta from first chunk
             if vote.is_none() {
@@ -192,10 +180,7 @@ impl OpenRaftService for GrpcRaftService {
                 if let Some(meta) = chunk.meta {
                     let last_membership: openraft::StoredMembership<crate::typ::TypeConfig> =
                         serde_json::from_slice(&meta.last_membership).map_err(|e| {
-                            Status::invalid_argument(format!(
-                                "Failed to deserialize membership: {}",
-                                e
-                            ))
+                            Status::invalid_argument(format!("Failed to deserialize membership: {}", e))
                         })?;
 
                     snapshot_meta = Some(openraft::SnapshotMeta {
@@ -218,8 +203,7 @@ impl OpenRaftService for GrpcRaftService {
         }
 
         let vote = vote.ok_or_else(|| Status::invalid_argument("Missing vote"))?;
-        let meta =
-            snapshot_meta.ok_or_else(|| Status::invalid_argument("Missing snapshot meta"))?;
+        let meta = snapshot_meta.ok_or_else(|| Status::invalid_argument("Missing snapshot meta"))?;
 
         debug!(
             "Received snapshot: size={} bytes, last_log_id={:?}",

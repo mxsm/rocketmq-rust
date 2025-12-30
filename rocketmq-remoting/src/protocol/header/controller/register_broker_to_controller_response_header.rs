@@ -51,33 +51,24 @@ mod tests {
         };
         let map = header.to_map().unwrap();
         assert_eq!(
-            map.get(&CheetahString::from_static_str("clusterName"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("clusterName")).unwrap(),
             "test_cluster"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("brokerName"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("brokerName")).unwrap(),
             "test_broker"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("masterBrokerId"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("masterBrokerId")).unwrap(),
             "123"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("masterAddress"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("masterAddress")).unwrap(),
             "127.0.0.1:10911"
         );
+        assert_eq!(map.get(&CheetahString::from_static_str("masterEpoch")).unwrap(), "5");
         assert_eq!(
-            map.get(&CheetahString::from_static_str("masterEpoch"))
-                .unwrap(),
-            "5"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("syncStateSetEpoch"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("syncStateSetEpoch")).unwrap(),
             "10"
         );
     }
@@ -115,10 +106,7 @@ mod tests {
             header.cluster_name,
             Some(CheetahString::from_static_str("test_cluster"))
         );
-        assert_eq!(
-            header.broker_name,
-            Some(CheetahString::from_static_str("test_broker"))
-        );
+        assert_eq!(header.broker_name, Some(CheetahString::from_static_str("test_broker")));
         assert_eq!(header.master_broker_id, Some(123));
         assert_eq!(
             header.master_address,

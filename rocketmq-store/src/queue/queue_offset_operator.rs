@@ -152,10 +152,7 @@ impl QueueOffsetOperator {
     }
 
     #[inline]
-    pub fn set_batch_topic_queue_table(
-        &self,
-        batch_topic_queue_table: HashMap<CheetahString, i64>,
-    ) {
+    pub fn set_batch_topic_queue_table(&self, batch_topic_queue_table: HashMap<CheetahString, i64>) {
         *self.batch_topic_queue_table.lock() = batch_topic_queue_table;
     }
 
@@ -223,10 +220,7 @@ mod tests {
             operator.get_batch_queue_offset(&CheetahString::from_static_str("topic-1")),
             0
         );
-        assert_eq!(
-            operator.get_lmq_offset(&CheetahString::from_static_str("topic-1")),
-            0
-        );
+        assert_eq!(operator.get_lmq_offset(&CheetahString::from_static_str("topic-1")), 0);
     }
 
     #[test]

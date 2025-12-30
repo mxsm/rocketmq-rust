@@ -72,9 +72,6 @@ mod tests {
             new_sync_state_set_epoch: 10,
         };
         let cloned = header.clone();
-        assert_eq!(
-            header.new_sync_state_set_epoch,
-            cloned.new_sync_state_set_epoch
-        );
+        assert_eq!(header.new_sync_state_set_epoch, cloned.new_sync_state_set_epoch);
     }
 }

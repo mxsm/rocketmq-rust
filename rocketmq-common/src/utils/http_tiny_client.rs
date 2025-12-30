@@ -174,10 +174,7 @@ impl HttpTinyClient {
     }
 
     /// Encode parameters for URL or form data using form_urlencoded
-    fn encoding_params(
-        param_values: Option<&[String]>,
-        _encoding: &str,
-    ) -> Result<Option<String>, io::Error> {
+    fn encoding_params(param_values: Option<&[String]>, _encoding: &str) -> Result<Option<String>, io::Error> {
         let params = match param_values {
             Some(params) if !params.is_empty() => params,
             _ => return Ok(None),
@@ -222,12 +219,10 @@ impl HttpTinyClient {
         }
 
         // Set standard headers (matching Java implementation)
-        request_builder = request_builder
-            .header("Client-Version", CURRENT_VERSION.name())
-            .header(
-                "Content-Type",
-                format!("application/x-www-form-urlencoded;charset={encoding}"),
-            );
+        request_builder = request_builder.header("Client-Version", CURRENT_VERSION.name()).header(
+            "Content-Type",
+            format!("application/x-www-form-urlencoded;charset={encoding}"),
+        );
 
         // Set timestamp header
         let timestamp = get_current_millis();

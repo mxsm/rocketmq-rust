@@ -195,9 +195,8 @@ fn main() -> rocketmq_error::RocketMQResult<()> {
         println!("[Performance Improvement]");
         let serialize_improvement =
             (1.0 - simd_serialize_time.as_secs_f64() / serde_serialize_time.as_secs_f64()) * 100.0;
-        let deserialize_improvement = (1.0
-            - simd_deserialize_time.as_secs_f64() / serde_deserialize_time.as_secs_f64())
-            * 100.0;
+        let deserialize_improvement =
+            (1.0 - simd_deserialize_time.as_secs_f64() / serde_deserialize_time.as_secs_f64()) * 100.0;
         let roundtrip_improvement =
             (1.0 - simd_roundtrip_time.as_secs_f64() / serde_roundtrip_time.as_secs_f64()) * 100.0;
         let throughput_improvement = ((iterations as f64 / simd_roundtrip_time.as_secs_f64())

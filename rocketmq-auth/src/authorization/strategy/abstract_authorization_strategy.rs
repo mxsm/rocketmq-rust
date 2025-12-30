@@ -114,10 +114,7 @@ impl AbstractAuthorizationStrategy {
     /// let config = AuthConfig::default();
     /// let strategy = AbstractAuthorizationStrategy::new(config, None)?;
     /// ```
-    pub fn new(
-        auth_config: AuthConfig,
-        _metadata_service: Option<Box<dyn Any + Send + Sync>>,
-    ) -> StrategyResult<Self> {
+    pub fn new(auth_config: AuthConfig, _metadata_service: Option<Box<dyn Any + Send + Sync>>) -> StrategyResult<Self> {
         // Parse and build whitelist from configuration
         let mut authorization_whitelist = HashSet::new();
         let whitelist_str = auth_config.authorization_whitelist.as_str();

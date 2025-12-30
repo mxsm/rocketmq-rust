@@ -52,10 +52,7 @@ mod tests {
     fn build_cluster_revive_topic_appends_correctly() {
         let cluster_name = "test_cluster";
         let expected = "rmq_sys_REVIVE_LOG_test_cluster";
-        assert_eq!(
-            PopAckConstants::build_cluster_revive_topic(cluster_name),
-            expected
-        );
+        assert_eq!(PopAckConstants::build_cluster_revive_topic(cluster_name), expected);
     }
 
     #[test]

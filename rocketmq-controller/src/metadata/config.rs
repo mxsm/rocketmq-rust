@@ -90,9 +90,7 @@ impl ConfigManager {
         self.configs
             .get(key)
             .map(|entry| entry.value().clone())
-            .ok_or_else(|| ControllerError::MetadataNotFound {
-                key: key.to_string(),
-            })
+            .ok_or_else(|| ControllerError::MetadataNotFound { key: key.to_string() })
     }
 
     /// Delete a configuration
@@ -101,19 +99,14 @@ impl ConfigManager {
 
         self.configs
             .remove(key)
-            .ok_or_else(|| ControllerError::MetadataNotFound {
-                key: key.to_string(),
-            })?;
+            .ok_or_else(|| ControllerError::MetadataNotFound { key: key.to_string() })?;
 
         Ok(())
     }
 
     /// List all configurations
     pub async fn list_configs(&self) -> Vec<ConfigInfo> {
-        self.configs
-            .iter()
-            .map(|entry| entry.value().clone())
-            .collect()
+        self.configs.iter().map(|entry| entry.value().clone()).collect()
     }
 }
 

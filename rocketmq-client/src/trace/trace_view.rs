@@ -19,8 +19,7 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_enum::MessageType;
 use rocketmq_common::utils::util_all;
 
-static LOCAL_ADDRESS: std::sync::LazyLock<CheetahString> =
-    std::sync::LazyLock::new(util_all::get_ip_str);
+static LOCAL_ADDRESS: std::sync::LazyLock<CheetahString> = std::sync::LazyLock::new(util_all::get_ip_str);
 
 #[derive(Debug, Clone)]
 pub struct TraceView {
@@ -107,10 +106,7 @@ mod tests {
         assert_eq!(trace_view.client_host, CheetahString::from("127.0.0.1"));
         assert_eq!(trace_view.cost_time, 1734784743);
         assert_eq!(trace_view.msg_type, Some(MessageType::NormalMsg));
-        assert_eq!(
-            trace_view.offset_msg_id,
-            CheetahString::from("offset_msg_id")
-        );
+        assert_eq!(trace_view.offset_msg_id, CheetahString::from("offset_msg_id"));
         assert_eq!(trace_view.time_stamp, 1734784743);
         assert_eq!(trace_view.born_time, 1734784743);
         assert_eq!(trace_view.topic, CheetahString::from("topic"));

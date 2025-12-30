@@ -70,10 +70,7 @@ impl ConsumeMessagePopOrderlyService {
             consumer_config,
             consumer_group,
             message_listener,
-            consume_runtime: RocketMQRuntime::new_multi(
-                consume_thread as usize,
-                consumer_group_tag.as_str(),
-            ),
+            consume_runtime: RocketMQRuntime::new_multi(consume_thread as usize, consumer_group_tag.as_str()),
             consume_request_set: Default::default(),
             message_queue_lock: Default::default(),
             consume_request_lock: Default::default(),
@@ -84,12 +81,7 @@ impl ConsumeMessagePopOrderlyService {
         self.consume_request_set.remove(request);
     }
 
-    async fn submit_consume_request(
-        &mut self,
-        this: ArcMut<Self>,
-        mut request: ConsumeRequest,
-        force: bool,
-    ) {
+    async fn submit_consume_request(&mut self, this: ArcMut<Self>, mut request: ConsumeRequest, force: bool) {
         let lock = self
             .consume_request_lock
             .fetch_lock_object_with_sharding_key(&request.message_queue, request.sharding_key_index)
@@ -118,11 +110,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         broker_name: Option<CheetahString>,
     ) -> ConsumeMessageDirectlyResult {
         info!("consumeMessageDirectly receive new message: {}", msg);
-        let mq = MessageQueue::from_parts(
-            msg.topic().clone(),
-            broker_name.unwrap_or_default(),
-            msg.queue_id(),
-        );
+        let mq = MessageQueue::from_parts(msg.topic().clone(), broker_name.unwrap_or_default(), msg.queue_id());
         let mut msgs = vec![ArcMut::new(msg)];
         let mut context = ConsumeOrderlyContext::new(mq);
         self.default_mqpush_consumer_impl
@@ -134,10 +122,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         let begin_timestamp = Instant::now();
 
         let status = self.message_listener.consume_message(
-            &msgs
-                .iter()
-                .map(|msg| msg.as_ref())
-                .collect::<Vec<&MessageExt>>()[..],
+            &msgs.iter().map(|msg| msg.as_ref()).collect::<Vec<&MessageExt>>()[..],
             &mut context,
         );
         let mut result = ConsumeMessageDirectlyResult::default();
@@ -206,10 +191,7 @@ impl ConsumeRequest {
         }
     }
 
-    pub async fn run(
-        &mut self,
-        mut consume_message_pop_orderly_service: ArcMut<ConsumeMessagePopOrderlyService>,
-    ) {
+    pub async fn run(&mut self, mut consume_message_pop_orderly_service: ArcMut<ConsumeMessagePopOrderlyService>) {
         if self.process_queue.is_dropped() {
             warn!(
                 "run, message queue not be able to consume, because it's dropped. {}",
@@ -227,8 +209,7 @@ impl ConsumeRequest {
 
 impl PartialEq for ConsumeRequest {
     fn eq(&self, other: &Self) -> bool {
-        self.sharding_key_index == other.sharding_key_index
-            && Arc::ptr_eq(&self.process_queue, &other.process_queue)
+        self.sharding_key_index == other.sharding_key_index && Arc::ptr_eq(&self.process_queue, &other.process_queue)
             || (self.message_queue.eq(&other.message_queue))
     }
 }

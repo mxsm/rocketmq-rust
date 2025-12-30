@@ -99,10 +99,7 @@ mod tests {
         assert_eq!(deserialized.username, Some(CheetahString::from("user")));
         assert_eq!(deserialized.password, Some(CheetahString::from("pass")));
         assert_eq!(deserialized.user_type, Some(CheetahString::from("admin")));
-        assert_eq!(
-            deserialized.user_status,
-            Some(CheetahString::from("active"))
-        );
+        assert_eq!(deserialized.user_status, Some(CheetahString::from("active")));
     }
 
     #[test]

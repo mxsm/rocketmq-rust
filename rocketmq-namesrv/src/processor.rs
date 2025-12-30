@@ -85,11 +85,7 @@ impl NameServerRequestProcessor {
         }
     }
 
-    pub fn register_processor(
-        &mut self,
-        request_code: RequestCode,
-        processor: NameServerRequestProcessorWrapper,
-    ) {
+    pub fn register_processor(&mut self, request_code: RequestCode, processor: NameServerRequestProcessorWrapper) {
         self.processor_table.insert(request_code as i32, processor);
     }
 
@@ -108,20 +104,15 @@ impl RequestProcessor for NameServerRequestProcessor {
         match self.processor_table.get_mut(request.code_ref()) {
             None => match self.default_request_processor.as_mut() {
                 None => {
-                    let response_command =
-                        RemotingCommand::create_response_command_with_code_remark(
-                            ResponseCode::SystemError,
-                            format!("The request code {} is not supported.", request.code_ref()),
-                        );
+                    let response_command = RemotingCommand::create_response_command_with_code_remark(
+                        ResponseCode::SystemError,
+                        format!("The request code {} is not supported.", request.code_ref()),
+                    );
                     Ok(Some(response_command.set_opaque(request.opaque())))
                 }
-                Some(processor) => {
-                    RequestProcessor::process_request(processor, channel, ctx, request).await
-                }
+                Some(processor) => RequestProcessor::process_request(processor, channel, ctx, request).await,
             },
-            Some(processor) => {
-                RequestProcessor::process_request(processor, channel, ctx, request).await
-            }
+            Some(processor) => RequestProcessor::process_request(processor, channel, ctx, request).await,
         }
     }
 }

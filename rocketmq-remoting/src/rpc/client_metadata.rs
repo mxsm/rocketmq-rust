@@ -31,30 +31,12 @@ use crate::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingU
 
 pub struct ClientMetadata {
     topic_route_table: Arc<RwLock<HashMap<CheetahString /* Topic */, TopicRouteData>>>,
-    topic_end_points_table: Arc<
-        RwLock<
-            HashMap<
-                CheetahString, /* Topic */
-                HashMap<MessageQueue, CheetahString /* brokerName */>,
-            >,
-        >,
-    >,
-    broker_addr_table: Arc<
-        RwLock<
-            HashMap<
-                CheetahString, /* Broker Name */
-                HashMap<u64 /* brokerId */, CheetahString /* address */>,
-            >,
-        >,
-    >,
-    broker_version_table: Arc<
-        RwLock<
-            HashMap<
-                CheetahString, /* Broker Name */
-                HashMap<CheetahString /* address */, i32>,
-            >,
-        >,
-    >,
+    topic_end_points_table:
+        Arc<RwLock<HashMap<CheetahString /* Topic */, HashMap<MessageQueue, CheetahString /* brokerName */>>>>,
+    broker_addr_table:
+        Arc<RwLock<HashMap<CheetahString /* Broker Name */, HashMap<u64 /* brokerId */, CheetahString /* address */>>>>,
+    broker_version_table:
+        Arc<RwLock<HashMap<CheetahString /* Broker Name */, HashMap<CheetahString /* address */, i32>>>>,
 }
 
 impl Default for ClientMetadata {
@@ -73,21 +55,13 @@ impl ClientMetadata {
         }
     }
 
-    pub fn fresh_topic_route(
-        &self,
-        topic: &CheetahString,
-        topic_route_data: Option<TopicRouteData>,
-    ) {
+    pub fn fresh_topic_route(&self, topic: &CheetahString, topic_route_data: Option<TopicRouteData>) {
         if topic.is_empty() || topic_route_data.is_none() {
             return;
         }
         let read_guard = self.topic_route_table.read();
         let old = read_guard.get(topic);
-        if !topic_route_data
-            .as_ref()
-            .unwrap()
-            .topic_route_data_changed(old)
-        {
+        if !topic_route_data.as_ref().unwrap().topic_route_data_changed(old) {
             return;
         }
         drop(read_guard);
@@ -100,10 +74,7 @@ impl ClientMetadata {
         }
 
         {
-            let mq_end_points = ClientMetadata::topic_route_data2endpoints_for_static_topic(
-                topic,
-                &topic_route_data,
-            );
+            let mq_end_points = ClientMetadata::topic_route_data2endpoints_for_static_topic(topic, &topic_route_data);
             if let Some(mq_end_points) = mq_end_points {
                 let mut write_guard = self.topic_end_points_table.write();
                 write_guard.insert(topic.clone(), mq_end_points);
@@ -163,12 +134,7 @@ impl ClientMetadata {
 
         let mut mq_end_points_of_broker = HashMap::new();
         let mut mapping_infos_by_scope = HashMap::new();
-        for (broker_name, info) in topic_route_data
-            .topic_queue_mapping_by_broker
-            .as_ref()
-            .unwrap()
-            .iter()
-        {
+        for (broker_name, info) in topic_route_data.topic_queue_mapping_by_broker.as_ref().unwrap().iter() {
             let scope = info.scope.as_ref();
             if let Some(scope_inner) = scope {
                 if !mapping_infos_by_scope.contains_key(scope_inner.as_str()) {
@@ -196,9 +162,7 @@ impl ClientMetadata {
                 for global_id in info.curr_id_map.as_ref().unwrap().keys() {
                     let mq = MessageQueue::from_parts(
                         topic,
-                        TopicQueueMappingUtils::get_mock_broker_name(
-                            info.scope.as_ref().unwrap().as_str(),
-                        ),
+                        TopicQueueMappingUtils::get_mock_broker_name(info.scope.as_ref().unwrap().as_str()),
                         *global_id,
                     );
                     if let Some(old_info) = mq_endpoints.get(&mq) {
@@ -212,18 +176,12 @@ impl ClientMetadata {
             }
 
             for i in 0..max_total_nums {
-                let mq = MessageQueue::from_parts(
-                    topic,
-                    TopicQueueMappingUtils::get_mock_broker_name(&scope),
-                    i,
-                );
+                let mq = MessageQueue::from_parts(topic, TopicQueueMappingUtils::get_mock_broker_name(&scope), i);
                 let broker_name = mq_endpoints
                     .get(&mq)
                     .map(|info| info.bname.clone().unwrap())
                     .unwrap_or_else(|| {
-                        CheetahString::from_static_str(
-                            mix_all::LOGICAL_QUEUE_MOCK_BROKER_NAME_NOT_EXIST,
-                        )
+                        CheetahString::from_static_str(mix_all::LOGICAL_QUEUE_MOCK_BROKER_NAME_NOT_EXIST)
                     });
                 mq_end_points_of_broker.insert(mq, broker_name);
             }
@@ -232,9 +190,7 @@ impl ClientMetadata {
         Some(mq_end_points_of_broker)
     }
 
-    pub fn broker_addr_table(
-        &self,
-    ) -> Arc<RwLock<HashMap<CheetahString, HashMap<u64, CheetahString>>>> {
+    pub fn broker_addr_table(&self) -> Arc<RwLock<HashMap<CheetahString, HashMap<u64, CheetahString>>>> {
         self.broker_addr_table.clone()
     }
 }

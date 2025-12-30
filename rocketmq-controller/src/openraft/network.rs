@@ -80,10 +80,7 @@ impl RaftNetworkFactory<TypeConfig> for NetworkFactory {
             .cloned()
             .unwrap_or_else(|| format!("unknown-{}", target));
 
-        debug!(
-            "Creating gRPC network connection to node {} at {}",
-            target, target_addr
-        );
+        debug!("Creating gRPC network connection to node {} at {}", target, target_addr);
 
         GrpcNetworkClient::new(target, target_addr)
     }

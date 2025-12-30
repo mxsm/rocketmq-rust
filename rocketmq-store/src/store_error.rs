@@ -74,9 +74,6 @@ mod tests {
     #[test]
     fn general_store_error() {
         let error = StoreError::General("An error occurred".to_string());
-        assert_eq!(
-            format!("{}", error),
-            "General store error: An error occurred"
-        );
+        assert_eq!(format!("{}", error), "General store error: An error occurred");
     }
 }

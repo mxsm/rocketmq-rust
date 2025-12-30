@@ -318,12 +318,10 @@ impl RocketMQSerializable {
 
         while buffer.remaining() > target_remaining {
             // Read key (short length prefix)
-            let key = Self::read_str(buffer, true, len)?
-                .ok_or_else(|| RocketmqError::DecodingError(0, 0))?;
+            let key = Self::read_str(buffer, true, len)?.ok_or_else(|| RocketmqError::DecodingError(0, 0))?;
 
             // Read value (long length prefix)
-            let value = Self::read_str(buffer, false, len)?
-                .ok_or_else(|| RocketmqError::DecodingError(0, 0))?;
+            let value = Self::read_str(buffer, false, len)?.ok_or_else(|| RocketmqError::DecodingError(0, 0))?;
 
             map.insert(key, value);
         }
@@ -402,12 +400,8 @@ mod tests {
 
     #[test]
     fn map_deserialize_non_empty() {
-        let mut buf =
-            BytesMut::from(&[0, 3, 107, 101, 121, 0, 0, 0, 5, 118, 97, 108, 117, 101][..]);
+        let mut buf = BytesMut::from(&[0, 3, 107, 101, 121, 0, 0, 0, 5, 118, 97, 108, 117, 101][..]);
         let deserialized = RocketMQSerializable::map_deserialize(&mut buf, 14).unwrap();
-        assert_eq!(
-            deserialized,
-            [("key".into(), "value".into())].iter().cloned().collect()
-        );
+        assert_eq!(deserialized, [("key".into(), "value".into())].iter().cloned().collect());
     }
 }

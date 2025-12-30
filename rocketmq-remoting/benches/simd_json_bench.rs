@@ -76,10 +76,7 @@ fn create_large_command() -> RemotingCommand {
     for i in 0..50 {
         ext_fields.insert(
             CheetahString::from(format!("field_name_{:03}", i)),
-            CheetahString::from(format!(
-                "field_value_{:03}_with_longer_content_to_increase_size",
-                i
-            )),
+            CheetahString::from(format!("field_value_{:03}_with_longer_content_to_increase_size", i)),
         );
     }
 

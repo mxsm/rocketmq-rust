@@ -32,10 +32,7 @@ pub struct TopicConfigAndQueueMapping {
 }
 
 impl TopicConfigAndQueueMapping {
-    pub fn new(
-        topic_config: TopicConfig,
-        topic_queue_mapping_detail: Option<ArcMut<TopicQueueMappingDetail>>,
-    ) -> Self {
+    pub fn new(topic_config: TopicConfig, topic_queue_mapping_detail: Option<ArcMut<TopicQueueMappingDetail>>) -> Self {
         Self {
             topic_config,
             topic_queue_mapping_detail,

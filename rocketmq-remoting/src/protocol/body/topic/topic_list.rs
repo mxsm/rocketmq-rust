@@ -45,10 +45,7 @@ mod tests {
         };
         assert_eq!(
             topic_list.topic_list,
-            vec![
-                <&str as Into<CheetahString>>::into("topic1"),
-                "topic2".into()
-            ]
+            vec![<&str as Into<CheetahString>>::into("topic1"), "topic2".into()]
         );
         assert_eq!(topic_list.broker_addr, Some("broker1".into()));
     }

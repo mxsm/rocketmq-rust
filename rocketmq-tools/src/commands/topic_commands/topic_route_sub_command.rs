@@ -22,12 +22,7 @@ pub struct TopicRouteSubCommand {
     #[arg(short = 't', long = "topic", required = true, help = "topic name")]
     topic: String,
     /// List format
-    #[arg(
-        short = 'l',
-        long = "list format",
-        required = false,
-        help = "list format"
-    )]
+    #[arg(short = 'l', long = "list format", required = false, help = "list format")]
     list_format: Option<bool>,
 }
 impl TopicRouteSubCommand {
@@ -39,11 +34,7 @@ impl TopicRouteSubCommand {
         }
         std::cmp::Ordering::Equal
     }
-    fn print_data(
-        &self,
-        topic_route_data: &TopicRouteData,
-        use_list_format: bool,
-    ) -> RocketMQResult<()> {
+    fn print_data(&self, topic_route_data: &TopicRouteData, use_list_format: bool) -> RocketMQResult<()> {
         if !use_list_format {
             println!("{}", topic_route_data.serialize_json()?);
             return Ok(());
@@ -56,14 +47,10 @@ impl TopicRouteSubCommand {
             map.insert(queue_data.broker_name().clone(), queue_data.clone())
                 .unwrap();
         }
-        queue_data_list.sort_by(|a, b| {
-            TopicRouteSubCommand::broker_name_compare(a.broker_name(), b.broker_name())
-        });
+        queue_data_list.sort_by(|a, b| TopicRouteSubCommand::broker_name_compare(a.broker_name(), b.broker_name()));
 
         let mut broker_data_list = topic_route_data.broker_datas.clone();
-        broker_data_list.sort_by(|a, b| {
-            TopicRouteSubCommand::broker_name_compare(a.broker_name(), b.broker_name())
-        });
+        broker_data_list.sort_by(|a, b| TopicRouteSubCommand::broker_name_compare(a.broker_name(), b.broker_name()));
 
         println!("#ClusterName #BrokerName #BrokerAddrs #ReadQueue #WriteQueue #Perm");
 
@@ -86,12 +73,7 @@ impl TopicRouteSubCommand {
         for _i in 0..158 {
             print!("-");
         }
-        println!(
-            "Total: {} {} {}",
-            map.len(),
-            total_read_queue,
-            total_write_queue,
-        );
+        println!("Total: {} {} {}", map.len(), total_read_queue, total_write_queue,);
         Ok(())
     }
 }

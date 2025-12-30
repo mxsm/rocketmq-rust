@@ -94,11 +94,7 @@ impl CommandExecute for TopicListCommand {
             for topic in user_topics {
                 // Get topic route to determine cluster
                 if let Ok(Some(route)) = admin.examine_topic_route_info(topic.clone()).await {
-                    let brokers: Vec<_> = route
-                        .broker_datas
-                        .iter()
-                        .map(|bd| bd.broker_name().clone())
-                        .collect();
+                    let brokers: Vec<_> = route.broker_datas.iter().map(|bd| bd.broker_name().clone()).collect();
 
                     // Check if any broker belongs to the filter cluster
                     if let Some(ref info) = cluster_info {
@@ -106,11 +102,9 @@ impl CommandExecute for TopicListCommand {
                             .cluster_addr_table
                             .as_ref()
                             .and_then(|table| table.get(filter_cluster.as_str()))
-                            .map(
-                                |cluster_brokers: &std::collections::HashSet<CheetahString>| {
-                                    brokers.iter().any(|b| cluster_brokers.contains(b))
-                                },
-                            )
+                            .map(|cluster_brokers: &std::collections::HashSet<CheetahString>| {
+                                brokers.iter().any(|b| cluster_brokers.contains(b))
+                            })
                             .unwrap_or(false);
 
                         if in_cluster {
@@ -161,10 +155,7 @@ impl CommandExecute for TopicListCommand {
                 tabled::settings::object::Rows::first(),
             ));
             println!("{table}");
-            output::print_info(&format!(
-                "Found {}",
-                output::format_count(count, "topic", "topics")
-            ));
+            output::print_info(&format!("Found {}", output::format_count(count, "topic", "topics")));
         }
 
         Ok(())
@@ -193,13 +184,7 @@ mod tests {
 
     #[test]
     fn test_command_with_cluster_filter() {
-        let cmd = TopicListCommand::try_parse_from([
-            "topicList",
-            "-n",
-            "127.0.0.1:9876",
-            "-c",
-            "DefaultCluster",
-        ]);
+        let cmd = TopicListCommand::try_parse_from(["topicList", "-n", "127.0.0.1:9876", "-c", "DefaultCluster"]);
         assert!(cmd.is_ok());
         let cmd = cmd.unwrap();
         assert_eq!(cmd.cluster, Some("DefaultCluster".to_string()));

@@ -44,9 +44,7 @@ impl GeneralHAConnection {
         }
     }
 
-    pub fn new_with_auto_switch_ha_connection(
-        auto_switch_ha_connection: AutoSwitchHAConnection,
-    ) -> Self {
+    pub fn new_with_auto_switch_ha_connection(auto_switch_ha_connection: AutoSwitchHAConnection) -> Self {
         GeneralHAConnection {
             default_ha_connection: None,
             auto_switch_ha_connection: Some(ArcMut::new(auto_switch_ha_connection)),
@@ -63,27 +61,16 @@ impl GeneralHAConnection {
 }
 
 impl HAConnection for GeneralHAConnection {
-    async fn start(
-        &mut self,
-        conn: WeakArcMut<GeneralHAConnection>,
-    ) -> Result<(), HAConnectionError> {
-        match (
-            &mut self.default_ha_connection,
-            &mut self.auto_switch_ha_connection,
-        ) {
+    async fn start(&mut self, conn: WeakArcMut<GeneralHAConnection>) -> Result<(), HAConnectionError> {
+        match (&mut self.default_ha_connection, &mut self.auto_switch_ha_connection) {
             (Some(connection), _) => connection.start(conn).await,
             (_, Some(connection)) => connection.start(conn).await,
-            (None, None) => Err(HAConnectionError::Connection(
-                "No HA connection set".to_string(),
-            )),
+            (None, None) => Err(HAConnectionError::Connection("No HA connection set".to_string())),
         }
     }
 
     async fn shutdown(&mut self) {
-        match (
-            &mut self.default_ha_connection,
-            &mut self.auto_switch_ha_connection,
-        ) {
+        match (&mut self.default_ha_connection, &mut self.auto_switch_ha_connection) {
             (Some(connection), _) => connection.shutdown().await,
             (_, Some(connection)) => connection.shutdown().await,
             (None, None) => {

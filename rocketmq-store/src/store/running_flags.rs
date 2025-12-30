@@ -57,8 +57,7 @@ impl RunningFlags {
     pub fn get_and_make_readable(&self) -> bool {
         let result = self.is_readable();
         if !result {
-            self.flag_bits
-                .fetch_and(!NOT_READABLE_BIT, Ordering::SeqCst);
+            self.flag_bits.fetch_and(!NOT_READABLE_BIT, Ordering::SeqCst);
         }
         result
     }
@@ -92,8 +91,7 @@ impl RunningFlags {
     pub fn get_and_make_writeable(&self) -> bool {
         let result = self.is_writeable();
         if !result {
-            self.flag_bits
-                .fetch_and(!NOT_WRITEABLE_BIT, Ordering::SeqCst);
+            self.flag_bits.fetch_and(!NOT_WRITEABLE_BIT, Ordering::SeqCst);
         }
         result
     }
@@ -113,10 +111,7 @@ impl RunningFlags {
     #[inline]
     pub fn is_cq_writeable(&self) -> bool {
         (self.flag_bits.load(Ordering::SeqCst)
-            & (NOT_WRITEABLE_BIT
-                | WRITE_LOGICS_QUEUE_ERROR_BIT
-                | WRITE_INDEX_FILE_ERROR_BIT
-                | LOGIC_DISK_FULL_BIT))
+            & (NOT_WRITEABLE_BIT | WRITE_LOGICS_QUEUE_ERROR_BIT | WRITE_INDEX_FILE_ERROR_BIT | LOGIC_DISK_FULL_BIT))
             == 0
     }
 
@@ -131,8 +126,7 @@ impl RunningFlags {
 
     #[inline]
     pub fn make_logics_queue_error(&self) {
-        self.flag_bits
-            .fetch_or(WRITE_LOGICS_QUEUE_ERROR_BIT, Ordering::SeqCst);
+        self.flag_bits.fetch_or(WRITE_LOGICS_QUEUE_ERROR_BIT, Ordering::SeqCst);
     }
 
     #[inline]
@@ -146,20 +140,17 @@ impl RunningFlags {
 
     #[inline]
     pub fn is_logics_queue_error(&self) -> bool {
-        (self.flag_bits.load(Ordering::SeqCst) & WRITE_LOGICS_QUEUE_ERROR_BIT)
-            == WRITE_LOGICS_QUEUE_ERROR_BIT
+        (self.flag_bits.load(Ordering::SeqCst) & WRITE_LOGICS_QUEUE_ERROR_BIT) == WRITE_LOGICS_QUEUE_ERROR_BIT
     }
 
     #[inline]
     pub fn make_index_file_error(&self) {
-        self.flag_bits
-            .fetch_or(WRITE_INDEX_FILE_ERROR_BIT, Ordering::SeqCst);
+        self.flag_bits.fetch_or(WRITE_INDEX_FILE_ERROR_BIT, Ordering::SeqCst);
     }
 
     #[inline]
     pub fn is_index_file_error(&self) -> bool {
-        (self.flag_bits.load(Ordering::SeqCst) & WRITE_INDEX_FILE_ERROR_BIT)
-            == WRITE_INDEX_FILE_ERROR_BIT
+        (self.flag_bits.load(Ordering::SeqCst) & WRITE_INDEX_FILE_ERROR_BIT) == WRITE_INDEX_FILE_ERROR_BIT
     }
 
     #[inline]
@@ -178,19 +169,15 @@ impl RunningFlags {
 
     #[inline]
     pub fn get_and_make_logic_disk_full(&self) -> bool {
-        let result =
-            (self.flag_bits.load(Ordering::SeqCst) & LOGIC_DISK_FULL_BIT) != LOGIC_DISK_FULL_BIT;
-        self.flag_bits
-            .fetch_or(LOGIC_DISK_FULL_BIT, Ordering::SeqCst);
+        let result = (self.flag_bits.load(Ordering::SeqCst) & LOGIC_DISK_FULL_BIT) != LOGIC_DISK_FULL_BIT;
+        self.flag_bits.fetch_or(LOGIC_DISK_FULL_BIT, Ordering::SeqCst);
         result
     }
 
     #[inline]
     pub fn get_and_make_logic_disk_ok(&self) -> bool {
-        let result =
-            (self.flag_bits.load(Ordering::SeqCst) & LOGIC_DISK_FULL_BIT) != LOGIC_DISK_FULL_BIT;
-        self.flag_bits
-            .fetch_and(!LOGIC_DISK_FULL_BIT, Ordering::SeqCst);
+        let result = (self.flag_bits.load(Ordering::SeqCst) & LOGIC_DISK_FULL_BIT) != LOGIC_DISK_FULL_BIT;
+        self.flag_bits.fetch_and(!LOGIC_DISK_FULL_BIT, Ordering::SeqCst);
         result
     }
 }
@@ -218,9 +205,7 @@ mod tests {
     fn test_is_readable() {
         let running_flags = RunningFlags::new();
         assert!(running_flags.is_readable());
-        running_flags
-            .flag_bits
-            .store(NOT_READABLE_BIT, Ordering::Relaxed);
+        running_flags.flag_bits.store(NOT_READABLE_BIT, Ordering::Relaxed);
         assert!(!running_flags.is_readable());
     }
 
@@ -263,9 +248,7 @@ mod tests {
     fn test_is_writeable() {
         let running_flags = RunningFlags::new();
         assert!(running_flags.is_writeable());
-        running_flags
-            .flag_bits
-            .store(NOT_WRITEABLE_BIT, Ordering::Relaxed);
+        running_flags.flag_bits.store(NOT_WRITEABLE_BIT, Ordering::Relaxed);
         assert!(!running_flags.is_writeable());
     }
 
@@ -273,10 +256,9 @@ mod tests {
     fn test_is_cq_writeable() {
         let running_flags = RunningFlags::new();
         assert!(running_flags.is_cq_writeable());
-        running_flags.flag_bits.store(
-            NOT_WRITEABLE_BIT | WRITE_LOGICS_QUEUE_ERROR_BIT,
-            Ordering::Relaxed,
-        );
+        running_flags
+            .flag_bits
+            .store(NOT_WRITEABLE_BIT | WRITE_LOGICS_QUEUE_ERROR_BIT, Ordering::Relaxed);
         assert!(!running_flags.is_cq_writeable());
     }
 

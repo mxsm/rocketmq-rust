@@ -303,10 +303,7 @@ pub trait Controller: Send + Sync {
     /// # Returns
     ///
     /// RemotingCommand indicating success or rejection
-    async fn apply_broker_id(
-        &self,
-        request: &ApplyBrokerIdRequestHeader,
-    ) -> RocketMQResult<Option<RemotingCommand>>;
+    async fn apply_broker_id(&self, request: &ApplyBrokerIdRequestHeader) -> RocketMQResult<Option<RemotingCommand>>;
 
     /// Clean up broker data from controller
     ///
@@ -358,10 +355,7 @@ pub trait Controller: Send + Sync {
     /// 4. State machine selects new master
     /// 5. Response sent to broker with new master info
     /// ```
-    async fn elect_master(
-        &self,
-        request: &ElectMasterRequestHeader,
-    ) -> RocketMQResult<Option<RemotingCommand>>;
+    async fn elect_master(&self, request: &ElectMasterRequestHeader) -> RocketMQResult<Option<RemotingCommand>>;
 
     /// Alter the In-Sync Replica set (ISR) for a broker
     ///
@@ -417,10 +411,7 @@ pub trait Controller: Send + Sync {
     /// - In-sync replica list
     /// - Out-of-sync replica list
     /// - Sync state set epoch
-    async fn get_replica_info(
-        &self,
-        request: &GetReplicaInfoRequestHeader,
-    ) -> RocketMQResult<Option<RemotingCommand>>;
+    async fn get_replica_info(&self, request: &GetReplicaInfoRequestHeader) -> RocketMQResult<Option<RemotingCommand>>;
 
     /// Get controller metadata
     ///
@@ -450,10 +441,7 @@ pub trait Controller: Send + Sync {
     /// # Returns
     ///
     /// RemotingCommand with aggregated sync state data
-    async fn get_sync_state_data(
-        &self,
-        broker_names: &[CheetahString],
-    ) -> RocketMQResult<Option<RemotingCommand>>;
+    async fn get_sync_state_data(&self, broker_names: &[CheetahString]) -> RocketMQResult<Option<RemotingCommand>>;
 
     // ==================== Lifecycle Listeners ====================
 
@@ -580,10 +568,7 @@ impl Controller for MockController {
         Ok(Some(RemotingCommand::create_response_command()))
     }
 
-    async fn apply_broker_id(
-        &self,
-        _request: &ApplyBrokerIdRequestHeader,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    async fn apply_broker_id(&self, _request: &ApplyBrokerIdRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
         Ok(Some(RemotingCommand::create_response_command()))
     }
 
@@ -595,10 +580,7 @@ impl Controller for MockController {
         Ok(Some(RemotingCommand::create_response_command()))
     }
 
-    async fn elect_master(
-        &self,
-        _request: &ElectMasterRequestHeader,
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    async fn elect_master(&self, _request: &ElectMasterRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
         Ok(Some(RemotingCommand::create_response_command()))
     }
 
@@ -621,10 +603,7 @@ impl Controller for MockController {
         Ok(Some(RemotingCommand::create_response_command()))
     }
 
-    async fn get_sync_state_data(
-        &self,
-        _broker_names: &[CheetahString],
-    ) -> RocketMQResult<Option<RemotingCommand>> {
+    async fn get_sync_state_data(&self, _broker_names: &[CheetahString]) -> RocketMQResult<Option<RemotingCommand>> {
         Ok(Some(RemotingCommand::create_response_command()))
     }
 

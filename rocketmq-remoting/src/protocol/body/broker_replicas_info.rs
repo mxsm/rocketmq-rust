@@ -43,10 +43,7 @@ impl BrokerReplicasInfo {
         &self.replicas_info_table
     }
 
-    pub fn set_replicas_info_table(
-        &mut self,
-        replicas_info_table: HashMap<CheetahString, ReplicasInfo>,
-    ) {
+    pub fn set_replicas_info_table(&mut self, replicas_info_table: HashMap<CheetahString, ReplicasInfo>) {
         self.replicas_info_table = replicas_info_table;
     }
 }
@@ -129,12 +126,7 @@ impl ReplicasInfo {
         self.master_broker_id = master_broker_id;
     }
 
-    pub fn is_exist_in_sync(
-        &self,
-        broker_name: &str,
-        broker_id: u64,
-        broker_address: &str,
-    ) -> bool {
+    pub fn is_exist_in_sync(&self, broker_name: &str, broker_id: u64, broker_address: &str) -> bool {
         self.in_sync_replicas.iter().any(|replica| {
             replica.broker_name == broker_name
                 && replica.broker_id == broker_id
@@ -142,12 +134,7 @@ impl ReplicasInfo {
         })
     }
 
-    pub fn is_exist_in_not_sync(
-        &self,
-        broker_name: &str,
-        broker_id: u64,
-        broker_address: &str,
-    ) -> bool {
+    pub fn is_exist_in_not_sync(&self, broker_name: &str, broker_id: u64, broker_address: &str) -> bool {
         self.not_in_sync_replicas.iter().any(|replica| {
             replica.broker_name == broker_name
                 && replica.broker_id == broker_id
@@ -155,12 +142,7 @@ impl ReplicasInfo {
         })
     }
 
-    pub fn is_exist_in_all_replicas(
-        &self,
-        broker_name: &str,
-        broker_id: u64,
-        broker_address: &str,
-    ) -> bool {
+    pub fn is_exist_in_all_replicas(&self, broker_name: &str, broker_id: u64, broker_address: &str) -> bool {
         self.is_exist_in_sync(broker_name, broker_id, broker_address)
             || self.is_exist_in_not_sync(broker_name, broker_id, broker_address)
     }
@@ -240,8 +222,7 @@ impl fmt::Display for ReplicaIdentity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "ReplicaIdentity{{ broker_name: '{}', broker_id: {}, broker_address: '{}', alive: {} \
-             }}",
+            "ReplicaIdentity{{ broker_name: '{}', broker_id: {}, broker_address: '{}', alive: {} }}",
             self.broker_name, self.broker_id, self.broker_address, self.alive
         )
     }
@@ -258,10 +239,7 @@ mod tests {
         let replica = ReplicaIdentity::new("broker1", 1, "address1");
         assert_eq!(replica.get_broker_name(), &CheetahString::from("broker1"));
         assert_eq!(replica.get_broker_id(), 1);
-        assert_eq!(
-            replica.get_broker_address(),
-            &CheetahString::from("address1")
-        );
+        assert_eq!(replica.get_broker_address(), &CheetahString::from("address1"));
         assert!(!replica.get_alive());
     }
 
@@ -270,10 +248,7 @@ mod tests {
         let replica = ReplicaIdentity::new_with_alive("broker1", 1, "address1", true);
         assert_eq!(replica.get_broker_name(), &CheetahString::from("broker1"));
         assert_eq!(replica.get_broker_id(), 1);
-        assert_eq!(
-            replica.get_broker_address(),
-            &CheetahString::from("address1")
-        );
+        assert_eq!(replica.get_broker_address(), &CheetahString::from("address1"));
         assert!(replica.get_alive());
     }
 
@@ -288,10 +263,7 @@ mod tests {
     fn set_broker_address_updates_broker_address() {
         let mut replica = ReplicaIdentity::new("broker1", 1, "address1");
         replica.set_broker_address("address2");
-        assert_eq!(
-            replica.get_broker_address(),
-            &CheetahString::from("address2")
-        );
+        assert_eq!(replica.get_broker_address(), &CheetahString::from("address2"));
     }
 
     #[test]
@@ -314,8 +286,7 @@ mod tests {
         let display = format!("{}", replica);
         assert_eq!(
             display,
-            "ReplicaIdentity{ broker_name: 'broker1', broker_id: 1, broker_address: 'address1', \
-             alive: true }"
+            "ReplicaIdentity{ broker_name: 'broker1', broker_id: 1, broker_address: 'address1', alive: true }"
         );
     }
 
@@ -368,8 +339,7 @@ mod tests {
     #[test]
     fn is_exist_in_sync_returns_true_for_existing_replica() {
         let in_sync_replicas = vec![ReplicaIdentity::new("broker1", 1, "address1")];
-        let replicas_info =
-            ReplicasInfo::new(1, "master_address", 100, 200, in_sync_replicas, vec![]);
+        let replicas_info = ReplicasInfo::new(1, "master_address", 100, 200, in_sync_replicas, vec![]);
         assert!(replicas_info.is_exist_in_sync("broker1", 1, "address1"));
     }
 
@@ -382,8 +352,7 @@ mod tests {
     #[test]
     fn is_exist_in_not_sync_returns_true_for_existing_replica() {
         let not_in_sync_replicas = vec![ReplicaIdentity::new("broker2", 2, "address2")];
-        let replicas_info =
-            ReplicasInfo::new(1, "master_address", 100, 200, vec![], not_in_sync_replicas);
+        let replicas_info = ReplicasInfo::new(1, "master_address", 100, 200, vec![], not_in_sync_replicas);
         assert!(replicas_info.is_exist_in_not_sync("broker2", 2, "address2"));
     }
 
@@ -396,16 +365,14 @@ mod tests {
     #[test]
     fn is_exist_in_all_replicas_returns_true_for_existing_replica_in_sync() {
         let in_sync_replicas = vec![ReplicaIdentity::new("broker1", 1, "address1")];
-        let replicas_info =
-            ReplicasInfo::new(1, "master_address", 100, 200, in_sync_replicas, vec![]);
+        let replicas_info = ReplicasInfo::new(1, "master_address", 100, 200, in_sync_replicas, vec![]);
         assert!(replicas_info.is_exist_in_all_replicas("broker1", 1, "address1"));
     }
 
     #[test]
     fn is_exist_in_all_replicas_returns_true_for_existing_replica_in_not_sync() {
         let not_in_sync_replicas = vec![ReplicaIdentity::new("broker2", 2, "address2")];
-        let replicas_info =
-            ReplicasInfo::new(1, "master_address", 100, 200, vec![], not_in_sync_replicas);
+        let replicas_info = ReplicasInfo::new(1, "master_address", 100, 200, vec![], not_in_sync_replicas);
         assert!(replicas_info.is_exist_in_all_replicas("broker2", 2, "address2"));
     }
 

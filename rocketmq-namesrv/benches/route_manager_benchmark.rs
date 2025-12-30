@@ -306,8 +306,7 @@ fn bench_iteration(c: &mut Criterion) {
 
         for i in 0..*size {
             let topic = create_topic_name(i);
-            let brokers: Vec<BrokerName> =
-                (0..10).map(|j| create_broker_name(i * 10 + j)).collect();
+            let brokers: Vec<BrokerName> = (0..10).map(|j| create_broker_name(i * 10 + j)).collect();
             map.insert(topic, brokers);
         }
 
