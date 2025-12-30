@@ -15,14 +15,5 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-use std::any::Any;
-
-pub mod context;
-pub mod enums;
-pub mod model;
-
-pub trait AsAny: Any {
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-
-    fn as_any(&self) -> &dyn Any;
-}
+pub mod base_authentication_context;
+pub mod default_authentication_context;

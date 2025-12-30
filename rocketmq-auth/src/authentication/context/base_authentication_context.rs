@@ -95,8 +95,8 @@ impl AsAny for BaseAuthenticationContext {
 mod tests {
     use cheetah_string::CheetahString;
 
+    use crate::authentication::context::base_authentication_context::BaseAuthenticationContext;
     use crate::authentication::AsAny;
-    use crate::authorization::context::base_authentication_context::BaseAuthenticationContext;
 
     #[test]
     fn new_base_authentication_context() {
