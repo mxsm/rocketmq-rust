@@ -193,7 +193,7 @@ impl ControllerRequestProcessor {
         channel: Channel,
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
-    ) -> RocketMQResult<RemotingCommand> {
+    ) -> RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
 
         match request_code {
@@ -238,9 +238,11 @@ impl ControllerRequestProcessor {
             }
             _ => {
                 let error_msg = format!("request type {} not supported", request.code());
-                Ok(RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::RequestCodeNotSupported,
-                    error_msg,
+                Ok(Some(
+                    RemotingCommand::create_response_command_with_code_remark(
+                        ResponseCode::RequestCodeNotSupported,
+                        error_msg,
+                    ),
                 ))
             }
         }
@@ -266,7 +268,7 @@ impl ControllerRequestProcessor {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
-    ) -> RocketMQResult<RemotingCommand> {
+    ) -> RocketMQResult<Option<RemotingCommand>> {
         unimplemented!("unimplemented handle_alter_sync_state_set")
     }
 
@@ -288,7 +290,7 @@ impl ControllerRequestProcessor {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
-    ) -> RocketMQResult<RemotingCommand> {
+    ) -> RocketMQResult<Option<RemotingCommand>> {
         unimplemented!("unimplemented handle_elect_master")
     }
 
@@ -310,7 +312,7 @@ impl ControllerRequestProcessor {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
-    ) -> RocketMQResult<RemotingCommand> {
+    ) -> RocketMQResult<Option<RemotingCommand>> {
         unimplemented!("unimplemented handle_get_replica_info")
     }
 
@@ -332,7 +334,7 @@ impl ControllerRequestProcessor {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
-    ) -> RocketMQResult<RemotingCommand> {
+    ) -> RocketMQResult<Option<RemotingCommand>> {
         // This is a read-only operation, no timeout needed
         unimplemented!("unimplemented handle_get_metadata_info")
     }
@@ -355,7 +357,7 @@ impl ControllerRequestProcessor {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
-    ) -> RocketMQResult<RemotingCommand> {
+    ) -> RocketMQResult<Option<RemotingCommand>> {
         unimplemented!("unimplemented handle_broker_heartbeat")
     }
 
@@ -377,7 +379,7 @@ impl ControllerRequestProcessor {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
-    ) -> RocketMQResult<RemotingCommand> {
+    ) -> RocketMQResult<Option<RemotingCommand>> {
         unimplemented!("unimplemented handle_get_sync_state_data")
     }
 
@@ -399,7 +401,7 @@ impl ControllerRequestProcessor {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
-    ) -> RocketMQResult<RemotingCommand> {
+    ) -> RocketMQResult<Option<RemotingCommand>> {
         unimplemented!("unimplemented handle_update_controller_config")
     }
 
@@ -421,7 +423,7 @@ impl ControllerRequestProcessor {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
-    ) -> RocketMQResult<RemotingCommand> {
+    ) -> RocketMQResult<Option<RemotingCommand>> {
         unimplemented!("unimplemented handle_get_controller_config")
     }
 
@@ -443,7 +445,7 @@ impl ControllerRequestProcessor {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
-    ) -> RocketMQResult<RemotingCommand> {
+    ) -> RocketMQResult<Option<RemotingCommand>> {
         unimplemented!("unimplemented handle_clean_broker_data")
     }
 
@@ -465,7 +467,7 @@ impl ControllerRequestProcessor {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
-    ) -> RocketMQResult<RemotingCommand> {
+    ) -> RocketMQResult<Option<RemotingCommand>> {
         unimplemented!("unimplemented handle_get_next_broker_id")
     }
 
@@ -487,7 +489,7 @@ impl ControllerRequestProcessor {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
-    ) -> RocketMQResult<RemotingCommand> {
+    ) -> RocketMQResult<Option<RemotingCommand>> {
         unimplemented!("unimplemented handle_apply_broker_id")
     }
 
@@ -509,7 +511,7 @@ impl ControllerRequestProcessor {
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
-    ) -> RocketMQResult<RemotingCommand> {
+    ) -> RocketMQResult<Option<RemotingCommand>> {
         unimplemented!("unimplemented handle_register_broker")
     }
 
@@ -542,11 +544,11 @@ impl ControllerRequestProcessor {
 impl RequestProcessor for ControllerRequestProcessor {
     async fn process_request(
         &mut self,
-        _channel: Channel,
-        _ctx: ConnectionHandlerContext,
-        _request: &mut RemotingCommand,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        unimplemented!("Implement process_request for ControllerRequestProcessor")
+        self.handle_request(channel, ctx, request).await
     }
 }
 
