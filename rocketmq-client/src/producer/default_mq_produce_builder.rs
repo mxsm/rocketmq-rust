@@ -303,7 +303,7 @@ impl DefaultMQProducerBuilder {
             mq_producer.set_auto_batch(auto_batch);
         }
         if let Some(produce_accumulator) = self.produce_accumulator {
-            mq_producer.set_produce_accumulator(Some(produce_accumulator));
+            mq_producer.set_produce_accumulator(produce_accumulator);
         }
 
         if let Some(enable_backpressure_for_async_mode) = self.enable_backpressure_for_async_mode {
@@ -315,7 +315,9 @@ impl DefaultMQProducerBuilder {
         if let Some(back_pressure_for_async_send_size) = self.back_pressure_for_async_send_size {
             mq_producer.set_back_pressure_for_async_send_size(back_pressure_for_async_send_size);
         }
-        mq_producer.set_rpc_hook(self.rpc_hook);
+        if let Some(rpc_hook) = self.rpc_hook {
+            mq_producer.set_rpc_hook(rpc_hook);
+        }
         if let Some(compress_level) = self.compress_level {
             mq_producer.set_compress_level(compress_level);
         }
