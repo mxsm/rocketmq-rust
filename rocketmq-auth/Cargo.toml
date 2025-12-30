@@ -35,10 +35,10 @@ ipnetwork = "0.21.1"
 
 # Hex and Base64 encoding/decoding
 hex = "0.4"
-base64 = "0.21"
+base64 = "0.22.1"
 
 # Optional: gRPC support
-tonic = { version = "0.12", optional = true }
+tonic = { version = "0.14.2", optional = true }
 
 # Error handling
 thiserror = { workspace = true }
