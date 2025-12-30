@@ -41,16 +41,16 @@ impl BaseAuthenticationContext {
         self.channel_id.as_ref()
     }
 
-    pub fn set_channel_id(&mut self, channel_id: CheetahString) {
-        self.channel_id = Some(channel_id);
+    pub fn set_channel_id(&mut self, channel_id: Option<CheetahString>) {
+        self.channel_id = channel_id;
     }
 
     pub fn rpc_code(&self) -> Option<&CheetahString> {
         self.rpc_code.as_ref()
     }
 
-    pub fn set_rpc_code(&mut self, rpc_code: CheetahString) {
-        self.rpc_code = Some(rpc_code);
+    pub fn set_rpc_code(&mut self, rpc_code: Option<CheetahString>) {
+        self.rpc_code = rpc_code;
     }
 }
 
@@ -110,8 +110,8 @@ mod tests {
     #[test]
     fn set_and_get_channel_and_rpc() {
         let mut base_authentication_context = BaseAuthenticationContext::new();
-        base_authentication_context.set_channel_id(CheetahString::from("channel-123"));
-        base_authentication_context.set_rpc_code(CheetahString::from("rpc-456"));
+        base_authentication_context.set_channel_id(Some(CheetahString::from("channel-123")));
+        base_authentication_context.set_rpc_code(Some(CheetahString::from("rpc-456")));
 
         assert_eq!(
             Some(&CheetahString::from("channel-123")),

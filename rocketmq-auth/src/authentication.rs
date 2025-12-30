@@ -17,6 +17,7 @@
 
 use std::any::Any;
 
+pub mod builder;
 pub mod context;
 pub mod enums;
 pub mod model;
