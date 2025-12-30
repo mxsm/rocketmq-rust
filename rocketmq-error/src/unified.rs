@@ -36,6 +36,8 @@ pub use serialization::SerializationError;
 use thiserror::Error;
 pub use tools::ToolsError;
 
+// Re-export auth error from the auth_error module
+pub use crate::auth_error::AuthError;
 // Re-export legacy error types for backward compatibility (will be deprecated)
 #[allow(deprecated)]
 pub use crate::client_error::*;
@@ -69,6 +71,14 @@ pub use crate::common_error::*;
 ///     }
 ///     Ok(())
 /// }
+///
+/// fn authenticate_user(username: &str) -> RocketMQResult<()> {
+///     // Create an authentication error
+///     if username.is_empty() {
+///         return Err(RocketMQError::user_not_found(""));
+///     }
+///     Ok(())
+/// }
 /// ```
 #[derive(Debug, Error)]
 pub enum RocketMQError {
@@ -99,6 +109,13 @@ pub enum RocketMQError {
     /// RPC client specific errors (broker lookup, request failures, etc.)
     #[error(transparent)]
     Rpc(#[from] RpcClientError),
+
+    // ============================================================================
+    // Authentication Errors
+    // ============================================================================
+    /// Authentication/authorization errors (credential validation, access control, etc.)
+    #[error(transparent)]
+    Authentication(#[from] AuthError),
 
     // ============================================================================
     // Broker Errors
@@ -529,6 +546,34 @@ impl RocketMQError {
     #[inline]
     pub fn not_initialized(reason: impl Into<String>) -> Self {
         Self::NotInitialized(reason.into())
+    }
+
+    // ============================================================================
+    // Authentication Error Constructors
+    // ============================================================================
+
+    /// Create an authentication failed error
+    #[inline]
+    pub fn authentication_failed(reason: impl Into<String>) -> Self {
+        Self::Authentication(AuthError::AuthenticationFailed(reason.into()))
+    }
+
+    /// Create an invalid credential error
+    #[inline]
+    pub fn invalid_credential(reason: impl Into<String>) -> Self {
+        Self::Authentication(AuthError::InvalidCredential(reason.into()))
+    }
+
+    /// Create a user not found error
+    #[inline]
+    pub fn user_not_found(username: impl Into<String>) -> Self {
+        Self::Authentication(AuthError::UserNotFound(username.into()))
+    }
+
+    /// Create an invalid signature error
+    #[inline]
+    pub fn invalid_signature(reason: impl Into<String>) -> Self {
+        Self::Authentication(AuthError::InvalidSignature(reason.into()))
     }
 }
 
