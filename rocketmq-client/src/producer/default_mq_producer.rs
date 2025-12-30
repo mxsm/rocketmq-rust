@@ -504,6 +504,13 @@ impl DefaultMQProducer {
         })
     }
 
+    #[inline]
+    fn get_accumulator_mut(&mut self) -> rocketmq_error::RocketMQResult<&mut ArcMut<ProduceAccumulator>> {
+        self.producer_config
+            .produce_accumulator
+            .as_mut()
+            .ok_or_else(|| mq_client_err!("ProduceAccumulator is not initialized, auto-batch is enabled"))
+    }
     pub async fn send_direct<M>(
         &mut self,
         mut msg: M,
@@ -550,18 +557,10 @@ impl DefaultMQProducer {
             MessageClientIDSetter::set_uniq_id(&mut msg);
             if send_callback.is_none() {
                 let mq_producer = self.clone();
-                self.producer_config
-                    .produce_accumulator
-                    .as_mut()
-                    .unwrap()
-                    .send(msg, mq, mq_producer)
-                    .await
+                self.get_accumulator_mut()?.send(msg, mq, mq_producer).await
             } else {
                 let mq_producer = self.clone();
-                self.producer_config
-                    .produce_accumulator
-                    .as_mut()
-                    .unwrap()
+                self.get_accumulator_mut()?
                     .send_callback(msg, mq, send_callback, mq_producer)
                     .await?;
                 Ok(None)
