@@ -144,6 +144,7 @@ use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 ///
 /// While individual methods may be called concurrently, implementations should
 /// serialize state-mutating operations internally (e.g., via Raft log).
+#[allow(async_fn_in_trait)]
 pub trait Controller: Send + Sync {
     // ==================== Lifecycle Management ====================
 
