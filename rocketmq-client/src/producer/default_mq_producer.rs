@@ -409,9 +409,9 @@ impl DefaultMQProducer {
 
     pub fn set_trace_dispatcher(
         &mut self,
-        trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>,
+        trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>,
     ) {
-        self.producer_config.trace_dispatcher = trace_dispatcher;
+        self.producer_config.trace_dispatcher = Some(trace_dispatcher);
     }
 
     pub fn set_auto_batch(&mut self, auto_batch: bool) {
