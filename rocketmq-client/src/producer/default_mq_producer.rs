@@ -418,10 +418,8 @@ impl DefaultMQProducer {
         self.producer_config.auto_batch = auto_batch;
     }
 
-    pub fn set_produce_accumulator(&mut self, produce_accumulator: Option<ProduceAccumulator>) {
-        if let Some(produce_accumulator) = produce_accumulator {
-            self.producer_config.produce_accumulator = Some(ArcMut::new(produce_accumulator));
-        }
+    pub fn set_produce_accumulator(&mut self, produce_accumulator: ProduceAccumulator) {
+        self.producer_config.produce_accumulator = Some(ArcMut::new(produce_accumulator));
     }
 
     pub fn set_enable_backpressure_for_async_mode(
@@ -443,8 +441,8 @@ impl DefaultMQProducer {
         self.producer_config.back_pressure_for_async_send_size = back_pressure_for_async_send_size;
     }
 
-    pub fn set_rpc_hook(&mut self, rpc_hook: Option<Arc<dyn RPCHook>>) {
-        self.producer_config.rpc_hook = rpc_hook;
+    pub fn set_rpc_hook(&mut self, rpc_hook: Arc<dyn RPCHook>) {
+        self.producer_config.rpc_hook = Some(rpc_hook);
     }
 
     pub fn set_compress_level(&mut self, compress_level: i32) {
