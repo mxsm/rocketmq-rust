@@ -1,31 +1,32 @@
 [package]
-name = "rocketmq-rust"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-homepage.workspace = true
-repository.workspace = true
-license.workspace = true
-keywords.workspace = true
-readme.workspace = true
-description.workspace = true
+name                   = "rocketmq-rust"
+version.workspace      = true
+authors.workspace      = true
+edition.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+license.workspace      = true
+keywords.workspace     = true
+readme.workspace       = true
+description.workspace  = true
 rust-version.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
-rocketmq-error = { workspace = true }
+tokio              = { workspace = true }
+tokio-util         = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+rocketmq-error     = { workspace = true }
+anyhow             = { workspace = true }
+parking_lot        = { workspace = true }
+serde              = { workspace = true }
 
-uuid = { version = "1", features = ["v4"] }
+uuid   = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-cron = "0.15"
-anyhow = { workspace = true }
-tokio-util = "0.7.17"
-parking_lot = { workspace = true }
-serde = { workspace = true }
+cron   = "0.15"
+
 
 [dev-dependencies]
 tokio-test = "0.4"
