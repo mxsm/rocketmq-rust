@@ -27,7 +27,6 @@ use std::sync::LazyLock;
 use bytes::Buf;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
-use lazy_static::lazy_static;
 
 pub mod message_accessor;
 pub mod message_batch;

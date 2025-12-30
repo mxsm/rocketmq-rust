@@ -21,14 +21,12 @@ use std::hint;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::sync::Once;
 
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
-use lazy_static::lazy_static;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 #[cfg(not(feature = "simd"))]
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
@@ -51,16 +49,18 @@ pub const SERIALIZE_TYPE_PROPERTY: &str = "rocketmq.serialize.type";
 pub const SERIALIZE_TYPE_ENV: &str = "ROCKETMQ_SERIALIZE_TYPE";
 pub const REMOTING_VERSION_KEY: &str = "rocketmq.remoting.version";
 
-lazy_static! {
-    static ref requestId: Arc<AtomicI32> = Arc::new(AtomicI32::new(0));
-    static ref CONFIG_VERSION: i32 = {
-        EnvUtils::get_property(REMOTING_VERSION_KEY)
-            .unwrap_or(String::from("0"))
-            .parse::<i32>()
-            .unwrap_or(0)
-    };
-    static ref INIT: Once = Once::new();
-    pub static ref SERIALIZE_TYPE_CONFIG_IN_THIS_SERVER: SerializeType = {
+static REQUEST_ID: std::sync::LazyLock<Arc<AtomicI32>> =
+    std::sync::LazyLock::new(|| Arc::new(AtomicI32::new(0)));
+
+static CONFIG_VERSION: std::sync::LazyLock<i32> = std::sync::LazyLock::new(|| {
+    EnvUtils::get_property(REMOTING_VERSION_KEY)
+        .unwrap_or(String::from("0"))
+        .parse::<i32>()
+        .unwrap_or(0)
+});
+
+pub static SERIALIZE_TYPE_CONFIG_IN_THIS_SERVER: std::sync::LazyLock<SerializeType> =
+    std::sync::LazyLock::new(|| {
         let protocol = std::env::var(SERIALIZE_TYPE_PROPERTY).unwrap_or_else(|_| {
             std::env::var(SERIALIZE_TYPE_ENV).unwrap_or_else(|_| "".to_string())
         });
@@ -69,8 +69,7 @@ lazy_static! {
             "ROCKETMQ" => SerializeType::ROCKETMQ,
             _ => SerializeType::JSON,
         }
-    };
-}
+    });
 
 fn set_cmd_version(cmd: &mut RemotingCommand) {
     cmd.set_version_ref(*CONFIG_VERSION);
@@ -142,7 +141,7 @@ impl fmt::Display for RemotingCommand {
 
 impl Default for RemotingCommand {
     fn default() -> Self {
-        let opaque = requestId.fetch_add(1, Ordering::AcqRel);
+        let opaque = REQUEST_ID.fetch_add(1, Ordering::AcqRel);
         RemotingCommand {
             code: 0,
             language: LanguageCode::RUST, // Replace with your actual enum variant
@@ -186,7 +185,7 @@ impl RemotingCommand {
     }
 
     pub fn get_and_add() -> i32 {
-        requestId.fetch_add(1, Ordering::AcqRel)
+        REQUEST_ID.fetch_add(1, Ordering::AcqRel)
     }
 
     pub fn create_response_command_with_code(code: impl Into<i32>) -> Self {
@@ -961,7 +960,7 @@ impl RemotingCommand {
     }
 
     pub fn create_new_request_id() -> i32 {
-        requestId.fetch_add(1, Ordering::AcqRel)
+        REQUEST_ID.fetch_add(1, Ordering::AcqRel)
     }
 
     #[inline]

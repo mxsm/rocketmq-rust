@@ -6,7 +6,13 @@ edition.workspace = true
 homepage.workspace = true
 repository.workspace = true
 license.workspace = true
-keywords = ["apache-rocketmq", "rocketmq-rust", "rocketmq-store", "rust", "storage"]
+keywords = [
+    "apache-rocketmq",
+    "rocketmq-rust",
+    "rocketmq-store",
+    "rust",
+    "storage",
+]
 readme = "README.md"
 description = "Storage layer for Apache RocketMQ in Rust."
 rust-version.workspace = true
@@ -36,7 +42,7 @@ dirs.workspace = true
 
 parking_lot.workspace = true
 bytes.workspace = true
-arc-swap = "1.7"
+arc-swap = "1.8"
 
 #tokio
 tokio.workspace = true
@@ -49,9 +55,7 @@ tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
-lazy_static.workspace = true
-
-tempfile = "3.23.0"
+tempfile = "3.24.0"
 
 memmap2 = "0.9.9"
 trait-variant.workspace = true
@@ -79,15 +83,17 @@ tokio-uring = { version = "0.5", optional = true }
 libc = "0.2.178"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62.2", features = ["Win32_Security",
+windows = { version = "0.62.2", features = [
+    "Win32_Security",
     "Win32_System_Memory_NonVolatile",
     "Win32_System_Memory",
     "Win32_System_ProcessStatus",
-    "Win32_System_Threading"] }
+    "Win32_System_Threading",
+] }
 
 
 [dev-dependencies]
-tempfile = "3.23.0"
+tempfile = "3.24.0"
 criterion = { version = "0.8", features = ["html_reports"] }
 
 [[bench]]

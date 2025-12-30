@@ -70,18 +70,39 @@
 #![allow(dead_code)]
 #![allow(clippy::module_inception)]
 
+mod command;
 pub mod config;
+pub mod controller;
+pub(crate) mod elect;
 pub mod error;
+pub mod event;
+pub mod heartbeat;
+pub mod helper;
 pub mod manager;
 pub mod metadata;
+pub mod metrics;
+pub mod openraft;
 pub mod processor;
 pub mod raft;
 pub mod rpc;
 pub mod storage;
+pub mod task;
+pub mod typ;
+pub mod protobuf {
+    tonic::include_proto!("rocketmq_rust_controller");
 
+    // OpenRaft protobuf definitions
+    pub mod openraft {
+        tonic::include_proto!("rocketmq_rust_controller.openraft");
+    }
+}
+
+pub use command::Args;
 pub use config::ControllerConfig;
+pub use elect::policy::DefaultElectPolicy;
 pub use error::ControllerError;
 pub use error::Result;
+pub use manager::replicas_info_manager::ReplicasInfoManager;
 pub use manager::ControllerManager;
 
 /// Controller module version

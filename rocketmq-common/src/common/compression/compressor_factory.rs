@@ -21,14 +21,20 @@ use crate::common::compression::lz4_compressor::Lz4Compressor;
 use crate::common::compression::zlib_compressor::ZlibCompressor;
 use crate::common::compression::zstd_compressor::ZstdCompressor;
 
+static LZ4_COMPRESSOR: Lz4Compressor = Lz4Compressor;
+static ZLIB_COMPRESSOR: ZlibCompressor = ZlibCompressor;
+static ZSTD_COMPRESSOR: ZstdCompressor = ZstdCompressor;
+
 pub struct CompressorFactory;
 
 impl CompressorFactory {
-    pub fn get_compressor(compressor_type: CompressionType) -> Box<dyn Compressor + Send + Sync> {
+    pub fn get_compressor(
+        compressor_type: CompressionType,
+    ) -> &'static (dyn Compressor + Send + Sync) {
         match compressor_type {
-            CompressionType::LZ4 => Box::new(Lz4Compressor),
-            CompressionType::Zlib => Box::new(ZlibCompressor),
-            CompressionType::Zstd => Box::new(ZstdCompressor),
+            CompressionType::LZ4 => &LZ4_COMPRESSOR,
+            CompressionType::Zlib => &ZLIB_COMPRESSOR,
+            CompressionType::Zstd => &ZSTD_COMPRESSOR,
         }
     }
 }

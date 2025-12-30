@@ -20,10 +20,10 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use lazy_static::lazy_static;
 use rocketmq_common::common::base::plain_access_config::PlainAccessConfig;
 use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::config::TopicConfig;
@@ -57,8 +57,10 @@ use crate::common::admin_tool_result::AdminToolResult;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::implementation::mq_client_manager::MQClientManager;
 
-lazy_static! {
-    static ref SYSTEM_GROUP_SET: HashSet<CheetahString> = {
+static SYSTEM_GROUP_SET: OnceLock<HashSet<CheetahString>> = OnceLock::new();
+
+fn get_system_group_set() -> &'static HashSet<CheetahString> {
+    SYSTEM_GROUP_SET.get_or_init(|| {
         let mut set = HashSet::new();
         set.insert(CheetahString::from(mix_all::DEFAULT_CONSUMER_GROUP));
         set.insert(CheetahString::from(mix_all::DEFAULT_PRODUCER_GROUP));
@@ -75,7 +77,7 @@ lazy_static! {
         set.insert(CheetahString::from(mix_all::CID_ONSAPI_PULL_GROUP));
         set.insert(CheetahString::from(mix_all::CID_SYS_RMQ_TRANS));
         set
-    };
+    })
 }
 
 const SOCKS_PROXY_JSON: &str = "socksProxyJson";

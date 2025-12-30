@@ -18,14 +18,14 @@
 use std::any::Any;
 
 use rocketmq_common::common::message::message_ext::MessageExt;
-use rocketmq_common::common::message::message_single::Message;
+use rocketmq_common::common::message::MessageTrait;
 
 use crate::producer::local_transaction_state::LocalTransactionState;
 
 pub trait TransactionListener: Send + Sync + 'static {
     fn execute_local_transaction(
         &self,
-        msg: &Message,
+        msg: &dyn MessageTrait,
         arg: Option<&(dyn Any + Send + Sync)>,
     ) -> LocalTransactionState;
 

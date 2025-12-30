@@ -65,16 +65,37 @@ impl MessageBatch {
         message_decoder::encode_messages(self.messages.as_ref().unwrap())
     }
 
-    pub fn generate_from_vec(
-        messages: Vec<Message>,
-    ) -> rocketmq_error::RocketMQResult<MessageBatch> {
+    pub fn generate_from_vec<M>(messages: Vec<M>) -> rocketmq_error::RocketMQResult<MessageBatch>
+    where
+        M: MessageTrait,
+    {
         if messages.is_empty() {
             return Err(RocketMQError::illegal_argument(
                 "MessageBatch::generate_from_vec: messages is empty",
             ));
         }
+
+        let mut message_list = Vec::with_capacity(messages.len());
+        for msg in messages {
+            if let Some(m) = msg.as_any().downcast_ref::<Message>() {
+                message_list.push(m.clone());
+            } else {
+                let mut m = Message::default();
+                m.set_topic(msg.get_topic().clone());
+                if let Some(body) = msg.get_body() {
+                    m.set_body(body.clone());
+                }
+                m.set_flag(msg.get_flag());
+                if let Some(transaction_id) = msg.get_transaction_id() {
+                    m.set_transaction_id(transaction_id.clone());
+                }
+                m.set_properties(msg.get_properties().clone());
+                message_list.push(m);
+            }
+        }
+
         let mut first: Option<&Message> = None;
-        for message in &messages {
+        for message in &message_list {
             if message.get_delay_time_level() > 0 {
                 return Err(RocketMQError::illegal_argument(
                     "TimeDelayLevel is not supported for batching",
@@ -90,7 +111,6 @@ impl MessageBatch {
             }
 
             if let Some(first_message) = first {
-                let first_message = first.unwrap();
                 if first_message.get_topic() != message.get_topic() {
                     return Err(RocketMQError::illegal_argument(
                         "The topic of the messages in one batch should be the same",
@@ -113,7 +133,7 @@ impl MessageBatch {
         final_message.set_wait_store_msg_ok(first.is_wait_store_msg_ok());
         Ok(MessageBatch {
             final_message,
-            messages: Some(messages),
+            messages: Some(message_list),
         })
     }
 }

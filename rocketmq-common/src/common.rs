@@ -25,9 +25,8 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
-
+pub mod chain;
 pub use crate::common::sys_flag::topic_sys_flag as TopicSysFlag;
-
 pub mod attribute;
 pub mod base;
 pub mod boundary_type;
@@ -37,6 +36,7 @@ pub mod config;
 pub mod config_manager;
 pub mod constant;
 pub mod consumer;
+pub mod controller;
 mod faq;
 pub mod filter;
 pub mod future;
@@ -55,7 +55,9 @@ pub mod statistics;
 pub mod stats;
 pub mod sys_flag;
 
+pub mod action;
 pub mod metrics;
+pub mod resource;
 pub mod system_clock;
 pub mod thread;
 pub mod topic;

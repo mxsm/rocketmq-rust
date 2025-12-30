@@ -60,6 +60,22 @@ pub enum SerializationError {
     /// Protobuf serialization error
     #[error("Protobuf error: {0}")]
     ProtobufError(String),
+
+    /// Event serialization failed
+    #[error("Event serialization failed: {0}")]
+    EventSerializationFailed(String),
+
+    /// Event deserialization failed
+    #[error("Event deserialization failed: {0}")]
+    EventDeserializationFailed(String),
+
+    /// Invalid event type
+    #[error("Invalid event type: {0}")]
+    InvalidEventType(i16),
+
+    /// Unknown event type
+    #[error("Unknown event type: {0}")]
+    UnknownEventType(i16),
 }
 
 impl SerializationError {
@@ -94,6 +110,30 @@ impl SerializationError {
     #[inline]
     pub fn missing_field(field: &'static str) -> Self {
         Self::MissingField { field }
+    }
+
+    /// Create an event serialization failed error
+    #[inline]
+    pub fn event_serialization_failed(message: impl Into<String>) -> Self {
+        Self::EventSerializationFailed(message.into())
+    }
+
+    /// Create an event deserialization failed error
+    #[inline]
+    pub fn event_deserialization_failed(message: impl Into<String>) -> Self {
+        Self::EventDeserializationFailed(message.into())
+    }
+
+    /// Create an invalid event type error
+    #[inline]
+    pub fn invalid_event_type(type_id: i16) -> Self {
+        Self::InvalidEventType(type_id)
+    }
+
+    /// Create an unknown event type error
+    #[inline]
+    pub fn unknown_event_type(type_id: i16) -> Self {
+        Self::UnknownEventType(type_id)
     }
 }
 

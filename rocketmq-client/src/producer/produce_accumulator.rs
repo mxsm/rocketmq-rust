@@ -100,13 +100,16 @@ impl ProduceAccumulator {
         unimplemented!("send")
     }
 
-    pub(crate) async fn send_callback<M: MessageTrait + Send + Sync + 'static + Clone>(
+    pub(crate) async fn send_callback<M>(
         &mut self,
         message: M,
         mq: Option<MessageQueue>,
         send_callback: Option<SendMessageCallback>,
         default_mq_producer: DefaultMQProducer,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    ) -> rocketmq_error::RocketMQResult<()>
+    where
+        M: MessageTrait + Send + Sync + 'static,
+    {
         let partition_key = AggregateKey::new_from_message_queue(&message, mq);
         loop {
             let batch =
