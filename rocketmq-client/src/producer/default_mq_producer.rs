@@ -148,8 +148,8 @@ impl ProducerConfig {
         self.max_message_size
     }
 
-    pub fn trace_dispatcher(&self) -> &Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>> {
-        &self.trace_dispatcher
+    pub fn trace_dispatcher(&self) -> Option<&Arc<Box<dyn TraceDispatcher + Send + Sync>>> {
+        self.trace_dispatcher.as_ref()
     }
 
     pub fn auto_batch(&self) -> bool {
@@ -301,8 +301,8 @@ impl DefaultMQProducer {
         self.producer_config.max_message_size
     }
 
-    pub fn trace_dispatcher(&self) -> &Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>> {
-        &self.producer_config.trace_dispatcher
+    pub fn trace_dispatcher(&self) -> Option<&Arc<Box<dyn TraceDispatcher + Send + Sync>>> {
+        self.producer_config.trace_dispatcher()
     }
 
     pub fn auto_batch(&self) -> bool {
