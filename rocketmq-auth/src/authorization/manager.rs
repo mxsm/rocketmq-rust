@@ -20,7 +20,9 @@
 //! This module provides high-level management interfaces for authorization operations.
 
 pub mod metadata_manager;
+pub mod metadata_manager_impl;
 
 // Re-export commonly used types
 pub use metadata_manager::AuthorizationMetadataManager;
 pub use metadata_manager::ManagerResult;
+pub use metadata_manager_impl::AuthorizationMetadataManagerImpl;
