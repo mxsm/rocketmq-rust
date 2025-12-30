@@ -15,10 +15,12 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-pub mod context;
-pub mod enums;
-pub mod manager;
-pub mod metadata_provider;
-pub mod model;
-pub mod provider;
-pub mod strategy;
+//! Authorization manager module.
+//!
+//! This module provides high-level management interfaces for authorization operations.
+
+pub mod metadata_manager;
+
+// Re-export commonly used types
+pub use metadata_manager::AuthorizationMetadataManager;
+pub use metadata_manager::ManagerResult;
