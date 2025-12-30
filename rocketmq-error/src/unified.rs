@@ -43,6 +43,8 @@ pub use crate::auth_error::AuthError;
 pub use crate::client_error::*;
 #[allow(deprecated)]
 pub use crate::common_error::*;
+// Re-export controller error from the controller_error module
+pub use crate::controller_error::ControllerError;
 
 /// Main error type for all RocketMQ operations
 ///
@@ -116,6 +118,13 @@ pub enum RocketMQError {
     /// Authentication/authorization errors (credential validation, access control, etc.)
     #[error(transparent)]
     Authentication(#[from] AuthError),
+
+    // ============================================================================
+    // Controller Errors
+    // ============================================================================
+    /// Controller operation errors (Raft consensus, leader election, broker management, etc.)
+    #[error(transparent)]
+    Controller(#[from] ControllerError),
 
     // ============================================================================
     // Broker Errors
@@ -574,6 +583,46 @@ impl RocketMQError {
     #[inline]
     pub fn invalid_signature(reason: impl Into<String>) -> Self {
         Self::Authentication(AuthError::InvalidSignature(reason.into()))
+    }
+
+    // ============================================================================
+    // Controller Error Constructors
+    // ============================================================================
+
+    /// Create a controller not leader error
+    #[inline]
+    pub fn controller_not_leader(leader_id: Option<u64>) -> Self {
+        Self::Controller(ControllerError::NotLeader { leader_id })
+    }
+
+    /// Create a controller Raft error
+    #[inline]
+    pub fn controller_raft_error(reason: impl Into<String>) -> Self {
+        Self::Controller(ControllerError::Raft(reason.into()))
+    }
+
+    /// Create a controller metadata not found error
+    #[inline]
+    pub fn controller_metadata_not_found(key: impl Into<String>) -> Self {
+        Self::Controller(ControllerError::MetadataNotFound { key: key.into() })
+    }
+
+    /// Create a controller invalid request error
+    #[inline]
+    pub fn controller_invalid_request(reason: impl Into<String>) -> Self {
+        Self::Controller(ControllerError::InvalidRequest(reason.into()))
+    }
+
+    /// Create a controller timeout error
+    #[inline]
+    pub fn controller_timeout(timeout_ms: u64) -> Self {
+        Self::Controller(ControllerError::Timeout { timeout_ms })
+    }
+
+    /// Create a controller shutdown error
+    #[inline]
+    pub fn controller_shutdown() -> Self {
+        Self::Controller(ControllerError::Shutdown)
     }
 }
 
