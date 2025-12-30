@@ -357,7 +357,10 @@ pub trait Controller: Send + Sync {
     /// 4. State machine selects new master
     /// 5. Response sent to broker with new master info
     /// ```
-    async fn elect_master(&self, request: &ElectMasterRequestHeader) -> RocketMQResult<Option<RemotingCommand>>;
+    async fn elect_master(
+        &self,
+        request: &ElectMasterRequestHeader,
+    ) -> RocketMQResult<Option<RemotingCommand>>;
 
     /// Alter the In-Sync Replica set (ISR) for a broker
     ///
@@ -446,8 +449,10 @@ pub trait Controller: Send + Sync {
     /// # Returns
     ///
     /// RemotingCommand with aggregated sync state data
-    async fn get_sync_state_data(&self, broker_names: &[CheetahString])
-        -> RocketMQResult<Option<RemotingCommand>>;
+    async fn get_sync_state_data(
+        &self,
+        broker_names: &[CheetahString],
+    ) -> RocketMQResult<Option<RemotingCommand>>;
 
     // ==================== Lifecycle Listeners ====================
 
@@ -646,11 +651,11 @@ mod tests {
     #[tokio::test]
     async fn test_mock_controller_operations() {
         let controller = MockController::new();
-        
+
         // Test register_broker
         let register_req = RegisterBrokerToControllerRequestHeader::default();
         assert!(controller.register_broker(&register_req).await.is_ok());
-        
+
         // Test get_next_broker_id
         let next_id_req = GetNextBrokerIdRequestHeader::default();
         assert!(controller.get_next_broker_id(&next_id_req).await.is_ok());

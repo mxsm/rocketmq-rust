@@ -327,6 +327,7 @@ impl ControllerRequestProcessor {
         // Expected implementation (once Controller trait is ready):
         // ```
         // use std::time::Duration;
+        //
         // use tokio::time::timeout;
         //
         // let controller = self.controller_manager.get_controller();
@@ -342,10 +343,13 @@ impl ControllerRequestProcessor {
         // }
         // ```
 
-        Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-            rocketmq_remoting::code::response_code::ResponseCode::SystemError,
-            "Controller::alter_sync_state_set() not implemented yet. See ALIGNMENT_REPORT_ALTER_SYNC_STATE_SET.md for implementation details.",
-        )))
+        Ok(Some(
+            RemotingCommand::create_response_command_with_code_remark(
+                rocketmq_remoting::code::response_code::ResponseCode::SystemError,
+                "Controller::alter_sync_state_set() not implemented yet. See \
+                 ALIGNMENT_REPORT_ALTER_SYNC_STATE_SET.md for implementation details.",
+            ),
+        ))
     }
 
     /// Handle ELECT_MASTER request
