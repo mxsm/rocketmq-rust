@@ -57,8 +57,14 @@ pub mod unified;
 // Auth error module
 pub mod auth_error;
 
+// Controller error module
+pub mod controller_error;
+
 // Re-export new error types as primary API
 // Re-export auth error types from unified module
+// Re-export controller error types
+pub use controller_error::ControllerError;
+pub use controller_error::ControllerResult;
 pub use unified::AuthError;
 pub use unified::NetworkError;
 pub use unified::ProtocolError;
