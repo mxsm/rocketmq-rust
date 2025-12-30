@@ -2163,7 +2163,12 @@ impl MQProducerInner for DefaultMQProducerImpl {
             });
     }
 
-    fn update_topic_publish_info(&mut self, topic: CheetahString, info: Option<TopicPublishInfo>) {
+    fn update_topic_publish_info(
+        &mut self,
+        topic: impl Into<CheetahString>,
+        info: Option<TopicPublishInfo>,
+    ) {
+        let topic = topic.into();
         if topic.is_empty() || info.is_none() {
             return;
         }
