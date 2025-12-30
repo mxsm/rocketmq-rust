@@ -62,3 +62,42 @@ impl TryFrom<u8> for Decision {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_decision_code() {
+        assert_eq!(Decision::Allow.code(), 1);
+        assert_eq!(Decision::Deny.code(), 2);
+    }
+
+    #[test]
+    fn test_decision_name() {
+        assert_eq!(Decision::Allow.name(), "Allow");
+        assert_eq!(Decision::Deny.name(), "Deny");
+    }
+
+    #[test]
+    fn test_decision_get_by_name() {
+        assert_eq!(Decision::get_by_name("Allow"), Some(Decision::Allow));
+        assert_eq!(Decision::get_by_name("allow"), Some(Decision::Allow));
+        assert_eq!(Decision::get_by_name("Deny"), Some(Decision::Deny));
+        assert_eq!(Decision::get_by_name("deny"), Some(Decision::Deny));
+        assert_eq!(Decision::get_by_name("Unknown"), None);
+    }
+
+    #[test]
+    fn test_decision_from_u8() {
+        assert_eq!(u8::from(Decision::Allow), 1);
+        assert_eq!(u8::from(Decision::Deny), 2);
+    }
+
+    #[test]
+    fn test_decision_try_from_u8() {
+        assert_eq!(Decision::try_from(1), Ok(Decision::Allow));
+        assert_eq!(Decision::try_from(2), Ok(Decision::Deny));
+        assert_eq!(Decision::try_from(3), Err(()));
+    }
+}
