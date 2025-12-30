@@ -19,9 +19,9 @@ use std::any::Any;
 
 use cheetah_string::CheetahString;
 
+use crate::authentication::context::base_authentication_context::BaseAuthenticationContext;
 use crate::authentication::AsAny;
 use crate::authorization::context::authentication_context::AuthenticationContext;
-use crate::authorization::context::base_authentication_context::BaseAuthenticationContext;
 
 #[derive(Debug, Default)]
 pub struct DefaultAuthenticationContext {
