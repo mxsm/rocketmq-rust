@@ -25,7 +25,7 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
-
+pub mod chain;
 pub use crate::common::sys_flag::topic_sys_flag as TopicSysFlag;
 pub mod attribute;
 pub mod base;
