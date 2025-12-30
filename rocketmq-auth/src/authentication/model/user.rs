@@ -96,3 +96,56 @@ impl Subject for User {
         SubjectType::User
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_user_of() {
+        let username = "test_user";
+        let user = User::of(username);
+        assert_eq!(user.username(), &CheetahString::from(username));
+        assert!(user.password().is_none());
+        assert!(user.user_type().is_none());
+        assert!(user.user_status().is_none());
+    }
+
+    #[test]
+    fn test_user_of_with_password() {
+        let username = "test_user";
+        let password = "test_password";
+        let user = User::of_with_password(username, password);
+        assert_eq!(user.username(), &CheetahString::from(username));
+        assert_eq!(user.password(), Some(&CheetahString::from(password)));
+        assert!(user.user_type().is_none());
+        assert!(user.user_status().is_none());
+    }
+
+    #[test]
+    fn test_user_of_with_type() {
+        let username = "test_user";
+        let password = "test_password";
+        let user_type = UserType::Normal;
+        let user = User::of_with_type(username, password, user_type);
+        assert_eq!(user.username(), &CheetahString::from(username));
+        assert_eq!(user.password(), Some(&CheetahString::from(password)));
+        assert_eq!(user.user_type(), Some(user_type));
+        assert!(user.user_status().is_none());
+    }
+
+    #[test]
+    fn test_user_set_user_status() {
+        let mut user = User::of("test_user");
+        user.set_user_status(UserStatus::Enable);
+        assert_eq!(user.user_status(), Some(UserStatus::Enable));
+    }
+
+    #[test]
+    fn test_user_subject_trait() {
+        let username = "test_user";
+        let user = User::of(username);
+        assert_eq!(user.subject_key(), username);
+        assert_eq!(user.subject_type(), SubjectType::User);
+    }
+}
