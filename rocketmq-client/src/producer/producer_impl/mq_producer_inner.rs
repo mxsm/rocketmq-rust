@@ -41,7 +41,11 @@ pub trait MQProducerInner: Send + Sync + 'static {
         check_request_header: CheckTransactionStateRequestHeader,
     );
 
-    fn update_topic_publish_info(&mut self, topic: CheetahString, info: Option<TopicPublishInfo>);
+    fn update_topic_publish_info(
+        &mut self,
+        topic: impl Into<CheetahString>,
+        info: Option<TopicPublishInfo>,
+    );
 
     fn is_unit_mode(&self) -> bool;
 }
