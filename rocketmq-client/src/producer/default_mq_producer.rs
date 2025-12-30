@@ -497,6 +497,14 @@ impl DefaultMQProducer {
     pub fn get_auto_batch(&self) -> bool {
         self.producer_config.produce_accumulator.is_some() && self.producer_config.auto_batch
     }
+    #[inline]
+    fn get_impl_mut(
+        &mut self,
+    ) -> rocketmq_error::RocketMQResult<&mut ArcMut<DefaultMQProducerImpl>> {
+        self.default_mqproducer_impl.as_mut().ok_or_else(|| {
+            mq_client_err!("DefaultMQProducerImpl is not initialized, call start() first")
+        })
+    }
 
     pub async fn send_direct<M>(
         &mut self,
@@ -507,31 +515,21 @@ impl DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
+        let producer = self.get_impl_mut()?;
+
         if send_callback.is_none() {
             if let Some(mq) = mq {
-                self.default_mqproducer_impl
-                    .as_mut()
-                    .unwrap()
-                    .sync_send_with_message_queue(msg, mq)
-                    .await
+                producer.sync_send_with_message_queue(msg, mq).await
             } else {
-                self.default_mqproducer_impl
-                    .as_mut()
-                    .unwrap()
-                    .send(&mut msg)
-                    .await
+                producer.send(&mut msg).await
             }
         } else if mq.is_none() {
-            self.default_mqproducer_impl
-                .as_mut()
-                .unwrap()
+            producer
                 .async_send_with_callback(msg, send_callback)
                 .await?;
             Ok(None)
         } else {
-            self.default_mqproducer_impl
-                .as_mut()
-                .unwrap()
+            producer
                 .async_send_with_message_queue_callback(msg, mq.unwrap(), send_callback)
                 .await?;
             Ok(None)
