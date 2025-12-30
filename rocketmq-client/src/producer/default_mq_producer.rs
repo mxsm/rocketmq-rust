@@ -711,18 +711,21 @@ impl MQProducer for DefaultMQProducer {
         Ok(())
     }
 
-    async fn send_to_queue<M>(&mut self, mut msg: M, mq: MessageQueue) -> rocketmq_error::RocketMQResult<SendResult>
+    async fn send_to_queue<M>(
+        &mut self,
+        mut msg: M,
+        mq: MessageQueue,
+    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
         msg.set_topic(self.with_namespace(msg.get_topic()));
         let mq = self.client_config.queue_with_namespace(mq);
-        let result = if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
+        if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
             self.send_by_accumulator(msg, Some(mq), None).await
         } else {
             self.send_direct(msg, Some(mq), None).await
-        }?;
-        Ok(result.expect("SendResult should not be None"))
+        }
     }
 
     async fn send_to_queue_with_timeout<M>(
