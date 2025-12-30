@@ -54,7 +54,12 @@
 // New unified error system
 pub mod unified;
 
+// Auth error module
+pub mod auth_error;
+
 // Re-export new error types as primary API
+// Re-export auth error types from unified module
+pub use unified::AuthError;
 pub use unified::NetworkError;
 pub use unified::ProtocolError;
 pub use unified::RocketMQError;
