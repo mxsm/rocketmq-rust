@@ -67,14 +67,8 @@ mod tests {
 
     #[test]
     fn test_add_write_perm_command() {
-        let cmd = AddWritePermCommand::try_parse_from([
-            "add_write_perm",
-            "-b",
-            "broker-a",
-            "-n",
-            "127.0.0.1:9876",
-        ])
-        .unwrap();
+        let cmd =
+            AddWritePermCommand::try_parse_from(["add_write_perm", "-b", "broker-a", "-n", "127.0.0.1:9876"]).unwrap();
 
         assert_eq!(cmd.broker_name, "broker-a");
     }

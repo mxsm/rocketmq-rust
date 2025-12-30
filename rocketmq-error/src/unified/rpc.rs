@@ -27,9 +27,7 @@ pub enum RpcClientError {
     BrokerNotFound { broker_name: String },
 
     /// RPC request failed
-    #[error(
-        "RPC request failed: addr={addr}, request_code={request_code}, timeout={timeout_ms}ms"
-    )]
+    #[error("RPC request failed: addr={addr}, request_code={request_code}, timeout={timeout_ms}ms")]
     RequestFailed {
         addr: String,
         request_code: i32,
@@ -59,12 +57,7 @@ impl RpcClientError {
         }
     }
     /// Helper to construct a `RequestFailed` error.
-    pub fn request_failed<E>(
-        addr: impl Into<String>,
-        request_code: i32,
-        timeout_ms: u64,
-        source: E,
-    ) -> Self
+    pub fn request_failed<E>(addr: impl Into<String>, request_code: i32, timeout_ms: u64, source: E) -> Self
     where
         E: std::error::Error + Send + Sync + 'static,
     {

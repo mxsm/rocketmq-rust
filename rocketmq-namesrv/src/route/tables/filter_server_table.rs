@@ -49,9 +49,7 @@ impl Default for FilterServerTable {
 impl FilterServerTable {
     /// Create a new filter server table
     pub fn new() -> Self {
-        Self {
-            inner: DashMap::new(),
-        }
+        Self { inner: DashMap::new() }
     }
 
     /// Create with estimated capacity
@@ -160,9 +158,7 @@ mod tests {
         ];
 
         // Test register
-        assert!(table
-            .register(broker_info.clone(), servers.clone())
-            .is_none());
+        assert!(table.register(broker_info.clone(), servers.clone()).is_none());
         assert_eq!(table.len(), 1);
 
         // Test get

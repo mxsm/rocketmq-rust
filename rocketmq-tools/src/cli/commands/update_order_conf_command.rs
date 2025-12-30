@@ -58,12 +58,9 @@ impl CommandExecute for UpdateOrderConfCommand {
 
         match method.as_str() {
             "put" => {
-                let order_conf =
-                    self.order_conf
-                        .as_ref()
-                        .ok_or_else(|| ToolsError::ValidationFailed {
-                            message: "order_conf is required for 'put' method".to_string(),
-                        })?;
+                let order_conf = self.order_conf.as_ref().ok_or_else(|| ToolsError::ValidationFailed {
+                    message: "order_conf is required for 'put' method".to_string(),
+                })?;
 
                 TopicOperations::create_or_update_order_conf(
                     &mut admin,
@@ -78,32 +75,19 @@ impl CommandExecute for UpdateOrderConfCommand {
                 );
             }
             "get" => {
-                let order_conf = TopicOperations::get_order_conf(
-                    &mut admin,
-                    CheetahString::from(self.topic.clone()),
-                )
-                .await?;
+                let order_conf =
+                    TopicOperations::get_order_conf(&mut admin, CheetahString::from(self.topic.clone())).await?;
 
                 println!("Order config for topic '{}': {}", self.topic, order_conf);
             }
             "delete" => {
-                TopicOperations::delete_order_conf(
-                    &mut admin,
-                    CheetahString::from(self.topic.clone()),
-                )
-                .await?;
+                TopicOperations::delete_order_conf(&mut admin, CheetahString::from(self.topic.clone())).await?;
 
-                println!(
-                    "Successfully deleted order config for topic '{}'",
-                    self.topic
-                );
+                println!("Successfully deleted order config for topic '{}'", self.topic);
             }
             _ => {
                 return Err(ToolsError::ValidationFailed {
-                    message: format!(
-                        "Invalid method '{}'. Allowed values: put, get, delete",
-                        method
-                    ),
+                    message: format!("Invalid method '{}'. Allowed values: put, get, delete", method),
                 }
                 .into());
             }

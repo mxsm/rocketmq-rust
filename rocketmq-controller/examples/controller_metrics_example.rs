@@ -40,10 +40,7 @@ async fn main() {
 
     // 1. Initialize controller configuration
     println!("1. Initializing controller configuration...");
-    let config = Arc::new(ControllerConfig::new_node(
-        1,
-        "127.0.0.1:9876".parse().unwrap(),
-    ));
+    let config = Arc::new(ControllerConfig::new_node(1, "127.0.0.1:9876".parse().unwrap()));
 
     // 2. Initialize metrics manager (singleton)
     println!("2. Initializing metrics manager...");
@@ -136,12 +133,7 @@ async fn simulate_dledger_operations(manager: &Arc<ControllerMetricsManager>) {
         manager.inc_dledger_op_total(DLedgerOperation::Append, status);
         manager.record_dledger_op_latency(DLedgerOperation::Append, latency);
 
-        println!(
-            "   - Append operation #{} ({:?}): {}µs",
-            i + 1,
-            status,
-            latency
-        );
+        println!("   - Append operation #{} ({:?}): {}µs", i + 1, status, latency);
 
         sleep(Duration::from_millis(50)).await;
     }

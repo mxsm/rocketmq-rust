@@ -186,10 +186,7 @@ mod tests {
         header.topic_request_header = Some(topic_request_header);
 
         // Test broker_name
-        assert_eq!(
-            header.broker_name(),
-            Some(&CheetahString::from("test_broker"))
-        );
+        assert_eq!(header.broker_name(), Some(&CheetahString::from("test_broker")));
 
         let new_broker = CheetahString::from("new_broker");
         header.set_broker_name(new_broker.clone());

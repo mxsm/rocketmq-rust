@@ -129,9 +129,9 @@ mod tests {
             ack_msg,
             ack_offset_list: vec![1, 2, 3],
         };
-        let expected = "BatchAckMsg [ack_msg=AckMsg [ack_offset=123, start_offset=456, \
-                        consumer_group=test_group, topic=test_topic, queue_id=1, pop_time=789, \
-                        broker_name=test_broker], ack_offset_list=[1, 2, 3]]";
+        let expected = "BatchAckMsg [ack_msg=AckMsg [ack_offset=123, start_offset=456, consumer_group=test_group, \
+                        topic=test_topic, queue_id=1, pop_time=789, broker_name=test_broker], ack_offset_list=[1, 2, \
+                        3]]";
         assert_eq!(format!("{}", batch_ack_msg), expected);
     }
 
@@ -151,13 +151,15 @@ mod tests {
             ack_offset_list: vec![1, 2, 3],
         };
         let json = serde_json::to_string(&batch_ack_msg).unwrap();
-        let expected = r#"{"ao":123,"so":456,"c":"test_group","t":"test_topic","q":1,"pt":789,"bn":"test_broker","aol":[1,2,3]}"#;
+        let expected =
+            r#"{"ao":123,"so":456,"c":"test_group","t":"test_topic","q":1,"pt":789,"bn":"test_broker","aol":[1,2,3]}"#;
         assert_eq!(json, expected);
     }
 
     #[test]
     fn batch_ack_msg_deserializes_correctly() {
-        let json = r#"{"ao":123,"so":456,"c":"test_group","t":"test_topic","q":1,"pt":789,"bn":"test_broker","aol":[1,2,3]}"#;
+        let json =
+            r#"{"ao":123,"so":456,"c":"test_group","t":"test_topic","q":1,"pt":789,"bn":"test_broker","aol":[1,2,3]}"#;
         let batch_ack_msg: BatchAckMsg = serde_json::from_str(json).unwrap();
         assert_eq!(batch_ack_msg.ack_msg.ack_offset, 123);
         assert_eq!(batch_ack_msg.ack_msg.start_offset, 456);

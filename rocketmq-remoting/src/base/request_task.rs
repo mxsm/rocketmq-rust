@@ -35,11 +35,7 @@ pub struct RequestTask {
 }
 
 impl RequestTask {
-    pub fn new(
-        runnable: Arc<dyn Fn() + Send + Sync>,
-        channel: Channel,
-        request: RemotingCommand,
-    ) -> Self {
+    pub fn new(runnable: Arc<dyn Fn() + Send + Sync>, channel: Channel, request: RemotingCommand) -> Self {
         Self {
             runnable,
             create_timestamp: get_current_millis(),

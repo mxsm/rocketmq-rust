@@ -101,11 +101,7 @@ pub trait ConsumeQueueStoreInterface: Sync + Any {
     ///
     /// # Returns
     /// Number of deleted files
-    fn delete_expired_file(
-        &self,
-        consume_queue: &dyn ConsumeQueueTrait,
-        min_commit_log_pos: i64,
-    ) -> i32;
+    fn delete_expired_file(&self, consume_queue: &dyn ConsumeQueueTrait, min_commit_log_pos: i64) -> i32;
 
     /// Check if the first file is available
     ///
@@ -178,13 +174,7 @@ pub trait ConsumeQueueStoreInterface: Sync + Any {
     ///
     /// # Returns
     /// List of Bytes for the topic-queueId in RocksDB
-    async fn range_query(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        start_index: i64,
-        num: i32,
-    ) -> Vec<Bytes>;
+    async fn range_query(&self, topic: &CheetahString, queue_id: i32, start_index: i64, num: i32) -> Vec<Bytes>;
 
     /// Get a specific consume queue unit from RocksDB
     ///
@@ -276,11 +266,7 @@ pub trait ConsumeQueueStoreInterface: Sync + Any {
     ///
     /// # Returns
     /// The max physical offset, or None if not found
-    fn get_max_phy_offset_in_consume_queue(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-    ) -> Option<i64>;
+    fn get_max_phy_offset_in_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<i64>;
 
     /// Get max offset of specific topic-queueId in topic queue table
     ///
@@ -348,8 +334,7 @@ pub trait ConsumeQueueStoreInterface: Sync + Any {
     ///
     /// # Returns
     /// The consume queue
-    fn find_or_create_consume_queue(&self, topic: &CheetahString, queue_id: i32)
-        -> ArcConsumeQueue;
+    fn find_or_create_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> ArcConsumeQueue;
 
     /// Find the consume queue map for a topic
     ///
@@ -358,10 +343,7 @@ pub trait ConsumeQueueStoreInterface: Sync + Any {
     ///
     /// # Returns
     /// The consume queue map for the topic, or None if not found
-    fn find_consume_queue_map(
-        &self,
-        topic: &CheetahString,
-    ) -> Option<HashMap<i32, ArcConsumeQueue>>;
+    fn find_consume_queue_map(&self, topic: &CheetahString) -> Option<HashMap<i32, ArcConsumeQueue>>;
 
     /// Get the total size of all consume queues
     ///

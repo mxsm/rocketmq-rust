@@ -34,9 +34,7 @@ pub struct BrokerEpochCacheHandler<MS: MessageStore> {
 
 impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self {
-            broker_runtime_inner,
-        }
+        Self { broker_runtime_inner }
     }
 
     pub async fn get_broker_epoch_cache(
@@ -48,8 +46,7 @@ impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let broker_runtime_inner = self.broker_runtime_inner.as_mut();
 
-        let replicas_manage = if let Some(replicas_manage) = broker_runtime_inner.replicas_manager()
-        {
+        let replicas_manage = if let Some(replicas_manage) = broker_runtime_inner.replicas_manager() {
             replicas_manage
         } else {
             panic!("`replicas_manage` object is empty")
@@ -79,8 +76,6 @@ impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
         );
 
         let cache = entry_code.encode().unwrap_or_default();
-        Ok(Some(
-            response.set_body(cache).set_code(ResponseCode::Success),
-        ))
+        Ok(Some(response.set_body(cache).set_code(ResponseCode::Success)))
     }
 }

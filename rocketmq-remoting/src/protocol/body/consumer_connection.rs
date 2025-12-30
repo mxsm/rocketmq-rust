@@ -128,10 +128,7 @@ impl ConsumerConnection {
     ///
     /// # Arguments
     /// * `subscription_table` - The new subscription table
-    pub fn set_subscription_table(
-        &mut self,
-        subscription_table: HashMap<CheetahString, SubscriptionData>,
-    ) {
+    pub fn set_subscription_table(&mut self, subscription_table: HashMap<CheetahString, SubscriptionData>) {
         self.subscription_table = subscription_table;
     }
 
@@ -328,10 +325,7 @@ mod tests {
         let mut sub_table = HashMap::new();
 
         let sub_data = create_test_subscription();
-        sub_table.insert(
-            CheetahString::from_static_str("test_topic"),
-            sub_data.clone(),
-        );
+        sub_table.insert(CheetahString::from_static_str("test_topic"), sub_data.clone());
 
         consumer_conn.set_subscription_table(sub_table);
         assert_eq!(consumer_conn.get_subscription_table().len(), 1);
@@ -344,10 +338,7 @@ mod tests {
 
         {
             let sub_table = consumer_conn.get_subscription_table_mut();
-            sub_table.insert(
-                CheetahString::from_static_str("test_topic"),
-                sub_data.clone(),
-            );
+            sub_table.insert(CheetahString::from_static_str("test_topic"), sub_data.clone());
         }
 
         assert_eq!(consumer_conn.get_subscription_table().len(), 1);
@@ -363,10 +354,7 @@ mod tests {
         assert!(consumer_conn.get_consume_type().is_none());
 
         consumer_conn.set_consume_type(ConsumeType::ConsumeActively);
-        assert_eq!(
-            consumer_conn.get_consume_type(),
-            Some(ConsumeType::ConsumeActively)
-        );
+        assert_eq!(consumer_conn.get_consume_type(), Some(ConsumeType::ConsumeActively));
     }
 
     #[test]
@@ -375,10 +363,7 @@ mod tests {
         assert!(consumer_conn.get_message_model().is_none());
 
         consumer_conn.set_message_model(MessageModel::Clustering);
-        assert_eq!(
-            consumer_conn.get_message_model(),
-            Some(MessageModel::Clustering)
-        );
+        assert_eq!(consumer_conn.get_message_model(), Some(MessageModel::Clustering));
     }
 
     #[test]

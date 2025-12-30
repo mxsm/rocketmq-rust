@@ -273,10 +273,7 @@ mod tests {
         assert_eq!(RequestCode::from(11), RequestCode::PullMessage);
         assert_eq!(RequestCode::from(34), RequestCode::HeartBeat);
         assert_eq!(RequestCode::from(200050), RequestCode::PopMessage);
-        assert_eq!(
-            RequestCode::from(1001),
-            RequestCode::ControllerAlterSyncStateSet
-        );
+        assert_eq!(RequestCode::from(1001), RequestCode::ControllerAlterSyncStateSet);
         assert_eq!(RequestCode::from(3001), RequestCode::AuthCreateUser);
         assert_eq!(RequestCode::from(-9999999), RequestCode::Unknown);
     }
@@ -366,32 +363,20 @@ mod tests {
         assert_eq!(RequestCode::from(200051), RequestCode::AckMessage);
         assert_eq!(RequestCode::from(200151), RequestCode::BatchAckMessage);
         assert_eq!(RequestCode::from(200052), RequestCode::PeekMessage);
-        assert_eq!(
-            RequestCode::from(200053),
-            RequestCode::ChangeMessageInvisibleTime
-        );
+        assert_eq!(RequestCode::from(200053), RequestCode::ChangeMessageInvisibleTime);
         assert_eq!(RequestCode::from(200054), RequestCode::Notification);
         assert_eq!(RequestCode::from(200055), RequestCode::PollingInfo);
 
         // Test Controller codes (1001-1018)
-        assert_eq!(
-            RequestCode::from(1001),
-            RequestCode::ControllerAlterSyncStateSet
-        );
-        assert_eq!(
-            RequestCode::from(1018),
-            RequestCode::RaftBrokerHeartBeatEventRequest
-        );
+        assert_eq!(RequestCode::from(1001), RequestCode::ControllerAlterSyncStateSet);
+        assert_eq!(RequestCode::from(1018), RequestCode::RaftBrokerHeartBeatEventRequest);
 
         // Test Auth codes (3001-3010)
         assert_eq!(RequestCode::from(3001), RequestCode::AuthCreateUser);
         assert_eq!(RequestCode::from(3010), RequestCode::AuthListAcl);
 
         // Test Cold data flow codes (2001-2004)
-        assert_eq!(
-            RequestCode::from(2001),
-            RequestCode::UpdateColdDataFlowCtrConfig
-        );
+        assert_eq!(RequestCode::from(2001), RequestCode::UpdateColdDataFlowCtrConfig);
         assert_eq!(RequestCode::from(2004), RequestCode::SetCommitlogReadMode);
     }
 

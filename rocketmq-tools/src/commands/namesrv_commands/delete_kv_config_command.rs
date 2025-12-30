@@ -44,14 +44,9 @@ impl CommandExecute for DeleteKvConfigCommand {
             .set_instance_name(get_current_millis().to_string().into());
 
         let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext)
-                .await
-                .map_err(|e| {
-                    RocketMQError::Internal(format!(
-                        "DeleteKvConfigCommand: Failed to start MQAdminExt: {}",
-                        e
-                    ))
-                })?;
+            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
+                RocketMQError::Internal(format!("DeleteKvConfigCommand: Failed to start MQAdminExt: {}", e))
+            })?;
 
             MQAdminExt::delete_kv_config(
                 &default_mqadmin_ext,
@@ -60,10 +55,7 @@ impl CommandExecute for DeleteKvConfigCommand {
             )
             .await
             .map_err(|e| {
-                RocketMQError::Internal(format!(
-                    "DeleteKvConfigCommand: Failed to delete kv config: {}",
-                    e
-                ))
+                RocketMQError::Internal(format!("DeleteKvConfigCommand: Failed to delete kv config: {}", e))
             })?;
 
             println!("delete kv config from namespace success.");

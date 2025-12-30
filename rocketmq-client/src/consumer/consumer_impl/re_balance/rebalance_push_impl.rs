@@ -102,8 +102,7 @@ impl RebalancePushImpl {
         &mut self,
         allocate_message_queue_strategy: Arc<dyn AllocateMessageQueueStrategy>,
     ) {
-        self.rebalance_impl_inner.allocate_message_queue_strategy =
-            Some(allocate_message_queue_strategy);
+        self.rebalance_impl_inner.allocate_message_queue_strategy = Some(allocate_message_queue_strategy);
     }
 
     pub fn set_mq_client_factory(&mut self, client_instance: ArcMut<MQClientInstance>) {
@@ -111,11 +110,7 @@ impl RebalancePushImpl {
     }
 
     #[inline]
-    pub async fn put_subscription_data(
-        &mut self,
-        topic: CheetahString,
-        subscription_data: SubscriptionData,
-    ) {
+    pub async fn put_subscription_data(&mut self, topic: CheetahString, subscription_data: SubscriptionData) {
         let mut subscription_inner = self.rebalance_impl_inner.subscription_inner.write().await;
         subscription_inner.insert(topic, subscription_data);
     }
@@ -124,19 +119,12 @@ impl RebalancePushImpl {
         self.rebalance_impl_inner.sub_rebalance_impl = Some(rebalance_impl);
     }
 
-    async fn try_remove_order_message_queue(
-        &mut self,
-        mq: &MessageQueue,
-        pq: &ProcessQueue,
-    ) -> bool {
+    async fn try_remove_order_message_queue(&mut self, mq: &MessageQueue, pq: &ProcessQueue) -> bool {
         let default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_mut().unwrap();
 
-        let force_unlock = pq.is_dropped()
-            && (get_current_millis() > pq.get_last_lock_timestamp() + *UNLOCK_DELAY_TIME_MILLS);
-        let consume_lock = pq
-            .consume_lock
-            .try_write_timeout(Duration::from_millis(500))
-            .await;
+        let force_unlock =
+            pq.is_dropped() && (get_current_millis() > pq.get_last_lock_timestamp() + *UNLOCK_DELAY_TIME_MILLS);
+        let consume_lock = pq.consume_lock.try_write_timeout(Duration::from_millis(500)).await;
         if force_unlock || consume_lock.is_some() {
             let offset_store = default_mqpush_consumer_impl.offset_store.as_mut().unwrap();
             offset_store.persist(mq).await;
@@ -212,13 +200,8 @@ impl Rebalance for RebalancePushImpl {
         }
     }
 
-    async fn remove_unnecessary_message_queue(
-        &mut self,
-        mq: &MessageQueue,
-        pq: &ProcessQueue,
-    ) -> bool {
-        let mut default_mqpush_consumer_impl =
-            self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
+    async fn remove_unnecessary_message_queue(&mut self, mq: &MessageQueue, pq: &ProcessQueue) -> bool {
+        let mut default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
         let consume_orderly = default_mqpush_consumer_impl.is_consume_orderly();
         let offset_store = default_mqpush_consumer_impl.offset_store.as_mut().unwrap();
 
@@ -253,8 +236,7 @@ impl Rebalance for RebalancePushImpl {
         mq: &MessageQueue,
     ) -> rocketmq_error::RocketMQResult<i64> {
         let consume_from_where = self.consumer_config.consume_from_where;
-        let mut default_mqpush_consumer_impl =
-            self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
+        let mut default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
         let offset_store = default_mqpush_consumer_impl.offset_store.as_mut().unwrap();
 
         let result = match consume_from_where {
@@ -262,16 +244,11 @@ impl Rebalance for RebalancePushImpl {
             | ConsumeFromWhere::ConsumeFromLastOffsetAndFromMinWhenBootFirst
             | ConsumeFromWhere::ConsumeFromMinOffset
             | ConsumeFromWhere::ConsumeFromMaxOffset => {
-                let last_offset = offset_store
-                    .read_offset(mq, ReadOffsetType::ReadFromStore)
-                    .await;
+                let last_offset = offset_store.read_offset(mq, ReadOffsetType::ReadFromStore).await;
                 if last_offset >= 0 {
                     last_offset
                 } else if -1 == last_offset {
-                    if mq
-                        .get_topic()
-                        .starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
-                    {
+                    if mq.get_topic().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
                         0
                     } else {
                         self.rebalance_impl_inner
@@ -290,9 +267,7 @@ impl Rebalance for RebalancePushImpl {
                 }
             }
             ConsumeFromWhere::ConsumeFromFirstOffset => {
-                let last_offset = offset_store
-                    .read_offset(mq, ReadOffsetType::ReadFromStore)
-                    .await;
+                let last_offset = offset_store.read_offset(mq, ReadOffsetType::ReadFromStore).await;
                 if last_offset >= 0 {
                     last_offset
                 } else if -1 == last_offset {
@@ -305,16 +280,11 @@ impl Rebalance for RebalancePushImpl {
                 }
             }
             ConsumeFromWhere::ConsumeFromTimestamp => {
-                let last_offset = offset_store
-                    .read_offset(mq, ReadOffsetType::ReadFromStore)
-                    .await;
+                let last_offset = offset_store.read_offset(mq, ReadOffsetType::ReadFromStore).await;
                 if last_offset >= 0 {
                     last_offset
                 } else if -1 == last_offset {
-                    if mq
-                        .get_topic()
-                        .starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
-                    {
+                    if mq.get_topic().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
                         self.rebalance_impl_inner
                             .client_instance
                             .as_mut()
@@ -395,9 +365,7 @@ impl Rebalance for RebalancePushImpl {
             let mqpush_consumer_impl = mqpush_consumer_impl.mut_from_ref();
             for pop_request in pop_request_list {
                 if delay == 0 {
-                    mqpush_consumer_impl
-                        .execute_pop_request_immediately(pop_request)
-                        .await;
+                    mqpush_consumer_impl.execute_pop_request_immediately(pop_request).await;
                 } else {
                     mqpush_consumer_impl.execute_pop_request_later(pop_request, delay);
                 }
@@ -509,11 +477,7 @@ impl Rebalance for RebalancePushImpl {
         // ConsumeMessageOrderlyService to consume
         self.consumer_config.client_rebalance
             || self.rebalance_impl_inner.message_model.unwrap() == MessageModel::Broadcasting
-            || self
-                .default_mqpush_consumer_impl
-                .as_ref()
-                .unwrap()
-                .is_consume_orderly()
+            || self.default_mqpush_consumer_impl.as_ref().unwrap().is_consume_orderly()
     }
 
     fn destroy(&mut self) {

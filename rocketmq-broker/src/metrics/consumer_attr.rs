@@ -49,12 +49,7 @@ impl ConsumerAttr {
     /// * `language` - Programming language of the consumer client
     /// * `version` - Client version
     /// * `consume_mode` - Consume mode (push/pull)
-    pub fn new(
-        group: String,
-        language: LanguageCode,
-        version: i32,
-        consume_mode: ConsumeType,
-    ) -> Self {
+    pub fn new(group: String, language: LanguageCode, version: i32, consume_mode: ConsumeType) -> Self {
         Self {
             group,
             language,
@@ -187,9 +182,7 @@ impl ConsumerAttrBuilder {
             group: self.group.ok_or(ConsumerAttrError::MissingGroup)?,
             language: self.language.ok_or(ConsumerAttrError::MissingLanguage)?,
             version: self.version.ok_or(ConsumerAttrError::MissingVersion)?,
-            consume_mode: self
-                .consume_mode
-                .ok_or(ConsumerAttrError::MissingConsumeMode)?,
+            consume_mode: self.consume_mode.ok_or(ConsumerAttrError::MissingConsumeMode)?,
         })
     }
 }
@@ -232,15 +225,11 @@ impl ConsumerAttrExt for Vec<ConsumerAttr> {
     }
 
     fn find_by_language(&self, language: LanguageCode) -> Vec<&ConsumerAttr> {
-        self.iter()
-            .filter(|attr| attr.language == language)
-            .collect()
+        self.iter().filter(|attr| attr.language == language).collect()
     }
 
     fn find_by_consume_mode(&self, consume_mode: ConsumeType) -> Vec<&ConsumerAttr> {
-        self.iter()
-            .filter(|attr| attr.consume_mode == consume_mode)
-            .collect()
+        self.iter().filter(|attr| attr.consume_mode == consume_mode).collect()
     }
 
     fn unique_groups(&self) -> Vec<String> {
@@ -259,15 +248,11 @@ impl ConsumerAttrExt for &[ConsumerAttr] {
     }
 
     fn find_by_language(&self, language: LanguageCode) -> Vec<&ConsumerAttr> {
-        self.iter()
-            .filter(|attr| attr.language == language)
-            .collect()
+        self.iter().filter(|attr| attr.language == language).collect()
     }
 
     fn find_by_consume_mode(&self, consume_mode: ConsumeType) -> Vec<&ConsumerAttr> {
-        self.iter()
-            .filter(|attr| attr.consume_mode == consume_mode)
-            .collect()
+        self.iter().filter(|attr| attr.consume_mode == consume_mode).collect()
     }
 
     fn unique_groups(&self) -> Vec<String> {

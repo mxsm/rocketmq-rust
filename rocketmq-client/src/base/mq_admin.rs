@@ -71,11 +71,7 @@ pub trait MQAdmin {
     ///
     /// # Returns
     /// A `Result` containing the offset if found, or an error.
-    fn search_offset(
-        &self,
-        mq: &MessageQueue,
-        timestamp: u64,
-    ) -> rocketmq_error::RocketMQResult<i64>;
+    fn search_offset(&self, mq: &MessageQueue, timestamp: u64) -> rocketmq_error::RocketMQResult<i64>;
 
     /// Retrieves the maximum offset of a message in a queue.
     ///
@@ -132,6 +128,5 @@ pub trait MQAdmin {
     ///
     /// # Returns
     /// A `Result` containing the `MessageExt` if found, or an error.
-    fn view_message(&self, topic: &str, msg_id: &str)
-        -> rocketmq_error::RocketMQResult<MessageExt>;
+    fn view_message(&self, topic: &str, msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt>;
 }

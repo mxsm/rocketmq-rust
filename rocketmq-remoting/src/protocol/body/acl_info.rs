@@ -67,10 +67,7 @@ mod tests {
         };
         assert_eq!(policy_entry.resource, Some(CheetahString::from("resource")));
         assert_eq!(policy_entry.actions, Some(CheetahString::from("actions")));
-        assert_eq!(
-            policy_entry.source_ips,
-            Some(vec![CheetahString::from("192.168.1.1")])
-        );
+        assert_eq!(policy_entry.source_ips, Some(vec![CheetahString::from("192.168.1.1")]));
         assert_eq!(policy_entry.decision, Some(CheetahString::from("allow")));
     }
 
@@ -100,10 +97,7 @@ mod tests {
         let deserialized: PolicyEntryInfo = serde_json::from_str(json).unwrap();
         assert_eq!(deserialized.resource, Some(CheetahString::from("resource")));
         assert_eq!(deserialized.actions, Some(CheetahString::from("actions")));
-        assert_eq!(
-            deserialized.source_ips,
-            Some(vec![CheetahString::from("192.168.1.1")])
-        );
+        assert_eq!(deserialized.source_ips, Some(vec![CheetahString::from("192.168.1.1")]));
         assert_eq!(deserialized.decision, Some(CheetahString::from("allow")));
     }
 

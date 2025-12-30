@@ -148,8 +148,7 @@ impl NameServerService {
             .await
             .map_err(|e| {
                 RocketMQError::Tools(ToolsError::broker_not_found(format!(
-                    "Failed to add write permission for broker '{broker}' on NameServer \
-                     '{namesrv}': {e}"
+                    "Failed to add write permission for broker '{broker}' on NameServer '{namesrv}': {e}"
                 )))
             })
     }
@@ -176,8 +175,7 @@ impl NameServerService {
             .await
             .map_err(|e| {
                 RocketMQError::Tools(ToolsError::broker_not_found(format!(
-                    "Failed to wipe write permission for broker '{broker}' on NameServer \
-                     '{namesrv}': {e}"
+                    "Failed to wipe write permission for broker '{broker}' on NameServer '{namesrv}': {e}"
                 )))
             })
     }

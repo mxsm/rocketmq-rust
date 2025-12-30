@@ -69,11 +69,7 @@ impl RaftNode {
             let mut snapshot = Snapshot::default();
             snapshot.mut_metadata().index = 0;
             snapshot.mut_metadata().term = 0;
-            snapshot
-                .mut_metadata()
-                .mut_conf_state()
-                .voters
-                .clone_from(&peers);
+            snapshot.mut_metadata().mut_conf_state().voters.clone_from(&peers);
 
             storage
                 .wl()

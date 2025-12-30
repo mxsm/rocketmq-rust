@@ -569,14 +569,8 @@ mod tests {
     #[test]
     fn test_remoting_command_type() {
         // Test RemotingCommandType::value_of
-        assert_eq!(
-            Some(RemotingCommandType::REQUEST),
-            RemotingCommandType::value_of(0)
-        );
-        assert_eq!(
-            Some(RemotingCommandType::RESPONSE),
-            RemotingCommandType::value_of(1)
-        );
+        assert_eq!(Some(RemotingCommandType::REQUEST), RemotingCommandType::value_of(0));
+        assert_eq!(Some(RemotingCommandType::RESPONSE), RemotingCommandType::value_of(1));
         assert_eq!(None, RemotingCommandType::value_of(2));
 
         // Test RemotingCommandType::get_code
@@ -609,18 +603,9 @@ mod tests {
         assert_eq!(2, LanguageCode::DOTNET.get_code());
 
         // Test LanguageCode::get_code_from_name
-        assert_eq!(
-            Some(LanguageCode::JAVA),
-            LanguageCode::get_code_from_name("JAVA")
-        );
-        assert_eq!(
-            Some(LanguageCode::CPP),
-            LanguageCode::get_code_from_name("CPP")
-        );
-        assert_eq!(
-            Some(LanguageCode::DOTNET),
-            LanguageCode::get_code_from_name("DOTNET")
-        );
+        assert_eq!(Some(LanguageCode::JAVA), LanguageCode::get_code_from_name("JAVA"));
+        assert_eq!(Some(LanguageCode::CPP), LanguageCode::get_code_from_name("CPP"));
+        assert_eq!(Some(LanguageCode::DOTNET), LanguageCode::get_code_from_name("DOTNET"));
     }
 
     #[test]
@@ -642,10 +627,7 @@ mod tests {
         let data_version = DataVersion::new();
         let initial_counter = data_version.counter.load(Ordering::SeqCst);
         data_version.increment_counter();
-        assert_eq!(
-            initial_counter + 1,
-            data_version.counter.load(Ordering::SeqCst)
-        );
+        assert_eq!(initial_counter + 1, data_version.counter.load(Ordering::SeqCst));
     }
 
     #[test]
@@ -657,10 +639,7 @@ mod tests {
         data_version.next_version();
         assert_eq!(initial_state_version, data_version.state_version);
         assert!(data_version.timestamp >= initial_timestamp);
-        assert_eq!(
-            initial_counter + 1,
-            data_version.counter.load(Ordering::SeqCst)
-        );
+        assert_eq!(initial_counter + 1, data_version.counter.load(Ordering::SeqCst));
     }
 
     #[test]
@@ -671,10 +650,7 @@ mod tests {
         data_version.next_version_with(20);
         assert_eq!(20, data_version.state_version);
         assert!(data_version.timestamp >= initial_timestamp);
-        assert_eq!(
-            initial_counter + 1,
-            data_version.counter.load(Ordering::SeqCst)
-        );
+        assert_eq!(initial_counter + 1, data_version.counter.load(Ordering::SeqCst));
     }
 
     #[test]
@@ -717,9 +693,6 @@ mod tests {
 
         data_version2.set_state_version(data_version1.get_state_version() + 1);
         assert_eq!(data_version1.cmp(&data_version2), std::cmp::Ordering::Less);
-        assert_eq!(
-            data_version2.cmp(&data_version1),
-            std::cmp::Ordering::Greater
-        );
+        assert_eq!(data_version2.cmp(&data_version1), std::cmp::Ordering::Greater);
     }
 }

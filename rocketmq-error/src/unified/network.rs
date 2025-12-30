@@ -129,9 +129,6 @@ mod tests {
             addr: "localhost:10911".to_string(),
             timeout_ms: 3000,
         };
-        assert_eq!(
-            err.to_string(),
-            "Connection timeout to localhost:10911 after 3000ms"
-        );
+        assert_eq!(err.to_string(), "Connection timeout to localhost:10911 after 3000ms");
     }
 }

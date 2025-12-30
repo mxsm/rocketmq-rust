@@ -112,8 +112,7 @@ impl ProduceAccumulator {
     {
         let partition_key = AggregateKey::new_from_message_queue(&message, mq);
         loop {
-            let batch =
-                self.get_or_create_async_send_batch(partition_key.clone(), &default_mq_producer);
+            let batch = self.get_or_create_async_send_batch(partition_key.clone(), &default_mq_producer);
             /*if batch.add(message.clone(), send_callback.clone()) {
                 self.async_send_batchs.lock().await.remove(&partition_key);
             } else {
@@ -207,10 +206,7 @@ struct MessageAccumulation {
 }
 
 impl MessageAccumulation {
-    pub fn new(
-        aggregate_key: AggregateKey,
-        default_mq_producer: ArcMut<DefaultMQProducer>,
-    ) -> Self {
+    pub fn new(aggregate_key: AggregateKey, default_mq_producer: ArcMut<DefaultMQProducer>) -> Self {
         Self {
             default_mq_producer,
             messages: vec![],

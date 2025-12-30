@@ -136,9 +136,6 @@ mod tests {
         assert_eq!(deserialized.broker_name(), event.broker_name());
         assert_eq!(deserialized.broker_address(), event.broker_address());
         assert_eq!(deserialized.new_broker_id(), event.new_broker_id());
-        assert_eq!(
-            deserialized.register_check_code(),
-            event.register_check_code()
-        );
+        assert_eq!(deserialized.register_check_code(), event.register_check_code());
     }
 }

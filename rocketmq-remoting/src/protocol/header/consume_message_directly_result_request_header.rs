@@ -64,26 +64,14 @@ mod tests {
     fn consume_message_directly_result_request_header_deserializes_correctly() {
         let data = r#"{"consumerGroup":"test_group","clientId":"client_id","msgId":"msg_id","brokerName":"broker_name","topic":"topic","topicSysFlag":1,"groupSysFlag":2}"#;
         let header: ConsumeMessageDirectlyResultRequestHeader = serde_json::from_str(data).unwrap();
-        assert_eq!(
-            header.consumer_group,
-            CheetahString::from_static_str("test_group")
-        );
-        assert_eq!(
-            header.client_id.unwrap(),
-            CheetahString::from_static_str("client_id")
-        );
-        assert_eq!(
-            header.msg_id.unwrap(),
-            CheetahString::from_static_str("msg_id")
-        );
+        assert_eq!(header.consumer_group, CheetahString::from_static_str("test_group"));
+        assert_eq!(header.client_id.unwrap(), CheetahString::from_static_str("client_id"));
+        assert_eq!(header.msg_id.unwrap(), CheetahString::from_static_str("msg_id"));
         assert_eq!(
             header.broker_name.unwrap(),
             CheetahString::from_static_str("broker_name")
         );
-        assert_eq!(
-            header.topic.unwrap(),
-            CheetahString::from_static_str("topic")
-        );
+        assert_eq!(header.topic.unwrap(), CheetahString::from_static_str("topic"));
         assert_eq!(header.topic_sys_flag.unwrap(), 1);
         assert_eq!(header.group_sys_flag.unwrap(), 2);
     }
@@ -92,10 +80,7 @@ mod tests {
     fn consume_message_directly_result_request_header_handles_missing_optional_fields() {
         let data = r#"{"consumerGroup":"test_group"}"#;
         let header: ConsumeMessageDirectlyResultRequestHeader = serde_json::from_str(data).unwrap();
-        assert_eq!(
-            header.consumer_group,
-            CheetahString::from_static_str("test_group")
-        );
+        assert_eq!(header.consumer_group, CheetahString::from_static_str("test_group"));
         assert!(header.client_id.is_none());
         assert!(header.msg_id.is_none());
         assert!(header.broker_name.is_none());
@@ -107,8 +92,7 @@ mod tests {
     #[test]
     fn consume_message_directly_result_request_header_handles_invalid_data() {
         let data = r#"{"consumerGroup":12345}"#;
-        let result: Result<ConsumeMessageDirectlyResultRequestHeader, _> =
-            serde_json::from_str(data);
+        let result: Result<ConsumeMessageDirectlyResultRequestHeader, _> = serde_json::from_str(data);
         assert!(result.is_err());
     }
 }

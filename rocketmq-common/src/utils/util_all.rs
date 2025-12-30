@@ -179,29 +179,19 @@ pub fn get_disk_partition_space_used_percent(path: &str) -> f64 {
                         let usable_space = metadata2.len();
                         let used_space = total_space.saturating_sub(free_space);
                         let entire_space = used_space + usable_space;
-                        let round_num = if used_space * 100 % entire_space != 0 {
-                            1
-                        } else {
-                            0
-                        };
+                        let round_num = if used_space * 100 % entire_space != 0 { 1 } else { 0 };
                         let result = used_space * 100 / entire_space + round_num;
                         return result as f64 / 100.0;
                     }
                     (Err(e), _) | (_, Err(e)) => {
-                        error!(
-                            "Error when measuring disk space usage, got exception: {:?}",
-                            e
-                        );
+                        error!("Error when measuring disk space usage, got exception: {:?}", e);
                         return -1.0;
                     }
                 }
             }
         }
         Err(e) => {
-            error!(
-                "Error when measuring disk space usage, got exception: {:?}",
-                e
-            );
+            error!("Error when measuring disk space usage, got exception: {:?}", e);
             return -1.0;
         }
     }
@@ -247,8 +237,7 @@ pub fn string_to_bytes(hex_string: impl Into<String>) -> Option<Vec<u8>> {
 
     for i in 0..length {
         let pos = i * 2;
-        let byte = (char_to_byte(hex_string.chars().nth(pos)?) << 4)
-            | char_to_byte(hex_string.chars().nth(pos + 1)?);
+        let byte = (char_to_byte(hex_string.chars().nth(pos)?) << 4) | char_to_byte(hex_string.chars().nth(pos + 1)?);
 
         bytes.push(byte);
     }
@@ -467,10 +456,7 @@ mod tests {
     #[test]
     fn test_compute_next_minutes_time_millis() {
         let next_minute = compute_next_minutes_time_millis();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
 
         assert!(next_minute > now);
         assert_eq!(next_minute % (60 * 1000), 0);

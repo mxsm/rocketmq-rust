@@ -28,9 +28,7 @@ pub struct CommitLogDispatcherBuildConsumeQueue {
 
 impl CommitLogDispatcherBuildConsumeQueue {
     pub fn new(consume_queue_store: ConsumeQueueStore) -> Self {
-        Self {
-            consume_queue_store,
-        }
+        Self { consume_queue_store }
     }
 }
 

@@ -39,10 +39,7 @@ pub fn get_store_path_batch_consume_queue(root_dir: &str) -> String {
 }
 
 pub fn get_store_path_index(root_dir: &str) -> String {
-    PathBuf::from(root_dir)
-        .join("index")
-        .to_string_lossy()
-        .into_owned()
+    PathBuf::from(root_dir).join("index").to_string_lossy().into_owned()
 }
 
 pub fn get_store_checkpoint(root_dir: &str) -> String {
@@ -53,17 +50,11 @@ pub fn get_store_checkpoint(root_dir: &str) -> String {
 }
 
 pub fn get_abort_file(root_dir: &str) -> String {
-    PathBuf::from(root_dir)
-        .join("abort")
-        .to_string_lossy()
-        .into_owned()
+    PathBuf::from(root_dir).join("abort").to_string_lossy().into_owned()
 }
 
 pub fn get_lock_file(root_dir: &str) -> String {
-    PathBuf::from(root_dir)
-        .join("lock")
-        .to_string_lossy()
-        .into_owned()
+    PathBuf::from(root_dir).join("lock").to_string_lossy().into_owned()
 }
 
 pub fn get_delay_offset_store_path(root_dir: &str) -> String {
@@ -106,10 +97,7 @@ mod tests {
         );
         assert_eq!(
             get_store_path_index(root_dir),
-            PathBuf::from(root_dir)
-                .join("index")
-                .to_string_lossy()
-                .into_owned()
+            PathBuf::from(root_dir).join("index").to_string_lossy().into_owned()
         );
         assert_eq!(
             get_store_checkpoint(root_dir),
@@ -120,17 +108,11 @@ mod tests {
         );
         assert_eq!(
             get_abort_file(root_dir),
-            PathBuf::from(root_dir)
-                .join("abort")
-                .to_string_lossy()
-                .into_owned()
+            PathBuf::from(root_dir).join("abort").to_string_lossy().into_owned()
         );
         assert_eq!(
             get_lock_file(root_dir),
-            PathBuf::from(root_dir)
-                .join("lock")
-                .to_string_lossy()
-                .into_owned()
+            PathBuf::from(root_dir).join("lock").to_string_lossy().into_owned()
         );
         assert_eq!(
             get_delay_offset_store_path(root_dir),

@@ -103,9 +103,7 @@ impl HAConnectionStateNotificationRequest {
     /// # Notes
     /// This method is not async and does not require locking
     pub fn is_completed(&self) -> bool {
-        self.notification_sender
-            .try_lock()
-            .is_ok_and(|guard| guard.is_none())
+        self.notification_sender.try_lock().is_ok_and(|guard| guard.is_none())
     }
 }
 
@@ -118,11 +116,8 @@ mod tests {
     #[tokio::test]
     async fn test_notification_request() {
         // Create a notification request
-        let (request, receiver) = HAConnectionStateNotificationRequest::new(
-            HAConnectionState::Transfer,
-            "127.0.0.1:9876",
-            true,
-        );
+        let (request, receiver) =
+            HAConnectionStateNotificationRequest::new(HAConnectionState::Transfer, "127.0.0.1:9876", true);
 
         // Check getters
         assert_eq!(request.expect_state(), HAConnectionState::Transfer);

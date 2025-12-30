@@ -130,12 +130,7 @@ pub mod simple_scheduler {
         ///
         /// # Notes
         /// - Tasks are executed at fixed intervals, even if previous executions overlap.
-        pub fn add_fixed_rate_task<F, Fut>(
-            &self,
-            initial_delay: Duration,
-            period: Duration,
-            task_fn: F,
-        ) -> TaskId
+        pub fn add_fixed_rate_task<F, Fut>(&self, initial_delay: Duration, period: Duration, task_fn: F) -> TaskId
         where
             F: FnMut(CancellationToken) -> Fut + Send + Sync + 'static,
             Fut: Future<Output = Result<()>> + Send + 'static,
@@ -157,12 +152,7 @@ pub mod simple_scheduler {
         ///
         /// # Notes
         /// - Tasks are executed serially, with a delay after each task completes.
-        pub fn add_fixed_delay_task<F, Fut>(
-            &self,
-            initial_delay: Duration,
-            period: Duration,
-            task_fn: F,
-        ) -> TaskId
+        pub fn add_fixed_delay_task<F, Fut>(&self, initial_delay: Duration, period: Duration, task_fn: F) -> TaskId
         where
             F: FnMut(CancellationToken) -> Fut + Send + Sync + 'static,
             Fut: Future<Output = Result<()>> + Send + 'static,
@@ -194,12 +184,7 @@ pub mod simple_scheduler {
             F: FnMut(CancellationToken) -> Fut + Send + Sync + 'static,
             Fut: Future<Output = Result<()>> + Send + 'static,
         {
-            self.add_scheduled_task(
-                ScheduleMode::FixedRateNoOverlap,
-                initial_delay,
-                period,
-                task_fn,
-            )
+            self.add_scheduled_task(ScheduleMode::FixedRateNoOverlap, initial_delay, period, task_fn)
         }
 
         /// Adds a scheduled task to the task manager.
@@ -402,12 +387,7 @@ pub mod simple_scheduler {
         /// # Notes
         /// - Tasks are executed at fixed intervals, even if previous executions overlap.
         /// - The task function is executed asynchronously.
-        pub fn add_fixed_rate_task_async<F>(
-            &self,
-            initial_delay: Duration,
-            period: Duration,
-            task_fn: F,
-        ) -> TaskId
+        pub fn add_fixed_rate_task_async<F>(&self, initial_delay: Duration, period: Duration, task_fn: F) -> TaskId
         where
             F: AsyncFnMut(CancellationToken) -> Result<()> + Send + Sync + 'static,
             for<'a> <F as AsyncFnMut<(CancellationToken,)>>::CallRefFuture<'a>: Send,
@@ -429,12 +409,7 @@ pub mod simple_scheduler {
         /// # Notes
         /// - Tasks are executed serially, with a delay after each task completes.
         /// - The task function is executed asynchronously.
-        pub fn add_fixed_delay_task_async<F>(
-            &self,
-            initial_delay: Duration,
-            period: Duration,
-            task_fn: F,
-        ) -> TaskId
+        pub fn add_fixed_delay_task_async<F>(&self, initial_delay: Duration, period: Duration, task_fn: F) -> TaskId
         where
             F: AsyncFnMut(CancellationToken) -> Result<()> + Send + Sync + 'static,
             for<'a> <F as AsyncFnMut<(CancellationToken,)>>::CallRefFuture<'a>: Send,
@@ -466,12 +441,7 @@ pub mod simple_scheduler {
             F: AsyncFnMut(CancellationToken) -> Result<()> + Send + Sync + 'static,
             for<'a> <F as AsyncFnMut<(CancellationToken,)>>::CallRefFuture<'a>: Send,
         {
-            self.add_scheduled_task_async(
-                ScheduleMode::FixedRateNoOverlap,
-                initial_delay,
-                period,
-                task_fn,
-            )
+            self.add_scheduled_task_async(ScheduleMode::FixedRateNoOverlap, initial_delay, period, task_fn)
         }
 
         /// Adds a scheduled task to the task manager asynchronously.
@@ -778,11 +748,7 @@ mod tests {
         time::sleep(Duration::from_millis(50)).await;
 
         let executed = counter.load(Ordering::Relaxed);
-        assert!(
-            executed >= 3,
-            "FixedRate executed too few times: {}",
-            executed
-        );
+        assert!(executed >= 3, "FixedRate executed too few times: {}", executed);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -806,11 +772,7 @@ mod tests {
         time::sleep(Duration::from_millis(50)).await;
 
         let executed = counter.load(Ordering::Relaxed);
-        assert!(
-            (3..=6).contains(&executed),
-            "FixedDelay count unexpected: {}",
-            executed
-        );
+        assert!((3..=6).contains(&executed), "FixedDelay count unexpected: {}", executed);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

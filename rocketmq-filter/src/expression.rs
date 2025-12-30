@@ -34,8 +34,5 @@ pub trait Expression {
     fn evaluate(
         &self,
         context: &dyn EvaluationContext,
-    ) -> Result<
-        Box<dyn std::any::Any + Send + Sync + 'static>,
-        Box<dyn Error + Send + Sync + 'static>,
-    >;
+    ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>, Box<dyn Error + Send + Sync + 'static>>;
 }

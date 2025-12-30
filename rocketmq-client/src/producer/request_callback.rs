@@ -20,8 +20,7 @@ use std::sync::Arc;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageTrait;
 
-pub type RequestCallbackFn =
-    Arc<dyn Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync>;
+pub type RequestCallbackFn = Arc<dyn Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync>;
 
 pub trait RequestCallback: Sync + Send {
     fn on_success(&self, response: &Message);

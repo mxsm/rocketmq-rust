@@ -81,10 +81,7 @@ impl Broker2Client {
         request_header: CheckTransactionStateRequestHeader,
         message_ext: MessageExt,
     ) {
-        let mut request = RemotingCommand::create_request_command(
-            RequestCode::CheckTransactionState,
-            request_header,
-        );
+        let mut request = RemotingCommand::create_request_command(RequestCode::CheckTransactionState, request_header);
         let msg_id = message_ext.msg_id().clone();
         match MessageDecoder::encode(&message_ext, false) {
             Ok(body) => {
@@ -92,8 +89,7 @@ impl Broker2Client {
             }
             Err(e) => {
                 error!(
-                    "Check transaction failed because encode message error. group={}, msgId={}, \
-                     error={:?}",
+                    "Check transaction failed because encode message error. group={}, msgId={}, error={:?}",
                     group, msg_id, e
                 );
                 return;
@@ -102,8 +98,7 @@ impl Broker2Client {
         // Java uses timeout=10ms for oneway
         if let Err(e) = channel.channel_inner_mut().send_oneway(request, 10).await {
             error!(
-                "Check transaction failed because invoke producer exception. group={}, msgId={}, \
-                 error={:?}",
+                "Check transaction failed because invoke producer exception. group={}, msgId={}, error={:?}",
                 group, msg_id, e
             );
         }
@@ -115,11 +110,7 @@ impl Broker2Client {
     /// # Arguments
     /// * `channel` - The consumer channel
     /// * `consumer_group` - The consumer group name
-    pub async fn notify_consumer_ids_changed(
-        &self,
-        channel: &mut Channel,
-        consumer_group: &CheetahString,
-    ) {
+    pub async fn notify_consumer_ids_changed(&self, channel: &mut Channel, consumer_group: &CheetahString) {
         if consumer_group.is_empty() {
             error!("notifyConsumerIdsChanged consumerGroup is null");
             return;
@@ -129,10 +120,7 @@ impl Broker2Client {
             consumer_group: consumer_group.clone(),
             rpc_request_header: None,
         };
-        let request = RemotingCommand::create_request_command(
-            RequestCode::NotifyConsumerIdsChanged,
-            request_header,
-        );
+        let request = RemotingCommand::create_request_command(RequestCode::NotifyConsumerIdsChanged, request_header);
 
         // Java uses timeout=10ms for oneway
         if let Err(e) = channel.channel_inner_mut().send_oneway(request, 10).await {
@@ -202,9 +190,7 @@ impl Broker2Client {
         let mut response = RemotingCommand::create_response_command();
 
         // Check if topic exists
-        let topic_config = broker_inner
-            .topic_config_manager()
-            .select_topic_config(topic);
+        let topic_config = broker_inner.topic_config_manager().select_topic_config(topic);
         if topic_config.is_none() {
             error!(
                 "[reset-offset] reset offset failed, no topic in this broker. topic={}",
@@ -274,10 +260,8 @@ impl Broker2Client {
             is_force,
             topic_request_header: None,
         };
-        let mut request = RemotingCommand::create_request_command(
-            RequestCode::ResetConsumerClientOffset,
-            request_header,
-        );
+        let mut request =
+            RemotingCommand::create_request_command(RequestCode::ResetConsumerClientOffset, request_header);
 
         // Use different body format for C++ clients
         if is_c {
@@ -291,9 +275,7 @@ impl Broker2Client {
         }
 
         // Notify all consumers in the group
-        let consumer_group_info = broker_inner
-            .consumer_manager()
-            .get_consumer_group_info(group);
+        let consumer_group_info = broker_inner.consumer_manager().get_consumer_group_info(group);
         if let Some(consumer_group_info) = consumer_group_info {
             let channel_info_table = consumer_group_info.get_channel_info_table();
             if !channel_info_table.is_empty() {
@@ -302,20 +284,14 @@ impl Broker2Client {
                     if version >= MIN_CLIENT_VERSION {
                         let mut channel = entry.key().clone();
                         // Java uses timeout=5000ms for oneway
-                        if let Err(e) = channel
-                            .channel_inner_mut()
-                            .send_oneway(request.clone(), 5000)
-                            .await
-                        {
+                        if let Err(e) = channel.channel_inner_mut().send_oneway(request.clone(), 5000).await {
                             error!(
-                                "[reset-offset] reset offset exception. topic={}, group={}, \
-                                 error={:?}",
+                                "[reset-offset] reset offset exception. topic={}, group={}, error={:?}",
                                 topic, group, e
                             );
                         } else {
                             info!(
-                                "[reset-offset] reset offset success. topic={}, group={}, \
-                                 clientId={}",
+                                "[reset-offset] reset offset success. topic={}, group={}, clientId={}",
                                 topic,
                                 group,
                                 entry.value().client_id()
@@ -329,8 +305,7 @@ impl Broker2Client {
                             version_desc
                         ));
                         warn!(
-                            "[reset-offset] the client does not support this feature. channel={}, \
-                             version={}",
+                            "[reset-offset] the client does not support this feature. channel={}, version={}",
                             entry.key().remote_address(),
                             version_desc
                         );
@@ -339,8 +314,7 @@ impl Broker2Client {
                 }
             } else {
                 let error_info = format!(
-                    "Consumer not online, so can not reset offset, Group: {} Topic: {} Timestamp: \
-                     {}",
+                    "Consumer not online, so can not reset offset, Group: {} Topic: {} Timestamp: {}",
                     group, topic, timestamp
                 );
                 error!("{}", error_info);
@@ -385,35 +359,23 @@ impl Broker2Client {
         let mut result = RemotingCommand::create_response_command();
 
         let request_header = GetConsumerStatusRequestHeader::new(topic.clone(), group.clone());
-        let request = RemotingCommand::create_request_command(
-            RequestCode::GetConsumerStatusFromClient,
-            request_header,
-        );
+        let request = RemotingCommand::create_request_command(RequestCode::GetConsumerStatusFromClient, request_header);
 
-        let mut consumer_status_table: HashMap<CheetahString, HashMap<MessageQueue, i64>> =
-            HashMap::new();
+        let mut consumer_status_table: HashMap<CheetahString, HashMap<MessageQueue, i64>> = HashMap::new();
 
-        let consumer_group_info = broker_inner
-            .consumer_manager()
-            .get_consumer_group_info(group);
+        let consumer_group_info = broker_inner.consumer_manager().get_consumer_group_info(group);
         let channel_info_table = match consumer_group_info {
             Some(info) => info.get_channel_info_table(),
             None => {
                 result.set_code_ref(ResponseCode::SystemError);
-                result.set_remark_mut(format!(
-                    "No Any Consumer online in the consumer group: [{}]",
-                    group
-                ));
+                result.set_remark_mut(format!("No Any Consumer online in the consumer group: [{}]", group));
                 return result;
             }
         };
 
         if channel_info_table.is_empty() {
             result.set_code_ref(ResponseCode::SystemError);
-            result.set_remark_mut(format!(
-                "No Any Consumer online in the consumer group: [{}]",
-                group
-            ));
+            result.set_remark_mut(format!("No Any Consumer online in the consumer group: [{}]", group));
             return result;
         }
 
@@ -429,8 +391,7 @@ impl Broker2Client {
                     version_desc
                 ));
                 warn!(
-                    "[get-consumer-status] the client does not support this feature. channel={}, \
-                     version={}",
+                    "[get-consumer-status] the client does not support this feature. channel={}, version={}",
                     entry.key().remote_address(),
                     version_desc
                 );
@@ -453,14 +414,11 @@ impl Broker2Client {
                     Ok(response) => {
                         if response.code() == ResponseCode::Success as i32 {
                             if let Some(body_bytes) = response.body() {
-                                if let Some(body) =
-                                    GetConsumerStatusBody::decode(body_bytes.as_ref())
-                                {
-                                    consumer_status_table
-                                        .insert(client_id.clone(), body.message_queue_table);
+                                if let Some(body) = GetConsumerStatusBody::decode(body_bytes.as_ref()) {
+                                    consumer_status_table.insert(client_id.clone(), body.message_queue_table);
                                     info!(
-                                        "[get-consumer-status] get consumer status success. \
-                                         topic={}, group={}, channelRemoteAddr={}",
+                                        "[get-consumer-status] get consumer status success. topic={}, group={}, \
+                                         channelRemoteAddr={}",
                                         topic, group, client_id
                                     );
                                 }
@@ -469,8 +427,7 @@ impl Broker2Client {
                     }
                     Err(e) => {
                         error!(
-                            "[get-consumer-status] get consumer status exception. topic={}, \
-                             group={}, error={:?}",
+                            "[get-consumer-status] get consumer status exception. topic={}, group={}, error={:?}",
                             topic, group, e
                         );
                     }

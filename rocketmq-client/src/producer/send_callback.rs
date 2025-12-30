@@ -21,8 +21,7 @@ use crate::producer::send_result::SendResult;
 
 pub(crate) type SendMessageCallbackInner = Arc<Box<dyn SendCallback>>;
 
-pub type SendMessageCallback =
-    Arc<dyn Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync>;
+pub type SendMessageCallback = Arc<dyn Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync>;
 
 pub trait SendCallback: Send + Sync + 'static {
     fn on_success(&self, send_result: &SendResult);

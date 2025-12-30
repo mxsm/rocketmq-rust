@@ -39,8 +39,7 @@ fn test_cheetah_string_as_dashmap_key() {
 #[test]
 fn test_cheetah_string_clone_performance() {
     // Test 3: Clone is cheap (like Arc)
-    let original =
-        CheetahString::from_string("a_very_long_string_that_would_be_expensive_to_copy".repeat(10));
+    let original = CheetahString::from_string("a_very_long_string_that_would_be_expensive_to_copy".repeat(10));
 
     // Multiple clones should be cheap
     let clone1 = original.clone();

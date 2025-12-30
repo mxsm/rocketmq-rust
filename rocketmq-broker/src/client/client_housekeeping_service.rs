@@ -74,12 +74,8 @@ where
     }
 
     fn scan_exception_channel(&self) {
-        self.broker_runtime_inner
-            .producer_manager()
-            .scan_not_active_channel();
-        self.broker_runtime_inner
-            .consumer_manager()
-            .scan_not_active_channel();
+        self.broker_runtime_inner.producer_manager().scan_not_active_channel();
+        self.broker_runtime_inner.consumer_manager().scan_not_active_channel();
     }
 }
 
@@ -100,9 +96,7 @@ where
         self.broker_runtime_inner
             .consumer_manager()
             .do_channel_close_event(remote_addr, channel);
-        self.broker_runtime_inner
-            .broker_stats_manager()
-            .inc_channel_close_num()
+        self.broker_runtime_inner.broker_stats_manager().inc_channel_close_num()
     }
 
     fn on_channel_exception(&self, remote_addr: &str, channel: &Channel) {
@@ -124,9 +118,7 @@ where
         self.broker_runtime_inner
             .consumer_manager()
             .do_channel_close_event(remote_addr, channel);
-        self.broker_runtime_inner
-            .broker_stats_manager()
-            .inc_channel_idle_num()
+        self.broker_runtime_inner.broker_stats_manager().inc_channel_idle_num()
     }
 
     fn on_channel_active(&self, _remote_addr: &str, _channel: &Channel) {

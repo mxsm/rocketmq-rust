@@ -41,18 +41,14 @@ impl GeneralHAService {
         GeneralHAService::DefaultHAService(default_ha_service)
     }
 
-    pub fn new_with_auto_switch_ha_service(
-        auto_switch_ha_service: ArcMut<AutoSwitchHAService>,
-    ) -> Self {
+    pub fn new_with_auto_switch_ha_service(auto_switch_ha_service: ArcMut<AutoSwitchHAService>) -> Self {
         GeneralHAService::AutoSwitchHAService(auto_switch_ha_service)
     }
 
     pub(crate) fn init(&mut self) -> HAResult<()> {
         let ha_service = self.clone();
         match self {
-            GeneralHAService::DefaultHAService(service) => {
-                DefaultHAService::init(service, ha_service)
-            }
+            GeneralHAService::DefaultHAService(service) => DefaultHAService::init(service, ha_service),
             GeneralHAService::AutoSwitchHAService(service) => {
                 unimplemented!("AutoSwitchHAService init is not implemented yet")
             }
@@ -82,26 +78,18 @@ impl HAService for GeneralHAService {
 
     async fn change_to_master(&self, master_epoch: i32) -> HAResult<bool> {
         match self {
-            GeneralHAService::DefaultHAService(service) => {
-                service.change_to_master(master_epoch).await
-            }
-            GeneralHAService::AutoSwitchHAService(service) => {
-                service.change_to_master(master_epoch).await
-            }
+            GeneralHAService::DefaultHAService(service) => service.change_to_master(master_epoch).await,
+            GeneralHAService::AutoSwitchHAService(service) => service.change_to_master(master_epoch).await,
         }
     }
 
     async fn change_to_master_when_last_role_is_master(&self, master_epoch: i32) -> HAResult<bool> {
         match self {
             GeneralHAService::DefaultHAService(service) => {
-                service
-                    .change_to_master_when_last_role_is_master(master_epoch)
-                    .await
+                service.change_to_master_when_last_role_is_master(master_epoch).await
             }
             GeneralHAService::AutoSwitchHAService(service) => {
-                service
-                    .change_to_master_when_last_role_is_master(master_epoch)
-                    .await
+                service.change_to_master_when_last_role_is_master(master_epoch).await
             }
         }
     }
@@ -147,34 +135,22 @@ impl HAService for GeneralHAService {
 
     async fn update_master_address(&self, new_addr: &str) {
         match self {
-            GeneralHAService::DefaultHAService(service) => {
-                service.update_master_address(new_addr).await
-            }
-            GeneralHAService::AutoSwitchHAService(service) => {
-                service.update_master_address(new_addr).await
-            }
+            GeneralHAService::DefaultHAService(service) => service.update_master_address(new_addr).await,
+            GeneralHAService::AutoSwitchHAService(service) => service.update_master_address(new_addr).await,
         }
     }
 
     async fn update_ha_master_address(&self, new_addr: &str) {
         match self {
-            GeneralHAService::DefaultHAService(service) => {
-                service.update_ha_master_address(new_addr).await
-            }
-            GeneralHAService::AutoSwitchHAService(service) => {
-                service.update_ha_master_address(new_addr).await
-            }
+            GeneralHAService::DefaultHAService(service) => service.update_ha_master_address(new_addr).await,
+            GeneralHAService::AutoSwitchHAService(service) => service.update_ha_master_address(new_addr).await,
         }
     }
 
     fn in_sync_replicas_nums(&self, master_put_where: i64) -> i32 {
         match self {
-            GeneralHAService::DefaultHAService(service) => {
-                service.in_sync_replicas_nums(master_put_where)
-            }
-            GeneralHAService::AutoSwitchHAService(service) => {
-                service.in_sync_replicas_nums(master_put_where)
-            }
+            GeneralHAService::DefaultHAService(service) => service.in_sync_replicas_nums(master_put_where),
+            GeneralHAService::AutoSwitchHAService(service) => service.in_sync_replicas_nums(master_put_where),
         }
     }
 
@@ -192,17 +168,10 @@ impl HAService for GeneralHAService {
         }
     }
 
-    async fn put_group_connection_state_request(
-        &self,
-        request: HAConnectionStateNotificationRequest,
-    ) {
+    async fn put_group_connection_state_request(&self, request: HAConnectionStateNotificationRequest) {
         match self {
-            GeneralHAService::DefaultHAService(service) => {
-                service.put_group_connection_state_request(request).await
-            }
-            GeneralHAService::AutoSwitchHAService(service) => {
-                service.put_group_connection_state_request(request).await
-            }
+            GeneralHAService::DefaultHAService(service) => service.put_group_connection_state_request(request).await,
+            GeneralHAService::AutoSwitchHAService(service) => service.put_group_connection_state_request(request).await,
         }
     }
 
@@ -230,20 +199,14 @@ impl HAService for GeneralHAService {
     fn get_push_to_slave_max_offset(&self) -> i64 {
         match self {
             GeneralHAService::DefaultHAService(service) => service.get_push_to_slave_max_offset(),
-            GeneralHAService::AutoSwitchHAService(service) => {
-                service.get_push_to_slave_max_offset()
-            }
+            GeneralHAService::AutoSwitchHAService(service) => service.get_push_to_slave_max_offset(),
         }
     }
 
     fn get_runtime_info(&self, master_put_where: i64) -> HARuntimeInfo {
         match self {
-            GeneralHAService::DefaultHAService(service) => {
-                service.get_runtime_info(master_put_where)
-            }
-            GeneralHAService::AutoSwitchHAService(service) => {
-                service.get_runtime_info(master_put_where)
-            }
+            GeneralHAService::DefaultHAService(service) => service.get_runtime_info(master_put_where),
+            GeneralHAService::AutoSwitchHAService(service) => service.get_runtime_info(master_put_where),
         }
     }
 
@@ -256,12 +219,8 @@ impl HAService for GeneralHAService {
 
     async fn is_slave_ok(&self, master_put_where: i64) -> bool {
         match self {
-            GeneralHAService::DefaultHAService(service) => {
-                service.is_slave_ok(master_put_where).await
-            }
-            GeneralHAService::AutoSwitchHAService(service) => {
-                service.is_slave_ok(master_put_where).await
-            }
+            GeneralHAService::DefaultHAService(service) => service.is_slave_ok(master_put_where).await,
+            GeneralHAService::AutoSwitchHAService(service) => service.is_slave_ok(master_put_where).await,
         }
     }
 }

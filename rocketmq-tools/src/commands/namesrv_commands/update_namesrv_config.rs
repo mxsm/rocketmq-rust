@@ -72,24 +72,14 @@ impl CommandExecute for UpdateNamesrvConfig {
                 }
             }
 
-            MQAdminExt::start(&mut default_mqadmin_ext)
-                .await
-                .map_err(|e| {
-                    RocketMQError::Internal(format!(
-                        "UpdateNamesrvConfig: Failed to start MQAdminExt: {}",
-                        e
-                    ))
-                })?;
+            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
+                RocketMQError::Internal(format!("UpdateNamesrvConfig: Failed to start MQAdminExt: {}", e))
+            })?;
 
             default_mqadmin_ext
                 .update_name_server_config(properties, server_list.clone())
                 .await
-                .map_err(|e| {
-                    RocketMQError::Internal(format!(
-                        "UpdateNamesrvConfig: Failed to update config: {}",
-                        e
-                    ))
-                })?;
+                .map_err(|e| RocketMQError::Internal(format!("UpdateNamesrvConfig: Failed to update config: {}", e)))?;
 
             println!(
                 "update name server config success!{}\n{} : {}\n",

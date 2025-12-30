@@ -98,10 +98,7 @@ impl NettyServerConfig {
         self.server_async_semaphore_value = server_async_semaphore_value;
     }
 
-    pub fn set_server_channel_max_idle_time_seconds(
-        &mut self,
-        server_channel_max_idle_time_seconds: i32,
-    ) {
+    pub fn set_server_channel_max_idle_time_seconds(&mut self, server_channel_max_idle_time_seconds: i32) {
         self.server_channel_max_idle_time_seconds = server_channel_max_idle_time_seconds;
     }
 
@@ -125,10 +122,7 @@ impl NettyServerConfig {
         self.server_socket_backlog = server_socket_backlog;
     }
 
-    pub fn set_server_pooled_byte_buf_allocator_enable(
-        &mut self,
-        server_pooled_byte_buf_allocator_enable: bool,
-    ) {
+    pub fn set_server_pooled_byte_buf_allocator_enable(&mut self, server_pooled_byte_buf_allocator_enable: bool) {
         self.server_pooled_byte_buf_allocator_enable = server_pooled_byte_buf_allocator_enable;
     }
 

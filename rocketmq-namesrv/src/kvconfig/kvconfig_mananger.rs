@@ -106,8 +106,7 @@ impl KVConfigManager {
     /// Gets the number of pending changes since last persistence
     #[inline]
     pub fn pending_changes(&self) -> usize {
-        self.pending_changes
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.pending_changes.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -151,8 +150,7 @@ impl KVConfigManager {
         }
 
         // Reset pending changes after successful load
-        self.pending_changes
-            .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.pending_changes.store(0, std::sync::atomic::Ordering::Relaxed);
         *self.last_persist_time.lock() = Instant::now();
 
         Ok(())
@@ -168,14 +166,8 @@ impl KVConfigManager {
     ///
     /// - `Ok(())` if update succeeds
     /// - `Err(String)` if update fails (legacy API)
-    pub fn update_namesrv_config(
-        &mut self,
-        updates: HashMap<CheetahString, CheetahString>,
-    ) -> Result<(), String> {
-        let result = self
-            .name_server_runtime_inner
-            .name_server_config_mut()
-            .update(updates);
+    pub fn update_namesrv_config(&mut self, updates: HashMap<CheetahString, CheetahString>) -> Result<(), String> {
+        let result = self.name_server_runtime_inner.name_server_config_mut().update(updates);
 
         if result.is_ok() {
             debug!("Namesrv configuration updated successfully");
@@ -217,8 +209,7 @@ impl KVConfigManager {
         })?;
 
         // Reset counters after successful persistence
-        self.pending_changes
-            .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.pending_changes.store(0, std::sync::atomic::Ordering::Relaxed);
         *self.last_persist_time.lock() = Instant::now();
 
         debug!("KV config persisted successfully to {}", config_path);
@@ -237,9 +228,7 @@ impl KVConfigManager {
     /// - `Ok(false)` if persistence was skipped
     /// - `Err(RocketMQError)` if persistence fails
     pub fn persist_if_needed(&mut self) -> RocketMQResult<bool> {
-        let pending = self
-            .pending_changes
-            .load(std::sync::atomic::Ordering::Relaxed);
+        let pending = self.pending_changes.load(std::sync::atomic::Ordering::Relaxed);
         let elapsed = self.last_persist_time.lock().elapsed();
 
         if pending >= AUTO_PERSIST_THRESHOLD || elapsed >= MIN_PERSIST_INTERVAL {
@@ -269,12 +258,7 @@ impl KVConfigManager {
     /// * `namespace` - The namespace for the configuration
     /// * `key` - The configuration key
     /// * `value` - The configuration value
-    pub fn put_kv_config(
-        &mut self,
-        namespace: Namespace,
-        key: Key,
-        value: Value,
-    ) -> RocketMQResult<()> {
+    pub fn put_kv_config(&mut self, namespace: Namespace, key: Key, value: Value) -> RocketMQResult<()> {
         let is_new = {
             let mut namespace_entry = self.config_table.entry(namespace.clone()).or_default();
             let pre_value = namespace_entry.insert(key.clone(), value.clone());
@@ -282,8 +266,7 @@ impl KVConfigManager {
         };
 
         // Increment pending changes counter
-        self.pending_changes
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.pending_changes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         if is_new {
             debug!(
@@ -324,8 +307,7 @@ impl KVConfigManager {
 
         if let Some(value) = deleted_value {
             // Increment pending changes counter
-            self.pending_changes
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.pending_changes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
             debug!(
                 "Deleted KV config: namespace={}, key={}, value={}",
@@ -336,10 +318,7 @@ impl KVConfigManager {
             self.persist_if_needed()?;
             Ok(true)
         } else {
-            debug!(
-                "KV config not found for deletion: namespace={}, key={}",
-                namespace, key
-            );
+            debug!("KV config not found for deletion: namespace={}, key={}", namespace, key);
             Ok(false)
         }
     }
@@ -378,10 +357,7 @@ impl KVConfigManager {
         self.pending_changes
             .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
 
-        debug!(
-            "Batch updated {} KV configs in namespace={}",
-            count, namespace
-        );
+        debug!("Batch updated {} KV configs in namespace={}", count, namespace);
 
         // Auto-persist if threshold reached
         self.persist_if_needed()?;
@@ -398,11 +374,7 @@ impl KVConfigManager {
     /// # Returns
     ///
     /// - `Ok(usize)` - Number of entries deleted
-    pub fn batch_delete_kv_config(
-        &mut self,
-        namespace: &Namespace,
-        keys: &[Key],
-    ) -> RocketMQResult<usize> {
+    pub fn batch_delete_kv_config(&mut self, namespace: &Namespace, keys: &[Key]) -> RocketMQResult<usize> {
         if keys.is_empty() {
             return Ok(0);
         }
@@ -479,10 +451,7 @@ impl KVConfigManager {
             match table.encode() {
                 Ok(encoded) => Some(encoded),
                 Err(e) => {
-                    error!(
-                        "Failed to encode KV table for namespace {}: {}",
-                        namespace, e
-                    );
+                    error!("Failed to encode KV table for namespace {}: {}", namespace, e);
                     None
                 }
             }
@@ -519,10 +488,7 @@ impl KVConfigManager {
     ///
     /// A vector of all namespace names
     pub fn get_all_namespaces(&self) -> Vec<Namespace> {
-        self.config_table
-            .iter()
-            .map(|entry| entry.key().clone())
-            .collect()
+        self.config_table.iter().map(|entry| entry.key().clone()).collect()
     }
 
     /// Gets the number of key-value pairs in a namespace.
@@ -542,9 +508,7 @@ impl KVConfigManager {
     /// - `Some(HashMap)` - Clone of the KV map if namespace exists
     /// - `None` - If namespace doesn't exist
     pub fn get_all_in_namespace(&self, namespace: &Namespace) -> Option<ConfigMap> {
-        self.config_table
-            .get(namespace)
-            .map(|kv_map| kv_map.clone())
+        self.config_table.get(namespace).map(|kv_map| kv_map.clone())
     }
 
     /// Gets statistics about the configuration manager.
@@ -554,14 +518,8 @@ impl KVConfigManager {
     /// A tuple of (namespace_count, total_kv_pairs, pending_changes)
     pub fn get_statistics(&self) -> (usize, usize, usize) {
         let namespace_count = self.config_table.len();
-        let total_kv_pairs: usize = self
-            .config_table
-            .iter()
-            .map(|entry| entry.value().len())
-            .sum();
-        let pending = self
-            .pending_changes
-            .load(std::sync::atomic::Ordering::Relaxed);
+        let total_kv_pairs: usize = self.config_table.iter().map(|entry| entry.value().len()).sum();
+        let pending = self.pending_changes.load(std::sync::atomic::Ordering::Relaxed);
 
         (namespace_count, total_kv_pairs, pending)
     }
@@ -581,8 +539,7 @@ mod tests {
 
     #[test]
     fn test_config_table_basic_operations() {
-        let config_table: Arc<dashmap::DashMap<Namespace, ConfigMap>> =
-            Arc::new(dashmap::DashMap::with_capacity(64));
+        let config_table: Arc<dashmap::DashMap<Namespace, ConfigMap>> = Arc::new(dashmap::DashMap::with_capacity(64));
 
         // Test empty state
         assert_eq!(config_table.len(), 0);
@@ -611,8 +568,7 @@ mod tests {
 
     #[test]
     fn test_config_table_namespace_isolation() {
-        let config_table: Arc<dashmap::DashMap<Namespace, ConfigMap>> =
-            Arc::new(dashmap::DashMap::new());
+        let config_table: Arc<dashmap::DashMap<Namespace, ConfigMap>> = Arc::new(dashmap::DashMap::new());
 
         let ns1 = CheetahString::from_static_str("namespace1");
         let ns2 = CheetahString::from_static_str("namespace2");
@@ -643,8 +599,7 @@ mod tests {
 
     #[test]
     fn test_config_table_concurrent_access() {
-        let config_table: Arc<dashmap::DashMap<Namespace, ConfigMap>> =
-            Arc::new(dashmap::DashMap::new());
+        let config_table: Arc<dashmap::DashMap<Namespace, ConfigMap>> = Arc::new(dashmap::DashMap::new());
 
         let ns1 = CheetahString::from_static_str("namespace1");
         let ns2 = CheetahString::from_static_str("namespace2");
@@ -669,8 +624,7 @@ mod tests {
 
     #[test]
     fn test_config_table_update() {
-        let config_table: Arc<dashmap::DashMap<Namespace, ConfigMap>> =
-            Arc::new(dashmap::DashMap::new());
+        let config_table: Arc<dashmap::DashMap<Namespace, ConfigMap>> = Arc::new(dashmap::DashMap::new());
 
         let ns = CheetahString::from_static_str("test_namespace");
         let key = CheetahString::from_static_str("test_key");
@@ -688,16 +642,12 @@ mod tests {
 
         // Verify update
         let entry = config_table.get(&ns).unwrap();
-        assert_eq!(
-            entry.get(&key),
-            Some(&CheetahString::from_static_str("value2"))
-        );
+        assert_eq!(entry.get(&key), Some(&CheetahString::from_static_str("value2")));
     }
 
     #[test]
     fn test_config_table_remove() {
-        let config_table: Arc<dashmap::DashMap<Namespace, ConfigMap>> =
-            Arc::new(dashmap::DashMap::new());
+        let config_table: Arc<dashmap::DashMap<Namespace, ConfigMap>> = Arc::new(dashmap::DashMap::new());
 
         let ns = CheetahString::from_static_str("test_namespace");
         let mut map = HashMap::new();
@@ -718,8 +668,7 @@ mod tests {
 
     #[test]
     fn test_config_table_iter() {
-        let config_table: Arc<dashmap::DashMap<Namespace, ConfigMap>> =
-            Arc::new(dashmap::DashMap::new());
+        let config_table: Arc<dashmap::DashMap<Namespace, ConfigMap>> = Arc::new(dashmap::DashMap::new());
 
         // Add multiple namespaces
         for i in 1..=3 {
@@ -737,10 +686,7 @@ mod tests {
         assert_eq!(count, 3);
 
         // Collect namespaces
-        let namespaces: Vec<_> = config_table
-            .iter()
-            .map(|entry| entry.key().clone())
-            .collect();
+        let namespaces: Vec<_> = config_table.iter().map(|entry| entry.key().clone()).collect();
         assert_eq!(namespaces.len(), 3);
     }
 

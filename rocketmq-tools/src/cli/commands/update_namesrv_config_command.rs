@@ -82,20 +82,14 @@ impl UpdateNamesrvConfigCommand {
     fn validate(&self) -> RocketMQResult<()> {
         // Validate key
         if self.key.trim().is_empty() {
-            return Err(crate::core::ToolsError::validation_error(
-                "key",
-                "Configuration key cannot be empty",
-            )
-            .into());
+            return Err(crate::core::ToolsError::validation_error("key", "Configuration key cannot be empty").into());
         }
 
         // Validate value
         if self.value.trim().is_empty() {
-            return Err(crate::core::ToolsError::validation_error(
-                "value",
-                "Configuration value cannot be empty",
-            )
-            .into());
+            return Err(
+                crate::core::ToolsError::validation_error("value", "Configuration value cannot be empty").into(),
+            );
         }
 
         Ok(())

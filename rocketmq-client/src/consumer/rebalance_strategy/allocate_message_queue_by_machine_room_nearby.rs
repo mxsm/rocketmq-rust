@@ -34,10 +34,7 @@ pub struct AllocateMessageQueueByMachineRoomNearby {
 }
 
 impl AllocateMessageQueueByMachineRoomNearby {
-    pub fn new(
-        strategy: Box<dyn AllocateMessageQueueStrategy>,
-        resolver: Box<dyn MachineRoomResolver>,
-    ) -> Self {
+    pub fn new(strategy: Box<dyn AllocateMessageQueueStrategy>, resolver: Box<dyn MachineRoomResolver>) -> Self {
         Self { strategy, resolver }
     }
 }
@@ -60,10 +57,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByMachineRoomNearby {
         let mut mr2mq: BTreeMap<CheetahString, Vec<MessageQueue>> = BTreeMap::new();
         for mq in mq_all {
             if let Some(broker_machine_room) = self.resolver.broker_deploy_in(mq) {
-                mr2mq
-                    .entry(broker_machine_room)
-                    .or_default()
-                    .push(mq.clone());
+                mr2mq.entry(broker_machine_room).or_default().push(mq.clone());
             } else {
                 return Err(mq_client_err!(format!("Machine room is null for mq {mq}")));
             }
@@ -73,13 +67,9 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByMachineRoomNearby {
         let mut mr2c: BTreeMap<CheetahString, Vec<CheetahString>> = BTreeMap::new();
         for cid in cid_all {
             if let Some(consumer_machine_room) = self.resolver.consumer_deploy_in(cid) {
-                mr2c.entry(consumer_machine_room)
-                    .or_default()
-                    .push(cid.clone());
+                mr2c.entry(consumer_machine_room).or_default().push(cid.clone());
             } else {
-                return Err(mq_client_err!(format!(
-                    "Machine room is null for consumer id {cid}"
-                )));
+                return Err(mq_client_err!(format!("Machine room is null for consumer id {cid}")));
             }
         }
 
@@ -99,12 +89,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByMachineRoomNearby {
             // 2. Allocate remaining MQs from machine rooms with no consumers
             for (machine_room, mqs) in mr2mq {
                 if !mr2c.contains_key(&machine_room) {
-                    result.extend(self.strategy.allocate(
-                        consumer_group,
-                        current_cid,
-                        &mqs,
-                        cid_all,
-                    )?);
+                    result.extend(self.strategy.allocate(consumer_group, current_cid, &mqs, cid_all)?);
                 }
             }
         }
@@ -155,9 +140,7 @@ mod tests {
 
     fn create_message_queue_list(machine_room: &str, size: usize) -> Vec<MessageQueue> {
         (0..size)
-            .map(|i| {
-                MessageQueue::from_parts(TOPIC, format!("{}-brokerName", machine_room), i as i32)
-            })
+            .map(|i| MessageQueue::from_parts(TOPIC, format!("{}-brokerName", machine_room), i as i32))
             .collect()
     }
 
@@ -187,9 +170,7 @@ mod tests {
         }
         let mq_set: BTreeSet<_> = mq_all.iter().collect();
         let res_set: BTreeSet<_> = allocated_res_all.iter().collect();
-        mq_set.is_superset(&res_set)
-            && res_set.is_superset(&mq_set)
-            && mq_all.len() == allocated_res_all.len()
+        mq_set.is_superset(&res_set) && res_set.is_superset(&mq_set) && mq_all.len() == allocated_res_all.len()
     }
 
     fn test_when_idc_size_equals(idc_size: usize, queue_size: usize, consumer_size: usize) {
@@ -203,12 +184,7 @@ mod tests {
 
         for current_id in &cid_all {
             let res = allocator
-                .allocate(
-                    &CheetahString::from("Test-C-G"),
-                    current_id,
-                    &mq_all,
-                    &cid_all,
-                )
+                .allocate(&CheetahString::from("Test-C-G"), current_id, &mq_all, &cid_all)
                 .unwrap();
 
             for mq in &res {
@@ -246,21 +222,13 @@ mod tests {
         let mut res_all = Vec::new();
         for current_id in &cid_all {
             let res = allocator
-                .allocate(
-                    &CheetahString::from("Test-C-G"),
-                    current_id,
-                    &mq_all,
-                    &cid_all,
-                )
+                .allocate(&CheetahString::from("Test-C-G"), current_id, &mq_all, &cid_all)
                 .unwrap();
 
             for mq in &res {
                 if let Some(broker_idc) = allocator.resolver.broker_deploy_in(mq) {
                     if broker_idc_with_consumer.contains(&broker_idc) {
-                        assert_eq!(
-                            Some(broker_idc),
-                            allocator.resolver.consumer_deploy_in(current_id)
-                        );
+                        assert_eq!(Some(broker_idc), allocator.resolver.consumer_deploy_in(current_id));
                     }
                 }
             }
@@ -297,18 +265,10 @@ mod tests {
         for current_id in &cid_all {
             if let Some(current_idc) = allocator.resolver.consumer_deploy_in(current_id) {
                 let res = allocator
-                    .allocate(
-                        &CheetahString::from("Test-C-G"),
-                        current_id,
-                        &mq_all,
-                        &cid_all,
-                    )
+                    .allocate(&CheetahString::from("Test-C-G"), current_id, &mq_all, &cid_all)
                     .unwrap();
 
-                idc2res
-                    .entry(current_idc.clone())
-                    .or_default()
-                    .extend(res.clone());
+                idc2res.entry(current_idc.clone()).or_default().extend(res.clone());
                 res_all.extend(res);
             }
         }

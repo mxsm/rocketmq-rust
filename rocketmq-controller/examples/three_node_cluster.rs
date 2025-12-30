@@ -58,9 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     // Initialize logging
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .init();
+    tracing_subscriber::fmt().with_max_level(tracing::Level::INFO).init();
 
     println!("=== OpenRaft Three-Node Cluster ===");
     println!("Node ID: {}", args.node_id);
@@ -82,10 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     ];
 
-    let current_peer = peers
-        .iter()
-        .find(|p| p.id == args.node_id)
-        .ok_or("Invalid node ID")?;
+    let current_peer = peers.iter().find(|p| p.id == args.node_id).ok_or("Invalid node ID")?;
 
     // Create configuration
     let config = Arc::new(

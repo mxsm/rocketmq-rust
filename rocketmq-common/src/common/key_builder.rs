@@ -47,9 +47,7 @@ impl KeyBuilder {
 
     pub fn parse_normal_topic(topic: &str, cid: &str) -> String {
         if topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
-            if topic.starts_with(&format!(
-                "{RETRY_GROUP_TOPIC_PREFIX}{cid}{POP_RETRY_SEPARATOR_V2}"
-            )) {
+            if topic.starts_with(&format!("{RETRY_GROUP_TOPIC_PREFIX}{cid}{POP_RETRY_SEPARATOR_V2}")) {
                 return topic[RETRY_GROUP_TOPIC_PREFIX.len() + cid.len() + 1..].to_string();
             }
             return topic[RETRY_GROUP_TOPIC_PREFIX.len() + cid.len() + 1..].to_string();
@@ -89,7 +87,6 @@ impl KeyBuilder {
     }
 
     pub fn is_pop_retry_topic_v2(retry_topic: &str) -> bool {
-        retry_topic.starts_with(RETRY_GROUP_TOPIC_PREFIX)
-            && retry_topic.contains(POP_RETRY_SEPARATOR_V2)
+        retry_topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) && retry_topic.contains(POP_RETRY_SEPARATOR_V2)
     }
 }

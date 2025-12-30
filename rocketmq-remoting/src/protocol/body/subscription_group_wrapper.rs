@@ -109,10 +109,9 @@ impl<'de> Deserialize<'de> for SubscriptionGroupWrapper {
                     }
                 }
 
-                let subscription_group_table = subscription_group_table
-                    .ok_or_else(|| de::Error::missing_field("subscriptionGroupTable"))?;
-                let data_version =
-                    data_version.ok_or_else(|| de::Error::missing_field("dataVersion"))?;
+                let subscription_group_table =
+                    subscription_group_table.ok_or_else(|| de::Error::missing_field("subscriptionGroupTable"))?;
+                let data_version = data_version.ok_or_else(|| de::Error::missing_field("dataVersion"))?;
 
                 // Convert HashMap to DashMap with Arc-wrapped values
                 let dash_map = DashMap::new();
@@ -128,11 +127,7 @@ impl<'de> Deserialize<'de> for SubscriptionGroupWrapper {
         }
 
         const FIELDS: &[&str] = &["subscriptionGroupTable", "dataVersion"];
-        deserializer.deserialize_struct(
-            "SubscriptionGroupWrapper",
-            FIELDS,
-            SubscriptionGroupWrapperVisitor,
-        )
+        deserializer.deserialize_struct("SubscriptionGroupWrapper", FIELDS, SubscriptionGroupWrapperVisitor)
     }
 }
 
@@ -150,16 +145,11 @@ impl SubscriptionGroupWrapper {
         }
     }
 
-    pub fn get_subscription_group_table(
-        &self,
-    ) -> &DashMap<CheetahString, Arc<SubscriptionGroupConfig>> {
+    pub fn get_subscription_group_table(&self) -> &DashMap<CheetahString, Arc<SubscriptionGroupConfig>> {
         &self.subscription_group_table
     }
 
-    pub fn set_subscription_group_table(
-        &mut self,
-        table: DashMap<CheetahString, Arc<SubscriptionGroupConfig>>,
-    ) {
+    pub fn set_subscription_group_table(&mut self, table: DashMap<CheetahString, Arc<SubscriptionGroupConfig>>) {
         self.subscription_group_table = table;
     }
 
@@ -188,10 +178,9 @@ mod tests {
     #[test]
     fn get_subscription_group_table_returns_reference() {
         let wrapper = SubscriptionGroupWrapper::new();
-        wrapper.subscription_group_table.insert(
-            "test_group".into(),
-            Arc::new(SubscriptionGroupConfig::default()),
-        );
+        wrapper
+            .subscription_group_table
+            .insert("test_group".into(), Arc::new(SubscriptionGroupConfig::default()));
 
         let table = wrapper.get_subscription_group_table();
         assert_eq!(table.len(), 1);

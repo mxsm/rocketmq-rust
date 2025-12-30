@@ -139,9 +139,7 @@ impl DefaultAuthenticationContextBuilder {
     }
 }
 
-impl AuthenticationContextBuilder<DefaultAuthenticationContext>
-    for DefaultAuthenticationContextBuilder
-{
+impl AuthenticationContextBuilder<DefaultAuthenticationContext> for DefaultAuthenticationContextBuilder {
     #[cfg(feature = "grpc")]
     fn build_from_grpc(
         &self,
@@ -153,17 +151,13 @@ impl AuthenticationContextBuilder<DefaultAuthenticationContext>
         // Extract channel ID from metadata
         if let Some(channel_id) = metadata.get("channel-id") {
             if let Ok(channel_id_str) = channel_id.to_str() {
-                context
-                    .base
-                    .set_channel_id(Some(CheetahString::from(channel_id_str)));
+                context.base.set_channel_id(Some(CheetahString::from(channel_id_str)));
             }
         }
 
         // Set RPC code from request type name
         let rpc_code = std::any::type_name_of_val(request);
-        context
-            .base
-            .set_rpc_code(Some(CheetahString::from(rpc_code)));
+        context.base.set_rpc_code(Some(CheetahString::from(rpc_code)));
 
         // Extract Authorization header
         let authorization = metadata
@@ -194,10 +188,7 @@ impl AuthenticationContextBuilder<DefaultAuthenticationContext>
         for key_value in key_values {
             let kv: Vec<&str> = key_value.trim().splitn(2, EQUAL).collect();
             if kv.len() != 2 {
-                warn!(
-                    "Skipping invalid authentication key-value pair: {}",
-                    key_value
-                );
+                warn!("Skipping invalid authentication key-value pair: {}", key_value);
                 continue;
             }
 
@@ -273,9 +264,7 @@ impl AuthenticationContextBuilder<DefaultAuthenticationContext>
 
         for (key, value) in fields.iter() {
             // Filter out UNIQUE_MSG_QUERY_FLAG for old versions
-            if request.version() <= RocketMqVersion::V4_9_3.ordinal() as i32
-                && key.as_str() == UNIQUE_MSG_QUERY_FLAG
-            {
+            if request.version() <= RocketMqVersion::V4_9_3.ordinal() as i32 && key.as_str() == UNIQUE_MSG_QUERY_FLAG {
                 continue;
             }
 
@@ -320,26 +309,17 @@ mod tests {
         impl CommandCustomHeader for EmptyHeader {
             fn to_map(
                 &self,
-            ) -> Option<
-                std::collections::HashMap<
-                    cheetah_string::CheetahString,
-                    cheetah_string::CheetahString,
-                >,
-            > {
+            ) -> Option<std::collections::HashMap<cheetah_string::CheetahString, cheetah_string::CheetahString>>
+            {
                 None
             }
         }
 
         let builder = DefaultAuthenticationContextBuilder::new();
         let request = RemotingCommand::create_request_command(1, EmptyHeader);
-        let result = builder
-            .build_from_remoting(&request, Some("test-channel"))
-            .unwrap();
+        let result = builder.build_from_remoting(&request, Some("test-channel")).unwrap();
 
-        assert_eq!(
-            result.base.channel_id(),
-            Some(&CheetahString::from("test-channel"))
-        );
+        assert_eq!(result.base.channel_id(), Some(&CheetahString::from("test-channel")));
         assert!(result.username().is_none());
     }
 }

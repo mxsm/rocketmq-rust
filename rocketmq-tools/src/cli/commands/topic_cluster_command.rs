@@ -105,13 +105,8 @@ mod tests {
 
     #[test]
     fn test_command_parsing() {
-        let cmd = TopicClusterSubCommand::try_parse_from([
-            "topicClusterList",
-            "-t",
-            "TestTopic",
-            "-n",
-            "127.0.0.1:9876",
-        ]);
+        let cmd =
+            TopicClusterSubCommand::try_parse_from(["topicClusterList", "-t", "TestTopic", "-n", "127.0.0.1:9876"]);
         assert!(cmd.is_ok());
         let cmd = cmd.unwrap();
         assert_eq!(cmd.topic, "TestTopic");
@@ -119,13 +114,7 @@ mod tests {
 
     #[test]
     fn test_command_with_format() {
-        let cmd = TopicClusterSubCommand::try_parse_from([
-            "topicClusterList",
-            "-t",
-            "TestTopic",
-            "-f",
-            "json",
-        ]);
+        let cmd = TopicClusterSubCommand::try_parse_from(["topicClusterList", "-t", "TestTopic", "-f", "json"]);
         assert!(cmd.is_ok());
         let cmd = cmd.unwrap();
         assert_eq!(cmd.format, "json");

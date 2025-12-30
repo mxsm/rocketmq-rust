@@ -364,8 +364,8 @@ impl AllocateMappedFileService {
         if next_put_ok {
             if can_submit_requests == 0 {
                 warn!(
-                    "[NOTIFYME]TransientStorePool is not enough, so create mapped file error, \
-                     RequestQueueSize: {}, StorePoolSize: {}",
+                    "[NOTIFYME]TransientStorePool is not enough, so create mapped file error, RequestQueueSize: {}, \
+                     StorePoolSize: {}",
                     self.request_queue.read().len(),
                     self.transient_store_pool
                         .as_ref()
@@ -395,8 +395,8 @@ impl AllocateMappedFileService {
         if next_next_put_ok {
             if can_submit_requests == 0 {
                 warn!(
-                    "[NOTIFYME]TransientStorePool is not enough, so skip preallocate mapped file, \
-                     RequestQueueSize: {}, StorePoolSize: {}",
+                    "[NOTIFYME]TransientStorePool is not enough, so skip preallocate mapped file, RequestQueueSize: \
+                     {}, StorePoolSize: {}",
                     self.request_queue.read().len(),
                     self.transient_store_pool
                         .as_ref()

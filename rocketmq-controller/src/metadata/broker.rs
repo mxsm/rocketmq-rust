@@ -148,12 +148,12 @@ impl BrokerManager {
     pub async fn heartbeat(&self, broker_name: &str) -> Result<()> {
         debug!("Heartbeat from broker: {}", broker_name);
 
-        let mut broker =
-            self.brokers
-                .get_mut(broker_name)
-                .ok_or_else(|| ControllerError::MetadataNotFound {
-                    key: broker_name.to_string(),
-                })?;
+        let mut broker = self
+            .brokers
+            .get_mut(broker_name)
+            .ok_or_else(|| ControllerError::MetadataNotFound {
+                key: broker_name.to_string(),
+            })?;
 
         broker.last_heartbeat = SystemTime::now();
 
@@ -172,10 +172,7 @@ impl BrokerManager {
 
     /// List all brokers
     pub async fn list_brokers(&self) -> Vec<BrokerInfo> {
-        self.brokers
-            .iter()
-            .map(|entry| entry.value().clone())
-            .collect()
+        self.brokers.iter().map(|entry| entry.value().clone()).collect()
     }
 
     /// List brokers by cluster

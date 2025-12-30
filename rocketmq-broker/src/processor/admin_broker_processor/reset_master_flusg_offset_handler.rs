@@ -34,9 +34,7 @@ pub struct ResetMasterFlushOffsetHandler<MS: MessageStore> {
 
 impl<MS: MessageStore> ResetMasterFlushOffsetHandler<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self {
-            broker_runtime_inner,
-        }
+        Self { broker_runtime_inner }
     }
 
     pub async fn reset_master_flush_offset(
@@ -48,11 +46,7 @@ impl<MS: MessageStore> ResetMasterFlushOffsetHandler<MS> {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let response = RemotingCommand::create_response_command();
 
-        let broker_id = self
-            .broker_runtime_inner
-            .broker_config()
-            .broker_identity
-            .broker_id;
+        let broker_id = self.broker_runtime_inner.broker_config().broker_identity.broker_id;
         if broker_id != MASTER_ID {
             let request_header = request
                 .decode_command_custom_header::<ResetMasterFlushOffsetHeader>()

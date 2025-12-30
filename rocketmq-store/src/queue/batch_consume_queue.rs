@@ -94,20 +94,12 @@ impl BatchConsumeQueue {
                 .join(topic.as_str())
                 .join(queue_id.to_string())
                 .join(subfolder.as_str());
-            MappedFileQueue::new(
-                queue_dir.to_string_lossy().to_string(),
-                mapped_file_size as u64,
-                None,
-            )
+            MappedFileQueue::new(queue_dir.to_string_lossy().to_string(), mapped_file_size as u64, None)
         } else {
             let queue_dir = PathBuf::from(store_path.as_str())
                 .join(topic.as_str())
                 .join(queue_id.to_string());
-            MappedFileQueue::new(
-                queue_dir.to_string_lossy().to_string(),
-                mapped_file_size as u64,
-                None,
-            )
+            MappedFileQueue::new(queue_dir.to_string_lossy().to_string(), mapped_file_size as u64, None)
         };
 
         let byte_buffer_item = vec![0u8; CQ_STORE_UNIT_SIZE as usize];
@@ -194,12 +186,7 @@ impl FileQueueLifeCycle for BatchConsumeQueue {
 
 impl Swappable for BatchConsumeQueue {
     #[inline]
-    fn swap_map(
-        &self,
-        reserve_num: i32,
-        force_swap_interval_ms: i64,
-        normal_swap_interval_ms: i64,
-    ) {
+    fn swap_map(&self, reserve_num: i32, force_swap_interval_ms: i64, normal_swap_interval_ms: i64) {
         todo!()
     }
 
@@ -316,11 +303,7 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
     }
 
     #[inline]
-    fn assign_queue_offset(
-        &self,
-        queue_offset_operator: &QueueOffsetOperator,
-        msg: &mut MessageExtBrokerInner,
-    ) {
+    fn assign_queue_offset(&self, queue_offset_operator: &QueueOffsetOperator, msg: &mut MessageExtBrokerInner) {
         todo!()
     }
 
@@ -330,10 +313,7 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
     }
 
     #[inline]
-    fn iterate_from(
-        &self,
-        start_index: i64,
-    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
+    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
         todo!()
     }
 
@@ -345,11 +325,7 @@ impl ConsumeQueueTrait for BatchConsumeQueue {
         todo!()
     }
 
-    fn get_offset_in_queue_by_time_with_boundary(
-        &self,
-        timestamp: i64,
-        boundary_type: BoundaryType,
-    ) -> i64 {
+    fn get_offset_in_queue_by_time_with_boundary(&self, timestamp: i64, boundary_type: BoundaryType) -> i64 {
         todo!()
     }
 }

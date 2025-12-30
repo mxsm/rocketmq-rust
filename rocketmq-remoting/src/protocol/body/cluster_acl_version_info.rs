@@ -173,11 +173,7 @@ mod tests {
             1
         );
         assert_eq!(
-            deserialized
-                .acl_config_data_version
-                .as_ref()
-                .unwrap()
-                .timestamp,
+            deserialized.acl_config_data_version.as_ref().unwrap().timestamp,
             123456789
         );
         assert_eq!(

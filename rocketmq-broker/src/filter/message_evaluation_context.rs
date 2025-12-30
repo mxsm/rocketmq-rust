@@ -53,10 +53,7 @@ mod tests {
     #[tokio::test]
     async fn get_returns_value_when_key_exists() {
         let mut properties = HashMap::new();
-        properties.insert(
-            CheetahString::from_slice("key1"),
-            CheetahString::from_slice("value1"),
-        );
+        properties.insert(CheetahString::from_slice("key1"), CheetahString::from_slice("value1"));
         let binding = Some(properties);
         let context = MessageEvaluationContext::new(&binding);
 
@@ -68,10 +65,7 @@ mod tests {
     #[tokio::test]
     async fn get_returns_none_when_key_does_not_exist() {
         let mut properties = HashMap::new();
-        properties.insert(
-            CheetahString::from_slice("key1"),
-            CheetahString::from_slice("value1"),
-        );
+        properties.insert(CheetahString::from_slice("key1"), CheetahString::from_slice("value1"));
         let binding = Some(properties);
         let context = MessageEvaluationContext::new(&binding);
 
@@ -92,14 +86,8 @@ mod tests {
     #[tokio::test]
     async fn key_values_returns_all_properties_when_present() {
         let mut properties = HashMap::new();
-        properties.insert(
-            CheetahString::from_slice("key1"),
-            CheetahString::from_slice("value1"),
-        );
-        properties.insert(
-            CheetahString::from_slice("key2"),
-            CheetahString::from_slice("value2"),
-        );
+        properties.insert(CheetahString::from_slice("key1"), CheetahString::from_slice("value1"));
+        properties.insert(CheetahString::from_slice("key2"), CheetahString::from_slice("value2"));
         let binding = Some(properties.clone());
         let context = MessageEvaluationContext::new(&binding);
 

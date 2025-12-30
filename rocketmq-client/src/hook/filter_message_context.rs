@@ -91,8 +91,7 @@ impl fmt::Debug for FilterMessageContext<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "FilterMessageContext {{ consumer_group: {:?}, msg_list: {:?}, mq: {:?}, arg: {:?}, \
-             unit_mode: {} }}",
+            "FilterMessageContext {{ consumer_group: {:?}, msg_list: {:?}, mq: {:?}, arg: {:?}, unit_mode: {} }}",
             self.consumer_group, self.msg_list, self.mq, self.arg, self.unit_mode
         )
     }

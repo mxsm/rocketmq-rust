@@ -85,10 +85,7 @@ impl RequestResponseFuture {
         self.begin_timestamp.elapsed() > Duration::from_millis(self.timeout_millis)
     }
 
-    pub async fn wait_response_message(
-        &self,
-        timeout: Duration,
-    ) -> Option<Box<dyn MessageTrait + Send>> {
+    pub async fn wait_response_message(&self, timeout: Duration) -> Option<Box<dyn MessageTrait + Send>> {
         /*if tokio::time::timeout(timeout, self.notify.notified())
             .await
             .is_ok()

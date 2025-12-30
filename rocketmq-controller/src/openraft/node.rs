@@ -108,9 +108,10 @@ impl RaftNodeManager {
     pub async fn initialize_cluster(&self, nodes: BTreeMap<NodeId, Node>) -> Result<()> {
         info!("Initializing Raft cluster with {} nodes", nodes.len());
 
-        self.raft.initialize(nodes).await.map_err(|e| {
-            ControllerError::Internal(format!("Failed to initialize cluster: {}", e))
-        })?;
+        self.raft
+            .initialize(nodes)
+            .await
+            .map_err(|e| ControllerError::Internal(format!("Failed to initialize cluster: {}", e)))?;
 
         info!("Raft cluster initialized successfully");
         Ok(())
@@ -131,17 +132,12 @@ impl RaftNodeManager {
 
     /// Change cluster membership
     pub async fn change_membership(&self, members: BTreeSet<NodeId>, retain: bool) -> Result<()> {
-        info!(
-            "Changing cluster membership: members={:?}, retain={}",
-            members, retain
-        );
+        info!("Changing cluster membership: members={:?}, retain={}", members, retain);
 
         self.raft
             .change_membership(members, retain)
             .await
-            .map_err(|e| {
-                ControllerError::Internal(format!("Failed to change membership: {}", e))
-            })?;
+            .map_err(|e| ControllerError::Internal(format!("Failed to change membership: {}", e)))?;
 
         info!("Cluster membership changed successfully");
         Ok(())

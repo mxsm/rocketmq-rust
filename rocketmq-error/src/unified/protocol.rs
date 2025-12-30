@@ -47,13 +47,8 @@ pub enum ProtocolError {
     InvalidMessage { reason: String },
 
     /// Protocol decode error
-    #[error(
-        "Protocol decode error: ext_fields_length={ext_fields_len}, header_length={header_len}"
-    )]
-    DecodeError {
-        ext_fields_len: usize,
-        header_len: usize,
-    },
+    #[error("Protocol decode error: ext_fields_length={ext_fields_len}, header_length={header_len}")]
+    DecodeError { ext_fields_len: usize, header_len: usize },
 
     /// Unsupported serialization type
     #[error("Unsupported serialization type: {serialize_type}")]
@@ -82,9 +77,7 @@ impl ProtocolError {
     /// Create an invalid message error
     #[inline]
     pub fn invalid_message(reason: impl Into<String>) -> Self {
-        Self::InvalidMessage {
-            reason: reason.into(),
-        }
+        Self::InvalidMessage { reason: reason.into() }
     }
 }
 

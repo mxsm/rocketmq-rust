@@ -47,10 +47,7 @@ impl CommandExecute for DeleteKvConfigCommand {
     async fn execute(&self, _rpc_hook: Option<std::sync::Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         // 1. Confirm dangerous operation (unless --yes flag is set)
         if !self.common.skip_confirm {
-            let target = format!(
-                "KV config (namespace='{}', key='{}')",
-                self.namespace, self.key
-            );
+            let target = format!("KV config (namespace='{}', key='{}')", self.namespace, self.key);
             if !prompt::confirm_dangerous_operation("delete", &target) {
                 output::print_warning("Operation cancelled by user");
                 return Ok(());
@@ -58,10 +55,7 @@ impl CommandExecute for DeleteKvConfigCommand {
         }
 
         // 2. Build admin client
-        output::print_operation_start(&format!(
-            "Deleting KV config: {}={}",
-            self.namespace, self.key
-        ));
+        output::print_operation_start(&format!("Deleting KV config: {}={}", self.namespace, self.key));
         let spinner = progress::create_spinner("Connecting to NameServer...");
 
         let mut builder = AdminBuilder::new();
@@ -123,15 +117,9 @@ mod tests {
 
     #[test]
     fn test_command_with_yes_flag() {
-        let cmd = DeleteKvConfigCommand::try_parse_from([
-            "delete_kv_config",
-            "-s",
-            "ORDER_TOPIC",
-            "-k",
-            "TestTopic",
-            "-y",
-        ])
-        .unwrap();
+        let cmd =
+            DeleteKvConfigCommand::try_parse_from(["delete_kv_config", "-s", "ORDER_TOPIC", "-k", "TestTopic", "-y"])
+                .unwrap();
 
         assert_eq!(cmd.namespace, "ORDER_TOPIC");
         assert_eq!(cmd.key, "TestTopic");
@@ -172,14 +160,7 @@ mod tests {
         let namespaces = vec!["ORDER_TOPIC", "RETRY_TOPIC", "DLQ_TOPIC"];
 
         for ns in namespaces {
-            let cmd = DeleteKvConfigCommand::try_parse_from([
-                "delete_kv_config",
-                "-s",
-                ns,
-                "-k",
-                "test_key",
-            ])
-            .unwrap();
+            let cmd = DeleteKvConfigCommand::try_parse_from(["delete_kv_config", "-s", ns, "-k", "test_key"]).unwrap();
 
             assert_eq!(cmd.namespace, ns);
         }

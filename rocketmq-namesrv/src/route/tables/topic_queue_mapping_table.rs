@@ -67,9 +67,7 @@ impl Default for TopicQueueMappingInfoTable {
 impl TopicQueueMappingInfoTable {
     /// Create a new topic queue mapping info table
     pub fn new() -> Self {
-        Self {
-            inner: DashMap::new(),
-        }
+        Self { inner: DashMap::new() }
     }
 
     /// Create with estimated capacity
@@ -97,10 +95,7 @@ impl TopicQueueMappingInfoTable {
         broker_name: BrokerName,
         mapping_info: Arc<TopicQueueMappingInfo>,
     ) -> Option<Arc<TopicQueueMappingInfo>> {
-        self.inner
-            .entry(topic)
-            .or_default()
-            .insert(broker_name, mapping_info)
+        self.inner.entry(topic).or_default().insert(broker_name, mapping_info)
     }
 
     /// Get topic queue mapping info for a specific broker
@@ -124,10 +119,7 @@ impl TopicQueueMappingInfoTable {
     ///
     /// # Returns
     /// HashMap of BrokerName -> TopicQueueMappingInfo if found
-    pub fn get_topic_mappings(
-        &self,
-        topic: &str,
-    ) -> Option<HashMap<CheetahString, TopicQueueMappingInfo>> {
+    pub fn get_topic_mappings(&self, topic: &str) -> Option<HashMap<CheetahString, TopicQueueMappingInfo>> {
         self.inner.get(topic).map(|broker_map| {
             broker_map
                 .iter()
@@ -144,11 +136,7 @@ impl TopicQueueMappingInfoTable {
     ///
     /// # Returns
     /// Removed mapping info if existed
-    pub fn remove_broker(
-        &self,
-        topic: &str,
-        broker_name: &str,
-    ) -> Option<Arc<TopicQueueMappingInfo>> {
+    pub fn remove_broker(&self, topic: &str, broker_name: &str) -> Option<Arc<TopicQueueMappingInfo>> {
         self.inner
             .get(topic)
             .and_then(|broker_map| broker_map.remove(broker_name).map(|(_, v)| v))
@@ -161,10 +149,7 @@ impl TopicQueueMappingInfoTable {
     ///
     /// # Returns
     /// Removed broker map if existed
-    pub fn remove_topic(
-        &self,
-        topic: &str,
-    ) -> Option<DashMap<BrokerName, Arc<TopicQueueMappingInfo>>> {
+    pub fn remove_topic(&self, topic: &str) -> Option<DashMap<BrokerName, Arc<TopicQueueMappingInfo>>> {
         self.inner.remove(topic).map(|(_, v)| v)
     }
 

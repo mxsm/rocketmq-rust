@@ -63,10 +63,7 @@ impl<'de> Deserialize<'de> for GroupRetryPolicyType {
                 match value {
                     "EXPONENTIAL" => Ok(GroupRetryPolicyType::Exponential),
                     "CUSTOMIZED" => Ok(GroupRetryPolicyType::Customized),
-                    _ => Err(serde::de::Error::unknown_variant(
-                        value,
-                        &["Exponential", "Customized"],
-                    )),
+                    _ => Err(serde::de::Error::unknown_variant(value, &["Exponential", "Customized"])),
                 }
             }
         }

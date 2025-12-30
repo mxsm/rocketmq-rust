@@ -58,8 +58,7 @@ pub(crate) struct ProcessQueue {
     pub(crate) msg_count: Arc<AtomicU64>,
     pub(crate) msg_size: Arc<AtomicU64>,
     pub(crate) consume_lock: Arc<RocketMQTokioRwLock<()>>,
-    pub(crate) consuming_msg_orderly_tree_map:
-        Arc<RwLock<std::collections::BTreeMap<i64, ArcMut<MessageExt>>>>,
+    pub(crate) consuming_msg_orderly_tree_map: Arc<RwLock<std::collections::BTreeMap<i64, ArcMut<MessageExt>>>>,
     pub(crate) try_unlock_times: Arc<AtomicI64>,
     pub(crate) queue_offset_max: Arc<AtomicU64>,
     pub(crate) dropped: Arc<AtomicBool>,
@@ -79,9 +78,7 @@ impl ProcessQueue {
             msg_count: Arc::new(AtomicU64::new(0)),
             msg_size: Arc::new(AtomicU64::new(0)),
             consume_lock: Arc::new(RocketMQTokioRwLock::new(())),
-            consuming_msg_orderly_tree_map: Arc::new(
-                RwLock::new(std::collections::BTreeMap::new()),
-            ),
+            consuming_msg_orderly_tree_map: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
             try_unlock_times: Arc::new(AtomicI64::new(0)),
             queue_offset_max: Arc::new(AtomicU64::new(0)),
             dropped: Arc::new(AtomicBool::new(false)),
@@ -97,8 +94,7 @@ impl ProcessQueue {
 
 impl ProcessQueue {
     pub(crate) fn set_dropped(&self, dropped: bool) {
-        self.dropped
-            .store(dropped, std::sync::atomic::Ordering::Release);
+        self.dropped.store(dropped, std::sync::atomic::Ordering::Release);
     }
 
     pub(crate) fn is_dropped(&self) -> bool {
@@ -106,33 +102,26 @@ impl ProcessQueue {
     }
 
     pub(crate) fn get_last_lock_timestamp(&self) -> u64 {
-        self.last_lock_timestamp
-            .load(std::sync::atomic::Ordering::Acquire)
+        self.last_lock_timestamp.load(std::sync::atomic::Ordering::Acquire)
     }
 
     pub(crate) fn set_locked(&self, locked: bool) {
-        self.locked
-            .store(locked, std::sync::atomic::Ordering::Release);
+        self.locked.store(locked, std::sync::atomic::Ordering::Release);
     }
 
     pub(crate) fn is_pull_expired(&self) -> bool {
-        (get_current_millis() - self.last_pull_timestamp.load(Ordering::Acquire))
-            > *PULL_MAX_IDLE_TIME
+        (get_current_millis() - self.last_pull_timestamp.load(Ordering::Acquire)) > *PULL_MAX_IDLE_TIME
     }
 
     pub(crate) fn is_lock_expired(&self) -> bool {
-        (get_current_millis() - self.last_lock_timestamp.load(Ordering::Acquire))
-            > *REBALANCE_LOCK_MAX_LIVE_TIME
+        (get_current_millis() - self.last_lock_timestamp.load(Ordering::Acquire)) > *REBALANCE_LOCK_MAX_LIVE_TIME
     }
 
     pub(crate) fn inc_try_unlock_times(&self) {
         self.try_unlock_times.fetch_add(1, Ordering::AcqRel);
     }
 
-    pub(crate) async fn clean_expired_msg(
-        &self,
-        push_consumer: Option<ArcMut<DefaultMQPushConsumerImpl>>,
-    ) {
+    pub(crate) async fn clean_expired_msg(&self, push_consumer: Option<ArcMut<DefaultMQPushConsumerImpl>>) {
         if push_consumer.is_none() {
             return;
         }
@@ -147,8 +136,7 @@ impl ProcessQueue {
                 let msg_tree_map = self.msg_tree_map.read().await;
                 if !msg_tree_map.is_empty() {
                     let value = msg_tree_map.first_key_value().unwrap().1;
-                    let consume_start_time_stamp =
-                        MessageAccessor::get_consume_start_time_stamp(value.as_ref());
+                    let consume_start_time_stamp = MessageAccessor::get_consume_start_time_stamp(value.as_ref());
                     if let Some(consume_start_time_stamp) = consume_start_time_stamp {
                         if get_current_millis() - consume_start_time_stamp.parse::<u64>().unwrap()
                             > push_consumer.consumer_config.consume_timeout * 1000 * 60
@@ -170,18 +158,12 @@ impl ProcessQueue {
 
             let mut msg = msg.unwrap();
             let msg_inner = msg.as_mut();
-            msg_inner.set_topic(
-                push_consumer
-                    .client_config
-                    .with_namespace(msg_inner.topic()),
-            );
+            msg_inner.set_topic(push_consumer.client_config.with_namespace(msg_inner.topic()));
             let _ = push_consumer
                 .send_message_back_with_broker_name(msg_inner, 3, None, None)
                 .await;
             let msg_tree_map = self.msg_tree_map.write().await;
-            if !msg_tree_map.is_empty()
-                && msg.queue_offset == *msg_tree_map.first_key_value().unwrap().0
-            {
+            if !msg_tree_map.is_empty() && msg.queue_offset == *msg_tree_map.first_key_value().unwrap().0 {
                 drop(msg_tree_map);
                 self.remove_message(&[msg]).await;
             }
@@ -195,9 +177,9 @@ impl ProcessQueue {
 
         let acc_total = if !messages.is_empty() {
             let message_ext = messages.last().unwrap();
-            if let Some(property) = message_ext.get_property(&CheetahString::from_static_str(
-                MessageConst::PROPERTY_MAX_OFFSET,
-            )) {
+            if let Some(property) =
+                message_ext.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_MAX_OFFSET))
+            {
                 property.parse::<i64>().unwrap() - message_ext.queue_offset
             } else {
                 0
@@ -207,19 +189,12 @@ impl ProcessQueue {
         };
 
         for message in messages {
-            if msg_tree_map
-                .insert(message.queue_offset, message.clone())
-                .is_none()
-            {
+            if msg_tree_map.insert(message.queue_offset, message.clone()).is_none() {
                 valid_msg_cnt += 1;
-                self.queue_offset_max.store(
-                    message.queue_offset as u64,
-                    std::sync::atomic::Ordering::Release,
-                );
-                self.msg_size.fetch_add(
-                    message.body().as_ref().unwrap().len() as u64,
-                    Ordering::AcqRel,
-                );
+                self.queue_offset_max
+                    .store(message.queue_offset as u64, std::sync::atomic::Ordering::Release);
+                self.msg_size
+                    .fetch_add(message.body().as_ref().unwrap().len() as u64, Ordering::AcqRel);
             }
         }
         self.msg_count.fetch_add(valid_msg_cnt, Ordering::AcqRel);
@@ -228,8 +203,7 @@ impl ProcessQueue {
             self.consuming.store(true, Ordering::Release);
         }
         if acc_total > 0 {
-            self.msg_acc_cnt
-                .store(acc_total, std::sync::atomic::Ordering::Release);
+            self.msg_acc_cnt.store(acc_total, std::sync::atomic::Ordering::Release);
         }
         dispatch_to_consume
     }
@@ -256,10 +230,8 @@ impl ProcessQueue {
             let prev = msg_tree_map.remove(&message.queue_offset);
             if let Some(prev) = prev {
                 removed_cnt += 1;
-                self.msg_size.fetch_sub(
-                    message.body().as_ref().unwrap().len() as u64,
-                    Ordering::AcqRel,
-                );
+                self.msg_size
+                    .fetch_sub(message.body().as_ref().unwrap().len() as u64, Ordering::AcqRel);
             }
             self.msg_count.fetch_sub(removed_cnt, Ordering::AcqRel);
             if self.msg_count.load(Ordering::Acquire) == 0 {
@@ -284,23 +256,15 @@ impl ProcessQueue {
     pub(crate) async fn commit(&self) -> i64 {
         let mut consuming_msg_orderly_tree_map = self.consuming_msg_orderly_tree_map.write().await;
         let key_value = consuming_msg_orderly_tree_map.last_key_value();
-        let offset = if let Some((key, _)) = key_value {
-            *key + 1
-        } else {
-            -1
-        };
-        self.msg_count.fetch_sub(
-            consuming_msg_orderly_tree_map.len() as u64,
-            Ordering::AcqRel,
-        );
+        let offset = if let Some((key, _)) = key_value { *key + 1 } else { -1 };
+        self.msg_count
+            .fetch_sub(consuming_msg_orderly_tree_map.len() as u64, Ordering::AcqRel);
         if self.msg_count.load(Ordering::Acquire) == 0 {
             self.msg_size.store(0, Ordering::Release);
         } else {
             for message in consuming_msg_orderly_tree_map.values() {
-                self.msg_size.fetch_sub(
-                    message.body().as_ref().unwrap().len() as u64,
-                    Ordering::AcqRel,
-                );
+                self.msg_size
+                    .fetch_sub(message.body().as_ref().unwrap().len() as u64, Ordering::AcqRel);
             }
         }
         consuming_msg_orderly_tree_map.clear();

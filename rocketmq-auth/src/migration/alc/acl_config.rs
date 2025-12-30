@@ -86,10 +86,7 @@ mod tests {
 
         let plain_configs = vec![PlainAccessConfig::default()];
         config.set_plain_access_configs(plain_configs.clone());
-        assert_eq!(
-            config.plain_access_configs(),
-            Some(plain_configs.as_slice())
-        );
+        assert_eq!(config.plain_access_configs(), Some(plain_configs.as_slice()));
     }
 
     #[test]

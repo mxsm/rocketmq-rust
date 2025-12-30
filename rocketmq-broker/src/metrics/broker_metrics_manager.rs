@@ -318,10 +318,7 @@ impl BrokerMetricsManager {
             .with_callback(move |observer| {
                 for (processor_name, count) in processor_watermark_fn() {
                     let mut attrs = attrs1.get();
-                    attrs.push(KeyValue::new(
-                        BrokerMetricsConstant::LABEL_PROCESSOR,
-                        processor_name,
-                    ));
+                    attrs.push(KeyValue::new(BrokerMetricsConstant::LABEL_PROCESSOR, processor_name));
                     observer.observe(count, &attrs);
                 }
             })
@@ -370,10 +367,7 @@ impl BrokerMetricsManager {
                             BrokerMetricsConstant::LABEL_LANGUAGE,
                             attr.language.to_string().to_lowercase(),
                         ),
-                        KeyValue::new(
-                            BrokerMetricsConstant::LABEL_VERSION,
-                            attr.version.to_string(),
-                        ),
+                        KeyValue::new(BrokerMetricsConstant::LABEL_VERSION, attr.version.to_string()),
                     ]);
                     observer.observe(count, &attrs);
                 }
@@ -388,18 +382,12 @@ impl BrokerMetricsManager {
                 for (attr, count) in consumer_connections_fn() {
                     let mut attrs = attrs6.get();
                     attrs.extend([
-                        KeyValue::new(
-                            BrokerMetricsConstant::LABEL_CONSUMER_GROUP,
-                            attr.group.clone(),
-                        ),
+                        KeyValue::new(BrokerMetricsConstant::LABEL_CONSUMER_GROUP, attr.group.clone()),
                         KeyValue::new(
                             BrokerMetricsConstant::LABEL_LANGUAGE,
                             attr.language.to_string().to_lowercase(),
                         ),
-                        KeyValue::new(
-                            BrokerMetricsConstant::LABEL_VERSION,
-                            attr.version.to_string(),
-                        ),
+                        KeyValue::new(BrokerMetricsConstant::LABEL_VERSION, attr.version.to_string()),
                         KeyValue::new(
                             BrokerMetricsConstant::LABEL_CONSUME_MODE,
                             attr.consume_mode.to_string().to_lowercase(),
@@ -454,13 +442,7 @@ impl BrokerMetricsManager {
     // ========================================================================
 
     /// Record incoming message count
-    pub fn inc_messages_in_total(
-        &self,
-        topic: &str,
-        message_type: TopicMessageType,
-        num: u64,
-        is_system: bool,
-    ) {
+    pub fn inc_messages_in_total(&self, topic: &str, message_type: TopicMessageType, num: u64, is_system: bool) {
         let mut attrs = self.base_attributes();
         attrs.extend([
             KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, topic.to_owned()),
@@ -468,35 +450,20 @@ impl BrokerMetricsManager {
                 BrokerMetricsConstant::LABEL_MESSAGE_TYPE,
                 message_type.to_string().to_lowercase(),
             ),
-            KeyValue::new(
-                BrokerMetricsConstant::LABEL_IS_SYSTEM,
-                is_system.to_string(),
-            ),
+            KeyValue::new(BrokerMetricsConstant::LABEL_IS_SYSTEM, is_system.to_string()),
         ]);
         self.messages_in_total.add(num, &attrs);
     }
 
     /// Record outgoing message count
-    pub fn inc_messages_out_total(
-        &self,
-        topic: &str,
-        consumer_group: &str,
-        num: u64,
-        is_retry: bool,
-    ) {
+    pub fn inc_messages_out_total(&self, topic: &str, consumer_group: &str, num: u64, is_retry: bool) {
         let is_system = is_system(topic, consumer_group);
         let mut attrs = self.base_attributes();
         attrs.extend([
             KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, topic.to_owned()),
-            KeyValue::new(
-                BrokerMetricsConstant::LABEL_CONSUMER_GROUP,
-                consumer_group.to_owned(),
-            ),
+            KeyValue::new(BrokerMetricsConstant::LABEL_CONSUMER_GROUP, consumer_group.to_owned()),
             KeyValue::new(BrokerMetricsConstant::LABEL_IS_RETRY, is_retry.to_string()),
-            KeyValue::new(
-                BrokerMetricsConstant::LABEL_IS_SYSTEM,
-                is_system.to_string(),
-            ),
+            KeyValue::new(BrokerMetricsConstant::LABEL_IS_SYSTEM, is_system.to_string()),
         ]);
         self.messages_out_total.add(num, &attrs);
     }
@@ -508,34 +475,19 @@ impl BrokerMetricsManager {
     /// Record incoming throughput (bytes)
     pub fn inc_throughput_in_total(&self, topic: &str, bytes: u64) {
         let mut attrs = self.base_attributes();
-        attrs.push(KeyValue::new(
-            BrokerMetricsConstant::LABEL_TOPIC,
-            topic.to_owned(),
-        ));
+        attrs.push(KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, topic.to_owned()));
         self.throughput_in_total.add(bytes, &attrs);
     }
 
     /// Record outgoing throughput (bytes)
-    pub fn inc_throughput_out_total(
-        &self,
-        topic: &str,
-        consumer_group: &str,
-        bytes: u64,
-        is_retry: bool,
-    ) {
+    pub fn inc_throughput_out_total(&self, topic: &str, consumer_group: &str, bytes: u64, is_retry: bool) {
         let is_system = is_system(topic, consumer_group);
         let mut attrs = self.base_attributes();
         attrs.extend([
             KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, topic.to_owned()),
-            KeyValue::new(
-                BrokerMetricsConstant::LABEL_CONSUMER_GROUP,
-                consumer_group.to_owned(),
-            ),
+            KeyValue::new(BrokerMetricsConstant::LABEL_CONSUMER_GROUP, consumer_group.to_owned()),
             KeyValue::new(BrokerMetricsConstant::LABEL_IS_RETRY, is_retry.to_string()),
-            KeyValue::new(
-                BrokerMetricsConstant::LABEL_IS_SYSTEM,
-                is_system.to_string(),
-            ),
+            KeyValue::new(BrokerMetricsConstant::LABEL_IS_SYSTEM, is_system.to_string()),
         ]);
         self.throughput_out_total.add(bytes, &attrs);
     }
@@ -570,8 +522,7 @@ impl BrokerMetricsManager {
     /// Record consumer group create execution time
     pub fn record_consumer_group_create_time(&self, time_ms: u64) {
         let attrs = self.base_attributes();
-        self.consumer_group_create_execute_time
-            .record(time_ms, &attrs);
+        self.consumer_group_create_execute_time.record(time_ms, &attrs);
     }
 
     // ========================================================================
@@ -584,14 +535,8 @@ impl BrokerMetricsManager {
         let mut attrs = self.base_attributes();
         attrs.extend([
             KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, topic.to_owned()),
-            KeyValue::new(
-                BrokerMetricsConstant::LABEL_CONSUMER_GROUP,
-                consumer_group.to_owned(),
-            ),
-            KeyValue::new(
-                BrokerMetricsConstant::LABEL_IS_SYSTEM,
-                is_system.to_string(),
-            ),
+            KeyValue::new(BrokerMetricsConstant::LABEL_CONSUMER_GROUP, consumer_group.to_owned()),
+            KeyValue::new(BrokerMetricsConstant::LABEL_IS_SYSTEM, is_system.to_string()),
         ]);
         self.send_to_dlq_messages.add(num, &attrs);
     }
@@ -603,30 +548,21 @@ impl BrokerMetricsManager {
     /// Record commit message count
     pub fn inc_commit_messages(&self, topic: &str, num: u64) {
         let mut attrs = self.base_attributes();
-        attrs.push(KeyValue::new(
-            BrokerMetricsConstant::LABEL_TOPIC,
-            topic.to_owned(),
-        ));
+        attrs.push(KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, topic.to_owned()));
         self.commit_messages_total.add(num, &attrs);
     }
 
     /// Record rollback message count
     pub fn inc_rollback_messages(&self, topic: &str, num: u64) {
         let mut attrs = self.base_attributes();
-        attrs.push(KeyValue::new(
-            BrokerMetricsConstant::LABEL_TOPIC,
-            topic.to_owned(),
-        ));
+        attrs.push(KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, topic.to_owned()));
         self.rollback_messages_total.add(num, &attrs);
     }
 
     /// Record transaction finish latency
     pub fn record_transaction_finish_latency(&self, topic: &str, latency_ms: u64) {
         let mut attrs = self.base_attributes();
-        attrs.push(KeyValue::new(
-            BrokerMetricsConstant::LABEL_TOPIC,
-            topic.to_owned(),
-        ));
+        attrs.push(KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, topic.to_owned()));
         self.transaction_finish_latency.record(latency_ms, &attrs);
     }
 }
@@ -656,8 +592,7 @@ pub fn is_retry_or_dlq_topic(topic: &str) -> bool {
     if topic.is_empty() {
         return false;
     }
-    topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
-        || topic.starts_with(mix_all::DLQ_GROUP_TOPIC_PREFIX)
+    topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) || topic.starts_with(mix_all::DLQ_GROUP_TOPIC_PREFIX)
 }
 
 /// Check if consumer group is a system group

@@ -42,10 +42,9 @@ use crate::factory::mq_client_instance::MQClientInstance;
 
 static LOCAL_OFFSET_STORE_DIR: Lazy<PathBuf> = Lazy::new(|| {
     #[cfg(target_os = "windows")]
-    let home = std::env::var("USERPROFILE")
-        .map_or(PathBuf::from("C:\\tmp\\.rocketmq_offsets"), |home| {
-            PathBuf::from(home).join(".rocketmq_offsets")
-        });
+    let home = std::env::var("USERPROFILE").map_or(PathBuf::from("C:\\tmp\\.rocketmq_offsets"), |home| {
+        PathBuf::from(home).join(".rocketmq_offsets")
+    });
 
     #[cfg(not(target_os = "windows"))]
     let home = std::env::var("HOME").map_or(PathBuf::from("/tmp/.rocketmq_offsets"), |home| {
@@ -80,23 +79,17 @@ impl LocalFileOffsetStore {
     }
 
     fn read_local_offset(&self) -> rocketmq_error::RocketMQResult<Option<OffsetSerializeWrapper>> {
-        let content = file_utils::file_to_string(self.store_path.as_str())
-            .map_or("".to_string(), |content| content);
+        let content = file_utils::file_to_string(self.store_path.as_str()).map_or("".to_string(), |content| content);
         if content.is_empty() {
             self.read_local_offset_bak()
         } else {
             match OffsetSerialize::decode(content.as_bytes()) {
                 Ok(value) => Ok(Some(value.into())),
-                Err(e) => Err(mq_client_err!(format!(
-                    "Failed to deserialize local offset: {}",
-                    e
-                ))),
+                Err(e) => Err(mq_client_err!(format!("Failed to deserialize local offset: {}", e))),
             }
         }
     }
-    fn read_local_offset_bak(
-        &self,
-    ) -> rocketmq_error::RocketMQResult<Option<OffsetSerializeWrapper>> {
+    fn read_local_offset_bak(&self) -> rocketmq_error::RocketMQResult<Option<OffsetSerializeWrapper>> {
         let content = file_utils::file_to_string(format!("{}{}", self.store_path, ".bak"))
             .map_or("".to_string(), |content| content);
         if content.is_empty() {
@@ -121,10 +114,7 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
             let mut offset_table_inner = self.offset_table.lock().await;
             for (mq, offset) in offset_table {
                 let offset = offset.load(Ordering::Relaxed);
-                info!(
-                    "load consumer's offset, {} {} {}",
-                    self.group_name, mq, offset
-                );
+                info!("load consumer's offset, {} {} {}", self.group_name, mq, offset);
                 offset_table_inner.insert(mq, ControllableOffset::new(offset));
             }
         }
@@ -204,10 +194,7 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
             .expect("persistAll failed");
         if !content.is_empty() {
             if let Err(e) = file_utils::string_to_file(&content, self.store_path.as_str()) {
-                error!(
-                    "persistAll consumer offset Exception, {},{}",
-                    self.store_path, e
-                );
+                error!("persistAll consumer offset Exception, {},{}", self.store_path, e);
             }
         }
     }
@@ -230,10 +217,7 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
                 .expect("persist failed");
             if !content.is_empty() {
                 if let Err(e) = file_utils::string_to_file(&content, self.store_path.as_str()) {
-                    error!(
-                        "persist consumer offset Exception, {},{}",
-                        self.store_path, e
-                    );
+                    error!("persist consumer offset Exception, {},{}", self.store_path, e);
                 }
             }
         }

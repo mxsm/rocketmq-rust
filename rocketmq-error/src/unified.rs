@@ -160,11 +160,7 @@ pub enum RocketMQError {
 
     /// Queue ID out of range
     #[error("Queue {queue_id} out of range (0-{max}) for topic '{topic}'")]
-    QueueIdOutOfRange {
-        topic: String,
-        queue_id: i32,
-        max: i32,
-    },
+    QueueIdOutOfRange { topic: String, queue_id: i32, max: i32 },
 
     /// Message body too large
     #[error("Message body length {actual} bytes exceeds limit {limit} bytes")]
@@ -176,11 +172,7 @@ pub enum RocketMQError {
 
     /// Retry limit exceeded
     #[error("Retry limit {current}/{max} exceeded for group '{group}'")]
-    RetryLimitExceeded {
-        group: String,
-        current: i32,
-        max: i32,
-    },
+    RetryLimitExceeded { group: String, current: i32, max: i32 },
 
     /// Transaction message rejected
     #[error("Transaction message rejected by broker policy")]
@@ -216,10 +208,7 @@ pub enum RocketMQError {
     // ============================================================================
     /// Request body missing or invalid
     #[error("Request body {operation} failed: {reason}")]
-    RequestBodyInvalid {
-        operation: &'static str,
-        reason: String,
-    },
+    RequestBodyInvalid { operation: &'static str, reason: String },
 
     /// Request header missing or invalid
     #[error("Request header error: {0}")]
@@ -227,10 +216,7 @@ pub enum RocketMQError {
 
     /// Response encoding/decoding failed
     #[error("Response {operation} failed: {reason}")]
-    ResponseProcessFailed {
-        operation: &'static str,
-        reason: String,
-    },
+    ResponseProcessFailed { operation: &'static str, reason: String },
 
     // ============================================================================
     // NameServer/Route Errors
@@ -272,10 +258,7 @@ pub enum RocketMQError {
 
     /// Invalid client state
     #[error("Invalid client state: expected {expected}, got {actual}")]
-    ClientInvalidState {
-        expected: &'static str,
-        actual: String,
-    },
+    ClientInvalidState { expected: &'static str, actual: String },
 
     /// Producer not available
     #[error("Producer is not available")]
@@ -347,10 +330,7 @@ pub enum RocketMQError {
 
     /// Consensus operation timeout
     #[error("Consensus operation '{operation}' timed out after {timeout_ms}ms")]
-    ControllerConsensusTimeout {
-        operation: &'static str,
-        timeout_ms: u64,
-    },
+    ControllerConsensusTimeout { operation: &'static str, timeout_ms: u64 },
 
     /// Snapshot operation failed
     #[error("Snapshot operation failed: {reason}")]
@@ -369,10 +349,7 @@ pub enum RocketMQError {
 
     /// Operation timeout
     #[error("Operation '{operation}' timed out after {timeout_ms}ms")]
-    Timeout {
-        operation: &'static str,
-        timeout_ms: u64,
-    },
+    Timeout { operation: &'static str, timeout_ms: u64 },
 
     /// Internal error (should be rare)
     #[error("Internal error: {0}")]
@@ -414,11 +391,7 @@ impl RocketMQError {
 
     /// Create a broker operation failed error
     #[inline]
-    pub fn broker_operation_failed(
-        operation: &'static str,
-        code: i32,
-        message: impl Into<String>,
-    ) -> Self {
+    pub fn broker_operation_failed(operation: &'static str, code: i32, message: impl Into<String>) -> Self {
         Self::BrokerOperationFailed {
             operation,
             code,
@@ -454,17 +427,12 @@ impl RocketMQError {
     /// Create a route not found error
     #[inline]
     pub fn route_not_found(topic: impl Into<String>) -> Self {
-        Self::RouteNotFound {
-            topic: topic.into(),
-        }
+        Self::RouteNotFound { topic: topic.into() }
     }
 
     /// Create a route registration conflict error
     #[inline]
-    pub fn route_registration_conflict(
-        broker_name: impl Into<String>,
-        reason: impl Into<String>,
-    ) -> Self {
+    pub fn route_registration_conflict(broker_name: impl Into<String>, reason: impl Into<String>) -> Self {
         Self::RouteRegistrationConflict {
             broker_name: broker_name.into(),
             reason: reason.into(),
@@ -732,8 +700,8 @@ mod tests {
 
     #[test]
     fn test_broker_operation_with_addr() {
-        let err = RocketMQError::broker_operation_failed("SEND_MESSAGE", 1, "failed")
-            .with_broker_addr("127.0.0.1:10911");
+        let err =
+            RocketMQError::broker_operation_failed("SEND_MESSAGE", 1, "failed").with_broker_addr("127.0.0.1:10911");
 
         if let RocketMQError::BrokerOperationFailed { broker_addr, .. } = err {
             assert_eq!(broker_addr, Some("127.0.0.1:10911".to_string()));

@@ -79,8 +79,7 @@ mod tests {
 
     #[test]
     fn elect_master_request_header_new() {
-        let header =
-            ElectMasterRequestHeader::new("test_cluster", "test_broker", 123, true, 1234567890);
+        let header = ElectMasterRequestHeader::new("test_cluster", "test_broker", 123, true, 1234567890);
         assert_eq!(header.cluster_name, "test_cluster");
         assert_eq!(header.broker_name, "test_broker");
         assert_eq!(header.broker_id, 123);
@@ -90,32 +89,23 @@ mod tests {
 
     #[test]
     fn elect_master_request_header_serializes_correctly() {
-        let header =
-            ElectMasterRequestHeader::new("test_cluster", "test_broker", 123, true, 1234567890);
+        let header = ElectMasterRequestHeader::new("test_cluster", "test_broker", 123, true, 1234567890);
         let map = header.to_map().unwrap();
         assert_eq!(
-            map.get(&CheetahString::from_static_str("clusterName"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("clusterName")).unwrap(),
             "test_cluster"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("brokerName"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("brokerName")).unwrap(),
             "test_broker"
         );
+        assert_eq!(map.get(&CheetahString::from_static_str("brokerId")).unwrap(), "123");
         assert_eq!(
-            map.get(&CheetahString::from_static_str("brokerId"))
-                .unwrap(),
-            "123"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("designateElect"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("designateElect")).unwrap(),
             "true"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("invokeTime"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("invokeTime")).unwrap(),
             "1234567890"
         );
     }
@@ -164,8 +154,7 @@ mod tests {
 
     #[test]
     fn elect_master_request_header_clone() {
-        let header =
-            ElectMasterRequestHeader::new("test_cluster", "test_broker", 123, true, 1234567890);
+        let header = ElectMasterRequestHeader::new("test_cluster", "test_broker", 123, true, 1234567890);
         let cloned = header.clone();
         assert_eq!(header.cluster_name, cloned.cluster_name);
         assert_eq!(header.broker_name, cloned.broker_name);

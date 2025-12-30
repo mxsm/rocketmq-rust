@@ -17,9 +17,7 @@
 
 use rocketmq_macros::RequestHeaderCodecV2;
 
-#[derive(
-    Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default, RequestHeaderCodecV2,
-)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default, RequestHeaderCodecV2)]
 #[serde(rename_all = "camelCase")]
 pub struct PollingInfoResponseHeader {
     #[required]
@@ -58,17 +56,13 @@ mod tests {
 
     #[test]
     fn test_polling_info_response_header_new_with_max_value() {
-        let header = PollingInfoResponseHeader {
-            polling_num: i32::MAX,
-        };
+        let header = PollingInfoResponseHeader { polling_num: i32::MAX };
         assert_eq!(header.polling_num, i32::MAX);
     }
 
     #[test]
     fn test_polling_info_response_header_new_with_min_value() {
-        let header = PollingInfoResponseHeader {
-            polling_num: i32::MIN,
-        };
+        let header = PollingInfoResponseHeader { polling_num: i32::MIN };
         assert_eq!(header.polling_num, i32::MIN);
     }
 
@@ -150,9 +144,7 @@ mod tests {
 
     #[test]
     fn test_polling_info_response_header_serialize_deserialize_max_value() {
-        let original = PollingInfoResponseHeader {
-            polling_num: i32::MAX,
-        };
+        let original = PollingInfoResponseHeader { polling_num: i32::MAX };
         let json = serde_json::to_string(&original).unwrap();
         let deserialized: PollingInfoResponseHeader = serde_json::from_str(&json).unwrap();
         assert_eq!(original, deserialized);
@@ -160,9 +152,7 @@ mod tests {
 
     #[test]
     fn test_polling_info_response_header_serialize_deserialize_min_value() {
-        let original = PollingInfoResponseHeader {
-            polling_num: i32::MIN,
-        };
+        let original = PollingInfoResponseHeader { polling_num: i32::MIN };
         let json = serde_json::to_string(&original).unwrap();
         let deserialized: PollingInfoResponseHeader = serde_json::from_str(&json).unwrap();
         assert_eq!(original, deserialized);

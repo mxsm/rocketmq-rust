@@ -389,14 +389,12 @@ impl DefaultAuthorizationProvider {
 
         if error.is_none() {
             debug!(
-                "[AUTHORIZATION] Subject = {} is {} Action = {} from sourceIp = {} on resource = \
-                 {} for request = {}.",
+                "[AUTHORIZATION] Subject = {} is {} Action = {} from sourceIp = {} on resource = {} for request = {}.",
                 subject_key, decision, actions, source_ip, resource, rpc_code
             );
         } else {
             info!(
-                "[AUTHORIZATION] Subject = {} is {} Action = {} from sourceIp = {} on resource = \
-                 {} for request = {}.",
+                "[AUTHORIZATION] Subject = {} is {} Action = {} from sourceIp = {} on resource = {} for request = {}.",
                 subject_key, decision, actions, source_ip, resource, rpc_code
             );
         }

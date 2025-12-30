@@ -125,11 +125,7 @@ impl StatsItem {
     pub fn sampling_in_seconds(&self) {
         let current_value = self.value.load(Ordering::Relaxed);
         let current_times = self.times.load(Ordering::Relaxed);
-        Self::sampling_in_seconds_internal(
-            Arc::clone(&self.cs_list_minute),
-            current_value,
-            current_times,
-        );
+        Self::sampling_in_seconds_internal(Arc::clone(&self.cs_list_minute), current_value, current_times);
     }
 
     /// Perform minute-level sampling
@@ -176,11 +172,7 @@ impl StatsItem {
         }
     }
 
-    pub fn sampling_in_minutes(
-        cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>,
-        current_value: u64,
-        current_times: u64,
-    ) {
+    pub fn sampling_in_minutes(cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>, current_value: u64, current_times: u64) {
         let mut cs_list = cs_list.lock();
         if cs_list.is_empty() {
             cs_list.push_back(CallSnapshot::new(
@@ -206,11 +198,7 @@ impl StatsItem {
         }
     }
 
-    pub fn sampling_in_hour(
-        cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>,
-        current_value: u64,
-        current_times: u64,
-    ) {
+    pub fn sampling_in_hour(cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>, current_value: u64, current_times: u64) {
         let mut cs_list = cs_list.lock();
         if cs_list.is_empty() {
             cs_list.push_back(CallSnapshot::new(
@@ -236,11 +224,7 @@ impl StatsItem {
         }
     }
 
-    pub fn print_at_minutes(
-        stats_name: &str,
-        stats_key: &str,
-        cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>,
-    ) {
+    pub fn print_at_minutes(stats_name: &str, stats_key: &str, cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>) {
         let ss = Self::compute_stats_data(cs_list);
         info!(
             "[{}] [{}] Stats In One Minute, {}",
@@ -250,11 +234,7 @@ impl StatsItem {
         );
     }
 
-    pub fn print_at_hour(
-        stats_name: &str,
-        stats_key: &str,
-        cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>,
-    ) {
+    pub fn print_at_hour(stats_name: &str, stats_key: &str, cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>) {
         let ss = Self::compute_stats_data(cs_list);
         info!(
             "[{}] [{}] Stats In One Hour, {}",
@@ -264,11 +244,7 @@ impl StatsItem {
         );
     }
 
-    pub fn print_at_day(
-        stats_name: &str,
-        stats_key: &str,
-        cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>,
-    ) {
+    pub fn print_at_day(stats_name: &str, stats_key: &str, cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>) {
         let ss = Self::compute_stats_data(cs_list);
         info!(
             "[{}] [{}] Stats In One Day, {}",
@@ -440,10 +416,7 @@ mod tests {
 
         // Verify snapshot contains non-zero values
         let snapshot = stats.get_stats_data_in_minute();
-        assert!(
-            snapshot.get_sum() > 0,
-            "Snapshot should capture incremented value"
-        );
+        assert!(snapshot.get_sum() > 0, "Snapshot should capture incremented value");
         assert!(snapshot.get_times() > 0, "Snapshot should capture times");
     }
 

@@ -68,8 +68,7 @@ pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) 
         if msg_bytes.is_none() {
             break;
         }
-        let message =
-            message_decoder::decode(msg_bytes.as_mut().unwrap(), true, false, false, false, true);
+        let message = message_decoder::decode(msg_bytes.as_mut().unwrap(), true, false, false, false, true);
         //parse message bytes and print it
         match message {
             None => {}

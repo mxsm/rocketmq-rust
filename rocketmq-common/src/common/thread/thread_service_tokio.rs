@@ -55,9 +55,7 @@ impl ServiceThreadTokio {
         let started = self.started.clone();
         let runnable = self.runnable.clone();
         let name = self.name.clone();
-        if let Ok(value) =
-            started.compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
-        {
+        if let Ok(value) = started.compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed) {
             if value {
                 return;
             }
@@ -88,9 +86,9 @@ impl ServiceThreadTokio {
     }
 
     pub async fn shutdown_interrupt(&mut self, interrupt: bool) {
-        if let Ok(value) =
-            self.started
-                .compare_exchange(true, false, Ordering::SeqCst, Ordering::Relaxed)
+        if let Ok(value) = self
+            .started
+            .compare_exchange(true, false, Ordering::SeqCst, Ordering::Relaxed)
         {
             if !value {
                 return;
@@ -147,10 +145,8 @@ mod tests {
     async fn test_start_and_shutdown() {
         let mock_runnable = MockTestRunnable::new();
 
-        let mut service_thread = ServiceThreadTokio::new(
-            "TestServiceThread".to_string(),
-            Arc::new(Mutex::new(mock_runnable)),
-        );
+        let mut service_thread =
+            ServiceThreadTokio::new("TestServiceThread".to_string(), Arc::new(Mutex::new(mock_runnable)));
 
         service_thread.start();
         assert!(service_thread.started.load(Ordering::SeqCst));
@@ -165,10 +161,8 @@ mod tests {
     #[tokio::test]
     async fn test_make_stop() {
         let mock_runnable = MockTestRunnable::new();
-        let mut service_thread = ServiceThreadTokio::new(
-            "TestServiceThread".to_string(),
-            Arc::new(Mutex::new(mock_runnable)),
-        );
+        let mut service_thread =
+            ServiceThreadTokio::new("TestServiceThread".to_string(), Arc::new(Mutex::new(mock_runnable)));
 
         service_thread.start();
         service_thread.make_stop();
@@ -178,10 +172,8 @@ mod tests {
     #[tokio::test]
     async fn test_wait_for_running() {
         let mock_runnable = MockTestRunnable::new();
-        let mut service_thread = ServiceThreadTokio::new(
-            "TestServiceThread".to_string(),
-            Arc::new(Mutex::new(mock_runnable)),
-        );
+        let mut service_thread =
+            ServiceThreadTokio::new("TestServiceThread".to_string(), Arc::new(Mutex::new(mock_runnable)));
 
         service_thread.start();
         service_thread.wait_for_running(100).await;
@@ -191,10 +183,8 @@ mod tests {
     #[tokio::test]
     async fn test_wakeup() {
         let mock_runnable = MockTestRunnable::new();
-        let mut service_thread = ServiceThreadTokio::new(
-            "TestServiceThread".to_string(),
-            Arc::new(Mutex::new(mock_runnable)),
-        );
+        let mut service_thread =
+            ServiceThreadTokio::new("TestServiceThread".to_string(), Arc::new(Mutex::new(mock_runnable)));
 
         service_thread.start();
         service_thread.wakeup();

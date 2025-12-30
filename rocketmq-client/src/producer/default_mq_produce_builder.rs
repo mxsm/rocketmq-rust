@@ -92,10 +92,7 @@ impl DefaultMQProducerBuilder {
     }
 
     #[inline]
-    pub fn default_mqproducer_impl(
-        mut self,
-        default_mqproducer_impl: DefaultMQProducerImpl,
-    ) -> Self {
+    pub fn default_mqproducer_impl(mut self, default_mqproducer_impl: DefaultMQProducerImpl) -> Self {
         self.default_mqproducer_impl = Some(default_mqproducer_impl);
         self
     }
@@ -160,19 +157,13 @@ impl DefaultMQProducerBuilder {
     }
 
     #[inline]
-    pub fn retry_times_when_send_async_failed(
-        mut self,
-        retry_times_when_send_async_failed: u32,
-    ) -> Self {
+    pub fn retry_times_when_send_async_failed(mut self, retry_times_when_send_async_failed: u32) -> Self {
         self.retry_times_when_send_async_failed = Some(retry_times_when_send_async_failed);
         self
     }
 
     #[inline]
-    pub fn retry_another_broker_when_not_store_ok(
-        mut self,
-        retry_another_broker_when_not_store_ok: bool,
-    ) -> Self {
+    pub fn retry_another_broker_when_not_store_ok(mut self, retry_another_broker_when_not_store_ok: bool) -> Self {
         self.retry_another_broker_when_not_store_ok = Some(retry_another_broker_when_not_store_ok);
         self
     }
@@ -184,10 +175,7 @@ impl DefaultMQProducerBuilder {
     }
 
     #[inline]
-    pub fn trace_dispatcher(
-        mut self,
-        trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>,
-    ) -> Self {
+    pub fn trace_dispatcher(mut self, trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>) -> Self {
         self.trace_dispatcher = Some(trace_dispatcher);
         self
     }
@@ -205,28 +193,19 @@ impl DefaultMQProducerBuilder {
     }
 
     #[inline]
-    pub fn enable_backpressure_for_async_mode(
-        mut self,
-        enable_backpressure_for_async_mode: bool,
-    ) -> Self {
+    pub fn enable_backpressure_for_async_mode(mut self, enable_backpressure_for_async_mode: bool) -> Self {
         self.enable_backpressure_for_async_mode = Some(enable_backpressure_for_async_mode);
         self
     }
 
     #[inline]
-    pub fn back_pressure_for_async_send_num(
-        mut self,
-        back_pressure_for_async_send_num: u32,
-    ) -> Self {
+    pub fn back_pressure_for_async_send_num(mut self, back_pressure_for_async_send_num: u32) -> Self {
         self.back_pressure_for_async_send_num = Some(back_pressure_for_async_send_num);
         self
     }
 
     #[inline]
-    pub fn back_pressure_for_async_send_size(
-        mut self,
-        back_pressure_for_async_send_size: u32,
-    ) -> Self {
+    pub fn back_pressure_for_async_send_size(mut self, back_pressure_for_async_send_size: u32) -> Self {
         self.back_pressure_for_async_send_size = Some(back_pressure_for_async_send_size);
         self
     }
@@ -288,11 +267,8 @@ impl DefaultMQProducerBuilder {
         if let Some(retry_times_when_send_async_failed) = self.retry_times_when_send_async_failed {
             mq_producer.set_retry_times_when_send_async_failed(retry_times_when_send_async_failed);
         }
-        if let Some(retry_another_broker_when_not_store_ok) =
-            self.retry_another_broker_when_not_store_ok
-        {
-            mq_producer
-                .set_retry_another_broker_when_not_store_ok(retry_another_broker_when_not_store_ok);
+        if let Some(retry_another_broker_when_not_store_ok) = self.retry_another_broker_when_not_store_ok {
+            mq_producer.set_retry_another_broker_when_not_store_ok(retry_another_broker_when_not_store_ok);
         }
         if let Some(max_message_size) = self.max_message_size {
             mq_producer.set_max_message_size(max_message_size);

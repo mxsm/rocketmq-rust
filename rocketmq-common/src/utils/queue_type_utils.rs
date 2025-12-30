@@ -76,10 +76,7 @@ mod tests {
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::from_iter([(
-                TopicAttributes::queue_type_attribute()
-                    .name()
-                    .to_string()
-                    .into(),
+                TopicAttributes::queue_type_attribute().name().to_string().into(),
                 "BatchCQ".to_string().into(),
             )]),
             ..TopicConfig::default()
@@ -88,10 +85,7 @@ mod tests {
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::from_iter([(
-                TopicAttributes::queue_type_attribute()
-                    .name()
-                    .to_string()
-                    .into(),
+                TopicAttributes::queue_type_attribute().name().to_string().into(),
                 "InvalidCQ".to_string().into(),
             )]),
             ..TopicConfig::default()
@@ -108,39 +102,24 @@ mod tests {
             attributes: HashMap::new(),
             ..TopicConfig::default()
         });
-        assert_eq!(
-            QueueTypeUtils::get_cq_type(topic_config.as_ref()),
-            CQType::SimpleCQ
-        );
+        assert_eq!(QueueTypeUtils::get_cq_type(topic_config.as_ref()), CQType::SimpleCQ);
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::from_iter([(
-                TopicAttributes::queue_type_attribute()
-                    .name()
-                    .to_string()
-                    .into(),
+                TopicAttributes::queue_type_attribute().name().to_string().into(),
                 "BatchCQ".to_string().into(),
             )]),
             ..TopicConfig::default()
         });
-        assert_eq!(
-            QueueTypeUtils::get_cq_type(topic_config.as_ref()),
-            CQType::BatchCQ
-        );
+        assert_eq!(QueueTypeUtils::get_cq_type(topic_config.as_ref()), CQType::BatchCQ);
 
         let topic_config = Some(TopicConfig {
             attributes: HashMap::from_iter([(
-                TopicAttributes::queue_type_attribute()
-                    .name()
-                    .to_string()
-                    .into(),
+                TopicAttributes::queue_type_attribute().name().to_string().into(),
                 "InvalidCQ".to_string().into(),
             )]),
             ..TopicConfig::default()
         });
-        assert_eq!(
-            QueueTypeUtils::get_cq_type(topic_config.as_ref()),
-            CQType::SimpleCQ
-        );
+        assert_eq!(QueueTypeUtils::get_cq_type(topic_config.as_ref()), CQType::SimpleCQ);
     }
 }

@@ -151,8 +151,7 @@ mod tests {
     #[test]
     fn ext_info_wrong_type_returns_none() {
         let mut base_authentication_context = BaseAuthenticationContext::new();
-        base_authentication_context
-            .set_ext_info(CheetahString::from("info-2"), CheetahString::from("xyz"));
+        base_authentication_context.set_ext_info(CheetahString::from("info-2"), CheetahString::from("xyz"));
 
         assert_eq!(
             None,
@@ -182,13 +181,9 @@ mod tests {
         let mut base_authentication_context = BaseAuthenticationContext::new();
 
         let any_ref = base_authentication_context.as_any();
-        assert!(any_ref
-            .downcast_ref::<BaseAuthenticationContext>()
-            .is_some());
+        assert!(any_ref.downcast_ref::<BaseAuthenticationContext>().is_some());
 
         let any_mut_ref = base_authentication_context.as_any_mut();
-        assert!(any_mut_ref
-            .downcast_mut::<BaseAuthenticationContext>()
-            .is_some());
+        assert!(any_mut_ref.downcast_mut::<BaseAuthenticationContext>().is_some());
     }
 }

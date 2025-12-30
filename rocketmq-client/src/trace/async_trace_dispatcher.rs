@@ -31,22 +31,13 @@ use crate::trace::trace_dispatcher::Type;
 pub struct AsyncTraceDispatcher;
 
 impl AsyncTraceDispatcher {
-    pub fn new(
-        group: &str,
-        type_: Type,
-        trace_topic_name: &str,
-        rpc_hook: Option<Arc<dyn RPCHook>>,
-    ) -> Self {
+    pub fn new(group: &str, type_: Type, trace_topic_name: &str, rpc_hook: Option<Arc<dyn RPCHook>>) -> Self {
         AsyncTraceDispatcher
     }
 }
 
 impl TraceDispatcher for AsyncTraceDispatcher {
-    fn start(
-        &self,
-        name_srv_addr: &str,
-        access_channel: AccessChannel,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    fn start(&self, name_srv_addr: &str, access_channel: AccessChannel) -> rocketmq_error::RocketMQResult<()> {
         todo!()
     }
 

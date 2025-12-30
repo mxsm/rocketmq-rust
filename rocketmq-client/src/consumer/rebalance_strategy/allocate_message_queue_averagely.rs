@@ -36,10 +36,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueAveragely {
             return Ok(result);
         }
 
-        let index = cid_all
-            .iter()
-            .position(|cid| cid == current_cid)
-            .unwrap_or(0);
+        let index = cid_all.iter().position(|cid| cid == current_cid).unwrap_or(0);
         let mod_val = mq_all.len() % cid_all.len();
         let average_size = if mq_all.len() <= cid_all.len() {
             1

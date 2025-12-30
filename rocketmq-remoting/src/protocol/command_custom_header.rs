@@ -71,10 +71,7 @@ pub trait CommandCustomHeader: AsAny {
     /// # Arguments
     ///
     /// * `_fields` - A reference to a `HashMap` that contains the fields to be decoded.
-    fn decode_fast(
-        &mut self,
-        _fields: &HashMap<CheetahString, CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    fn decode_fast(&mut self, _fields: &HashMap<CheetahString, CheetahString>) -> rocketmq_error::RocketMQResult<()> {
         Ok(())
     }
 

@@ -155,13 +155,8 @@ impl std::fmt::Display for SendResult {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "SendResult [sendStatus={:?}, msgId={:?}, offsetMsgId={:?}, messageQueue={:?}, \
-             queueOffset={}]",
-            self.send_status,
-            self.msg_id,
-            self.offset_msg_id,
-            self.message_queue,
-            self.queue_offset,
+            "SendResult [sendStatus={:?}, msgId={:?}, offsetMsgId={:?}, messageQueue={:?}, queueOffset={}]",
+            self.send_status, self.msg_id, self.offset_msg_id, self.message_queue, self.queue_offset,
         )
     }
 }

@@ -37,12 +37,7 @@ pub struct DeleteTopicCommand {
     #[command(flatten)]
     common_args: CommonArgs,
 
-    #[arg(
-        short = 't',
-        long = "topic",
-        required = true,
-        help = "Topic name to delete"
-    )]
+    #[arg(short = 't', long = "topic", required = true, help = "Topic name to delete")]
     topic: String,
 
     #[arg(
@@ -61,10 +56,7 @@ impl CommandExecute for DeleteTopicCommand {
 
         // 2. Confirm dangerous operation (unless --yes flag is set)
         if !self.common_args.skip_confirm {
-            let target = format!(
-                "topic '{}' from cluster '{}'",
-                self.topic, self.cluster_name
-            );
+            let target = format!("topic '{}' from cluster '{}'", self.topic, self.cluster_name);
             if !prompt::confirm_dangerous_operation("delete", &target) {
                 output::print_warning("Operation cancelled by user");
                 return Ok(());
@@ -142,14 +134,7 @@ mod tests {
 
     #[test]
     fn test_command_with_yes_flag() {
-        let cmd = DeleteTopicCommand::try_parse_from([
-            "deleteTopic",
-            "-t",
-            "TestTopic",
-            "-c",
-            "DefaultCluster",
-            "-y",
-        ]);
+        let cmd = DeleteTopicCommand::try_parse_from(["deleteTopic", "-t", "TestTopic", "-c", "DefaultCluster", "-y"]);
         assert!(cmd.is_ok());
         let cmd = cmd.unwrap();
         assert!(cmd.common_args.skip_confirm);
@@ -157,14 +142,8 @@ mod tests {
 
     #[test]
     fn test_command_with_long_yes_flag() {
-        let cmd = DeleteTopicCommand::try_parse_from([
-            "deleteTopic",
-            "-t",
-            "TestTopic",
-            "-c",
-            "DefaultCluster",
-            "--yes",
-        ]);
+        let cmd =
+            DeleteTopicCommand::try_parse_from(["deleteTopic", "-t", "TestTopic", "-c", "DefaultCluster", "--yes"]);
         assert!(cmd.is_ok());
         let cmd = cmd.unwrap();
         assert!(cmd.common_args.skip_confirm);
@@ -185,10 +164,7 @@ mod tests {
         let cmd = cmd.unwrap();
         assert_eq!(cmd.topic, "MyTestTopic");
         assert_eq!(cmd.cluster_name, "MyCluster");
-        assert_eq!(
-            cmd.common_args.namesrv_addr,
-            Some("192.168.1.1:9876".to_string())
-        );
+        assert_eq!(cmd.common_args.namesrv_addr, Some("192.168.1.1:9876".to_string()));
         assert!(!cmd.common_args.skip_confirm);
     }
 }

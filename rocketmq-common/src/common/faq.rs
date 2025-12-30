@@ -19,33 +19,22 @@ pub struct FAQUrl;
 
 impl FAQUrl {
     pub const APPLY_TOPIC_URL: &'static str = "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
-    pub const CLIENT_PARAMETER_CHECK_URL: &'static str =
-        "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
-    pub const CLIENT_SERVICE_NOT_OK: &'static str =
-        "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
-    pub const GROUP_NAME_DUPLICATE_URL: &'static str =
-        "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
-    pub const LOAD_JSON_EXCEPTION: &'static str =
-        "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
+    pub const CLIENT_PARAMETER_CHECK_URL: &'static str = "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
+    pub const CLIENT_SERVICE_NOT_OK: &'static str = "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
+    pub const GROUP_NAME_DUPLICATE_URL: &'static str = "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
+    pub const LOAD_JSON_EXCEPTION: &'static str = "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
     const MORE_INFORMATION: &'static str = "For more information, please visit the url, ";
-    pub const MQLIST_NOT_EXIST: &'static str =
-        "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
-    pub const NAME_SERVER_ADDR_NOT_EXIST_URL: &'static str =
-        "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
+    pub const MQLIST_NOT_EXIST: &'static str = "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
+    pub const NAME_SERVER_ADDR_NOT_EXIST_URL: &'static str = "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
     // FAQ: No route info of this topic, TopicABC
-    pub const NO_TOPIC_ROUTE_INFO: &'static str =
-        "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
-    pub const SAME_GROUP_DIFFERENT_TOPIC: &'static str =
-        "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
+    pub const NO_TOPIC_ROUTE_INFO: &'static str = "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
+    pub const SAME_GROUP_DIFFERENT_TOPIC: &'static str = "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
     pub const SEND_MSG_FAILED: &'static str = "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
-    pub const SUBSCRIPTION_GROUP_NOT_EXIST: &'static str =
-        "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
+    pub const SUBSCRIPTION_GROUP_NOT_EXIST: &'static str = "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
     const TIP_STRING_BEGIN: &'static str = "\nSee ";
     const TIP_STRING_END: &'static str = " for further details.";
-    pub const UNEXPECTED_EXCEPTION_URL: &'static str =
-        "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
-    pub const UNKNOWN_HOST_EXCEPTION: &'static str =
-        "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
+    pub const UNEXPECTED_EXCEPTION_URL: &'static str = "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
+    pub const UNKNOWN_HOST_EXCEPTION: &'static str = "https://rocketmq.apache.org/docs/bestPractice/06FAQ";
 
     pub fn suggest_todo(url: &'static str) -> String {
         format!("{}{}{}", Self::TIP_STRING_BEGIN, url, Self::TIP_STRING_END)

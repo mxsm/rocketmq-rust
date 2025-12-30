@@ -20,10 +20,5 @@ use std::collections::HashSet;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 
 pub trait MessageQueueListener: Send + Sync {
-    fn message_queue_changed(
-        &self,
-        topic: &str,
-        mq_all: &HashSet<MessageQueue>,
-        mq_assigned: &HashSet<MessageQueue>,
-    );
+    fn message_queue_changed(&self, topic: &str, mq_all: &HashSet<MessageQueue>, mq_assigned: &HashSet<MessageQueue>);
 }

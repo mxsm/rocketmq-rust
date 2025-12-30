@@ -112,15 +112,11 @@ pub struct MQConsumerInnerImpl {
 
 impl MQConsumerInnerImpl {
     pub(crate) async fn pop_message(&mut self, pop_request: PopRequest) {
-        self.default_mqpush_consumer_impl
-            .pop_message(pop_request)
-            .await;
+        self.default_mqpush_consumer_impl.pop_message(pop_request).await;
     }
 
     pub(crate) async fn pull_message(&mut self, pull_request: PullRequest) {
-        self.default_mqpush_consumer_impl
-            .pull_message(pull_request)
-            .await;
+        self.default_mqpush_consumer_impl.pull_message(pull_request).await;
     }
 
     pub(crate) async fn consume_message_directly(
@@ -176,26 +172,14 @@ impl MQConsumerInner for MQConsumerInnerImpl {
     }
 
     #[inline]
-    async fn update_topic_subscribe_info(
-        &self,
-        topic: CheetahString,
-        info: &HashSet<MessageQueue>,
-    ) {
-        MQConsumerInner::update_topic_subscribe_info(
-            self.default_mqpush_consumer_impl.mut_from_ref(),
-            topic,
-            info,
-        )
-        .await
+    async fn update_topic_subscribe_info(&self, topic: CheetahString, info: &HashSet<MessageQueue>) {
+        MQConsumerInner::update_topic_subscribe_info(self.default_mqpush_consumer_impl.mut_from_ref(), topic, info)
+            .await
     }
 
     #[inline]
     async fn is_subscribe_topic_need_update(&self, topic: &str) -> bool {
-        MQConsumerInner::is_subscribe_topic_need_update(
-            self.default_mqpush_consumer_impl.as_ref(),
-            topic,
-        )
-        .await
+        MQConsumerInner::is_subscribe_topic_need_update(self.default_mqpush_consumer_impl.as_ref(), topic).await
     }
 
     #[inline]

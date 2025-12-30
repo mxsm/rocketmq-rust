@@ -50,10 +50,7 @@ impl BrokerReplicaInfo {
     ///
     /// * `cluster_name` - Cluster name
     /// * `broker_name` - Broker name
-    pub fn new(
-        cluster_name: impl Into<CheetahString>,
-        broker_name: impl Into<CheetahString>,
-    ) -> Self {
+    pub fn new(cluster_name: impl Into<CheetahString>, broker_name: impl Into<CheetahString>) -> Self {
         Self {
             cluster_name: cluster_name.into(),
             broker_name: broker_name.into(),
@@ -115,10 +112,7 @@ impl BrokerReplicaInfo {
 
     /// Get all broker IDs
     pub fn get_all_broker(&self) -> HashSet<u64> {
-        self.broker_id_info
-            .iter()
-            .map(|entry| *entry.key())
-            .collect()
+        self.broker_id_info.iter().map(|entry| *entry.key()).collect()
     }
 
     /// Get broker ID to address mapping
@@ -188,12 +182,7 @@ impl Serialize for BrokerReplicaInfo {
         let broker_id_info: HashMap<u64, (String, String)> = self
             .broker_id_info
             .iter()
-            .map(|entry| {
-                (
-                    *entry.key(),
-                    (entry.value().0.to_string(), entry.value().1.to_string()),
-                )
-            })
+            .map(|entry| (*entry.key(), (entry.value().0.to_string(), entry.value().1.to_string())))
             .collect();
         state.serialize_field("broker_id_info", &broker_id_info)?;
 
@@ -263,27 +252,20 @@ impl<'de> Deserialize<'de> for BrokerReplicaInfo {
                             if broker_id_info.is_some() {
                                 return Err(de::Error::duplicate_field("broker_id_info"));
                             }
-                            broker_id_info =
-                                Some(map.next_value::<HashMap<u64, (String, String)>>()?);
+                            broker_id_info = Some(map.next_value::<HashMap<u64, (String, String)>>()?);
                         }
                     }
                 }
 
-                let cluster_name =
-                    cluster_name.ok_or_else(|| de::Error::missing_field("cluster_name"))?;
-                let broker_name =
-                    broker_name.ok_or_else(|| de::Error::missing_field("broker_name"))?;
-                let next_assign_broker_id = next_assign_broker_id
-                    .ok_or_else(|| de::Error::missing_field("next_assign_broker_id"))?;
-                let broker_id_info_map =
-                    broker_id_info.ok_or_else(|| de::Error::missing_field("broker_id_info"))?;
+                let cluster_name = cluster_name.ok_or_else(|| de::Error::missing_field("cluster_name"))?;
+                let broker_name = broker_name.ok_or_else(|| de::Error::missing_field("broker_name"))?;
+                let next_assign_broker_id =
+                    next_assign_broker_id.ok_or_else(|| de::Error::missing_field("next_assign_broker_id"))?;
+                let broker_id_info_map = broker_id_info.ok_or_else(|| de::Error::missing_field("broker_id_info"))?;
 
                 let broker_id_info = DashMap::new();
                 for (k, (a, c)) in broker_id_info_map {
-                    broker_id_info.insert(
-                        k,
-                        (CheetahString::from_string(a), CheetahString::from_string(c)),
-                    );
+                    broker_id_info.insert(k, (CheetahString::from_string(a), CheetahString::from_string(c)));
                 }
 
                 Ok(BrokerReplicaInfo {
@@ -295,12 +277,7 @@ impl<'de> Deserialize<'de> for BrokerReplicaInfo {
             }
         }
 
-        const FIELDS: &[&str] = &[
-            "cluster_name",
-            "broker_name",
-            "next_assign_broker_id",
-            "broker_id_info",
-        ];
+        const FIELDS: &[&str] = &["cluster_name", "broker_name", "next_assign_broker_id", "broker_id_info"];
         deserializer.deserialize_struct("BrokerReplicaInfo", FIELDS, BrokerReplicaInfoVisitor)
     }
 }

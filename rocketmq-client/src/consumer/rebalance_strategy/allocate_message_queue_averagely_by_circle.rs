@@ -35,10 +35,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueAveragelyByCircle {
         if !check(consumer_group, current_cid, mq_all, cid_all)? {
             return Ok(result);
         }
-        let index = cid_all
-            .iter()
-            .position(|cid| cid == current_cid)
-            .unwrap_or(0);
+        let index = cid_all.iter().position(|cid| cid == current_cid).unwrap_or(0);
         for (i, item) in mq_all.iter().enumerate().skip(index) {
             if i % cid_all.len() == index {
                 result.push(item.clone());
@@ -157,9 +154,7 @@ mod tests {
         assert_eq!(vec![3, 7], consumer_allocate_queue["CID_PREFIX3"]);
     }
     fn create_consumer_id_list(size: usize) -> Vec<CheetahString> {
-        (0..size)
-            .map(|i| format!("CID_PREFIX{}", i).into())
-            .collect()
+        (0..size).map(|i| format!("CID_PREFIX{}", i).into()).collect()
     }
 
     fn create_message_queue_list(size: usize) -> Vec<MessageQueue> {

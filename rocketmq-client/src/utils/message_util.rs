@@ -28,14 +28,9 @@ use crate::common::client_error_code::ClientErrorCode;
 pub struct MessageUtil;
 
 impl MessageUtil {
-    pub fn create_reply_message(
-        request_message: &Message,
-        body: &[u8],
-    ) -> rocketmq_error::RocketMQResult<Message> {
+    pub fn create_reply_message(request_message: &Message, body: &[u8]) -> rocketmq_error::RocketMQResult<Message> {
         let mut reply_message = Message::default();
-        let cluster = request_message.get_property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_CLUSTER,
-        ));
+        let cluster = request_message.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CLUSTER));
         if let Some(cluster) = cluster {
             reply_message.set_body(Bytes::copy_from_slice(body));
             let reply_topic = mix_all::get_retry_topic(&cluster);
@@ -54,18 +49,18 @@ impl MessageUtil {
                     reply_to,
                 );
             }
-            if let Some(correlation_id) = request_message.get_property(
-                &CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID),
-            ) {
+            if let Some(correlation_id) =
+                request_message.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
+            {
                 MessageAccessor::put_property(
                     &mut reply_message,
                     CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID),
                     correlation_id,
                 );
             }
-            if let Some(ttl) = request_message.get_property(&CheetahString::from_static_str(
-                MessageConst::PROPERTY_MESSAGE_TTL,
-            )) {
+            if let Some(ttl) =
+                request_message.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_MESSAGE_TTL))
+            {
                 MessageAccessor::put_property(
                     &mut reply_message,
                     CheetahString::from_static_str(MessageConst::PROPERTY_MESSAGE_TTL),

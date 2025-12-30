@@ -63,10 +63,7 @@ impl TopicConfigSerializeWrapper {
         }
     }
 
-    pub fn set_topic_config_table(
-        &mut self,
-        topic_config_table: Option<HashMap<CheetahString, TopicConfig>>,
-    ) {
+    pub fn set_topic_config_table(&mut self, topic_config_table: Option<HashMap<CheetahString, TopicConfig>>) {
         self.topic_config_table = topic_config_table;
     }
 

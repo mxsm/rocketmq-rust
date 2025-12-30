@@ -115,12 +115,7 @@ pub trait BrokerHeartbeatManager: Send + Sync {
     /// # Returns
     ///
     /// The broker live information if the broker is registered, None otherwise
-    fn get_broker_live_info(
-        &self,
-        cluster_name: &str,
-        broker_name: &str,
-        broker_id: i64,
-    ) -> Option<BrokerLiveInfo>;
+    fn get_broker_live_info(&self, cluster_name: &str, broker_name: &str, broker_id: i64) -> Option<BrokerLiveInfo>;
 
     /// Check if a broker is active
     ///

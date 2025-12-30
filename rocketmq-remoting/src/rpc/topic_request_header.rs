@@ -39,9 +39,7 @@ impl TopicRequestHeader {
     }
 
     pub fn get_broker_name(&self) -> Option<&CheetahString> {
-        self.rpc_request_header
-            .as_ref()
-            .and_then(|v| v.broker_name.as_ref())
+        self.rpc_request_header.as_ref().and_then(|v| v.broker_name.as_ref())
     }
 }
 

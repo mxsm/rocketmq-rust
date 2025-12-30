@@ -62,14 +62,8 @@ pub struct TimerMessageStore {
 impl Clone for TimerMessageStore {
     fn clone(&self) -> Self {
         Self {
-            curr_read_time_ms: AtomicI64::new(
-                self.curr_read_time_ms
-                    .load(std::sync::atomic::Ordering::Relaxed),
-            ),
-            curr_queue_offset: AtomicI64::new(
-                self.curr_queue_offset
-                    .load(std::sync::atomic::Ordering::Relaxed),
-            ),
+            curr_read_time_ms: AtomicI64::new(self.curr_read_time_ms.load(std::sync::atomic::Ordering::Relaxed)),
+            curr_queue_offset: AtomicI64::new(self.curr_queue_offset.load(std::sync::atomic::Ordering::Relaxed)),
             last_enqueue_but_expired_time: self.last_enqueue_but_expired_time,
             last_enqueue_but_expired_store_time: self.last_enqueue_but_expired_store_time,
             default_message_store: self.default_message_store.clone(),
@@ -96,10 +90,7 @@ impl TimerMessageStore {
     }
 
     pub fn get_dequeue_behind_millis(&self) -> i64 {
-        (SystemClock::now() as i64)
-            - self
-                .curr_read_time_ms
-                .load(std::sync::atomic::Ordering::Relaxed)
+        (SystemClock::now() as i64) - self.curr_read_time_ms.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn get_enqueue_behind_millis(&self) -> i64 {
@@ -115,9 +106,7 @@ impl TimerMessageStore {
     }
 
     pub fn get_enqueue_behind_messages(&self) -> i64 {
-        let temp_queue_offset = self
-            .curr_queue_offset
-            .load(std::sync::atomic::Ordering::Relaxed);
+        let temp_queue_offset = self.curr_queue_offset.load(std::sync::atomic::Ordering::Relaxed);
         let consume_queue = self
             .default_message_store
             .as_ref()
@@ -164,10 +153,7 @@ impl TimerMessageStore {
         }
     }
 
-    pub fn set_default_message_store(
-        &mut self,
-        default_message_store: Option<ArcMut<LocalFileMessageStore>>,
-    ) {
+    pub fn set_default_message_store(&mut self, default_message_store: Option<ArcMut<LocalFileMessageStore>>) {
         self.default_message_store = default_message_store;
     }
 

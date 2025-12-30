@@ -37,8 +37,8 @@ impl Display for ConsumeQueueData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "ConsumeQueueData [physic_offset={}, physic_size={}, tags_code={}, \
-             extend_data_json={:?}, bit_map={:?}, eval={}, msg={:?}]",
+            "ConsumeQueueData [physic_offset={}, physic_size={}, tags_code={}, extend_data_json={:?}, bit_map={:?}, \
+             eval={}, msg={:?}]",
             self.physic_offset,
             self.physic_size,
             self.tags_code,
@@ -71,8 +71,7 @@ mod tests {
         assert_eq!(
             display,
             "ConsumeQueueData [physic_offset=123, physic_size=456, tags_code=789, \
-             extend_data_json=Some(\"extend_data\"), bit_map=Some(\"bit_map\"), eval=true, \
-             msg=Some(\"message\")]"
+             extend_data_json=Some(\"extend_data\"), bit_map=Some(\"bit_map\"), eval=true, msg=Some(\"message\")]"
         );
     }
 
@@ -117,10 +116,7 @@ mod tests {
             deserialized.extend_data_json.unwrap(),
             CheetahString::from("extend_data")
         );
-        assert_eq!(
-            deserialized.bit_map.unwrap(),
-            CheetahString::from("bit_map")
-        );
+        assert_eq!(deserialized.bit_map.unwrap(), CheetahString::from("bit_map"));
         assert!(deserialized.eval);
         assert_eq!(deserialized.msg.unwrap(), CheetahString::from("message"));
     }

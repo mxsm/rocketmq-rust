@@ -24,12 +24,7 @@ impl PullSysFlag {
     const FLAG_CLASS_FILTER: u32 = 0x1 << 3;
     const FLAG_LITE_PULL_MESSAGE: u32 = 0x1 << 4;
 
-    pub fn build_sys_flag(
-        commit_offset: bool,
-        suspend: bool,
-        subscription: bool,
-        class_filter: bool,
-    ) -> u32 {
+    pub fn build_sys_flag(commit_offset: bool, suspend: bool, subscription: bool, class_filter: bool) -> u32 {
         let mut flag = 0;
 
         if commit_offset {

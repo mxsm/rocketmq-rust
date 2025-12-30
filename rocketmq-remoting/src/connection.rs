@@ -243,9 +243,7 @@ impl Connection {
     /// }
     /// // Connection closed
     /// ```
-    pub async fn receive_command(
-        &mut self,
-    ) -> Option<rocketmq_error::RocketMQResult<RemotingCommand>> {
+    pub async fn receive_command(&mut self) -> Option<rocketmq_error::RocketMQResult<RemotingCommand>> {
         self.inbound_stream.next().await
     }
 
@@ -285,10 +283,7 @@ impl Connection {
     /// - Uses `split_to(len)` instead of `split()` for better performance
     /// - `split_to()` returns all data and leaves buffer empty, eliminating need for clear()
     /// - `freeze()` converts BytesMut to Bytes with zero-copy (just refcount increment)
-    pub async fn send_command(
-        &mut self,
-        mut command: RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn send_command(&mut self, mut command: RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
         // Encode command into buffer (buffer might have capacity from previous use)
         command.fast_header_encode(&mut self.encode_buffer);
         if let Some(body_inner) = command.take_body() {
@@ -330,10 +325,7 @@ impl Connection {
     ///
     /// This method may consume the command's body (`take_body()`), modifying
     /// the original command.
-    pub async fn send_command_ref(
-        &mut self,
-        command: &mut RemotingCommand,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn send_command_ref(&mut self, command: &mut RemotingCommand) -> rocketmq_error::RocketMQResult<()> {
         // Encode command into buffer
         command.fast_header_encode(&mut self.encode_buffer);
         if let Some(body_inner) = command.take_body() {
@@ -387,10 +379,7 @@ impl Connection {
     /// let batch = vec![cmd1, cmd2, cmd3];
     /// connection.send_batch(batch).await?;
     /// ```
-    pub async fn send_batch(
-        &mut self,
-        mut commands: Vec<RemotingCommand>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn send_batch(&mut self, mut commands: Vec<RemotingCommand>) -> rocketmq_error::RocketMQResult<()> {
         if commands.is_empty() {
             return Ok(());
         }

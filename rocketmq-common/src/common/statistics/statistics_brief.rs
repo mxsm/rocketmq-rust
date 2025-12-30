@@ -137,8 +137,7 @@ impl StatisticsBrief {
                     0
                 };
 
-                return meta_range_min
-                    + (meta_range_max - meta_range_min) / slot_num * (slot_num_left + 1);
+                return meta_range_min + (meta_range_max - meta_range_min) / slot_num * (slot_num_left + 1);
             } else {
                 slot_num_left -= slot_num;
             }

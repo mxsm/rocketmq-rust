@@ -33,23 +33,13 @@ pub struct UpdateKvConfigCommand {
     #[command(flatten)]
     common_args: CommonArgs,
 
-    #[arg(
-        short = 's',
-        long = "namespace",
-        required = true,
-        help = "set the namespace"
-    )]
+    #[arg(short = 's', long = "namespace", required = true, help = "set the namespace")]
     namespace: String,
 
     #[arg(short = 'k', long = "key", required = true, help = "set the key name")]
     key: String,
 
-    #[arg(
-        short = 'v',
-        long = "value",
-        required = true,
-        help = "set the key value"
-    )]
+    #[arg(short = 'v', long = "value", required = true, help = "set the key value")]
     value: String,
 }
 
@@ -65,14 +55,9 @@ impl CommandExecute for UpdateKvConfigCommand {
                 default_mqadmin_ext.set_namesrv_addr(addr.trim());
             }
 
-            MQAdminExt::start(&mut default_mqadmin_ext)
-                .await
-                .map_err(|e| {
-                    RocketMQError::Internal(format!(
-                        "UpdateKvConfigCommand: Failed to start MQAdminExt: {}",
-                        e
-                    ))
-                })?;
+            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
+                RocketMQError::Internal(format!("UpdateKvConfigCommand: Failed to start MQAdminExt: {}", e))
+            })?;
 
             default_mqadmin_ext
                 .create_and_update_kv_config(
@@ -82,10 +67,7 @@ impl CommandExecute for UpdateKvConfigCommand {
                 )
                 .await
                 .map_err(|e| {
-                    RocketMQError::Internal(format!(
-                        "UpdateKvConfigCommand: Failed to update kv config: {}",
-                        e
-                    ))
+                    RocketMQError::Internal(format!("UpdateKvConfigCommand: Failed to update kv config: {}", e))
                 })?;
 
             println!("update kv config in namespace success.");

@@ -79,9 +79,7 @@ impl BooleanAttribute {
         match value.to_lowercase().as_str() {
             "true" => Ok(true),
             "false" => Ok(false),
-            _ => Err(format!(
-                "Boolean attribute must be 'true' or 'false', got '{value}'",
-            )),
+            _ => Err(format!("Boolean attribute must be 'true' or 'false', got '{value}'",)),
         }
     }
 }
@@ -150,39 +148,29 @@ mod tests {
 
     #[test]
     fn verify_valid_true() {
-        let attribute =
-            BooleanAttribute::new(CheetahString::from_static_str("test_attribute"), true, true);
+        let attribute = BooleanAttribute::new(CheetahString::from_static_str("test_attribute"), true, true);
         let result = attribute.verify("true");
         assert!(result.is_ok());
     }
 
     #[test]
     fn verify_valid_false() {
-        let attribute = BooleanAttribute::new(
-            CheetahString::from_static_str("test_attribute"),
-            true,
-            false,
-        );
+        let attribute = BooleanAttribute::new(CheetahString::from_static_str("test_attribute"), true, false);
         let result = attribute.verify("false");
         assert!(result.is_ok());
     }
 
     #[test]
     fn verify_empty_value() {
-        let attribute =
-            BooleanAttribute::new(CheetahString::from_static_str("test_attribute"), true, true);
+        let attribute = BooleanAttribute::new(CheetahString::from_static_str("test_attribute"), true, true);
         let result = attribute.verify("");
         assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err(),
-            "Boolean attribute value cannot be empty"
-        );
+        assert_eq!(result.unwrap_err(), "Boolean attribute value cannot be empty");
     }
 
     #[test]
     fn verify_invalid_value() {
-        let attribute =
-            BooleanAttribute::new(CheetahString::from_static_str("test_attribute"), true, true);
+        let attribute = BooleanAttribute::new(CheetahString::from_static_str("test_attribute"), true, true);
         let result = attribute.verify("invalid");
         assert!(result.is_err());
         assert_eq!(

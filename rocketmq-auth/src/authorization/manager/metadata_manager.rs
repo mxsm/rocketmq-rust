@@ -143,8 +143,7 @@ impl AuthorizationMetadataManager {
         // TODO: Use AuthorizationFactory to create provider from config
         // For now, return error indicating factory is needed
         Err(AuthorizationError::ConfigurationError(
-            "AuthorizationMetadataManager::new requires factory implementation. Use \
-             with_providers() instead."
+            "AuthorizationMetadataManager::new requires factory implementation. Use with_providers() instead."
                 .to_string(),
         ))
     }
@@ -213,10 +212,7 @@ impl AuthorizationMetadataManager {
             }
             Some(mut old_acl) => {
                 // ACL exists, update policies
-                debug!(
-                    "ACL already exists for subject {}, updating policies",
-                    subject_key
-                );
+                debug!("ACL already exists for subject {}, updating policies", subject_key);
                 old_acl.update_policies(acl.policies().clone());
                 self.authorization_provider.update_acl(old_acl).await
             }
@@ -345,16 +341,12 @@ impl AuthorizationMetadataManager {
         let policy_type = policy_type.unwrap_or(PolicyType::Custom);
 
         // 3. Get existing ACL
-        let mut acl = self
-            .authorization_provider
-            .get_acl(subject)
-            .await?
-            .ok_or_else(|| {
-                AuthorizationError::InternalError(format!(
-                    "The ACL for subject '{}' does not exist",
-                    subject.subject_key()
-                ))
-            })?;
+        let mut acl = self.authorization_provider.get_acl(subject).await?.ok_or_else(|| {
+            AuthorizationError::InternalError(format!(
+                "The ACL for subject '{}' does not exist",
+                subject.subject_key()
+            ))
+        })?;
 
         // 4. Delete policy entry or entire ACL
         if let Some(resource) = resource {
@@ -406,10 +398,7 @@ impl AuthorizationMetadataManager {
     ///     println!("Found ACL with {} policies", acl.policies().len());
     /// }
     /// ```
-    pub async fn get_acl<S: Subject + Send + Sync>(
-        &self,
-        subject: &S,
-    ) -> ManagerResult<Option<Acl>> {
+    pub async fn get_acl<S: Subject + Send + Sync>(&self, subject: &S) -> ManagerResult<Option<Acl>> {
         // 1. Verify subject exists
         self.verify_subject_by_ref(subject).await?;
 
@@ -559,10 +548,7 @@ impl AuthorizationMetadataManager {
     /// Verify that a subject exists by reference.
     ///
     /// Similar to verify_subject_exists but works with Subject trait references.
-    async fn verify_subject_by_ref<S: Subject + Send + Sync>(
-        &self,
-        subject: &S,
-    ) -> ManagerResult<()> {
+    async fn verify_subject_by_ref<S: Subject + Send + Sync>(&self, subject: &S) -> ManagerResult<()> {
         if subject.subject_type() == SubjectType::User {
             // TODO: When AuthenticationMetadataProvider is available:
             // let user_subject = subject as &dyn std::any::Any;

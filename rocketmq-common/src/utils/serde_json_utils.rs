@@ -29,10 +29,7 @@ impl SerdeJsonUtils {
     }
 
     /// Deserialize JSON from bytes into a Rust type.
-    #[deprecated(
-        since = "0.7.0",
-        note = "Use `from_json_bytes` or `from_json_slice` instead"
-    )]
+    #[deprecated(since = "0.7.0", note = "Use `from_json_bytes` or `from_json_slice` instead")]
     #[inline]
     pub fn decode<T>(bytes: &[u8]) -> rocketmq_error::RocketMQResult<T>
     where
@@ -185,8 +182,7 @@ mod tests {
     #[test]
     fn test_from_json_error() {
         let json_str = r#"{"name":"Alice","age":"thirty"}"#;
-        let result: rocketmq_error::RocketMQResult<TestStruct> =
-            SerdeJsonUtils::from_json_str(json_str);
+        let result: rocketmq_error::RocketMQResult<TestStruct> = SerdeJsonUtils::from_json_str(json_str);
         assert!(result.is_err());
     }
 
@@ -204,8 +200,7 @@ mod tests {
     #[test]
     fn test_from_json_slice_error() {
         let json_slice = r#"{"name":"Bob","age":"twenty-five"}"#.as_bytes();
-        let result: rocketmq_error::RocketMQResult<TestStruct> =
-            SerdeJsonUtils::from_json_slice(json_slice);
+        let result: rocketmq_error::RocketMQResult<TestStruct> = SerdeJsonUtils::from_json_slice(json_slice);
         assert!(result.is_err());
     }
 

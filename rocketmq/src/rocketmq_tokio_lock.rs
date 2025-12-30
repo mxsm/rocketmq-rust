@@ -113,10 +113,7 @@ impl<T: ?Sized> RocketMQTokioRwLock<T> {
     ///
     /// An `Option` containing a `RwLockReadGuard` if the read lock was successfully acquired within
     /// the timeout, or `None` if the timeout expired.
-    pub async fn try_read_timeout(
-        &self,
-        timeout: Duration,
-    ) -> Option<tokio::sync::RwLockReadGuard<'_, T>> {
+    pub async fn try_read_timeout(&self, timeout: Duration) -> Option<tokio::sync::RwLockReadGuard<'_, T>> {
         (tokio::time::timeout(timeout, self.lock.read()).await).ok()
     }
 
@@ -130,10 +127,7 @@ impl<T: ?Sized> RocketMQTokioRwLock<T> {
     ///
     /// An `Option` containing a `RwLockWriteGuard` if the write lock was successfully acquired
     /// within the timeout, or `None` if the timeout expired.
-    pub async fn try_write_timeout(
-        &self,
-        timeout: Duration,
-    ) -> Option<tokio::sync::RwLockWriteGuard<'_, T>> {
+    pub async fn try_write_timeout(&self, timeout: Duration) -> Option<tokio::sync::RwLockWriteGuard<'_, T>> {
         (tokio::time::timeout(timeout, self.lock.write()).await).ok()
     }
 }
@@ -190,10 +184,7 @@ impl<T: ?Sized> RocketMQTokioMutex<T> {
     ///
     /// An `Option` containing a `MutexGuard` if the lock was successfully acquired within the
     /// timeout, or `None` if the timeout expired.
-    pub async fn try_lock_timeout(
-        &self,
-        timeout: Duration,
-    ) -> Option<tokio::sync::MutexGuard<'_, T>> {
+    pub async fn try_lock_timeout(&self, timeout: Duration) -> Option<tokio::sync::MutexGuard<'_, T>> {
         (tokio::time::timeout(timeout, self.lock.lock()).await).ok()
     }
 }

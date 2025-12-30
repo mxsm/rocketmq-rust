@@ -48,13 +48,7 @@ use rocketmq_store::log_file::mapped_file::default_mapped_file_impl::DefaultMapp
 use tempfile::TempDir;
 
 /// Setup: Create a test MappedFile and message
-fn setup_test_environment(
-    file_size: u64,
-) -> (
-    Arc<DefaultMappedFile>,
-    TempDir,
-    DefaultAppendMessageCallback,
-) {
+fn setup_test_environment(file_size: u64) -> (Arc<DefaultMappedFile>, TempDir, DefaultAppendMessageCallback) {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("test_commitlog");
 
@@ -75,10 +69,7 @@ fn setup_test_environment(
 /// Create a test message with pre-encoded buffer
 fn create_test_message_with_encoding(body_size: usize) -> MessageExtBrokerInner {
     let body = vec![b'A'; body_size];
-    let mut message = Message::new(
-        CheetahString::from_static_str("BenchmarkTopic"),
-        body.as_ref(),
-    );
+    let mut message = Message::new(CheetahString::from_static_str("BenchmarkTopic"), body.as_ref());
     message.set_tags(CheetahString::from_static_str("TAG1"));
 
     let mut msg_inner = MessageExtBrokerInner {
@@ -114,48 +105,40 @@ fn bench_zerocopy_vs_standard(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(size as u64));
 
         // Benchmark standard path
-        group.bench_with_input(
-            BenchmarkId::new("standard_append", size),
-            &size,
-            |b, &size| {
-                let (mapped_file, _temp, callback) = setup_test_environment(10 * 1024 * 1024);
-                let mut message = create_test_message_with_encoding(size);
-                let context = PutMessageContext::default();
+        group.bench_with_input(BenchmarkId::new("standard_append", size), &size, |b, &size| {
+            let (mapped_file, _temp, callback) = setup_test_environment(10 * 1024 * 1024);
+            let mut message = create_test_message_with_encoding(size);
+            let context = PutMessageContext::default();
 
-                b.iter(|| {
-                    let result = callback.do_append(
-                        std::hint::black_box(0),
-                        std::hint::black_box(mapped_file.as_ref()),
-                        std::hint::black_box(1024 * 1024),
-                        std::hint::black_box(&mut message),
-                        std::hint::black_box(&context),
-                    );
-                    std::hint::black_box(result);
-                });
-            },
-        );
+            b.iter(|| {
+                let result = callback.do_append(
+                    std::hint::black_box(0),
+                    std::hint::black_box(mapped_file.as_ref()),
+                    std::hint::black_box(1024 * 1024),
+                    std::hint::black_box(&mut message),
+                    std::hint::black_box(&context),
+                );
+                std::hint::black_box(result);
+            });
+        });
 
         // Benchmark zero-copy path
-        group.bench_with_input(
-            BenchmarkId::new("zerocopy_append", size),
-            &size,
-            |b, &size| {
-                let (mapped_file, _temp, callback) = setup_test_environment(10 * 1024 * 1024);
-                let mut message = create_test_message_with_encoding(size);
-                let context = PutMessageContext::default();
+        group.bench_with_input(BenchmarkId::new("zerocopy_append", size), &size, |b, &size| {
+            let (mapped_file, _temp, callback) = setup_test_environment(10 * 1024 * 1024);
+            let mut message = create_test_message_with_encoding(size);
+            let context = PutMessageContext::default();
 
-                b.iter(|| {
-                    let result = callback.do_append_zerocopy(
-                        std::hint::black_box(0),
-                        std::hint::black_box(mapped_file.as_ref()),
-                        std::hint::black_box(1024 * 1024),
-                        std::hint::black_box(&mut message),
-                        std::hint::black_box(&context),
-                    );
-                    std::hint::black_box(result);
-                });
-            },
-        );
+            b.iter(|| {
+                let result = callback.do_append_zerocopy(
+                    std::hint::black_box(0),
+                    std::hint::black_box(mapped_file.as_ref()),
+                    std::hint::black_box(1024 * 1024),
+                    std::hint::black_box(&mut message),
+                    std::hint::black_box(&context),
+                );
+                std::hint::black_box(result);
+            });
+        });
     }
 
     group.finish();
@@ -254,48 +237,44 @@ fn bench_concurrent_zerocopy(c: &mut Criterion) {
     for thread_count in [1, 2, 4, 8].iter() {
         let threads = *thread_count;
 
-        group.bench_with_input(
-            BenchmarkId::from_parameter(threads),
-            &threads,
-            |b, &thread_count| {
-                b.iter_custom(|iters| {
-                    let (mapped_file, _temp, callback) = setup_test_environment(100 * 1024 * 1024);
-                    let callback = Arc::new(callback);
+        group.bench_with_input(BenchmarkId::from_parameter(threads), &threads, |b, &thread_count| {
+            b.iter_custom(|iters| {
+                let (mapped_file, _temp, callback) = setup_test_environment(100 * 1024 * 1024);
+                let callback = Arc::new(callback);
 
-                    let start = Instant::now();
+                let start = Instant::now();
 
-                    let handles: Vec<_> = (0..thread_count)
-                        .map(|_| {
-                            let mapped_file = mapped_file.clone();
-                            let callback = callback.clone();
-                            let iter_count = iters / thread_count as u64;
+                let handles: Vec<_> = (0..thread_count)
+                    .map(|_| {
+                        let mapped_file = mapped_file.clone();
+                        let callback = callback.clone();
+                        let iter_count = iters / thread_count as u64;
 
-                            std::thread::spawn(move || {
-                                let mut message = create_test_message_with_encoding(1024);
-                                let context = PutMessageContext::default();
+                        std::thread::spawn(move || {
+                            let mut message = create_test_message_with_encoding(1024);
+                            let context = PutMessageContext::default();
 
-                                for _ in 0..iter_count {
-                                    let result = callback.do_append_zerocopy(
-                                        0,
-                                        mapped_file.as_ref(),
-                                        1024 * 1024,
-                                        &mut message,
-                                        &context,
-                                    );
-                                    std::hint::black_box(result);
-                                }
-                            })
+                            for _ in 0..iter_count {
+                                let result = callback.do_append_zerocopy(
+                                    0,
+                                    mapped_file.as_ref(),
+                                    1024 * 1024,
+                                    &mut message,
+                                    &context,
+                                );
+                                std::hint::black_box(result);
+                            }
                         })
-                        .collect();
+                    })
+                    .collect();
 
-                    for handle in handles {
-                        handle.join().unwrap();
-                    }
+                for handle in handles {
+                    handle.join().unwrap();
+                }
 
-                    start.elapsed()
-                });
-            },
-        );
+                start.elapsed()
+            });
+        });
     }
 
     group.finish();

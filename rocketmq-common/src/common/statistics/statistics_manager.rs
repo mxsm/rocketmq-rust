@@ -73,9 +73,7 @@ impl StatisticsManager {
         let mut kind_meta_map = self.kind_meta_map.write();
         kind_meta_map.insert(kind_meta.get_name().to_string(), kind_meta.clone());
         let mut stats_table = self.stats_table.write();
-        stats_table
-            .entry(kind_meta.get_name().to_string())
-            .or_default();
+        stats_table.entry(kind_meta.get_name().to_string()).or_default();
     }
 
     pub fn set_brief_meta(&mut self, brief_metas: Vec<(String, Vec<Vec<i64>>)>) {
@@ -123,11 +121,7 @@ impl StatisticsManager {
                     let new_item = Arc::new(StatisticsItem::new(
                         kind,
                         key,
-                        kind_meta
-                            .get_item_names()
-                            .iter()
-                            .map(|item| item.as_str())
-                            .collect(),
+                        kind_meta.get_item_names().iter().map(|item| item.as_str()).collect(),
                     ));
                     item_map.insert(key.to_string(), new_item.clone());
                     new_item.inc_items(item_accumulates);
@@ -146,10 +140,7 @@ impl StatisticsManager {
         }
     }
 
-    pub fn set_statistics_item_state_getter(
-        &mut self,
-        getter: Arc<dyn StatisticsItemStateGetter + Send + Sync>,
-    ) {
+    pub fn set_statistics_item_state_getter(&mut self, getter: Arc<dyn StatisticsItemStateGetter + Send + Sync>) {
         self.statistics_item_state_getter = Some(getter);
     }
 }

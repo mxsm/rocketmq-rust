@@ -40,9 +40,7 @@ pub(super) struct SubscriptionGroupHandler<MS: MessageStore> {
 
 impl<MS: MessageStore> SubscriptionGroupHandler<MS> {
     pub(super) fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self {
-            broker_runtime_inner,
-        }
+        Self { broker_runtime_inner }
     }
 
     pub async fn update_and_create_subscription_group(
@@ -95,29 +93,16 @@ impl<MS: MessageStore> SubscriptionGroupHandler<MS> {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut request_body = UnlockBatchRequestBody::decode(request.get_body().unwrap()).unwrap();
-        if request_body.only_this_broker
-            || !self
-                .broker_runtime_inner
-                .broker_config()
-                .lock_in_strict_mode
-        {
-            self.broker_runtime_inner
-                .rebalance_lock_manager()
-                .unlock_batch(
-                    request_body.consumer_group.as_ref().unwrap(),
-                    &request_body.mq_set,
-                    request_body.client_id.as_ref().unwrap(),
-                );
+        if request_body.only_this_broker || !self.broker_runtime_inner.broker_config().lock_in_strict_mode {
+            self.broker_runtime_inner.rebalance_lock_manager().unlock_batch(
+                request_body.consumer_group.as_ref().unwrap(),
+                &request_body.mq_set,
+                request_body.client_id.as_ref().unwrap(),
+            );
         } else {
             request_body.only_this_broker = true;
-            let request_body =
-                Bytes::from(request_body.encode().expect("unlockBatchMQ encode error"));
-            for broker_addr in self
-                .broker_runtime_inner
-                .broker_member_group()
-                .broker_addrs
-                .values()
-            {
+            let request_body = Bytes::from(request_body.encode().expect("unlockBatchMQ encode error"));
+            for broker_addr in self.broker_runtime_inner.broker_member_group().broker_addrs.values() {
                 match self
                     .broker_runtime_inner
                     .broker_outer_api()

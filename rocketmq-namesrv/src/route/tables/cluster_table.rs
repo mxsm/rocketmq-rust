@@ -52,9 +52,7 @@ pub struct ClusterAddrTable {
 impl ClusterAddrTable {
     /// Create a new cluster address table
     pub fn new() -> Self {
-        Self {
-            inner: DashMap::new(),
-        }
+        Self { inner: DashMap::new() }
     }
 
     /// Create with estimated capacity
@@ -76,10 +74,7 @@ impl ClusterAddrTable {
     /// # Returns
     /// true if broker was newly added, false if already existed
     pub fn add_broker(&self, cluster_name: ClusterName, broker_name: BrokerName) -> bool {
-        self.inner
-            .entry(cluster_name)
-            .or_default()
-            .insert(broker_name)
+        self.inner.entry(cluster_name).or_default().insert(broker_name)
     }
 
     /// Remove a broker from a cluster
@@ -175,10 +170,7 @@ impl ClusterAddrTable {
     /// # Arguments
     /// * `cluster_name` - Cluster name
     pub fn broker_count_in_cluster(&self, cluster_name: &str) -> usize {
-        self.inner
-            .get(cluster_name)
-            .map(|brokers| brokers.len())
-            .unwrap_or(0)
+        self.inner.get(cluster_name).map(|brokers| brokers.len()).unwrap_or(0)
     }
 
     /// Get total number of brokers across all clusters
@@ -260,14 +252,8 @@ mod tests {
         let table = ClusterAddrTable::new();
         let cluster: ClusterName = CheetahString::from_string("DefaultCluster".to_string());
 
-        table.add_broker(
-            cluster.clone(),
-            CheetahString::from_string("broker-a".to_string()),
-        );
-        table.add_broker(
-            cluster.clone(),
-            CheetahString::from_string("broker-b".to_string()),
-        );
+        table.add_broker(cluster.clone(), CheetahString::from_string("broker-a".to_string()));
+        table.add_broker(cluster.clone(), CheetahString::from_string("broker-b".to_string()));
 
         // Remove cluster
         assert!(table.remove_cluster("DefaultCluster"));
@@ -363,10 +349,7 @@ mod tests {
         assert_eq!(all_data.len(), 2);
 
         // Verify ClusterA has 2 brokers
-        let cluster_a_data = all_data
-            .iter()
-            .find(|(name, _)| &**name == "ClusterA")
-            .unwrap();
+        let cluster_a_data = all_data.iter().find(|(name, _)| &**name == "ClusterA").unwrap();
         assert_eq!(cluster_a_data.1.len(), 2);
     }
 

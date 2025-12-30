@@ -49,10 +49,8 @@ mod tests {
 
         let map = header.to_map().unwrap();
         assert_eq!(
-            map.get(&CheetahString::from_static_str(
-                DeleteTopicRequestHeader::TOPIC
-            ))
-            .unwrap(),
+            map.get(&CheetahString::from_static_str(DeleteTopicRequestHeader::TOPIC))
+                .unwrap(),
             &CheetahString::from("test_topic")
         );
     }
@@ -71,10 +69,8 @@ mod tests {
 
         let map = header.to_map().unwrap();
         assert_eq!(
-            map.get(&CheetahString::from_static_str(
-                DeleteTopicRequestHeader::TOPIC
-            ))
-            .unwrap(),
+            map.get(&CheetahString::from_static_str(DeleteTopicRequestHeader::TOPIC))
+                .unwrap(),
             &CheetahString::from("test_topic")
         );
         // Add assertions for fields from topic_request_header

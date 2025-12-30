@@ -27,10 +27,7 @@ pub trait RpcClientHook {
         &self,
         rpc_request: &RpcRequest<H>,
     ) -> rocketmq_error::RocketMQResult<Option<RpcResponse>>;
-    fn after_response(
-        &self,
-        rpc_response: &RpcResponse,
-    ) -> rocketmq_error::RocketMQResult<Option<RpcResponse>>;
+    fn after_response(&self, rpc_response: &RpcResponse) -> rocketmq_error::RocketMQResult<Option<RpcResponse>>;
 }
 
 pub type RpcClientHookFn = Arc<

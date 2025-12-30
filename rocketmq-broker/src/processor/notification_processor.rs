@@ -51,10 +51,7 @@ impl<MS: MessageStore> NotificationProcessor<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> ArcMut<Self> {
         let mut this = ArcMut::new(Self {
             broker_runtime_inner: broker_runtime_inner.clone(),
-            pop_long_polling_service: ArcMut::new(PopLongPollingService::new(
-                broker_runtime_inner,
-                true,
-            )),
+            pop_long_polling_service: ArcMut::new(PopLongPollingService::new(broker_runtime_inner, true)),
         });
         let this_clone = this.clone();
         this.pop_long_polling_service.set_processor(this_clone);
@@ -141,17 +138,13 @@ impl<MS: MessageStore> NotificationProcessor<MS> {
         // For order mode, check if blocked. If attempt_id is missing, skip block check.
         if request_header.order {
             if let Some(attempt_id) = request_header.attempt_id.as_ref() {
-                if self
-                    .broker_runtime_inner
-                    .consumer_order_info_manager()
-                    .check_block(
-                        attempt_id,
-                        &request_header.topic,
-                        &request_header.consumer_group,
-                        queue_id,
-                        0,
-                    )
-                {
+                if self.broker_runtime_inner.consumer_order_info_manager().check_block(
+                    attempt_id,
+                    &request_header.topic,
+                    &request_header.consumer_group,
+                    queue_id,
+                    0,
+                ) {
                     return false;
                 }
             }
@@ -168,12 +161,7 @@ impl<MS: MessageStore> NotificationProcessor<MS> {
         rest_num > 0
     }
 
-    async fn get_pop_offset(
-        &self,
-        topic: &CheetahString,
-        cid: &CheetahString,
-        queue_id: i32,
-    ) -> i64 {
+    async fn get_pop_offset(&self, topic: &CheetahString, cid: &CheetahString, queue_id: i32) -> i64 {
         let mut offset = self
             .broker_runtime_inner
             .consumer_offset_manager()
@@ -225,11 +213,7 @@ where
 
         response.set_opaque_mut(request.opaque());
 
-        if !PermName::is_readable(
-            self.broker_runtime_inner
-                .broker_config()
-                .broker_permission(),
-        ) {
+        if !PermName::is_readable(self.broker_runtime_inner.broker_config().broker_permission()) {
             response.set_code_ref(ResponseCode::NoPermission);
             response.set_remark_mut(format!(
                 "the broker[{}] peeking message is forbidden",
@@ -322,9 +306,7 @@ where
             has_msg = self
                 .has_msg_from_topic_name(&retry_topic, random_q, &request_header)
                 .await;
-            if !has_msg
-                && broker_config.enable_retry_topic_v2
-                && broker_config.retrieve_message_from_pop_retry_topic_v1
+            if !has_msg && broker_config.enable_retry_topic_v2 && broker_config.retrieve_message_from_pop_retry_topic_v1
             {
                 let retry_topic_v1 = KeyBuilder::build_pop_retry_topic_v1(
                     request_header.topic.as_str(),
@@ -343,9 +325,7 @@ where
                     .await;
             } else if let Some(topic_name) = topic_config.topic_name.as_ref() {
                 let queue_id = request_header.queue_id;
-                has_msg = self
-                    .has_msg_from_queue(topic_name, &request_header, queue_id)
-                    .await;
+                has_msg = self.has_msg_from_queue(topic_name, &request_header, queue_id).await;
             }
             // if it doesn't have message, fetch retry again
             if !need_retry && !has_msg {

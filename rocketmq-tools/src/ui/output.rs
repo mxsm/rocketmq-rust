@@ -135,11 +135,7 @@ mod tests {
 
     #[test]
     fn test_print_list() {
-        let items = vec![
-            "Item1".to_string(),
-            "Item2".to_string(),
-            "Item3".to_string(),
-        ];
+        let items = vec!["Item1".to_string(), "Item2".to_string(), "Item3".to_string()];
         print_list("Test List", &items);
     }
 

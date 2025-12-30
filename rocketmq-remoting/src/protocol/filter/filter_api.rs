@@ -35,8 +35,7 @@ impl FilterAPI {
         };
 
         if sub_string.is_empty() || sub_string == SubscriptionData::SUB_ALL {
-            subscription_data.sub_string =
-                CheetahString::from_static_str(SubscriptionData::SUB_ALL);
+            subscription_data.sub_string = CheetahString::from_static_str(SubscriptionData::SUB_ALL);
             return Ok(subscription_data);
         }
 
@@ -49,9 +48,7 @@ impl FilterAPI {
             let trimmed_tag = tag.trim();
             if !trimmed_tag.is_empty() {
                 subscription_data.tags_set.insert(trimmed_tag.into());
-                subscription_data
-                    .code_set
-                    .insert(JavaStringHasher::hash_str(tag));
+                subscription_data.code_set.insert(JavaStringHasher::hash_str(tag));
             }
         }
 
@@ -80,10 +77,7 @@ impl FilterAPI {
         }
 
         if sub_string.is_empty() {
-            return Err(format!(
-                "Expression can't be null! {}",
-                type_.unwrap_or_default()
-            ));
+            return Err(format!("Expression can't be null! {}", type_.unwrap_or_default()));
         }
 
         let mut subscription_data = SubscriptionData {
@@ -128,12 +122,9 @@ mod tests {
         let topic = "test_topic".into();
         let sub_string = "tag1||tag2".into();
         let expression_type: CheetahString = "SQL92".into();
-        let subscription_data = FilterAPI::build_subscription_data_with_expression_type(
-            &topic,
-            &sub_string,
-            Some(expression_type.clone()),
-        )
-        .unwrap();
+        let subscription_data =
+            FilterAPI::build_subscription_data_with_expression_type(&topic, &sub_string, Some(expression_type.clone()))
+                .unwrap();
 
         assert_eq!(subscription_data.topic.as_str(), topic.as_str());
         assert_eq!(subscription_data.sub_string.as_str(), sub_string.as_str());

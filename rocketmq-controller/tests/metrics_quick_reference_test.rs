@@ -28,9 +28,7 @@ mod quick_reference_tests {
 
     #[test]
     fn test_initialization() {
-        let config = Arc::new(
-            ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()),
-        );
+        let config = Arc::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
         let _metrics = ControllerMetricsManager::get_instance(config);
     }
 
@@ -43,43 +41,31 @@ mod quick_reference_tests {
 
     #[test]
     fn test_request_metrics() {
-        let config = Arc::new(
-            ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()),
-        );
+        let config = Arc::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
         let metrics = ControllerMetricsManager::get_instance(config);
 
         metrics.inc_request_total("controller_register_broker", RequestHandleStatus::Success);
         metrics.record_request_latency("controller_register_broker", 1500);
 
-        ControllerMetricsManager::inc_request_total_static(
-            "controller_elect_master",
-            RequestHandleStatus::Failed,
-        );
+        ControllerMetricsManager::inc_request_total_static("controller_elect_master", RequestHandleStatus::Failed);
         ControllerMetricsManager::record_request_latency_static("controller_elect_master", 2500);
     }
 
     #[test]
     fn test_dledger_metrics() {
-        let config = Arc::new(
-            ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()),
-        );
+        let config = Arc::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
         let metrics = ControllerMetricsManager::get_instance(config);
 
         metrics.inc_dledger_op_total(DLedgerOperation::Append, DLedgerOperationStatus::Success);
         metrics.record_dledger_op_latency(DLedgerOperation::Append, 800);
 
-        ControllerMetricsManager::inc_dledger_op_total_static(
-            DLedgerOperation::Append,
-            DLedgerOperationStatus::Failed,
-        );
+        ControllerMetricsManager::inc_dledger_op_total_static(DLedgerOperation::Append, DLedgerOperationStatus::Failed);
         ControllerMetricsManager::record_dledger_op_latency_static(DLedgerOperation::Append, 1200);
     }
 
     #[test]
     fn test_election_metrics() {
-        let config = Arc::new(
-            ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()),
-        );
+        let config = Arc::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
         let metrics = ControllerMetricsManager::get_instance(config);
 
         metrics.inc_election_total(ElectionResult::NewMasterElected);
@@ -90,9 +76,7 @@ mod quick_reference_tests {
 
     #[test]
     fn test_request_with_timing() {
-        let config = Arc::new(
-            ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()),
-        );
+        let config = Arc::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
         let metrics = ControllerMetricsManager::get_instance(config);
 
         let start = Instant::now();
@@ -107,9 +91,7 @@ mod quick_reference_tests {
 
     #[test]
     fn test_all_request_statuses() {
-        let config = Arc::new(
-            ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()),
-        );
+        let config = Arc::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
         let metrics = ControllerMetricsManager::get_instance(config);
 
         metrics.inc_request_total("test", RequestHandleStatus::Success);
@@ -119,9 +101,7 @@ mod quick_reference_tests {
 
     #[test]
     fn test_all_dledger_statuses() {
-        let config = Arc::new(
-            ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()),
-        );
+        let config = Arc::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
         let metrics = ControllerMetricsManager::get_instance(config);
 
         metrics.inc_dledger_op_total(DLedgerOperation::Append, DLedgerOperationStatus::Success);
@@ -131,9 +111,7 @@ mod quick_reference_tests {
 
     #[test]
     fn test_all_election_results() {
-        let config = Arc::new(
-            ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()),
-        );
+        let config = Arc::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
         let metrics = ControllerMetricsManager::get_instance(config);
 
         metrics.inc_election_total(ElectionResult::NewMasterElected);
@@ -145,9 +123,7 @@ mod quick_reference_tests {
     fn test_thread_safety() {
         use std::thread;
 
-        let config = Arc::new(
-            ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()),
-        );
+        let config = Arc::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
         let _metrics = ControllerMetricsManager::get_instance(config);
 
         let handles: Vec<_> = (0..10)

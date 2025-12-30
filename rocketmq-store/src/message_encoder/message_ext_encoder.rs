@@ -78,8 +78,7 @@ impl MessageExtEncoder {
         } else {
             20
         };
-        let storehost_address_length = if (sys_flag & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG) == 0
-        {
+        let storehost_address_length = if (sys_flag & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG) == 0 {
             8
         } else {
             20
@@ -115,8 +114,7 @@ impl MessageExtEncoder {
         } else {
             20
         };
-        let storehost_address_length = if (sys_flag & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG) == 0
-        {
+        let storehost_address_length = if (sys_flag & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG) == 0 {
             8
         } else {
             20
@@ -140,10 +138,7 @@ impl MessageExtEncoder {
              (message_version.get_topic_length_size() as i32) + topic_length // TOPIC
     }
 
-    pub fn encode_without_properties(
-        &mut self,
-        msg_inner: &MessageExtBrokerInner,
-    ) -> Option<PutMessageResult> {
+    pub fn encode_without_properties(&mut self, msg_inner: &MessageExtBrokerInner) -> Option<PutMessageResult> {
         let topic_data = msg_inner.topic().as_bytes();
         let topic_length = topic_data.len();
 
@@ -154,9 +149,7 @@ impl MessageExtEncoder {
                 "message body size exceeded, msg body size: {}, maxMessageSize: {}",
                 body_length, self.max_message_body_size
             );
-            return Some(PutMessageResult::new_default(
-                PutMessageStatus::MessageIllegal,
-            ));
+            return Some(PutMessageResult::new_default(PutMessageStatus::MessageIllegal));
         }
 
         let msg_len_no_properties = Self::cal_msg_length_no_properties(
@@ -206,8 +199,7 @@ impl MessageExtEncoder {
         self.byte_buf.put_i32(msg_inner.reconsume_times());
 
         // 14 Prepared Transaction Offset
-        self.byte_buf
-            .put_i64(msg_inner.prepared_transaction_offset());
+        self.byte_buf.put_i64(msg_inner.prepared_transaction_offset());
 
         // 15 BODY
         self.byte_buf.put_i32(body_length as i32);
@@ -229,9 +221,7 @@ impl MessageExtEncoder {
     pub fn encode(&mut self, msg_inner: &MessageExtBrokerInner) -> Option<PutMessageResult> {
         self.byte_buf.clear();
 
-        if self.message_store_config.enable_multi_dispatch
-            && CommitLog::is_multi_dispatch_msg(msg_inner)
-        {
+        if self.message_store_config.enable_multi_dispatch && CommitLog::is_multi_dispatch_msg(msg_inner) {
             return self.encode_without_properties(msg_inner);
         }
 
@@ -242,11 +232,7 @@ impl MessageExtEncoder {
             && properties_data[properties_data.len() - 1..][0] != PROPERTY_SEPARATOR as u8;
 
         let properties_length = properties_data.len()
-            + if need_append_last_property_separator {
-                1
-            } else {
-                0
-            }
+            + if need_append_last_property_separator { 1 } else { 0 }
             + self.crc32_reserved_length as usize;
 
         if properties_length > i16::MAX as usize {
@@ -276,15 +262,10 @@ impl MessageExtEncoder {
         // Exceeds the maximum message body
         if body_length > self.max_message_body_size as usize {
             warn!(
-                "message body size exceeded, msg total size: {}, msg body size: {}, \
-                 maxMessageSize: {}",
+                "message body size exceeded, msg total size: {}, msg body size: {}, maxMessageSize: {}",
                 msg_len, body_length, self.max_message_body_size
             );
-            return Some(PutMessageResult::new(
-                PutMessageStatus::MessageIllegal,
-                None,
-                false,
-            ));
+            return Some(PutMessageResult::new(PutMessageStatus::MessageIllegal, None, false));
         }
 
         let queue_offset = msg_inner.queue_offset();
@@ -295,11 +276,7 @@ impl MessageExtEncoder {
                 "message size exceeded, msg total size: {}, msg body size: {}, maxMessageSize: {}",
                 msg_len, body_length, self.max_message_size
             );
-            return Some(PutMessageResult::new(
-                PutMessageStatus::MessageIllegal,
-                None,
-                false,
-            ));
+            return Some(PutMessageResult::new(PutMessageStatus::MessageIllegal, None, false));
         }
 
         // 1 TOTALSIZE
@@ -342,8 +319,7 @@ impl MessageExtEncoder {
         self.byte_buf.put_i32(msg_inner.reconsume_times());
 
         // 14 Prepared Transaction Offset
-        self.byte_buf
-            .put_i64(msg_inner.prepared_transaction_offset());
+        self.byte_buf.put_i64(msg_inner.prepared_transaction_offset());
 
         // 15 BODY
         self.byte_buf.put_i32(body_length as i32);
@@ -367,8 +343,7 @@ impl MessageExtEncoder {
             self.byte_buf.put(properties_data);
         }
         if need_append_last_property_separator {
-            self.byte_buf
-                .put_u8(MessageDecoder::PROPERTY_SEPARATOR as u8);
+            self.byte_buf.put_u8(MessageDecoder::PROPERTY_SEPARATOR as u8);
         }
         // 18 CRC32
         self.byte_buf.advance(self.crc32_reserved_length as usize);
@@ -426,12 +401,8 @@ impl MessageExtEncoder {
             let current = total_length - messages_byte_buff.remaining();
             let need_append_last_property_separator = properties_len > 0
                 && batch_prop_len > 0
-                && properties_body.as_ref()[(properties_len - 1) as usize..][0]
-                    != PROPERTY_SEPARATOR as u8;
-            let topic_data = message_ext_batch
-                .message_ext_broker_inner
-                .topic()
-                .as_bytes();
+                && properties_body.as_ref()[(properties_len - 1) as usize..][0] != PROPERTY_SEPARATOR as u8;
+            let topic_data = message_ext_batch.message_ext_broker_inner.topic().as_bytes();
             let topic_length = topic_data.len() as i32;
             let mut total_prop_len = if need_append_last_property_separator {
                 properties_len + batch_prop_len + 1
@@ -452,12 +423,8 @@ impl MessageExtEncoder {
             // 1 TOTALSIZE
             self.byte_buf.put_i32(msg_len);
             // 2 MAGICCODE
-            self.byte_buf.put_i32(
-                message_ext_batch
-                    .message_ext_broker_inner
-                    .version()
-                    .get_magic_code(),
-            );
+            self.byte_buf
+                .put_i32(message_ext_batch.message_ext_broker_inner.version().get_magic_code());
             // 3 BODYCRC
             self.byte_buf.put_i32(body_crc);
             // 4 QUEUEID
@@ -482,11 +449,8 @@ impl MessageExtEncoder {
             self.byte_buf
                 .put_i64(message_ext_batch.message_ext_broker_inner.store_timestamp());
             // 12 STOREHOSTADDRESS
-            self.byte_buf.put(
-                message_ext_batch
-                    .message_ext_broker_inner
-                    .store_host_bytes(),
-            );
+            self.byte_buf
+                .put(message_ext_batch.message_ext_broker_inner.store_host_bytes());
             // 13 RECONSUMETIMES
             self.byte_buf
                 .put_i32(message_ext_batch.message_ext_broker_inner.reconsume_times());
@@ -512,8 +476,7 @@ impl MessageExtEncoder {
             }
             if batch_prop_len > 0 {
                 if need_append_last_property_separator {
-                    self.byte_buf
-                        .put_u8(MessageDecoder::PROPERTY_SEPARATOR as u8);
+                    self.byte_buf.put_u8(MessageDecoder::PROPERTY_SEPARATOR as u8);
                 }
                 self.byte_buf.put_slice(batch_prop_data);
             }
@@ -569,13 +532,7 @@ mod tests {
     fn cal_msg_length_calculates_correct_length() {
         let length = MessageExtEncoder::cal_msg_length(MessageVersion::V1, 0, 10, 5, 15);
         assert_eq!(length, 121);
-        let length = MessageExtEncoder::cal_msg_length(
-            MessageVersion::V1,
-            MessageSysFlag::BORNHOST_V6_FLAG,
-            10,
-            5,
-            15,
-        );
+        let length = MessageExtEncoder::cal_msg_length(MessageVersion::V1, MessageSysFlag::BORNHOST_V6_FLAG, 10, 5, 15);
         assert_eq!(length, 133);
         let length = MessageExtEncoder::cal_msg_length(MessageVersion::V2, 0, 10, 5, 15);
         assert_eq!(length, 122);

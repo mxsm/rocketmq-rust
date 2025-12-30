@@ -147,10 +147,7 @@ impl<'de> Deserialize<'de> for TopicFilterType {
                 match value {
                     "SINGLE_TAG" => Ok(TopicFilterType::SingleTag),
                     "MULTI_TAG" => Ok(TopicFilterType::MultiTag),
-                    _ => Err(serde::de::Error::unknown_variant(
-                        value,
-                        &["SingleTag", "MultiTag"],
-                    )),
+                    _ => Err(serde::de::Error::unknown_variant(value, &["SingleTag", "MultiTag"])),
                 }
             }
         }

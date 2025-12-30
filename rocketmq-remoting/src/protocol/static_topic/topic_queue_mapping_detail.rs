@@ -24,10 +24,7 @@ impl TopicQueueMappingDetail {
         mapping_detail.hosted_queues.as_ref()?.get(&global_id)
     }
 
-    pub fn compute_max_offset_from_mapping(
-        mapping_detail: &TopicQueueMappingDetail,
-        global_id: Option<i32>,
-    ) -> i64 {
+    pub fn compute_max_offset_from_mapping(mapping_detail: &TopicQueueMappingDetail, global_id: Option<i32>) -> i64 {
         match Self::get_mapping_info(mapping_detail, global_id.unwrap()) {
             Some(mapping_items) => {
                 if mapping_items.is_empty() {
@@ -43,9 +40,7 @@ impl TopicQueueMappingDetail {
 
 //impl static methods(Like java static method)
 impl TopicQueueMappingDetail {
-    pub fn clone_as_mapping_info(
-        mapping_detail: &TopicQueueMappingDetail,
-    ) -> TopicQueueMappingInfo {
+    pub fn clone_as_mapping_info(mapping_detail: &TopicQueueMappingDetail) -> TopicQueueMappingInfo {
         TopicQueueMappingInfo {
             topic: mapping_detail.topic_queue_mapping_info.topic.clone(),
             total_queues: mapping_detail.topic_queue_mapping_info.total_queues,

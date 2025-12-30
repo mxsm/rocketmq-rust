@@ -20,8 +20,7 @@ use sysinfo::System;
 
 pub struct StoreUtil;
 
-pub static TOTAL_PHYSICAL_MEMORY_SIZE: Lazy<u64> =
-    Lazy::new(StoreUtil::get_total_physical_memory_size);
+pub static TOTAL_PHYSICAL_MEMORY_SIZE: Lazy<u64> = Lazy::new(StoreUtil::get_total_physical_memory_size);
 
 impl StoreUtil {
     pub fn get_total_physical_memory_size() -> u64 {

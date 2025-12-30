@@ -33,12 +33,7 @@ pub struct AddWritePermSubCommand {
     #[command(flatten)]
     common_args: CommonArgs,
 
-    #[arg(
-        short = 'b',
-        long = "brokerName",
-        required = true,
-        help = "broker name"
-    )]
+    #[arg(short = 'b', long = "brokerName", required = true, help = "broker name")]
     broker_name: String,
 }
 
@@ -50,36 +45,25 @@ impl CommandExecute for AddWritePermSubCommand {
             .set_instance_name(get_current_millis().to_string().into());
 
         let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext)
-                .await
-                .map_err(|e| {
-                    RocketMQError::Internal(format!(
-                        "AddWritePermSubCommand: Failed to start MQAdminExt: {}",
-                        e
-                    ))
-                })?;
+            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
+                RocketMQError::Internal(format!("AddWritePermSubCommand: Failed to start MQAdminExt: {}", e))
+            })?;
             let broker_name = self.broker_name.trim();
             for namesrv_addr in default_mqadmin_ext.get_name_server_address_list().await {
                 match default_mqadmin_ext
                     .add_write_perm_of_broker(namesrv_addr.clone(), broker_name.into())
                     .await
                     .map_err(|e| {
-                        RocketMQError::Internal(format!(
-                            "AddWritePermSubCommand: Failed to add write perm: {}",
-                            e
-                        ))
+                        RocketMQError::Internal(format!("AddWritePermSubCommand: Failed to add write perm: {}", e))
                     }) {
                     Ok(add_topic_count) => {
                         println!(
-                            "add write perm of broker[{broker_name}] in name \
-                             server[{namesrv_addr}] OK, {add_topic_count}"
+                            "add write perm of broker[{broker_name}] in name server[{namesrv_addr}] OK, \
+                             {add_topic_count}"
                         );
                     }
                     Err(e) => {
-                        println!(
-                            "add write perm of broker[{broker_name}] in name \
-                             server[{namesrv_addr}] Failed",
-                        );
+                        println!("add write perm of broker[{broker_name}] in name server[{namesrv_addr}] Failed",);
                         println!("{e}")
                     }
                 }

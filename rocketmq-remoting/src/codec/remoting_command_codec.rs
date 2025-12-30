@@ -90,10 +90,7 @@ impl Decoder for RemotingCommandCodec {
     /// # Errors
     ///
     /// This function will return an error if the decoding process fails.
-    fn decode(
-        &mut self,
-        src: &mut BytesMut,
-    ) -> Result<Option<Self::Item>, rocketmq_error::RocketMQError> {
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, rocketmq_error::RocketMQError> {
         RemotingCommand::decode(src)
     }
 }
@@ -151,10 +148,7 @@ impl Decoder for CompositeCodec {
     type Error = rocketmq_error::RocketMQError;
     type Item = RemotingCommand;
 
-    fn decode(
-        &mut self,
-        src: &mut BytesMut,
-    ) -> Result<Option<Self::Item>, rocketmq_error::RocketMQError> {
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, rocketmq_error::RocketMQError> {
         self.remoting_command_codec.decode(src)
     }
 }
@@ -164,8 +158,7 @@ impl Encoder<Bytes> for CompositeCodec {
 
     fn encode(&mut self, item: Bytes, dst: &mut BytesMut) -> Result<(), Self::Error> {
         self.bytes_codec.encode(item, dst).map_err(|error| {
-            RocketmqError::RemotingCommandEncoderError(format!("Error encoding bytes: {error}"))
-                .into()
+            RocketmqError::RemotingCommandEncoderError(format!("Error encoding bytes: {error}")).into()
         })
     }
 }

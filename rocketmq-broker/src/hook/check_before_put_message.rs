@@ -47,10 +47,6 @@ impl<MS: MessageStore> PutMessageHook for CheckBeforePutMessageHook<MS> {
     }
 
     fn execute_before_put_message(&self, msg: &mut dyn MessageTrait) -> Option<PutMessageResult> {
-        HookUtils::check_before_put_message(
-            self.message_store.deref(),
-            &self.message_store_config,
-            msg,
-        )
+        HookUtils::check_before_put_message(self.message_store.deref(), &self.message_store_config, msg)
     }
 }

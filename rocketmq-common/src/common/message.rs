@@ -53,10 +53,7 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// * `keys` - The keys to set, converted into a `String`.
     fn set_keys(&mut self, keys: CheetahString) {
-        self.put_property(
-            CheetahString::from_static_str(MessageConst::PROPERTY_KEYS),
-            keys,
-        );
+        self.put_property(CheetahString::from_static_str(MessageConst::PROPERTY_KEYS), keys);
     }
 
     /// Adds a property to the message.
@@ -143,10 +140,7 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// * `tags` - The tags to set, converted into a `String`.
     fn set_tags(&mut self, tags: CheetahString) {
-        self.put_property(
-            CheetahString::from_static_str(MessageConst::PROPERTY_TAGS),
-            tags,
-        );
+        self.put_property(CheetahString::from_static_str(MessageConst::PROPERTY_TAGS), tags);
     }
 
     /// Retrieves the keys associated with the message.
@@ -174,12 +168,10 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// An `i32` representing the delay time level.
     fn get_delay_time_level(&self) -> i32 {
-        self.get_property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_DELAY_TIME_LEVEL,
-        ))
-        .unwrap_or(CheetahString::from_slice("0"))
-        .parse()
-        .unwrap_or(0)
+        self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL))
+            .unwrap_or(CheetahString::from_slice("0"))
+            .parse()
+            .unwrap_or(0)
     }
 
     /// Sets the delay time level for the message.
@@ -280,9 +272,7 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// An `Option<String>` containing the buyer ID if it exists, otherwise `None`.
     fn get_buyer_id(&self) -> Option<CheetahString> {
-        self.get_property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_BUYER_ID,
-        ))
+        self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_BUYER_ID))
     }
 
     /// Sets the buyer ID for the message.
@@ -329,12 +319,10 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// The delay time in seconds.
     fn get_delay_time_sec(&self) -> u64 {
-        self.get_property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_TIMER_DELAY_SEC,
-        ))
-        .unwrap_or(CheetahString::from_slice("0"))
-        .parse()
-        .unwrap_or(0)
+        self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_SEC))
+            .unwrap_or(CheetahString::from_slice("0"))
+            .parse()
+            .unwrap_or(0)
     }
 
     /// Sets the delay time for the message in milliseconds.
@@ -355,12 +343,10 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// The delay time in milliseconds.
     fn get_delay_time_ms(&self) -> u64 {
-        self.get_property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_TIMER_DELAY_MS,
-        ))
-        .unwrap_or(CheetahString::from_slice("0"))
-        .parse()
-        .unwrap_or(0)
+        self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_MS))
+            .unwrap_or(CheetahString::from_slice("0"))
+            .parse()
+            .unwrap_or(0)
     }
 
     /// Sets the delivery time for the message in milliseconds.
@@ -381,12 +367,10 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// The delivery time in milliseconds.
     fn get_deliver_time_ms(&self) -> u64 {
-        self.get_property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_TIMER_DELIVER_MS,
-        ))
-        .unwrap_or(CheetahString::from_slice("0"))
-        .parse()
-        .unwrap_or(0)
+        self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVER_MS))
+            .unwrap_or(CheetahString::from_slice("0"))
+            .parse()
+            .unwrap_or(0)
     }
 
     /// Retrieves a mutable reference to the compressed body of the message.
@@ -517,8 +501,7 @@ impl MessageConst {
     pub const PROPERTY_BORN_HOST: &'static str = "__BORNHOST";
     pub const PROPERTY_BORN_TIMESTAMP: &'static str = "BORN_TIMESTAMP";
     pub const PROPERTY_BUYER_ID: &'static str = "BUYER_ID";
-    pub const PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS: &'static str =
-        "CHECK_IMMUNITY_TIME_IN_SECONDS";
+    pub const PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS: &'static str = "CHECK_IMMUNITY_TIME_IN_SECONDS";
     pub const PROPERTY_CLUSTER: &'static str = "CLUSTER";
     pub const PROPERTY_CONSUME_START_TIMESTAMP: &'static str = "CONSUME_START_TIME";
     pub const PROPERTY_CORRECTION_FLAG: &'static str = "CORRECTION_FLAG";
@@ -575,8 +558,7 @@ impl MessageConst {
     pub const PROPERTY_TRANSACTION_CHECK_TIMES: &'static str = "TRANSACTION_CHECK_TIMES";
     pub const PROPERTY_TRANSACTION_ID: &'static str = "__transactionId__";
     pub const PROPERTY_TRANSACTION_PREPARED: &'static str = "TRAN_MSG";
-    pub const PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET: &'static str =
-        "TRAN_PREPARED_QUEUE_OFFSET";
+    pub const PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET: &'static str = "TRAN_PREPARED_QUEUE_OFFSET";
     pub const PROPERTY_TRANSFER_FLAG: &'static str = "TRANSFER_FLAG";
     /**
      * the transient property key of groupSysFlag (set by the client when pulling messages)

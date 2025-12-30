@@ -61,10 +61,7 @@ mod tests {
         let serialized = serde_json::to_string(&consume_status_list).unwrap();
         println!("{}", serialized);
         let deserialized: ConsumeStatsList = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(
-            deserialized.broker_addr.unwrap(),
-            CheetahString::from("addr")
-        );
+        assert_eq!(deserialized.broker_addr.unwrap(), CheetahString::from("addr"));
         assert_eq!(deserialized.total_diff, 2);
         assert_eq!(deserialized.total_inflight_diff, 1);
         let a = deserialized.consume_stats_list[0]

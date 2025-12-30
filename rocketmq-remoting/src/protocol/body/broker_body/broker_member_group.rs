@@ -139,35 +139,19 @@ mod tests {
 
     #[test]
     fn minimum_broker_id_returns_smallest_broker_id_when_present() {
-        let mut group = BrokerMemberGroup::new(
-            CheetahString::from("cluster"),
-            CheetahString::from("broker"),
-        );
-        group
-            .broker_addrs
-            .insert(3, CheetahString::from("127.0.0.1:10913"));
-        group
-            .broker_addrs
-            .insert(1, CheetahString::from("127.0.0.1:10911"));
-        group
-            .broker_addrs
-            .insert(2, CheetahString::from("127.0.0.1:10912"));
+        let mut group = BrokerMemberGroup::new(CheetahString::from("cluster"), CheetahString::from("broker"));
+        group.broker_addrs.insert(3, CheetahString::from("127.0.0.1:10913"));
+        group.broker_addrs.insert(1, CheetahString::from("127.0.0.1:10911"));
+        group.broker_addrs.insert(2, CheetahString::from("127.0.0.1:10912"));
 
         assert_eq!(group.minimum_broker_id(), 1);
     }
 
     #[test]
     fn minimum_broker_id_handles_zero_and_large_ids() {
-        let mut group = BrokerMemberGroup::new(
-            CheetahString::from("cluster"),
-            CheetahString::from("broker"),
-        );
-        group
-            .broker_addrs
-            .insert(0, CheetahString::from("127.0.0.1:10910"));
-        group
-            .broker_addrs
-            .insert(42, CheetahString::from("127.0.0.1:10942"));
+        let mut group = BrokerMemberGroup::new(CheetahString::from("cluster"), CheetahString::from("broker"));
+        group.broker_addrs.insert(0, CheetahString::from("127.0.0.1:10910"));
+        group.broker_addrs.insert(42, CheetahString::from("127.0.0.1:10942"));
         group
             .broker_addrs
             .insert(u64::MAX, CheetahString::from("127.0.0.1:12000"));

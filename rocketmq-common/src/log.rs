@@ -45,9 +45,8 @@ static WORKER_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 /// Returns `Ok(())` on success, or a `RocketMQError` if initialization fails.
 pub fn init_logger() -> RocketMQResult<()> {
     let info_level = std::env::var("RUST_LOG").unwrap_or_else(|_| String::from("INFO"));
-    let level = tracing::Level::from_str(&info_level).map_err(|_| {
-        RocketMQError::illegal_argument(format!("Invalid log level: {}", info_level))
-    })?;
+    let level = tracing::Level::from_str(&info_level)
+        .map_err(|_| RocketMQError::illegal_argument(format!("Invalid log level: {}", info_level)))?;
 
     tracing_subscriber::fmt()
         .with_thread_names(true)

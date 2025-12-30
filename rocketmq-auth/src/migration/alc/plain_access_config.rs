@@ -116,9 +116,8 @@ impl fmt::Display for PlainAccessConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "PlainAccessConfig{{ access_key={:?}, white_remote_address={:?}, admin={}, \
-             default_topic_perm={:?}, default_group_perm={:?}, topic_perms={:?}, group_perms={:?} \
-             }}",
+            "PlainAccessConfig{{ access_key={:?}, white_remote_address={:?}, admin={}, default_topic_perm={:?}, \
+             default_group_perm={:?}, topic_perms={:?}, group_perms={:?} }}",
             self.access_key,
             self.white_remote_address,
             self.admin,

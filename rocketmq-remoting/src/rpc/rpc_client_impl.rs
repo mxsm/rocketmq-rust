@@ -190,11 +190,7 @@ impl RpcClientImpl {
     ) -> Result<RpcResponse, RpcClientError>
     where
         H: CommandCustomHeader + TopicRequestHeaderTrait,
-        R: CommandCustomHeader
-            + FromMap<Target = R, Error = rocketmq_error::RocketMQError>
-            + Send
-            + Sync
-            + 'static,
+        R: CommandCustomHeader + FromMap<Target = R, Error = rocketmq_error::RocketMQError> + Send + Sync + 'static,
     {
         trace!(
             "Sending RPC request: addr={}, code={}, timeout={}ms",
@@ -232,24 +228,19 @@ impl RpcClientImpl {
             });
         }
 
-        let response_header = response
-            .decode_command_custom_header::<R>()
-            .map_err(|err| RpcClientError::RequestFailed {
-                addr: addr.to_string(),
-                request_code,
-                timeout_ms: timeout_millis,
-                source: Box::new(err),
-            })?;
+        let response_header =
+            response
+                .decode_command_custom_header::<R>()
+                .map_err(|err| RpcClientError::RequestFailed {
+                    addr: addr.to_string(),
+                    request_code,
+                    timeout_ms: timeout_millis,
+                    source: Box::new(err),
+                })?;
 
-        let body = response
-            .body()
-            .map(|value| Box::new(value.clone()) as Box<dyn Any>);
+        let body = response.body().map(|value| Box::new(value.clone()) as Box<dyn Any>);
 
-        Ok(RpcResponse::new(
-            response.code(),
-            Box::new(response_header),
-            body,
-        ))
+        Ok(RpcResponse::new(response.code(), Box::new(response_header), body))
     }
 
     /// Handles PULL_MESSAGE request with multiple success codes
@@ -306,14 +297,8 @@ impl RpcClientImpl {
                         timeout_ms: timeout_millis,
                         source: Box::new(err),
                     })?;
-                let body = response
-                    .body()
-                    .map(|value| Box::new(value.clone()) as Box<dyn Any>);
-                Ok(RpcResponse::new(
-                    response.code(),
-                    Box::new(response_header),
-                    body,
-                ))
+                let body = response.body().map(|value| Box::new(value.clone()) as Box<dyn Any>);
+                Ok(RpcResponse::new(response.code(), Box::new(response_header), body))
             }
             ResponseCode::QueryNotFound => {
                 // Special case: no offset found (not an error)
@@ -361,17 +346,11 @@ impl RpcClient for RpcClientImpl {
         }
 
         // Resolve broker address
-        let broker_name = request
-            .header
-            .broker_name()
-            .expect("broker name is required");
+        let broker_name = request.header.broker_name().expect("broker name is required");
         let addr = self.get_broker_addr_by_name(broker_name.as_ref())?;
 
         let result = match RequestCode::from(request.code) {
-            RequestCode::PullMessage => {
-                self.handle_pull_message(&addr, request, timeout_millis)
-                    .await?
-            }
+            RequestCode::PullMessage => self.handle_pull_message(&addr, request, timeout_millis).await?,
             RequestCode::GetMinOffset => {
                 self.handle_request::<H, GetMinOffsetResponseHeader>(
                     &addr,
@@ -443,9 +422,7 @@ impl RpcClient for RpcClientImpl {
                     .into());
                 }
 
-                let body = response
-                    .body()
-                    .map(|value| Box::new(value.clone()) as Box<dyn Any>);
+                let body = response.body().map(|value| Box::new(value.clone()) as Box<dyn Any>);
                 RpcResponse::new_option(response.code(), body)
             }
             _ => return Err(RpcClientError::UnsupportedRequestCode { code: request.code }.into()),

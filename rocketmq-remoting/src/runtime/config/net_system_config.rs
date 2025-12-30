@@ -17,25 +17,18 @@
 
 use std::env;
 
-pub const POOLED_BYTE_BUF_ALLOCATOR_ENABLE: &str =
-    "com.rocketmq.rocketmq-remoting.nettyPooledByteBufAllocatorEnable";
+pub const POOLED_BYTE_BUF_ALLOCATOR_ENABLE: &str = "com.rocketmq.rocketmq-remoting.nettyPooledByteBufAllocatorEnable";
 pub const SOCKET_SNDBUF_SIZE: &str = "com.rocketmq.rocketmq-remoting.socket.sndbuf.size";
 pub const SOCKET_RCVBUF_SIZE: &str = "com.rocketmq.rocketmq-remoting.socket.rcvbuf.size";
 pub const SOCKET_BACKLOG: &str = "com.rocketmq.rocketmq-remoting.socket.backlog";
-pub const CLIENT_ASYNC_SEMAPHORE_VALUE: &str =
-    "com.rocketmq.rocketmq-remoting.clientAsyncSemaphoreValue";
-pub const CLIENT_ONEWAY_SEMAPHORE_VALUE: &str =
-    "com.rocketmq.rocketmq-remoting.clientOnewaySemaphoreValue";
+pub const CLIENT_ASYNC_SEMAPHORE_VALUE: &str = "com.rocketmq.rocketmq-remoting.clientAsyncSemaphoreValue";
+pub const CLIENT_ONEWAY_SEMAPHORE_VALUE: &str = "com.rocketmq.rocketmq-remoting.clientOnewaySemaphoreValue";
 pub const CLIENT_WORKER_SIZE: &str = "com.rocketmq.rocketmq-remoting.client.worker.size";
 pub const CLIENT_CONNECT_TIMEOUT: &str = "com.rocketmq.rocketmq-remoting.client.connect.timeout";
-pub const CLIENT_CHANNEL_MAX_IDLE_SECONDS: &str =
-    "com.rocketmq.rocketmq-remoting.client.channel.maxIdleTimeSeconds";
-pub const CLIENT_CLOSE_SOCKET_IF_TIMEOUT: &str =
-    "com.rocketmq.rocketmq-remoting.client.closeSocketIfTimeout";
-pub const WRITE_BUFFER_HIGH_WATER_MARK_VALUE: &str =
-    "com.rocketmq.rocketmq-remoting.write.buffer.high.water.mark";
-pub const WRITE_BUFFER_LOW_WATER_MARK: &str =
-    "com.rocketmq.rocketmq-remoting.write.buffer.low.water.mark";
+pub const CLIENT_CHANNEL_MAX_IDLE_SECONDS: &str = "com.rocketmq.rocketmq-remoting.client.channel.maxIdleTimeSeconds";
+pub const CLIENT_CLOSE_SOCKET_IF_TIMEOUT: &str = "com.rocketmq.rocketmq-remoting.client.closeSocketIfTimeout";
+pub const WRITE_BUFFER_HIGH_WATER_MARK_VALUE: &str = "com.rocketmq.rocketmq-remoting.write.buffer.high.water.mark";
+pub const WRITE_BUFFER_LOW_WATER_MARK: &str = "com.rocketmq.rocketmq-remoting.write.buffer.low.water.mark";
 
 pub(crate) struct NetSystemConfig {
     pub(crate) pooled_byte_buf_allocator_enable: bool,

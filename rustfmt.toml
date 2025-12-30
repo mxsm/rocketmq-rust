@@ -1,15 +1,9 @@
 #https://rust-lang.github.io/rustfmt/?version=v1.6.0&search=
-comment_width = 120
-edition = "2021"
 format_code_in_doc_comments = true
-format_strings = true
-group_imports = "StdExternalCrate"
-imports_granularity = "Item"
-normalize_comments = false
-normalize_doc_attributes = true
-wrap_comments = true
-format_macro_bodies = true
-format_macro_matchers = true
-reorder_impl_items = false
-reorder_imports = true
-reorder_modules = true
+format_strings              = true
+wrap_comments               = true
+format_macro_bodies         = true
+format_macro_matchers       = true
+imports_granularity         = "Item"
+comment_width               = 100
+max_width                   = 120

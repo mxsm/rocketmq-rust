@@ -54,9 +54,7 @@ static FIX_STRING: LazyLock<Vec<char>> = LazyLock::new(|| {
     bytes.put(ip.as_slice());
     bytes.put_i16(pid);
     bytes.put_i32(class_loader_hash);
-    let data = bytes_to_string(bytes.freeze().as_ref())
-        .chars()
-        .collect::<Vec<char>>();
+    let data = bytes_to_string(bytes.freeze().as_ref()).chars().collect::<Vec<char>>();
     data
 });
 
@@ -79,16 +77,11 @@ impl MessageClientIDSetter {
 
     fn set_start_time(millis: i64) {
         let dt = Utc.timestamp_millis_opt(millis).unwrap();
-        let cal = Utc
-            .with_ymd_and_hms(dt.year(), dt.month(), 1, 0, 0, 0)
-            .unwrap();
+        let cal = Utc.with_ymd_and_hms(dt.year(), dt.month(), 1, 0, 0, 0).unwrap();
 
         *START_TIME.lock() = cal.timestamp_millis();
 
-        *NEXT_START_TIME.lock() = cal
-            .checked_add_months(Months::new(1))
-            .unwrap()
-            .timestamp_millis();
+        *NEXT_START_TIME.lock() = cal.checked_add_months(Months::new(1)).unwrap().timestamp_millis();
     }
 
     pub fn create_uniq_id() -> String {
@@ -126,9 +119,7 @@ impl MessageClientIDSetter {
         {
             let uniq_id = Self::create_uniq_id();
             message.put_property(
-                CheetahString::from_static_str(
-                    MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
-                ),
+                CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
                 CheetahString::from_string(uniq_id),
             );
         }

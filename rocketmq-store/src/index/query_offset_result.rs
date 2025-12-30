@@ -22,11 +22,7 @@ pub struct QueryOffsetResult {
 }
 
 impl QueryOffsetResult {
-    pub fn new(
-        phy_offsets: Vec<i64>,
-        index_last_update_timestamp: i64,
-        index_last_update_phyoffset: i64,
-    ) -> Self {
+    pub fn new(phy_offsets: Vec<i64>, index_last_update_timestamp: i64, index_last_update_phyoffset: i64) -> Self {
         QueryOffsetResult {
             phy_offsets,
             index_last_update_timestamp,

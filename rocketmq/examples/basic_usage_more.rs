@@ -77,23 +77,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //    seconds.)
     let counter_clone = counter.clone();
     let interval_delayed_task = Arc::new(
-        Task::new(
-            "interval_delayed",
-            "Interval with Initial Delay",
-            move |ctx| {
-                let counter = counter_clone.clone();
-                async move {
-                    let count = counter.fetch_add(1, Ordering::Relaxed);
-                    info!(
-                        "Execute interval delayed tasks #{}: {} at {:?}",
-                        count + 1,
-                        ctx.execution_id,
-                        ctx.scheduled_time
-                    );
-                    TaskResult::Success(Some("Interval delay task completed".to_string()))
-                }
-            },
-        )
+        Task::new("interval_delayed", "Interval with Initial Delay", move |ctx| {
+            let counter = counter_clone.clone();
+            async move {
+                let count = counter.fetch_add(1, Ordering::Relaxed);
+                info!(
+                    "Execute interval delayed tasks #{}: {} at {:?}",
+                    count + 1,
+                    ctx.execution_id,
+                    ctx.scheduled_time
+                );
+                TaskResult::Success(Some("Interval delay task completed".to_string()))
+            }
+        })
         .with_description("Interval task with initial delay"),
     );
 
@@ -110,9 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ctx.execution_id,
                     ctx.scheduled_time
                 );
-                TaskResult::Success(Some(
-                    "Execution of the delayed task is completed".to_string(),
-                ))
+                TaskResult::Success(Some("Execution of the delayed task is completed".to_string()))
             }
         })
         .with_description("Delay 500ms before each execution")
@@ -132,9 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ctx.execution_id,
                     ctx.scheduled_time
                 );
-                TaskResult::Success(Some(
-                    "Limit the number of times to complete the task".to_string(),
-                ))
+                TaskResult::Success(Some("Limit the number of times to complete the task".to_string()))
             }
         })
         .with_description("Interval task that executes at most 3 times"),
@@ -153,20 +145,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Interval with initial delay
     let interval_job_id = scheduler
-        .schedule_interval_job_with_delay(
-            interval_delayed_task,
-            Duration::from_secs(2),
-            Duration::from_secs(5),
-        )
+        .schedule_interval_job_with_delay(interval_delayed_task, Duration::from_secs(2), Duration::from_secs(5))
         .await?;
     info!("Scheduled interval job with delay: {}", interval_job_id);
 
     // 3. Regular interval with execution delay
     let execution_delay_job_id = scheduler
-        .schedule_job(
-            execution_delay_task,
-            Arc::new(IntervalTrigger::every_seconds(3)),
-        )
+        .schedule_job(execution_delay_task, Arc::new(IntervalTrigger::every_seconds(3)))
         .await?;
     info!("Scheduled execution delay job: {}", execution_delay_job_id);
 

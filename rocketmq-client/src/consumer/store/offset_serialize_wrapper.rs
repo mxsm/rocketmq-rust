@@ -29,38 +29,24 @@ use crate::consumer::store::offset_serialize::OffsetSerialize;
 #[derive(Serialize, Deserialize, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct OffsetSerializeWrapper {
-    #[serde(
-        serialize_with = "serialize_atomic_i64",
-        deserialize_with = "deserialize_atomic_i64"
-    )]
+    #[serde(serialize_with = "serialize_atomic_i64", deserialize_with = "deserialize_atomic_i64")]
     pub offset_table: HashMap<MessageQueue, AtomicI64>,
 }
 
-fn serialize_atomic_i64<S>(
-    map: &HashMap<MessageQueue, AtomicI64>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
+fn serialize_atomic_i64<S>(map: &HashMap<MessageQueue, AtomicI64>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
-    let map_as_i64: HashMap<_, _> = map
-        .iter()
-        .map(|(k, v)| (k, v.load(Ordering::Relaxed)))
-        .collect();
+    let map_as_i64: HashMap<_, _> = map.iter().map(|(k, v)| (k, v.load(Ordering::Relaxed))).collect();
     map_as_i64.serialize(serializer)
 }
 
-fn deserialize_atomic_i64<'de, D>(
-    deserializer: D,
-) -> Result<HashMap<MessageQueue, AtomicI64>, D::Error>
+fn deserialize_atomic_i64<'de, D>(deserializer: D) -> Result<HashMap<MessageQueue, AtomicI64>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let map_as_i64: HashMap<MessageQueue, i64> = HashMap::deserialize(deserializer)?;
-    let map_as_atomic: HashMap<_, _> = map_as_i64
-        .into_iter()
-        .map(|(k, v)| (k, AtomicI64::new(v)))
-        .collect();
+    let map_as_atomic: HashMap<_, _> = map_as_i64.into_iter().map(|(k, v)| (k, AtomicI64::new(v))).collect();
     Ok(map_as_atomic)
 }
 

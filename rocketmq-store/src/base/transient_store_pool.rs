@@ -72,10 +72,7 @@ impl TransientStorePool {
         let mut available_buffers = self.available_buffers.lock();
         let buffer = available_buffers.pop_front();
         if available_buffers.len() < self.pool_size / 10 * 4 {
-            warn!(
-                "TransientStorePool only remain {} sheets.",
-                available_buffers.len()
-            );
+            warn!("TransientStorePool only remain {} sheets.", available_buffers.len());
         }
         buffer
     }

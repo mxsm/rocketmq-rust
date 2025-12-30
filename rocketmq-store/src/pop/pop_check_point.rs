@@ -219,9 +219,8 @@ impl Display for PopCheckPoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "PopCheckPoint [start_offset={}, pop_time={}, invisible_time={}, bit_map={}, num={}, \
-             queue_id={}, topic={}, cid={}, revive_offset={}, queue_offset_diff={:?}, \
-             broker_name={}, re_put_times={}]",
+            "PopCheckPoint [start_offset={}, pop_time={}, invisible_time={}, bit_map={}, num={}, queue_id={}, \
+             topic={}, cid={}, revive_offset={}, queue_offset_diff={:?}, broker_name={}, re_put_times={}]",
             self.start_offset,
             self.pop_time,
             self.invisible_time,
@@ -504,10 +503,9 @@ mod tests {
             re_put_times: Some(CheetahString::from("test_reput")),
         };
         let display = format!("{}", p);
-        let expected = "PopCheckPoint [start_offset=10, pop_time=20, invisible_time=30, \
-                        bit_map=40, num=50, queue_id=60, topic=test_topic, cid=test_cid, \
-                        revive_offset=70, queue_offset_diff=[1, 2, 3], broker_name=test_broker, \
-                        re_put_times=test_reput]";
+        let expected = "PopCheckPoint [start_offset=10, pop_time=20, invisible_time=30, bit_map=40, num=50, \
+                        queue_id=60, topic=test_topic, cid=test_cid, revive_offset=70, queue_offset_diff=[1, 2, 3], \
+                        broker_name=test_broker, re_put_times=test_reput]";
         assert_eq!(display, expected);
     }
 }

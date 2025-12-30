@@ -131,22 +131,13 @@ pub trait MQAdminExt: Send {
         broker_addr: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<TopicStatsTable>;
 
-    async fn examine_topic_stats_concurrent(
-        &self,
-        topic: CheetahString,
-    ) -> AdminToolResult<TopicStatsTable>;
+    async fn examine_topic_stats_concurrent(&self, topic: CheetahString) -> AdminToolResult<TopicStatsTable>;
 
     async fn fetch_all_topic_list(&self) -> rocketmq_error::RocketMQResult<TopicList>;
 
-    async fn fetch_topics_by_cluster(
-        &self,
-        cluster_name: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<TopicList>;
+    async fn fetch_topics_by_cluster(&self, cluster_name: CheetahString) -> rocketmq_error::RocketMQResult<TopicList>;
 
-    async fn fetch_broker_runtime_stats(
-        &self,
-        broker_addr: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<KVTable>;
+    async fn fetch_broker_runtime_stats(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<KVTable>;
 
     async fn examine_consume_stats(
         &self,
@@ -201,12 +192,7 @@ pub trait MQAdminExt: Send {
         broker_name: CheetahString,
     ) -> rocketmq_error::RocketMQResult<i32>;
 
-    async fn put_kv_config(
-        &self,
-        namespace: CheetahString,
-        key: CheetahString,
-        value: CheetahString,
-    );
+    async fn put_kv_config(&self, namespace: CheetahString, key: CheetahString, value: CheetahString);
 
     async fn get_kv_config(
         &self,
@@ -214,10 +200,7 @@ pub trait MQAdminExt: Send {
         key: CheetahString,
     ) -> rocketmq_error::RocketMQResult<CheetahString>;
 
-    async fn get_kv_list_by_namespace(
-        &self,
-        namespace: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<KVTable>;
+    async fn get_kv_list_by_namespace(&self, namespace: CheetahString) -> rocketmq_error::RocketMQResult<KVTable>;
 
     async fn delete_topic(
         &self,
@@ -309,20 +292,11 @@ pub trait MQAdminExt: Send {
         is_cluster: bool,
     ) -> rocketmq_error::RocketMQResult<()>;
 
-    async fn query_topic_consume_by_who(
-        &self,
-        topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<GroupList>;
+    async fn query_topic_consume_by_who(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<GroupList>;
 
-    async fn query_topics_by_consumer(
-        &self,
-        group: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<TopicList>;
+    async fn query_topics_by_consumer(&self, group: CheetahString) -> rocketmq_error::RocketMQResult<TopicList>;
 
-    async fn query_topics_by_consumer_concurrent(
-        &self,
-        group: CheetahString,
-    ) -> AdminToolResult<TopicList>;
+    async fn query_topics_by_consumer_concurrent(&self, group: CheetahString) -> AdminToolResult<TopicList>;
 
     async fn query_subscription(
         &self,
@@ -410,10 +384,7 @@ pub trait MQAdminExt: Send {
         stats_key: CheetahString,
     ) ->rocketmq_error::RocketMQResult<BrokerStatsData>;*/
 
-    async fn get_cluster_list(
-        &self,
-        topic: String,
-    ) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>>;
+    async fn get_cluster_list(&self, topic: String) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>>;
 
     /*async fn fetch_consume_stats_in_broker(
         &self,
@@ -422,10 +393,7 @@ pub trait MQAdminExt: Send {
         timeout_millis: u64,
     ) ->rocketmq_error::RocketMQResult<ConsumeStatsList>;*/
 
-    async fn get_topic_cluster_list(
-        &self,
-        topic: String,
-    ) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>>;
+    async fn get_topic_cluster_list(&self, topic: String) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>>;
 
     /*async fn get_all_subscription_group(
         &self,

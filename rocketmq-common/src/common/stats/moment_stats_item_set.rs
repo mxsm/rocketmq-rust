@@ -58,8 +58,7 @@ impl MomentStatsItemSet {
     pub fn init(&self) {
         let stats_item_table = Arc::clone(&self.stats_item_table);
         let initial_delay = Duration::from_millis(
-            (compute_next_minutes_time_millis() as i64 - get_current_millis() as i64)
-                .unsigned_abs(),
+            (compute_next_minutes_time_millis() as i64 - get_current_millis() as i64).unsigned_abs(),
         );
 
         let mut interval = tokio::time::interval(Duration::from_secs(300));
@@ -90,11 +89,7 @@ impl MomentStatsItemSet {
         let to_remove: Vec<String> = self
             .stats_item_table
             .iter()
-            .filter(|entry| {
-                entry
-                    .key()
-                    .contains(&format!("{separator}{stats_key}{separator}"))
-            })
+            .filter(|entry| entry.key().contains(&format!("{separator}{stats_key}{separator}")))
             .map(|entry| entry.key().clone())
             .collect();
         for key in to_remove {
@@ -158,12 +153,7 @@ mod tests {
         let stats_set = MomentStatsItemSet::new("TestName".to_string());
         stats_set.set_value("TestKey", 10);
         let stats_item = stats_set.get_and_create_stats_item("TestKey".to_string());
-        assert_eq!(
-            stats_item
-                .get_value()
-                .load(std::sync::atomic::Ordering::Relaxed),
-            10
-        );
+        assert_eq!(stats_item.get_value().load(std::sync::atomic::Ordering::Relaxed), 10);
     }
 
     #[tokio::test]

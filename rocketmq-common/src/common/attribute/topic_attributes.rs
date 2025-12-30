@@ -35,12 +35,7 @@ impl TopicAttributes {
             valid_values.insert("DELETE".into());
             valid_values.insert("COMPACTION".into());
 
-            EnumAttribute::new(
-                "cleanup.policy".into(),
-                false,
-                valid_values,
-                "DELETE".into(),
-            )
+            EnumAttribute::new("cleanup.policy".into(), false, valid_values, "DELETE".into())
         })
     }
 
@@ -63,8 +58,7 @@ impl TopicAttributes {
     /// Reserve time attribute defining how long messages are kept
     pub fn topic_reserve_time_attribute() -> &'static LongRangeAttribute {
         static INSTANCE: OnceLock<LongRangeAttribute> = OnceLock::new();
-        INSTANCE
-            .get_or_init(|| LongRangeAttribute::new("reserve.time".into(), true, -1, i64::MAX, -1))
+        INSTANCE.get_or_init(|| LongRangeAttribute::new("reserve.time".into(), true, -1, i64::MAX, -1))
     }
 
     /// Returns all defined attributes in a HashMap

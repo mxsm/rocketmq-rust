@@ -106,8 +106,7 @@ mod reply_message_request_header_tests {
         map.insert("storeTimestamp".into(), "1622547800".into());
         map.insert("unitMode".into(), "true".into());
 
-        let header: ReplyMessageRequestHeader =
-            <ReplyMessageRequestHeader as FromMap>::from(&map).unwrap();
+        let header: ReplyMessageRequestHeader = <ReplyMessageRequestHeader as FromMap>::from(&map).unwrap();
 
         assert_eq!(header.topic, "test_topic");
         assert_eq!(header.producer_group, "test_producer_group");

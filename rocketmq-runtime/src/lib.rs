@@ -65,12 +65,8 @@ impl RocketMQRuntime {
     }
 
     #[inline]
-    pub fn schedule_at_fixed_rate<F>(
-        &self,
-        task: F,
-        initial_delay: Option<Duration>,
-        period: Duration,
-    ) where
+    pub fn schedule_at_fixed_rate<F>(&self, task: F, initial_delay: Option<Duration>, period: Duration)
+    where
         F: Fn() + Send + 'static,
     {
         match self {
@@ -90,8 +86,7 @@ impl RocketMQRuntime {
                         let next_execution_time = current_execution_time + period;
 
                         // Wait until the next execution
-                        let delay = next_execution_time
-                            .saturating_duration_since(tokio::time::Instant::now());
+                        let delay = next_execution_time.saturating_duration_since(tokio::time::Instant::now());
                         tokio::time::sleep(delay).await;
                     }
                 });
@@ -100,12 +95,8 @@ impl RocketMQRuntime {
     }
 
     #[inline]
-    pub fn schedule_at_fixed_rate_mut<F>(
-        &self,
-        mut task: F,
-        initial_delay: Option<Duration>,
-        period: Duration,
-    ) where
+    pub fn schedule_at_fixed_rate_mut<F>(&self, mut task: F, initial_delay: Option<Duration>, period: Duration)
+    where
         F: FnMut() + Send + 'static,
     {
         match self {
@@ -125,8 +116,7 @@ impl RocketMQRuntime {
                         let next_execution_time = current_execution_time + period;
 
                         // Wait until the next execution
-                        let delay = next_execution_time
-                            .saturating_duration_since(tokio::time::Instant::now());
+                        let delay = next_execution_time.saturating_duration_since(tokio::time::Instant::now());
                         tokio::time::sleep(delay).await;
                     }
                 });

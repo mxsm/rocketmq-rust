@@ -324,12 +324,7 @@ impl LocalAuthorizationMetadataProvider {
     }
 
     /// Filter ACLs by subject and resource patterns.
-    fn filter_acls(
-        &self,
-        acls: Vec<Acl>,
-        subject_filter: Option<&str>,
-        resource_filter: Option<&str>,
-    ) -> Vec<Acl> {
+    fn filter_acls(&self, acls: Vec<Acl>, subject_filter: Option<&str>, resource_filter: Option<&str>) -> Vec<Acl> {
         acls.into_iter()
             .filter(|acl| {
                 // Filter by subject
@@ -357,9 +352,7 @@ impl LocalAuthorizationMetadataProvider {
             })
             .filter(|acl| {
                 // Keep ACLs that have policy entries
-                acl.policies()
-                    .iter()
-                    .any(|policy| !policy.entries().is_empty())
+                acl.policies().iter().any(|policy| !policy.entries().is_empty())
             })
             .collect()
     }
@@ -389,15 +382,11 @@ impl AuthorizationMetadataProvider for LocalAuthorizationMetadataProvider {
         let storage_path = PathBuf::from(base_path).join("acls");
         self.storage_path = Some(storage_path.clone());
 
-        debug!(
-            "Initializing LocalAuthorizationMetadataProvider at: {:?}",
-            storage_path
-        );
+        debug!("Initializing LocalAuthorizationMetadataProvider at: {:?}", storage_path);
 
         // Create storage directory if it doesn't exist
         if let Some(parent) = storage_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| AuthorizationError::ConfigurationError(e.to_string()))?;
+            std::fs::create_dir_all(parent).map_err(|e| AuthorizationError::ConfigurationError(e.to_string()))?;
         }
 
         // TODO: Initialize RocksDB
@@ -510,11 +499,7 @@ impl AuthorizationMetadataProvider for LocalAuthorizationMetadataProvider {
         self.get_cached(subject_key).await
     }
 
-    async fn list_acl(
-        &self,
-        subject_filter: Option<&str>,
-        resource_filter: Option<&str>,
-    ) -> MetadataResult<Vec<Acl>> {
+    async fn list_acl(&self, subject_filter: Option<&str>, resource_filter: Option<&str>) -> MetadataResult<Vec<Acl>> {
         if !*self.initialized.read().unwrap() {
             return Err(AuthorizationError::NotInitialized(
                 "Provider not initialized".to_string(),

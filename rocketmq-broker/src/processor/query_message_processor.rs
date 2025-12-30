@@ -47,14 +47,10 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
-        info!(
-            "QueryMessageProcessor received request code: {:?}",
-            request_code
-        );
+        info!("QueryMessageProcessor received request code: {:?}", request_code);
         match request_code {
             RequestCode::QueryMessage | RequestCode::ViewMessageById => {
-                self.process_request_inner(channel, ctx, request_code, request)
-                    .await
+                self.process_request_inner(channel, ctx, request_code, request).await
             }
             _ => {
                 warn!(
@@ -63,10 +59,7 @@ where
                 );
                 let response = RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::RequestCodeNotSupported,
-                    format!(
-                        "QueryMessageProcessor request code {} not supported",
-                        request.code()
-                    ),
+                    format!("QueryMessageProcessor request code {} not supported", request.code()),
                 );
                 Ok(Some(response.set_opaque(request.opaque())))
             }
@@ -111,11 +104,8 @@ where
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command_with_header(
-            QueryMessageResponseHeader::default(),
-        );
-        let mut request_header =
-            request.decode_command_custom_header::<QueryMessageRequestHeader>()?;
+        let mut response = RemotingCommand::create_response_command_with_header(QueryMessageResponseHeader::default());
+        let mut request_header = request.decode_command_custom_header::<QueryMessageRequestHeader>()?;
         response.set_opaque_mut(request.opaque());
         let Some(ext_fields) = request.ext_fields() else {
             return Ok(Some(
@@ -126,10 +116,7 @@ where
         };
         let is_unique_key = ext_fields.get(UNIQUE_MSG_QUERY_FLAG);
         if is_unique_key.is_some_and(|value| value == "true") {
-            request_header.max_num = self
-                .broker_runtime_inner
-                .message_store_config()
-                .default_query_max_num as i32;
+            request_header.max_num = self.broker_runtime_inner.message_store_config().default_query_max_num as i32;
         }
         let message_store = match self.broker_runtime_inner.message_store() {
             Some(store) => store,
@@ -159,13 +146,9 @@ where
             ));
         };
 
-        let response_header = response
-            .read_custom_header_mut::<QueryMessageResponseHeader>()
-            .unwrap();
-        response_header.index_last_update_phyoffset =
-            query_message_result.index_last_update_phyoffset;
-        response_header.index_last_update_timestamp =
-            query_message_result.index_last_update_timestamp;
+        let response_header = response.read_custom_header_mut::<QueryMessageResponseHeader>().unwrap();
+        response_header.index_last_update_phyoffset = query_message_result.index_last_update_phyoffset;
+        response_header.index_last_update_timestamp = query_message_result.index_last_update_timestamp;
 
         if query_message_result.buffer_total_size > 0 {
             let message_data = query_message_result.get_message_data();
@@ -201,8 +184,7 @@ where
             }
         };
 
-        let select_mapped_buffer_result =
-            message_store.select_one_message_by_offset(request_header.offset);
+        let select_mapped_buffer_result = message_store.select_one_message_by_offset(request_header.offset);
         if let Some(result) = select_mapped_buffer_result {
             let message_data = result.get_bytes();
             if let Some(body) = message_data {
@@ -210,13 +192,9 @@ where
             }
             return Ok(Some(response));
         }
-        Ok(Some(
-            response
-                .set_code(ResponseCode::SystemError)
-                .set_remark(format!(
-                    "can not find message by offset: {}",
-                    request_header.offset
-                )),
-        ))
+        Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(format!(
+            "can not find message by offset: {}",
+            request_header.offset
+        ))))
     }
 }

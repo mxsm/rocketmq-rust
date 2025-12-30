@@ -40,11 +40,10 @@ impl std::fmt::Display for ProcessQueueInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "ProcessQueueInfo [commit_offset: {}, cached_msg_min_offset: {}, \
-             cached_msg_max_offset: {}, cached_msg_count: {}, cached_msg_size_in_mib: {}, \
-             transaction_msg_min_offset: {}, transaction_msg_max_offset: {}, \
-             transaction_msg_count: {}, locked: {}, try_unlock_times: {}, last_lock_timestamp: \
-             {}, droped: {}, last_pull_timestamp: {}, last_consume_timestamp: {}]",
+            "ProcessQueueInfo [commit_offset: {}, cached_msg_min_offset: {}, cached_msg_max_offset: {}, \
+             cached_msg_count: {}, cached_msg_size_in_mib: {}, transaction_msg_min_offset: {}, \
+             transaction_msg_max_offset: {}, transaction_msg_count: {}, locked: {}, try_unlock_times: {}, \
+             last_lock_timestamp: {}, droped: {}, last_pull_timestamp: {}, last_consume_timestamp: {}]",
             self.commit_offset,
             self.cached_msg_min_offset,
             self.cached_msg_max_offset,

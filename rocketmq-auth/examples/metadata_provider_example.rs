@@ -79,13 +79,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  - ACLs for topics: {}", topic_acls.len());
 
     // Both filters
-    let filtered: Vec<Acl> = provider
-        .list_acl(Some("user:alice"), Some("Topic:orders"))
-        .await?;
-    println!(
-        "  - ACLs for user:alice on Topic:orders: {}\n",
-        filtered.len()
-    );
+    let filtered: Vec<Acl> = provider.list_acl(Some("user:alice"), Some("Topic:orders")).await?;
+    println!("  - ACLs for user:alice on Topic:orders: {}\n", filtered.len());
 
     // 6. Update ACL
     let mut updated_acl = acl;

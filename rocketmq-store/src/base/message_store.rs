@@ -182,12 +182,7 @@ pub trait MessageStoreInner: Sync + 'static {
     fn get_max_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64;
 
     /// Get maximum offset of the topic queue.
-    fn get_max_offset_in_queue_committed(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        committed: bool,
-    ) -> i64;
+    fn get_max_offset_in_queue_committed(&self, topic: &CheetahString, queue_id: i32, committed: bool) -> i64;
 
     /// Get the minimum offset of the topic queue.
     fn get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64;
@@ -199,20 +194,10 @@ pub trait MessageStoreInner: Sync + 'static {
     fn set_timer_message_store(&mut self, timer_message_store: Arc<TimerMessageStore>);
 
     /// Get the offset of the message in the commit log (physical offset).
-    fn get_commit_log_offset_in_queue(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        consume_queue_offset: i64,
-    ) -> i64;
+    fn get_commit_log_offset_in_queue(&self, topic: &CheetahString, queue_id: i32, consume_queue_offset: i64) -> i64;
 
     /// Look up the physical offset of the message by timestamp.
-    fn get_offset_in_queue_by_time(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        timestamp: i64,
-    ) -> i64;
+    fn get_offset_in_queue_by_time(&self, topic: &CheetahString, queue_id: i32, timestamp: i64) -> i64;
 
     /// Look up the physical offset of the message by timestamp with boundary type.
     fn get_offset_in_queue_by_time_with_boundary(
@@ -227,17 +212,10 @@ pub trait MessageStoreInner: Sync + 'static {
     fn look_message_by_offset(&self, commit_log_offset: i64) -> Option<MessageExt>;
 
     /// Look up the message by given commit log offset and size.
-    fn look_message_by_offset_with_size(
-        &self,
-        commit_log_offset: i64,
-        size: i32,
-    ) -> Option<MessageExt>;
+    fn look_message_by_offset_with_size(&self, commit_log_offset: i64, size: i32) -> Option<MessageExt>;
 
     /// Get one message from the specified commit log offset.
-    fn select_one_message_by_offset(
-        &self,
-        commit_log_offset: i64,
-    ) -> Option<SelectMappedBufferResult>;
+    fn select_one_message_by_offset(&self, commit_log_offset: i64) -> Option<SelectMappedBufferResult>;
 
     /// Get one message from the specified commit log offset and message size.
     fn select_one_message_by_offset_with_size(
@@ -277,12 +255,7 @@ pub trait MessageStoreInner: Sync + 'static {
     ) -> Result<i64, StoreError>;*/
 
     /// Get the store time of the message specified.
-    fn get_message_store_timestamp(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        consume_queue_offset: i64,
-    ) -> i64;
+    fn get_message_store_timestamp(&self, topic: &CheetahString, queue_id: i32, consume_queue_offset: i64) -> i64;
 
     /// Asynchronous get the store time of the message specified.
     async fn get_message_store_timestamp_async(
@@ -299,11 +272,7 @@ pub trait MessageStoreInner: Sync + 'static {
     fn get_commit_log_data(&self, offset: i64) -> Option<SelectMappedBufferResult>;
 
     /// Get the raw commit log data starting from the given offset, across multiple mapped files.
-    fn get_bulk_commit_log_data(
-        &self,
-        offset: i64,
-        size: i32,
-    ) -> Option<Vec<SelectMappedBufferResult>>;
+    fn get_bulk_commit_log_data(&self, offset: i64, size: i32) -> Option<Vec<SelectMappedBufferResult>>;
 
     /// Append data to commit log.
     async fn append_to_commit_log(
@@ -371,12 +340,7 @@ pub trait MessageStoreInner: Sync + 'static {
     ) -> bool;
 
     /// Check if the given message is in store.
-    fn check_in_store_by_consume_offset(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        consume_offset: i64,
-    ) -> bool;
+    fn check_in_store_by_consume_offset(&self, topic: &CheetahString, queue_id: i32, consume_offset: i64) -> bool;
 
     /// Get number of the bytes that have been stored in commit log and not yet dispatched.
     fn dispatch_behind_bytes(&self) -> i64;

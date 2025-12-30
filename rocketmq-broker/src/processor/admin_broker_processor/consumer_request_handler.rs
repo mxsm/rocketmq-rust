@@ -47,9 +47,7 @@ pub(super) struct ConsumerRequestHandler<MS: MessageStore> {
 
 impl<MS: MessageStore> ConsumerRequestHandler<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self {
-            broker_runtime_inner,
-        }
+        Self { broker_runtime_inner }
     }
 }
 
@@ -62,8 +60,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
-        let request_header =
-            request.decode_command_custom_header::<GetConsumerConnectionListRequestHeader>()?;
+        let request_header = request.decode_command_custom_header::<GetConsumerConnectionListRequestHeader>()?;
         let consumer_group_info = self
             .broker_runtime_inner
             .consumer_manager()
@@ -85,22 +82,16 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                     connection.set_client_id(channel_info.client_id().clone());
                     connection.set_language(channel_info.language());
                     connection.set_version(channel_info.version());
-                    connection
-                        .set_client_addr(channel_info.key().remote_address().to_string().into());
+                    connection.set_client_addr(channel_info.key().remote_address().to_string().into());
                     body_data.insert_connection(connection);
                 }
                 let body = body_data.encode()?;
                 response.set_body_mut_ref(body);
                 Ok(Some(response))
             }
-            None => Ok(Some(
-                response
-                    .set_code(ResponseCode::ConsumerNotOnline)
-                    .set_remark(format!(
-                        "the consumer group[{}] not online",
-                        request_header.get_consumer_group()
-                    )),
-            )),
+            None => Ok(Some(response.set_code(ResponseCode::ConsumerNotOnline).set_remark(
+                format!("the consumer group[{}] not online", request_header.get_consumer_group()),
+            ))),
         }
     }
 
@@ -156,8 +147,8 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                     > 0
             {
                 warn!(
-                    "AdminBrokerProcessor#getConsumeStats: topic does not exist in consumer \
-                     group's subscription, topic={}, consumer group={}",
+                    "AdminBrokerProcessor#getConsumeStats: topic does not exist in consumer group's subscription, \
+                     topic={}, consumer group={}",
                     topic,
                     request_header.get_consumer_group()
                 );
@@ -167,12 +158,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
             for i in 0..topic_config.unwrap().get_read_queue_nums() {
                 let mut mq = MessageQueue::new();
                 mq.set_topic(topic.to_string().into());
-                mq.set_broker_name(
-                    self.broker_runtime_inner
-                        .broker_config()
-                        .broker_name()
-                        .clone(),
-                );
+                mq.set_broker_name(self.broker_runtime_inner.broker_config().broker_name().clone());
                 mq.set_queue_id(i as i32);
 
                 let mut offset_wrapper = OffsetWrapper::new();
@@ -186,19 +172,21 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                     broker_offset = 0;
                 }
 
-                let mut consumer_offset = self
-                    .broker_runtime_inner
-                    .consumer_offset_manager()
-                    .query_offset(request_header.get_consumer_group(), topic, i as i32);
+                let mut consumer_offset = self.broker_runtime_inner.consumer_offset_manager().query_offset(
+                    request_header.get_consumer_group(),
+                    topic,
+                    i as i32,
+                );
 
                 if mapping_detail.is_none() && consumer_offset < 0 {
                     consumer_offset = 0;
                 }
 
-                let pull_offset = self
-                    .broker_runtime_inner
-                    .consumer_offset_manager()
-                    .query_offset(request_header.get_consumer_group(), topic, i as i32);
+                let pull_offset = self.broker_runtime_inner.consumer_offset_manager().query_offset(
+                    request_header.get_consumer_group(),
+                    topic,
+                    i as i32,
+                );
 
                 offset_wrapper.set_broker_offset(broker_offset);
                 offset_wrapper.set_consumer_offset(consumer_offset);
@@ -216,9 +204,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                     }
                 }
 
-                consume_stats
-                    .get_offset_table_mut()
-                    .insert(mq, offset_wrapper);
+                consume_stats.get_offset_table_mut().insert(mq, offset_wrapper);
             }
 
             let consume_tps = self
@@ -242,10 +228,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
-        let content = self
-            .broker_runtime_inner
-            .consumer_offset_manager_mut()
-            .encode();
+        let content = self.broker_runtime_inner.consumer_offset_manager_mut().encode();
         if !content.is_empty() {
             response.set_body_mut_ref(content);
             Ok(Some(response))
@@ -265,19 +248,15 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_header =
-            match request.decode_command_custom_header::<GetConsumerRunningInfoRequestHeader>() {
-                Ok(header) => header,
-                Err(e) => {
-                    let response = RemotingCommand::create_response_command()
-                        .set_code(ResponseCode::SystemError)
-                        .set_remark(format!(
-                            "decode GetConsumerRunningInfoRequestHeader failed: {}",
-                            e
-                        ));
-                    return Ok(Some(response));
-                }
-            };
+        let request_header = match request.decode_command_custom_header::<GetConsumerRunningInfoRequestHeader>() {
+            Ok(header) => header,
+            Err(e) => {
+                let response = RemotingCommand::create_response_command()
+                    .set_code(ResponseCode::SystemError)
+                    .set_remark(format!("decode GetConsumerRunningInfoRequestHeader failed: {}", e));
+                return Ok(Some(response));
+            }
+        };
 
         self.call_consumer(
             request.clone(),
@@ -303,24 +282,18 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         if client_channel_info.is_none() {
             response = response
                 .set_code(ResponseCode::SystemError)
-                .set_remark(format!(
-                    "The Consumer <{}> <{}> not online",
-                    consumer_group, client_id
-                ));
+                .set_remark(format!("The Consumer <{}> <{}> not online", consumer_group, client_id));
             return Ok(Some(response));
         }
 
         let client_channel_info = client_channel_info.unwrap();
 
         if client_channel_info.version() < RocketMqVersion::V3_1_8_SNAPSHOT.ordinal() as i32 {
-            response = response
-                .set_code(ResponseCode::SystemError)
-                .set_remark(format!(
-                    "The Consumer <{}> Version <{}> too low to finish, please upgrade it to \
-                     V3_1_8_SNAPSHOT",
-                    client_id,
-                    RocketMqVersion::from_ordinal(client_channel_info.version() as u32).name()
-                ));
+            response = response.set_code(ResponseCode::SystemError).set_remark(format!(
+                "The Consumer <{}> Version <{}> too low to finish, please upgrade it to V3_1_8_SNAPSHOT",
+                client_id,
+                RocketMqVersion::from_ordinal(client_channel_info.version() as u32).name()
+            ));
             return Ok(Some(response));
         }
 
@@ -329,10 +302,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
         // Default timeout is 5000ms, same as Java implementation
         let timeout_millis = 5000u64;
 
-        match Broker2Client
-            .call_client(&mut channel, request, timeout_millis)
-            .await
-        {
+        match Broker2Client.call_client(&mut channel, request, timeout_millis).await {
             Ok(result) => Ok(Some(result)),
             Err(e) => {
                 let (code, error_type) = match &e {

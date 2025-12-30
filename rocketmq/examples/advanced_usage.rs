@@ -65,10 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let counter = counter_clone.clone();
             async move {
                 let count = counter.fetch_add(1, Ordering::Relaxed);
-                info!(
-                    "Processing data batch #{} at {:?}",
-                    count, ctx.scheduled_time
-                );
+                info!("Processing data batch #{} at {:?}", count, ctx.scheduled_time);
 
                 // Simulate data processing
                 sleep(Duration::from_millis(200)).await;

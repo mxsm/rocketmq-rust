@@ -101,10 +101,7 @@ impl MessageBatch {
                     "TimeDelayLevel is not supported for batching",
                 ));
             }
-            if message
-                .get_topic()
-                .starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
-            {
+            if message.get_topic().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
                 return Err(RocketMQError::illegal_argument(
                     "Retry group topic is not supported for batching",
                 ));

@@ -54,11 +54,7 @@ async fn test_simple_cluster_setup() {
         let port = BASE_PORT + node_id as u16;
         let addr = format!("127.0.0.1:{}", port).parse().unwrap();
 
-        let peers: Vec<RaftPeer> = all_peers
-            .iter()
-            .filter(|p| p.id != node_id)
-            .cloned()
-            .collect();
+        let peers: Vec<RaftPeer> = all_peers.iter().filter(|p| p.id != node_id).cloned().collect();
 
         let config = ControllerConfig::default()
             .with_node_info(node_id, addr)

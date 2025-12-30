@@ -35,10 +35,7 @@ pub struct CommitLogDispatcherCalcBitMap {
 }
 
 impl CommitLogDispatcherCalcBitMap {
-    pub fn new(
-        broker_config: Arc<BrokerConfig>,
-        consumer_filter_manager: ConsumerFilterManager,
-    ) -> Self {
+    pub fn new(broker_config: Arc<BrokerConfig>, consumer_filter_manager: ConsumerFilterManager) -> Self {
         Self {
             broker_config,
             consumer_filter_manager,
@@ -58,8 +55,7 @@ impl CommitLogDispatcher for CommitLogDispatcherCalcBitMap {
             return;
         }
         let filter_datas = filter_datas.unwrap();
-        let mut filter_bit_map =
-            BitsArray::create(self.consumer_filter_manager.bloom_filter().unwrap().m() as usize);
+        let mut filter_bit_map = BitsArray::create(self.consumer_filter_manager.bloom_filter().unwrap().m() as usize);
 
         let start_time = Instant::now();
         for filter_data in filter_datas.iter() {
@@ -71,19 +67,12 @@ impl CommitLogDispatcher for CommitLogDispatcherCalcBitMap {
                 continue;
             }
             if filter_data.bloom_filter_data().is_none() {
-                error!(
-                    "[BUG] Consumer in filter manager has no bloom data! {:?}",
-                    filter_data
-                );
+                error!("[BUG] Consumer in filter manager has no bloom data! {:?}", filter_data);
                 continue;
             }
 
             let context = MessageEvaluationContext::new(&request.properties_map);
-            let ret = filter_data
-                .compiled_expression()
-                .as_ref()
-                .unwrap()
-                .evaluate(&context);
+            let ret = filter_data.compiled_expression().as_ref().unwrap().evaluate(&context);
 
             debug!(
                 "Result of Calc bit map: ret={:?}, data={:?}, props={:?}, offset={}",
@@ -97,10 +86,7 @@ impl CommitLogDispatcher for CommitLogDispatcherCalcBitMap {
                         self.consumer_filter_manager
                             .bloom_filter()
                             .unwrap()
-                            .hash_to(
-                                filter_data.bloom_filter_data().unwrap(),
-                                &mut filter_bit_map,
-                            );
+                            .hash_to(filter_data.bloom_filter_data().unwrap(), &mut filter_bit_map);
                     }
                 }
             }

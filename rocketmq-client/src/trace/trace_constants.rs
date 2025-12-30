@@ -37,7 +37,6 @@ impl TraceConstants {
     pub const ROCKETMQ_REGION_ID: &'static str = "rocketmq.region_id";
     pub const ROCKETMQ_TRANSACTION_ID: &'static str = "rocketmq.transaction_id";
     pub const ROCKETMQ_TRANSACTION_STATE: &'static str = "rocketmq.transaction_state";
-    pub const ROCKETMQ_IS_FROM_TRANSACTION_CHECK: &'static str =
-        "rocketmq.is_from_transaction_check";
+    pub const ROCKETMQ_IS_FROM_TRANSACTION_CHECK: &'static str = "rocketmq.is_from_transaction_check";
     pub const ROCKETMQ_RETRY_TIMERS: &'static str = "rocketmq.retry_times";
 }

@@ -164,8 +164,7 @@ impl Inner {
                     self.change_current_state(HAConnectionState::Transfer).await;
                     // Initialize current reported offset
                     let max_offset = self.default_message_store.get_max_phy_offset();
-                    self.current_reported_offset
-                        .store(max_offset, Ordering::Release);
+                    self.current_reported_offset.store(max_offset, Ordering::Release);
                     let now = get_current_millis();
                     self.last_read_timestamp.store(now, Ordering::SeqCst);
                     Ok(Some(stream))
@@ -210,12 +209,8 @@ impl Inner {
 
 impl DefaultHAClient {
     /// Create a new DefaultHAClient
-    pub fn new(
-        default_message_store: ArcMut<LocalFileMessageStore>,
-    ) -> Result<Self, HAClientError> {
-        let flow_monitor = Arc::new(FlowMonitor::new(
-            default_message_store.message_store_config(),
-        ));
+    pub fn new(default_message_store: ArcMut<LocalFileMessageStore>) -> Result<Self, HAClientError> {
+        let flow_monitor = Arc::new(FlowMonitor::new(default_message_store.message_store_config()));
 
         let now = get_current_millis();
 
@@ -231,9 +226,7 @@ impl DefaultHAClient {
                 current_reported_offset: Arc::new(AtomicI64::new(0)),
                 dispatch_position: AtomicUsize::new(0),
                 byte_buffer_read: BytesMut::with_capacity(READ_MAX_BUFFER_SIZE),
-                byte_buffer_backup: Arc::new(RwLock::new(BytesMut::with_capacity(
-                    READ_MAX_BUFFER_SIZE,
-                ))),
+                byte_buffer_backup: Arc::new(RwLock::new(BytesMut::with_capacity(READ_MAX_BUFFER_SIZE))),
                 report_offset: BytesMut::with_capacity(REPORT_HEADER_SIZE),
                 default_message_store,
                 current_state: Arc::new(RwLock::new(HAConnectionState::Ready)),
@@ -323,9 +316,7 @@ impl HAClient for DefaultHAClient {
                     drop(read_guard);
                     match client.connect_master().await {
                         Ok(Some(stream)) => {
-                            client
-                                .change_current_state(HAConnectionState::Transfer)
-                                .await;
+                            client.change_current_state(HAConnectionState::Transfer).await;
 
                             //split stream into read/write halves
                             let (reader, writer) = stream.into_split();
@@ -334,13 +325,11 @@ impl HAClient for DefaultHAClient {
 
                             // channel: reader -> writer report offset; main loop -> writer
                             // heartbeat
-                            let (offset_tx, offset_rx) =
-                                tokio::sync::mpsc::unbounded_channel::<i64>();
+                            let (offset_tx, offset_rx) = tokio::sync::mpsc::unbounded_channel::<i64>();
                             let (kick_tx, kick_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
 
                             // use reader/writer to send errors back to main loop
-                            let (err_tx, mut err_rx) =
-                                tokio::sync::mpsc::unbounded_channel::<anyhow::Error>();
+                            let (err_tx, mut err_rx) = tokio::sync::mpsc::unbounded_channel::<anyhow::Error>();
 
                             // reader task: read data from master and dispatch to message store
                             let reader_shutdown = client.shutdown_notify.clone();
@@ -464,9 +453,7 @@ impl HAClient for DefaultHAClient {
     }
 
     async fn shutdown(&self) {
-        self.inner
-            .change_current_state(HAConnectionState::Shutdown)
-            .await;
+        self.inner.change_current_state(HAConnectionState::Shutdown).await;
         self.inner.shutdown_notify.notify_waiters();
 
         // Wait for service to stop
@@ -552,15 +539,13 @@ impl ReaderTask {
                 Some(Ok(bytes)) => {
                     // framed - once for one piece of data; we are still doing custom protocol
                     // unpacking in the local buffe
-                    self.flow_monitor
-                        .add_byte_count_transferred(bytes.len() as i64);
+                    self.flow_monitor.add_byte_count_transferred(bytes.len() as i64);
                     self.buf.extend_from_slice(&bytes);
 
                     if !self.dispatch_read().await? {
                         bail!("dispatchReadRequest error");
                     }
-                    self.last_read_timestamp
-                        .store(get_current_millis(), Ordering::SeqCst);
+                    self.last_read_timestamp.store(get_current_millis(), Ordering::SeqCst);
                 }
                 Some(Err(e)) => {
                     bail!(e);
@@ -581,10 +566,8 @@ impl ReaderTask {
             }
 
             let header = &self.buf[self.dispatch_pos..self.dispatch_pos + TRANSFER_HEADER_SIZE];
-            let master_phy_offset =
-                i64::from_be_bytes(header[0..8].try_into().expect("slice len 8"));
-            let body_size =
-                i32::from_be_bytes(header[8..12].try_into().expect("slice len 4")) as usize;
+            let master_phy_offset = i64::from_be_bytes(header[0..8].try_into().expect("slice len 8"));
+            let body_size = i32::from_be_bytes(header[8..12].try_into().expect("slice len 4")) as usize;
 
             let slave_phy_offset = self.store.get_max_phy_offset();
             if slave_phy_offset != 0 && slave_phy_offset != master_phy_offset {
@@ -650,9 +633,7 @@ struct WriterTask {
 
 impl WriterTask {
     async fn run(&mut self) -> anyhow::Result<()> {
-        let mut ticker = interval(Duration::from_millis(
-            self.cfg.heartbeat_interval_ms.max(1000),
-        ));
+        let mut ticker = interval(Duration::from_millis(self.cfg.heartbeat_interval_ms.max(1000)));
 
         loop {
             tokio::select! {
@@ -679,8 +660,7 @@ impl WriterTask {
         self.report_offset.put_i64(max_off);
         let bytes = self.report_offset.split().freeze();
         self.wr.send(bytes).await?;
-        self.last_write_timestamp
-            .store(get_current_millis(), Ordering::Release);
+        self.last_write_timestamp.store(get_current_millis(), Ordering::Release);
         Ok(())
     }
 }

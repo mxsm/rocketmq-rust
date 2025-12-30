@@ -31,10 +31,7 @@ pub struct ElectMasterEvent {
 }
 
 impl ElectMasterEvent {
-    pub fn without_new_master(
-        new_master_elected: bool,
-        broker_name: impl Into<CheetahString>,
-    ) -> Self {
+    pub fn without_new_master(new_master_elected: bool, broker_name: impl Into<CheetahString>) -> Self {
         Self {
             new_master_elected,
             broker_name: broker_name.into(),
@@ -42,10 +39,7 @@ impl ElectMasterEvent {
         }
     }
 
-    pub fn with_new_master(
-        broker_name: impl Into<CheetahString>,
-        new_master_broker_id: u64,
-    ) -> Self {
+    pub fn with_new_master(broker_name: impl Into<CheetahString>, new_master_broker_id: u64) -> Self {
         Self {
             new_master_elected: true,
             broker_name: broker_name.into(),
@@ -143,14 +137,8 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         let deserialized: ElectMasterEvent = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(
-            deserialized.new_master_elected(),
-            event.new_master_elected()
-        );
+        assert_eq!(deserialized.new_master_elected(), event.new_master_elected());
         assert_eq!(deserialized.broker_name(), event.broker_name());
-        assert_eq!(
-            deserialized.new_master_broker_id(),
-            event.new_master_broker_id()
-        );
+        assert_eq!(deserialized.new_master_broker_id(), event.new_master_broker_id());
     }
 }

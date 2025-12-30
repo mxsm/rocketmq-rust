@@ -40,9 +40,7 @@ impl BrokerIdentityInfo {
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.cluster_name.trim().is_empty()
-            && self.broker_name.trim().is_empty()
-            && self.broker_id.is_none()
+        self.cluster_name.trim().is_empty() && self.broker_name.trim().is_empty() && self.broker_id.is_none()
     }
 }
 
@@ -105,8 +103,7 @@ mod tests {
 
         let info = BrokerIdentityInfo::new("cluster", "broker", None);
         let display_str = format!("{}", info);
-        let expected =
-            "BrokerIdentityInfo{clusterName='cluster', brokerName='broker', brokerId=None}";
+        let expected = "BrokerIdentityInfo{clusterName='cluster', brokerName='broker', brokerId=None}";
         assert_eq!(display_str, expected);
     }
 }

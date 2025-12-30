@@ -49,10 +49,7 @@ fn test_controller_error_constructors() {
 
     // Test Raft error constructor
     let err = RocketMQError::controller_raft_error("consensus failed");
-    assert!(matches!(
-        err,
-        RocketMQError::Controller(ControllerError::Raft(_))
-    ));
+    assert!(matches!(err, RocketMQError::Controller(ControllerError::Raft(_))));
     assert!(err.to_string().contains("consensus failed"));
 
     // Test metadata not found constructor
@@ -79,10 +76,7 @@ fn test_controller_error_constructors() {
 
     // Test shutdown constructor
     let err = RocketMQError::controller_shutdown();
-    assert!(matches!(
-        err,
-        RocketMQError::Controller(ControllerError::Shutdown)
-    ));
+    assert!(matches!(err, RocketMQError::Controller(ControllerError::Shutdown)));
 }
 
 #[test]

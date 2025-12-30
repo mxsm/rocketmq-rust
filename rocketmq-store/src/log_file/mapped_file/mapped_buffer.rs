@@ -120,10 +120,7 @@ impl MappedBuffer {
     /// buffer.write(5, b" World")?;
     /// ```
     pub fn write(&self, offset: usize, data: &[u8]) -> MappedFileResult<()> {
-        if offset
-            .checked_add(data.len())
-            .is_none_or(|end| end > self.len)
-        {
+        if offset.checked_add(data.len()).is_none_or(|end| end > self.len) {
             return Err(MappedFileError::out_of_bounds(
                 self.offset + offset,
                 data.len(),
@@ -286,10 +283,7 @@ impl MappedBuffer {
         let mut total_written = 0;
 
         for (offset, data) in writes {
-            if offset
-                .checked_add(data.len())
-                .is_none_or(|end| end > self.len)
-            {
+            if offset.checked_add(data.len()).is_none_or(|end| end > self.len) {
                 return Err(MappedFileError::out_of_bounds(
                     self.offset + offset,
                     data.len(),
@@ -335,8 +329,7 @@ impl MappedBuffer {
     /// Returns `MappedFileError::FlushFailed` if msync fails
     pub fn flush(&self) -> MappedFileResult<()> {
         let mmap = self.mmap.write();
-        mmap.flush()
-            .map_err(|e| MappedFileError::FlushFailed(e.to_string()))
+        mmap.flush().map_err(|e| MappedFileError::FlushFailed(e.to_string()))
     }
 
     /// Flushes a specific range to disk.

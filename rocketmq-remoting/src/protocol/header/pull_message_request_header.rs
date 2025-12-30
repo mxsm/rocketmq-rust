@@ -181,67 +181,31 @@ mod tests {
         };
         let map: HashMap<CheetahString, CheetahString> = header.to_map().unwrap();
         assert_eq!(
-            map.get(&CheetahString::from_static_str("consumerGroup"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("consumerGroup")).unwrap(),
             "test_consumer_group"
         );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("topic")).unwrap(),
-            "test_topic"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("queueId")).unwrap(),
-            "1"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("queueOffset"))
-                .unwrap(),
-            "100"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("maxMsgNums"))
-                .unwrap(),
-            "10"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("sysFlag")).unwrap(),
-            "0"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("commitOffset"))
-                .unwrap(),
-            "50"
-        );
+        assert_eq!(map.get(&CheetahString::from_static_str("topic")).unwrap(), "test_topic");
+        assert_eq!(map.get(&CheetahString::from_static_str("queueId")).unwrap(), "1");
+        assert_eq!(map.get(&CheetahString::from_static_str("queueOffset")).unwrap(), "100");
+        assert_eq!(map.get(&CheetahString::from_static_str("maxMsgNums")).unwrap(), "10");
+        assert_eq!(map.get(&CheetahString::from_static_str("sysFlag")).unwrap(), "0");
+        assert_eq!(map.get(&CheetahString::from_static_str("commitOffset")).unwrap(), "50");
         assert_eq!(
             map.get(&CheetahString::from_static_str("suspendTimeoutMillis"))
                 .unwrap(),
             "3000"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("subscription"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("subscription")).unwrap(),
             "test_subscription"
         );
+        assert_eq!(map.get(&CheetahString::from_static_str("subVersion")).unwrap(), "1");
         assert_eq!(
-            map.get(&CheetahString::from_static_str("subVersion"))
-                .unwrap(),
-            "1"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("expressionType"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("expressionType")).unwrap(),
             "test_expression"
         );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("maxMsgBytes"))
-                .unwrap(),
-            "1024"
-        );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("requestSource"))
-                .unwrap(),
-            "1"
-        );
+        assert_eq!(map.get(&CheetahString::from_static_str("maxMsgBytes")).unwrap(), "1024");
+        assert_eq!(map.get(&CheetahString::from_static_str("requestSource")).unwrap(), "1");
         assert_eq!(
             map.get(&CheetahString::from_static_str("proxyForwardClientId"))
                 .unwrap(),

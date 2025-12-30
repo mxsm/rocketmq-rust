@@ -49,10 +49,7 @@ pub trait TransactionalMessageServiceLocal: Sync + 'static {
     /// # Returns
     ///
     /// A `PutMessageResult` indicating the result of the message preparation.
-    async fn async_prepare_message(
-        &mut self,
-        message_inner: MessageExtBrokerInner,
-    ) -> PutMessageResult;
+    async fn async_prepare_message(&mut self, message_inner: MessageExtBrokerInner) -> PutMessageResult;
 
     /// Deletes a prepared transactional message.
     ///
@@ -85,8 +82,7 @@ pub trait TransactionalMessageServiceLocal: Sync + 'static {
     /// # Returns
     ///
     /// An `OperationResult` indicating the result of the rollback operation.
-    fn rollback_message(&mut self, request_header: &EndTransactionRequestHeader)
-        -> OperationResult;
+    fn rollback_message(&mut self, request_header: &EndTransactionRequestHeader) -> OperationResult;
 
     /// Checks the state of transactional messages.
     ///

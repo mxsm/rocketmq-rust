@@ -182,10 +182,7 @@ fn benchmark_concurrent_writes(c: &mut Criterion) {
                         let mgr = manager.clone();
                         thread::spawn(move || {
                             for i in 0..size / 10 {
-                                let key = CheetahString::from_string(format!(
-                                    "GROUP_{}_{}",
-                                    thread_id, i
-                                ));
+                                let key = CheetahString::from_string(format!("GROUP_{}_{}", thread_id, i));
                                 let config = SubscriptionGroupConfig::new(key.clone());
                                 mgr.insert(key, config);
                             }
@@ -207,10 +204,7 @@ fn benchmark_concurrent_writes(c: &mut Criterion) {
                         let mgr = manager.clone();
                         thread::spawn(move || {
                             for i in 0..size / 10 {
-                                let key = CheetahString::from_string(format!(
-                                    "GROUP_{}_{}",
-                                    thread_id, i
-                                ));
+                                let key = CheetahString::from_string(format!("GROUP_{}_{}", thread_id, i));
                                 let config = SubscriptionGroupConfig::new(key.clone());
                                 mgr.insert(key, config);
                             }
@@ -246,10 +240,7 @@ fn benchmark_mixed_workload(c: &mut Criterion) {
                         for i in 0..100 {
                             if i % 3 == 0 {
                                 // Write operation
-                                let key = CheetahString::from_string(format!(
-                                    "NEW_GROUP_{}_{}",
-                                    thread_id, i
-                                ));
+                                let key = CheetahString::from_string(format!("NEW_GROUP_{}_{}", thread_id, i));
                                 let config = SubscriptionGroupConfig::new(key.clone());
                                 mgr.insert(key, config);
                             } else {
@@ -278,10 +269,7 @@ fn benchmark_mixed_workload(c: &mut Criterion) {
                         for i in 0..100 {
                             if i % 3 == 0 {
                                 // Write operation
-                                let key = CheetahString::from_string(format!(
-                                    "NEW_GROUP_{}_{}",
-                                    thread_id, i
-                                ));
+                                let key = CheetahString::from_string(format!("NEW_GROUP_{}_{}", thread_id, i));
                                 let config = SubscriptionGroupConfig::new(key.clone());
                                 mgr.insert(key, config);
                             } else {

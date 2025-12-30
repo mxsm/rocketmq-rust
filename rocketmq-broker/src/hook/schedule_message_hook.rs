@@ -32,9 +32,7 @@ pub struct ScheduleMessageHook<MS: MessageStore> {
 
 impl<MS: MessageStore> ScheduleMessageHook<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self {
-            broker_runtime_inner,
-        }
+        Self { broker_runtime_inner }
     }
 }
 

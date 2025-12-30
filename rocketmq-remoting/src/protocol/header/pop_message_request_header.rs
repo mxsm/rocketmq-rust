@@ -83,9 +83,8 @@ impl Display for PopMessageRequestHeader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "PopMessageRequestHeader [consumer_group={}, topic={}, queue_id={}, max_msg_nums={}, \
-             invisible_time={}, poll_time={}, born_time={}, init_mode={}, exp_type={}, exp={}, \
-             order={}, attempt_id={}]",
+            "PopMessageRequestHeader [consumer_group={}, topic={}, queue_id={}, max_msg_nums={}, invisible_time={}, \
+             poll_time={}, born_time={}, init_mode={}, exp_type={}, exp={}, order={}, attempt_id={}]",
             self.consumer_group,
             self.topic,
             self.queue_id,
@@ -145,9 +144,9 @@ mod tests {
         };
         assert_eq!(
             format!("{}", header),
-            "PopMessageRequestHeader [consumer_group=group1, topic=topic1, queue_id=1, \
-             max_msg_nums=10, invisible_time=1000, poll_time=2000, born_time=3000, init_mode=1, \
-             exp_type=type1, exp=exp1, order=true, attempt_id=attempt1]"
+            "PopMessageRequestHeader [consumer_group=group1, topic=topic1, queue_id=1, max_msg_nums=10, \
+             invisible_time=1000, poll_time=2000, born_time=3000, init_mode=1, exp_type=type1, exp=exp1, order=true, \
+             attempt_id=attempt1]"
         );
     }
 
@@ -156,9 +155,8 @@ mod tests {
         let header = PopMessageRequestHeader::default();
         assert_eq!(
             format!("{}", header),
-            "PopMessageRequestHeader [consumer_group=, topic=, queue_id=0, max_msg_nums=0, \
-             invisible_time=0, poll_time=0, born_time=0, init_mode=0, exp_type=, exp=, \
-             order=false, attempt_id=]"
+            "PopMessageRequestHeader [consumer_group=, topic=, queue_id=0, max_msg_nums=0, invisible_time=0, \
+             poll_time=0, born_time=0, init_mode=0, exp_type=, exp=, order=false, attempt_id=]"
         );
     }
 }

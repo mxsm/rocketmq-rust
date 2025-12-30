@@ -30,21 +30,17 @@ impl CommandUtil {
         cluster_name: &str,
     ) -> RocketMQResult<Vec<CheetahString>> {
         let cluster_addr_table = cluster_info.cluster_addr_table.as_ref().ok_or_else(|| {
-            RocketMQError::Internal(
-                "CommandUtil: No cluster address table available from nameserver.".into(),
-            )
+            RocketMQError::Internal("CommandUtil: No cluster address table available from nameserver.".into())
         })?;
         let broker_names = cluster_addr_table.get(cluster_name).ok_or_else(|| {
             RocketMQError::Internal(format!(
-                "CommandUtil: Make sure the specified clusterName exists or the nameserver which \
-                 connected to is correct. Cluster: {}",
+                "CommandUtil: Make sure the specified clusterName exists or the nameserver which connected to is \
+                 correct. Cluster: {}",
                 cluster_name
             ))
         })?;
         let broker_addr_table = cluster_info.broker_addr_table.as_ref().ok_or_else(|| {
-            RocketMQError::Internal(
-                "CommandUtil: No broker address table available from nameserver.".into(),
-            )
+            RocketMQError::Internal("CommandUtil: No broker address table available from nameserver.".into())
         })?;
 
         let mut master_addrs = Vec::new();
@@ -87,17 +83,14 @@ impl CommandUtil {
             }
         }
         Err(RocketMQError::Internal(format!(
-            "CommandUtil: Make sure the specified clusterName exists or the nameserver which \
-             connected to is correct. Cluster: {}",
+            "CommandUtil: Make sure the specified clusterName exists or the nameserver which connected to is correct. \
+             Cluster: {}",
             cluster_name
         )))
     }
 
     #[allow(unused)]
-    pub fn fetch_broker_name_by_addr(
-        cluster_info: &ClusterInfo,
-        broker_addr: &str,
-    ) -> RocketMQResult<String> {
+    pub fn fetch_broker_name_by_addr(cluster_info: &ClusterInfo, broker_addr: &str) -> RocketMQResult<String> {
         if let Some(broker_addr_table) = &cluster_info.broker_addr_table {
             for (broker_name, broker_data) in broker_addr_table.iter() {
                 for addr in broker_data.broker_addrs().values() {
@@ -140,10 +133,7 @@ mod tests {
         let mut cluster_addr_table = HashMap::new();
         let mut broker_names = HashSet::new();
         broker_names.insert(CheetahString::from_static_str("broker-a"));
-        cluster_addr_table.insert(
-            CheetahString::from_static_str("DefaultCluster"),
-            broker_names,
-        );
+        cluster_addr_table.insert(CheetahString::from_static_str("DefaultCluster"), broker_names);
 
         ClusterInfo::new(Some(broker_addr_table), Some(cluster_addr_table))
     }
@@ -151,8 +141,7 @@ mod tests {
     #[test]
     fn fetch_master_addr_by_cluster_name() {
         let cluster_info = create_test_cluster_info();
-        let result =
-            CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, "DefaultCluster");
+        let result = CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, "DefaultCluster");
 
         assert!(result.is_ok());
         let addrs = result.unwrap();
@@ -163,8 +152,7 @@ mod tests {
     #[test]
     fn fetch_master_addr_by_cluster_name_not_found() {
         let cluster_info = create_test_cluster_info();
-        let result =
-            CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, "NonExistentCluster");
+        let result = CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, "NonExistentCluster");
 
         assert!(result.is_err());
     }
@@ -189,8 +177,7 @@ mod tests {
     #[test]
     fn fetch_broker_name_by_cluster_name() {
         let cluster_info = create_test_cluster_info();
-        let result =
-            CommandUtil::fetch_broker_name_by_cluster_name(&cluster_info, "DefaultCluster");
+        let result = CommandUtil::fetch_broker_name_by_cluster_name(&cluster_info, "DefaultCluster");
 
         assert!(result.is_ok());
         let names = result.unwrap();
@@ -201,8 +188,7 @@ mod tests {
     #[test]
     fn fetch_broker_name_by_cluster_name_not_found() {
         let cluster_info = create_test_cluster_info();
-        let result =
-            CommandUtil::fetch_broker_name_by_cluster_name(&cluster_info, "NonExistentCluster");
+        let result = CommandUtil::fetch_broker_name_by_cluster_name(&cluster_info, "NonExistentCluster");
 
         assert!(result.is_err());
     }

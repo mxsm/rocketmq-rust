@@ -136,10 +136,7 @@ mod tests {
         assert_eq!(trace_context.trace_type, Some(TraceType::Pub));
         assert!(trace_context.time_stamp > 0);
         assert_eq!(trace_context.region_id, CheetahString::from("region_id"));
-        assert_eq!(
-            trace_context.region_name,
-            CheetahString::from("region_name")
-        );
+        assert_eq!(trace_context.region_name, CheetahString::from("region_name"));
         assert_eq!(trace_context.group_name, CheetahString::from("group_name"));
         assert_eq!(trace_context.cost_time, 100);
         assert!(!trace_context.is_success);

@@ -87,11 +87,7 @@ impl TaskExecutor {
     }
 
     /// Execute a task asynchronously
-    pub async fn execute_task(
-        &self,
-        task: Arc<Task>,
-        scheduled_time: SystemTime,
-    ) -> Result<String, SchedulerError> {
+    pub async fn execute_task(&self, task: Arc<Task>, scheduled_time: SystemTime) -> Result<String, SchedulerError> {
         let execution_id = Uuid::new_v4().to_string();
         let mut execution = TaskExecution::new(task.id.clone(), scheduled_time);
         execution.execution_id = execution_id.clone();
@@ -120,10 +116,7 @@ impl TaskExecutor {
             running_tasks.insert(execution_id.clone(), handle);
         }
 
-        info!(
-            "Task scheduled for execution: {} ({})",
-            task.name, execution_id
-        );
+        info!("Task scheduled for execution: {} ({})", task.name, execution_id);
         Ok(execution_id)
     }
 
@@ -160,11 +153,7 @@ impl TaskExecutor {
     /// Get all executions for a task
     pub async fn get_task_executions(&self, task_id: &str) -> Vec<TaskExecution> {
         let executions = self.executions.read().await;
-        executions
-            .values()
-            .filter(|e| e.task_id == task_id)
-            .cloned()
-            .collect()
+        executions.values().filter(|e| e.task_id == task_id).cloned().collect()
     }
 
     /// Get current metrics
@@ -202,16 +191,9 @@ impl TaskExecutor {
         }
     }
 
-    async fn run_task_internal(
-        &self,
-        task: Arc<Task>,
-        execution_id: String,
-        scheduled_time: SystemTime,
-    ) {
+    async fn run_task_internal(&self, task: Arc<Task>, execution_id: String, scheduled_time: SystemTime) {
         let internal = self.clone_for_task();
-        internal
-            .run_task_internal(task, execution_id, scheduled_time)
-            .await;
+        internal.run_task_internal(task, execution_id, scheduled_time).await;
     }
 
     pub async fn execute_task_with_delay(
@@ -284,12 +266,7 @@ struct TaskExecutorInternal {
 }
 
 impl TaskExecutorInternal {
-    async fn run_task_internal(
-        &self,
-        task: Arc<Task>,
-        execution_id: String,
-        scheduled_time: SystemTime,
-    ) {
+    async fn run_task_internal(&self, task: Arc<Task>, execution_id: String, scheduled_time: SystemTime) {
         // Acquire semaphore permit
         let _permit = match self.semaphore.acquire().await {
             Ok(permit) => permit,
@@ -353,10 +330,7 @@ impl TaskExecutorInternal {
                 error!("Task failed: {} ({}) - {}", task.name, execution_id, err);
             }
             TaskResult::Skipped(reason) => {
-                info!(
-                    "Task skipped: {} ({}) - {}",
-                    task.name, execution_id, reason
-                );
+                info!("Task skipped: {} ({}) - {}", task.name, execution_id, reason);
             }
         }
     }

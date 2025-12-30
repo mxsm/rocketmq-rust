@@ -40,8 +40,7 @@ impl PullMessageService {
         }
     }
     pub async fn start(&mut self, mut instance: ArcMut<MQClientInstance>) {
-        let (tx, mut rx) =
-            tokio::sync::mpsc::channel::<Box<dyn MessageRequest + Send + 'static>>(1024 * 4);
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Box<dyn MessageRequest + Send + 'static>>(1024 * 4);
         let (mut shutdown, tx_shutdown) = Shutdown::new(1);
         self.tx = Some(tx);
         self.tx_shutdown = Some(tx_shutdown);
@@ -91,10 +90,7 @@ impl PullMessageService {
         if let Some(mut consumer) = instance.select_consumer(request.get_consumer_group()).await {
             consumer.pull_message(request).await;
         } else {
-            warn!(
-                "No matched consumer for the PullRequest {},drop it",
-                request
-            )
+            warn!("No matched consumer for the PullRequest {},drop it", request)
         }
     }
 
@@ -102,10 +98,7 @@ impl PullMessageService {
         if let Some(mut consumer) = instance.select_consumer(request.get_consumer_group()).await {
             consumer.pop_message(request).await;
         } else {
-            warn!(
-                "No matched consumer for the PopRequest {}, drop it",
-                request
-            )
+            warn!("No matched consumer for the PopRequest {}, drop it", request)
         }
     }
 
@@ -147,10 +140,7 @@ impl PullMessageService {
                 warn!("Failed to send shutdown signal to pull_tx, error: {:?}", e);
             }
         } else {
-            warn!(
-                "Attempted to shutdown but tx_shutdown is None. Ensure `start` is called before \
-                 `shutdown`."
-            );
+            warn!("Attempted to shutdown but tx_shutdown is None. Ensure `start` is called before `shutdown`.");
         }
     }
 }

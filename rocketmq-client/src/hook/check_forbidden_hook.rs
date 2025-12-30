@@ -20,8 +20,5 @@ use crate::hook::check_forbidden_context::CheckForbiddenContext;
 pub trait CheckForbiddenHook: Send + Sync {
     fn hook_name(&self) -> &str;
 
-    fn check_forbidden(
-        &self,
-        context: &CheckForbiddenContext<'_>,
-    ) -> rocketmq_error::RocketMQResult<()>;
+    fn check_forbidden(&self, context: &CheckForbiddenContext<'_>) -> rocketmq_error::RocketMQResult<()>;
 }

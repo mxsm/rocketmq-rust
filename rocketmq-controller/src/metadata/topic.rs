@@ -148,9 +148,7 @@ impl TopicManager {
 
         // Check if topic exists
         if !self.topics.contains_key(&config.topic_name) {
-            return Err(ControllerError::MetadataNotFound {
-                key: config.topic_name,
-            });
+            return Err(ControllerError::MetadataNotFound { key: config.topic_name });
         }
 
         // Convert config to info (preserving brokers list)
@@ -213,10 +211,7 @@ impl TopicManager {
 
     /// List all topics
     pub async fn list_topics(&self) -> Vec<TopicInfo> {
-        self.topics
-            .iter()
-            .map(|entry| entry.value().clone())
-            .collect()
+        self.topics.iter().map(|entry| entry.value().clone()).collect()
     }
 
     /// List topics by broker

@@ -75,25 +75,17 @@ mod tests {
         }
 
         assert_eq!(
-            consumer_allocate_queue
-                .get("CID_PREFIX0")
-                .unwrap()
-                .as_slice(),
+            consumer_allocate_queue.get("CID_PREFIX0").unwrap().as_slice(),
             &[0, 1, 2, 3]
         );
         assert_eq!(
-            consumer_allocate_queue
-                .get("CID_PREFIX1")
-                .unwrap()
-                .as_slice(),
+            consumer_allocate_queue.get("CID_PREFIX1").unwrap().as_slice(),
             &[0, 1, 2, 3]
         );
     }
 
     fn create_consumer_id_list(size: usize) -> Vec<CheetahString> {
-        (0..size)
-            .map(|i| format!("CID_PREFIX{}", i).into())
-            .collect()
+        (0..size).map(|i| format!("CID_PREFIX{}", i).into()).collect()
     }
 
     fn create_message_queue_list(size: usize) -> Vec<MessageQueue> {

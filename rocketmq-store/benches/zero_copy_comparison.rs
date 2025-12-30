@@ -62,11 +62,7 @@ fn get_bytes_with_copy(mapped_file: &DefaultMappedFile, pos: usize, size: usize)
 
 // Proposed implementation: true zero-copy
 fn get_bytes_zero_copy(mapped_file: &DefaultMappedFile, pos: usize, size: usize) -> Bytes {
-    Bytes::from_owner(MmapRegionSlice::new(
-        mapped_file.get_mapped_file_arcmut(),
-        pos,
-        size,
-    ))
+    Bytes::from_owner(MmapRegionSlice::new(mapped_file.get_mapped_file_arcmut(), pos, size))
 }
 
 fn benchmark_zero_copy_comparison(c: &mut Criterion) {

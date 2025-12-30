@@ -75,10 +75,7 @@ mod tests {
     #[test]
     fn broker_operator_result_set_success_list() {
         let mut result = BrokerOperatorResult::new();
-        let success_list = vec![
-            CheetahString::from("success1"),
-            CheetahString::from("success2"),
-        ];
+        let success_list = vec![CheetahString::from("success1"), CheetahString::from("success2")];
         result.set_success_list(success_list.clone());
         assert_eq!(result.get_success_list(), &success_list);
     }
@@ -86,10 +83,7 @@ mod tests {
     #[test]
     fn broker_operator_result_set_failure_list() {
         let mut result = BrokerOperatorResult::new();
-        let failure_list = vec![
-            CheetahString::from("failure1"),
-            CheetahString::from("failure2"),
-        ];
+        let failure_list = vec![CheetahString::from("failure1"), CheetahString::from("failure2")];
         result.set_failure_list(failure_list.clone());
         assert_eq!(result.get_failure_list(), &failure_list);
     }

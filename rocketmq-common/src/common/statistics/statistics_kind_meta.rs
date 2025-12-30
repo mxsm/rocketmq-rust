@@ -24,11 +24,7 @@ pub struct StatisticsKindMeta {
 }
 
 impl StatisticsKindMeta {
-    pub fn new(
-        name: String,
-        item_names: Vec<String>,
-        scheduled_printer: StatisticsItemScheduledPrinter,
-    ) -> Self {
+    pub fn new(name: String, item_names: Vec<String>, scheduled_printer: StatisticsItemScheduledPrinter) -> Self {
         StatisticsKindMeta {
             name,
             item_names,

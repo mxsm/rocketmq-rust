@@ -273,10 +273,9 @@ impl fmt::Display for MessageExt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "MessageExt {{ message: {}, broker_name: {}, queue_id: {}, store_size: {}, \
-             queue_offset: {}, sys_flag: {}, born_timestamp: {}, born_host: {}, store_timestamp: \
-             {}, store_host: {}, msg_id: {}, commit_log_offset: {}, body_crc: {}, \
-             reconsume_times: {}, prepared_transaction_offset: {} }}",
+            "MessageExt {{ message: {}, broker_name: {}, queue_id: {}, store_size: {}, queue_offset: {}, sys_flag: \
+             {}, born_timestamp: {}, born_host: {}, store_timestamp: {}, store_host: {}, msg_id: {}, \
+             commit_log_offset: {}, body_crc: {}, reconsume_times: {}, prepared_transaction_offset: {} }}",
             self.message,
             self.broker_name,
             self.queue_id,

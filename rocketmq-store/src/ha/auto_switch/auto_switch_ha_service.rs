@@ -86,10 +86,7 @@ impl HAService for AutoSwitchHAService {
         todo!()
     }
 
-    async fn put_group_connection_state_request(
-        &self,
-        request: HAConnectionStateNotificationRequest,
-    ) {
+    async fn put_group_connection_state_request(&self, request: HAConnectionStateNotificationRequest) {
         todo!()
     }
 

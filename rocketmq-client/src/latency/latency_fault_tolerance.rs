@@ -30,13 +30,7 @@ pub trait LatencyFaultTolerance<T, R, S>: Send + Sync + 'static {
     /// * `not_available_duration` - Corresponding not available time, ms. The broker will be not
     ///   available until it
     /// * `reachable` - To decide if this broker is reachable or not.
-    async fn update_fault_item(
-        &mut self,
-        name: T,
-        current_latency: u64,
-        not_available_duration: u64,
-        reachable: bool,
-    );
+    async fn update_fault_item(&mut self, name: T, current_latency: u64, not_available_duration: u64, reachable: bool);
 
     /// To check if this broker is available.
     ///

@@ -70,41 +70,33 @@ fn bench_encode_buffer_continuous(c: &mut Criterion) {
         let msg_size = 1024;
 
         // EncodeBuffer
-        group.bench_with_input(
-            BenchmarkId::new("EncodeBuffer", msg_count),
-            msg_count,
-            |b, &count| {
-                let mut eb = EncodeBuffer::new();
-                let data = vec![0u8; msg_size];
+        group.bench_with_input(BenchmarkId::new("EncodeBuffer", msg_count), msg_count, |b, &count| {
+            let mut eb = EncodeBuffer::new();
+            let data = vec![0u8; msg_size];
 
-                b.iter(|| {
-                    for _ in 0..count {
-                        eb.append(black_box(&data));
-                        let bytes = eb.take_bytes();
-                        black_box(bytes);
-                    }
-                });
-            },
-        );
+            b.iter(|| {
+                for _ in 0..count {
+                    eb.append(black_box(&data));
+                    let bytes = eb.take_bytes();
+                    black_box(bytes);
+                }
+            });
+        });
 
         // BytesMut
-        group.bench_with_input(
-            BenchmarkId::new("BytesMut", msg_count),
-            msg_count,
-            |b, &count| {
-                let mut buf = BytesMut::with_capacity(8192);
-                let data = vec![0u8; msg_size];
+        group.bench_with_input(BenchmarkId::new("BytesMut", msg_count), msg_count, |b, &count| {
+            let mut buf = BytesMut::with_capacity(8192);
+            let data = vec![0u8; msg_size];
 
-                b.iter(|| {
-                    for _ in 0..count {
-                        buf.extend_from_slice(black_box(&data));
-                        let len = buf.len();
-                        let bytes = buf.split_to(len).freeze();
-                        black_box(bytes);
-                    }
-                });
-            },
-        );
+            b.iter(|| {
+                for _ in 0..count {
+                    buf.extend_from_slice(black_box(&data));
+                    let len = buf.len();
+                    let bytes = buf.split_to(len).freeze();
+                    black_box(bytes);
+                }
+            });
+        });
     }
 
     group.finish();

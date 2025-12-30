@@ -162,11 +162,7 @@ impl UpdateTopicCommand {
             write_queue_nums: self.write_queue_nums,
             perm: self.perm,
             topic_filter_type: None, // Use default
-            topic_sys_flag: if topic_sys_flag > 0 {
-                Some(topic_sys_flag)
-            } else {
-                None
-            },
+            topic_sys_flag: if topic_sys_flag > 0 { Some(topic_sys_flag) } else { None },
             order: self.order,
         })
     }
@@ -180,11 +176,10 @@ impl UpdateTopicCommand {
         } else if let Some(ref cluster) = self.cluster {
             Ok(TopicTarget::Cluster(CheetahString::from(cluster.clone())))
         } else {
-            Err(crate::core::ToolsError::validation_error(
-                "target",
-                "Either broker_addr or cluster must be specified",
+            Err(
+                crate::core::ToolsError::validation_error("target", "Either broker_addr or cluster must be specified")
+                    .into(),
             )
-            .into())
         }
     }
 
@@ -195,10 +190,7 @@ impl UpdateTopicCommand {
             TopicTarget::Cluster(cluster) => format!("cluster {}", cluster),
         };
 
-        println!(
-            "Topic '{}' created/updated successfully on {}",
-            self.topic, target_str
-        );
+        println!("Topic '{}' created/updated successfully on {}", self.topic, target_str);
 
         // Print configuration details
         println!("\nConfiguration:");
@@ -219,9 +211,7 @@ impl UpdateTopicCommand {
 
         // Note about order topics
         if self.order {
-            println!(
-                "\nNote: Order topic creation requires additional configuration on the broker."
-            );
+            println!("\nNote: Order topic creation requires additional configuration on the broker.");
             println!("   Ensure the broker supports order message configuration.");
         }
     }

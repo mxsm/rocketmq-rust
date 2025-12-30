@@ -143,9 +143,7 @@ impl TaskScheduler {
     pub async fn start(&self) -> SchedulerResult<()> {
         let mut running = self.running.write().await;
         if *running {
-            return Err(SchedulerError::SystemError(
-                "Scheduler is already running".to_string(),
-            ));
+            return Err(SchedulerError::SystemError("Scheduler is already running".to_string()));
         }
         *running = true;
 
@@ -199,11 +197,7 @@ impl TaskScheduler {
     }
 
     /// Schedule a new job
-    pub async fn schedule_job(
-        &self,
-        task: Arc<Task>,
-        trigger: Arc<dyn Trigger>,
-    ) -> SchedulerResult<String> {
+    pub async fn schedule_job(&self, task: Arc<Task>, trigger: Arc<dyn Trigger>) -> SchedulerResult<String> {
         let job = ScheduledJob::new(task.clone(), trigger);
         let job_id = job.id.clone();
 
@@ -306,11 +300,7 @@ impl TaskScheduler {
     }
 
     /// Schedule a delayed job (execute once after delay)
-    pub async fn schedule_delayed_job(
-        &self,
-        task: Arc<Task>,
-        delay: Duration,
-    ) -> SchedulerResult<String> {
+    pub async fn schedule_delayed_job(&self, task: Arc<Task>, delay: Duration) -> SchedulerResult<String> {
         let trigger = Arc::new(DelayTrigger::new(delay));
         self.schedule_job(task, trigger).await
     }
@@ -365,10 +355,7 @@ impl TaskScheduler {
             let execution_id = executor
                 .execute_task_with_delay(job.task, SystemTime::now(), execution_delay)
                 .await?;
-            info!(
-                "Job executed immediately with delay: {} ({})",
-                job_id, execution_id
-            );
+            info!("Job executed immediately with delay: {} ({})", job_id, execution_id);
             Ok(execution_id)
         } else {
             Err(SchedulerError::TaskNotFound(job_id.to_string()))

@@ -346,11 +346,7 @@ impl ControllerConfig {
     }
 
     /// Set metrics gRPC exporter configuration
-    pub fn with_metrics_grpc_exporter(
-        mut self,
-        target: impl Into<String>,
-        header: impl Into<String>,
-    ) -> Self {
+    pub fn with_metrics_grpc_exporter(mut self, target: impl Into<String>, header: impl Into<String>) -> Self {
         self.metrics_grpc_exporter_target = target.into();
         self.metrics_grpc_exporter_header = header.into();
         self
@@ -430,9 +426,7 @@ impl ControllerConfig {
 
     /// Check if a configuration key is in the blacklist
     pub fn is_config_in_blacklist(&self, key: &str) -> bool {
-        self.config_black_list
-            .split(';')
-            .any(|item| item.trim() == key)
+        self.config_black_list.split(';').any(|item| item.trim() == key)
     }
 
     /// Validate the configuration
@@ -449,9 +443,7 @@ impl ControllerConfig {
         }
 
         if self.controller_request_thread_pool_queue_capacity == 0 {
-            return Err(
-                "controller_request_thread_pool_queue_capacity must be greater than 0".to_string(),
-            );
+            return Err("controller_request_thread_pool_queue_capacity must be greater than 0".to_string());
         }
 
         if self.mapped_file_size == 0 {

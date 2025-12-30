@@ -60,15 +60,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     scheduler.start().await?;
 
     // Schedule jobs
-    let job1_id = scheduler
-        .schedule_job(simple_task.clone(), cron_trigger)
-        .await?;
-    let job2_id = scheduler
-        .schedule_job(simple_task.clone(), interval_trigger)
-        .await?;
-    let job3_id = scheduler
-        .schedule_job(simple_task.clone(), delay_trigger)
-        .await?;
+    let job1_id = scheduler.schedule_job(simple_task.clone(), cron_trigger).await?;
+    let job2_id = scheduler.schedule_job(simple_task.clone(), interval_trigger).await?;
+    let job3_id = scheduler.schedule_job(simple_task.clone(), delay_trigger).await?;
 
     info!("Scheduled jobs: {}, {}, {}", job1_id, job2_id, job3_id);
 

@@ -120,9 +120,7 @@ impl PartialOrd for PopRequest {
 
 impl Ord for PopRequest {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.expired
-            .cmp(&other.expired)
-            .then_with(|| self.op.cmp(&other.op))
+        self.expired.cmp(&other.expired).then_with(|| self.op.cmp(&other.op))
     }
 }
 

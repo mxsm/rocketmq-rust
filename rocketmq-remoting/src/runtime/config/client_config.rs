@@ -85,10 +85,7 @@ mod tests {
             default_config.client_worker_threads,
             NET_SYSTEM_CONFIG.client_worker_size
         );
-        assert_eq!(
-            default_config.client_callback_executor_threads,
-            num_cpus::get()
-        );
+        assert_eq!(default_config.client_callback_executor_threads, num_cpus::get());
         assert_eq!(
             default_config.client_oneway_semaphore_value,
             NET_SYSTEM_CONFIG.client_oneway_semaphore_value

@@ -88,11 +88,7 @@ impl MQProducerInnerImpl {
         }
     }
 
-    pub fn update_topic_publish_info(
-        &mut self,
-        topic: impl Into<CheetahString>,
-        info: Option<TopicPublishInfo>,
-    ) {
+    pub fn update_topic_publish_info(&mut self, topic: impl Into<CheetahString>, info: Option<TopicPublishInfo>) {
         if let Some(default_mqproducer_impl_inner) = &mut self.default_mqproducer_impl_inner {
             default_mqproducer_impl_inner.update_topic_publish_info(topic.into(), info);
         }

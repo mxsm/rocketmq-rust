@@ -45,10 +45,7 @@ pub struct SyncStateInfo {
 }
 
 impl SyncStateInfo {
-    pub fn new(
-        cluster_name: impl Into<CheetahString>,
-        broker_name: impl Into<CheetahString>,
-    ) -> Self {
+    pub fn new(cluster_name: impl Into<CheetahString>, broker_name: impl Into<CheetahString>) -> Self {
         Self {
             cluster_name: cluster_name.into(),
             broker_name: broker_name.into(),

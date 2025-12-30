@@ -309,8 +309,7 @@ mod tests {
 
     #[test]
     fn test_exponential_backoff() {
-        let mut backoff =
-            ExponentialBackoff::new(Duration::from_secs(1), Duration::from_secs(60), 5);
+        let mut backoff = ExponentialBackoff::new(Duration::from_secs(1), Duration::from_secs(60), 5);
 
         // First few attempts
         assert_eq!(backoff.next_delay(), Some(Duration::from_secs(1)));

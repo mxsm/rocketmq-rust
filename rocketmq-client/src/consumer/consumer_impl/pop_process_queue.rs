@@ -69,8 +69,7 @@ impl PopProcessQueue {
 
     #[inline]
     pub(crate) fn set_last_pop_timestamp(&self, last_pop_timestamp: u64) {
-        self.last_pop_timestamp
-            .store(last_pop_timestamp, Ordering::Release);
+        self.last_pop_timestamp.store(last_pop_timestamp, Ordering::Release);
     }
 
     #[inline]

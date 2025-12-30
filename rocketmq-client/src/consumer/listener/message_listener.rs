@@ -25,10 +25,8 @@ pub(crate) struct MessageListener {
         Option<ArcBoxMessageListenerConcurrently>,
         Option<MessageListenerConcurrentlyFn>,
     )>,
-    pub(crate) message_listener_orderly: Option<(
-        Option<ArcBoxMessageListenerOrderly>,
-        Option<MessageListenerOrderlyFn>,
-    )>,
+    pub(crate) message_listener_orderly:
+        Option<(Option<ArcBoxMessageListenerOrderly>, Option<MessageListenerOrderlyFn>)>,
 }
 
 impl MessageListener {
@@ -37,10 +35,7 @@ impl MessageListener {
             Option<ArcBoxMessageListenerConcurrently>,
             Option<MessageListenerConcurrentlyFn>,
         )>,
-        message_listener_orderly: Option<(
-            Option<ArcBoxMessageListenerOrderly>,
-            Option<MessageListenerOrderlyFn>,
-        )>,
+        message_listener_orderly: Option<(Option<ArcBoxMessageListenerOrderly>, Option<MessageListenerOrderlyFn>)>,
     ) -> Self {
         Self {
             message_listener_concurrently,

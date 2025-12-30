@@ -47,23 +47,19 @@ mod tests {
         };
         let map = header.to_map().unwrap();
         assert_eq!(
-            map.get(&CheetahString::from_static_str("clusterName"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("clusterName")).unwrap(),
             "test_cluster"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("brokerName"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("brokerName")).unwrap(),
             "test_broker"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("appliedBrokerId"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("appliedBrokerId")).unwrap(),
             "9876543210"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("registerCheckCode"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("registerCheckCode")).unwrap(),
             "check_code_123"
         );
     }

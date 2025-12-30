@@ -62,11 +62,7 @@ impl ExpressionMessageFilter {
 
 #[allow(unused_variables)]
 impl MessageFilter for ExpressionMessageFilter {
-    fn is_matched_by_consume_queue(
-        &self,
-        tags_code: Option<i64>,
-        cq_ext_unit: Option<&CqExtUnit>,
-    ) -> bool {
+    fn is_matched_by_consume_queue(&self, tags_code: Option<i64>, cq_ext_unit: Option<&CqExtUnit>) -> bool {
         if self.subscription_data.is_none() {
             return true;
         }
@@ -81,9 +77,7 @@ impl MessageFilter for ExpressionMessageFilter {
             if subscription_data.sub_string.as_str() == SubscriptionData::SUB_ALL {
                 return true;
             }
-            subscription_data
-                .code_set
-                .contains(&(tags_code.unwrap() as i32))
+            subscription_data.code_set.contains(&(tags_code.unwrap() as i32))
         } else {
             unimplemented!("SQL92 expression type is not supported yet.")
         }

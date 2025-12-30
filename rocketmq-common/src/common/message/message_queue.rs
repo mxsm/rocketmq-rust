@@ -49,11 +49,7 @@ impl MessageQueue {
         }
     }
 
-    pub fn from_parts(
-        topic: impl Into<CheetahString>,
-        broker_name: impl Into<CheetahString>,
-        queue_id: i32,
-    ) -> Self {
+    pub fn from_parts(topic: impl Into<CheetahString>, broker_name: impl Into<CheetahString>, queue_id: i32) -> Self {
         MessageQueue {
             topic: topic.into(),
             broker_name: broker_name.into(),
@@ -99,9 +95,7 @@ impl MessageQueue {
 
 impl PartialEq for MessageQueue {
     fn eq(&self, other: &Self) -> bool {
-        self.topic == other.topic
-            && self.broker_name == other.broker_name
-            && self.queue_id == other.queue_id
+        self.topic == other.topic && self.broker_name == other.broker_name && self.queue_id == other.queue_id
     }
 }
 

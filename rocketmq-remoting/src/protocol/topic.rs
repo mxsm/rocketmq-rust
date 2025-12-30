@@ -65,8 +65,7 @@ impl std::fmt::Display for OffsetMovedEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "OffsetMovedEvent [consumer_group={}, message_queue={:?}, offset_request={}, \
-             offset_new={}]",
+            "OffsetMovedEvent [consumer_group={}, message_queue={:?}, offset_request={}, offset_new={}]",
             self.consumer_group, self.message_queue, self.offset_request, self.offset_new
         )
     }

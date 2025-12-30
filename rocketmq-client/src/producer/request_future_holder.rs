@@ -28,8 +28,7 @@ use tokio::time::interval;
 
 use crate::producer::request_response_future::RequestResponseFuture;
 
-pub static REQUEST_FUTURE_HOLDER: Lazy<Arc<RequestFutureHolder>> =
-    Lazy::new(|| Arc::new(RequestFutureHolder::new()));
+pub static REQUEST_FUTURE_HOLDER: Lazy<Arc<RequestFutureHolder>> = Lazy::new(|| Arc::new(RequestFutureHolder::new()));
 
 pub struct RequestFutureHolder {
     request_future_table: Arc<RwLock<HashMap<String, Arc<RequestResponseFuture>>>>,

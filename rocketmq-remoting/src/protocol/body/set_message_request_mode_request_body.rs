@@ -85,10 +85,7 @@ mod tests {
         }"#;
         let deserialized: SetMessageRequestModeRequestBody = serde_json::from_str(json).unwrap();
         assert_eq!(deserialized.topic, CheetahString::from("test_topic"));
-        assert_eq!(
-            deserialized.consumer_group,
-            CheetahString::from("test_group")
-        );
+        assert_eq!(deserialized.consumer_group, CheetahString::from("test_group"));
         assert_eq!(deserialized.mode, MessageRequestMode::Pull);
         assert_eq!(deserialized.pop_share_queue_num, 3);
     }

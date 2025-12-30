@@ -64,8 +64,7 @@ impl StatisticsItem {
         }
 
         self.invoke_times.fetch_add(1, Ordering::SeqCst);
-        self.last_timestamp
-            .store(get_current_millis(), Ordering::SeqCst);
+        self.last_timestamp.store(get_current_millis(), Ordering::SeqCst);
 
         if let Some(ref interceptor) = self.interceptor {
             interceptor.inc(item_incs);
@@ -198,18 +197,8 @@ mod tests {
     fn inc_items_updates_values_correctly() {
         let item = StatisticsItem::new("kind", "object", vec!["item1", "item2"]);
         item.inc_items(vec![1, 2]);
-        assert_eq!(
-            item.item_accumulate("item1")
-                .unwrap()
-                .load(Ordering::SeqCst),
-            1
-        );
-        assert_eq!(
-            item.item_accumulate("item2")
-                .unwrap()
-                .load(Ordering::SeqCst),
-            2
-        );
+        assert_eq!(item.item_accumulate("item1").unwrap().load(Ordering::SeqCst), 1);
+        assert_eq!(item.item_accumulate("item2").unwrap().load(Ordering::SeqCst), 2);
     }
 
     #[test]
@@ -230,20 +219,8 @@ mod tests {
         let item = StatisticsItem::new("kind", "object", vec!["item1", "item2"]);
         item.inc_items(vec![1, 2]);
         let snapshot = item.snapshot();
-        assert_eq!(
-            snapshot
-                .item_accumulate("item1")
-                .unwrap()
-                .load(Ordering::SeqCst),
-            1
-        );
-        assert_eq!(
-            snapshot
-                .item_accumulate("item2")
-                .unwrap()
-                .load(Ordering::SeqCst),
-            2
-        );
+        assert_eq!(snapshot.item_accumulate("item1").unwrap().load(Ordering::SeqCst), 1);
+        assert_eq!(snapshot.item_accumulate("item2").unwrap().load(Ordering::SeqCst), 2);
     }
 
     #[test]
@@ -253,20 +230,8 @@ mod tests {
         let item2 = StatisticsItem::new("kind", "object", vec!["item1", "item2"]);
         item2.inc_items(vec![1, 2]);
         let result = item1.subtract(&item2);
-        assert_eq!(
-            result
-                .item_accumulate("item1")
-                .unwrap()
-                .load(Ordering::SeqCst),
-            2
-        );
-        assert_eq!(
-            result
-                .item_accumulate("item2")
-                .unwrap()
-                .load(Ordering::SeqCst),
-            2
-        );
+        assert_eq!(result.item_accumulate("item1").unwrap().load(Ordering::SeqCst), 2);
+        assert_eq!(result.item_accumulate("item2").unwrap().load(Ordering::SeqCst), 2);
     }
 
     #[test]

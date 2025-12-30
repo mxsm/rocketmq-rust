@@ -75,10 +75,7 @@ mod tests {
             extra_info: CheetahString::from(""),
             pop_time: 123456789,
         };
-        assert_eq!(
-            format!("{}", ack_result),
-            "AckResult [AckStatus=Ok, extraInfo=]"
-        );
+        assert_eq!(format!("{}", ack_result), "AckResult [AckStatus=Ok, extraInfo=]");
     }
 
     #[test]

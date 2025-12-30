@@ -31,10 +31,7 @@ pub struct DeleteTopicFromNamesrvRequestHeader {
 }
 
 impl DeleteTopicFromNamesrvRequestHeader {
-    pub fn new(
-        topic: impl Into<CheetahString>,
-        cluster_name: Option<impl Into<CheetahString>>,
-    ) -> Self {
+    pub fn new(topic: impl Into<CheetahString>, cluster_name: Option<impl Into<CheetahString>>) -> Self {
         Self {
             topic: topic.into(),
             cluster_name: cluster_name.map(|s| s.into()),
@@ -107,10 +104,7 @@ mod tests {
         let json = r#"{"topic":"topic1","clusterName":"cluster1"}"#;
         let deserialized: DeleteTopicFromNamesrvRequestHeader = serde_json::from_str(json).unwrap();
         assert_eq!(deserialized.topic, CheetahString::from("topic1"));
-        assert_eq!(
-            deserialized.cluster_name,
-            Some(CheetahString::from("cluster1"))
-        );
+        assert_eq!(deserialized.cluster_name, Some(CheetahString::from("cluster1")));
     }
 
     #[test]

@@ -49,9 +49,9 @@ impl RocksDBBackend {
 
         // Create directory if it doesn't exist
         if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                ControllerError::StorageError(format!("Failed to create directory: {}", e))
-            })?;
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| ControllerError::StorageError(format!("Failed to create directory: {}", e)))?;
         }
 
         // Configure RocksDB options
@@ -77,10 +77,7 @@ impl RocksDBBackend {
 
         info!("RocksDB opened successfully");
 
-        Ok(Self {
-            db: Arc::new(db),
-            path,
-        })
+        Ok(Self { db: Arc::new(db), path })
     }
 
     /// Get the database path
@@ -184,9 +181,8 @@ impl StorageBackend for RocksDBBackend {
                 batch.put(key.as_bytes(), value);
             }
 
-            db.write(batch).map_err(|e| {
-                ControllerError::StorageError(format!("RocksDB batch write failed: {}", e))
-            })
+            db.write(batch)
+                .map_err(|e| ControllerError::StorageError(format!("RocksDB batch write failed: {}", e)))
         })
         .await
         .map_err(|e| ControllerError::StorageError(format!("Task join error: {}", e)))??;
@@ -206,9 +202,8 @@ impl StorageBackend for RocksDBBackend {
                 batch.delete(key.as_bytes());
             }
 
-            db.write(batch).map_err(|e| {
-                ControllerError::StorageError(format!("RocksDB batch delete failed: {}", e))
-            })
+            db.write(batch)
+                .map_err(|e| ControllerError::StorageError(format!("RocksDB batch delete failed: {}", e)))
         })
         .await
         .map_err(|e| ControllerError::StorageError(format!("Task join error: {}", e)))??;
@@ -225,9 +220,7 @@ impl StorageBackend for RocksDBBackend {
         tokio::task::spawn_blocking(move || {
             db.get(key.as_bytes())
                 .map(|opt| opt.is_some())
-                .map_err(|e| {
-                    ControllerError::StorageError(format!("RocksDB exists check failed: {}", e))
-                })
+                .map_err(|e| ControllerError::StorageError(format!("RocksDB exists check failed: {}", e)))
         })
         .await
         .map_err(|e| ControllerError::StorageError(format!("Task join error: {}", e)))?

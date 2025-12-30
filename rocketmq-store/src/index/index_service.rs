@@ -88,10 +88,7 @@ impl IndexService {
             return true;
         };
 
-        let mut files: Vec<_> = read_dir
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .collect();
+        let mut files: Vec<_> = read_dir.filter_map(Result::ok).map(|entry| entry.path()).collect();
 
         // Sort files in ascending order
         files.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
@@ -105,13 +102,7 @@ impl IndexService {
                 continue;
             };
 
-            let index_file = IndexFile::new(
-                file_path,
-                self.hash_slot_num as usize,
-                self.index_num as usize,
-                0,
-                0,
-            );
+            let index_file = IndexFile::new(file_path, self.hash_slot_num as usize, self.index_num as usize, 0, 0);
             index_file.load();
 
             if !last_exit_ok && index_file.get_end_timestamp() > checkpoint_timestamp {
@@ -196,14 +187,7 @@ impl IndexService {
         index_file_list.clear();
     }
 
-    pub fn query_offset(
-        &self,
-        topic: &str,
-        key: &str,
-        max_num: i32,
-        begin: i64,
-        end: i64,
-    ) -> QueryOffsetResult {
+    pub fn query_offset(&self, topic: &str, key: &str, max_num: i32, begin: i64, end: i64) -> QueryOffsetResult {
         self.query_offset_with_type(topic, key, max_num, begin, end, None)
     }
 
@@ -250,13 +234,7 @@ impl IndexService {
                         } else {
                             build_key(topic, key)
                         };
-                        f.select_phy_offset(
-                            &mut phy_offsets,
-                            &query_key,
-                            max_num as usize,
-                            begin,
-                            end,
-                        );
+                        f.select_phy_offset(&mut phy_offsets, &query_key, max_num as usize, begin, end);
                     }
 
                     if f.get_begin_timestamp() < begin {
@@ -270,11 +248,7 @@ impl IndexService {
             }
         } // Read lock automatically released here
 
-        QueryOffsetResult::new(
-            phy_offsets,
-            index_last_update_timestamp,
-            index_last_update_phyoffset,
-        )
+        QueryOffsetResult::new(phy_offsets, index_last_update_timestamp, index_last_update_phyoffset)
     }
 
     pub fn build_index(&self, dispatch_request: &DispatchRequest) {
@@ -336,19 +310,12 @@ impl IndexService {
 
                 // Index tags
                 if let Some(properties) = &dispatch_request.properties_map {
-                    if let Some(tags) =
-                        properties.get(&CheetahString::from_static_str(MessageConst::PROPERTY_TAGS))
-                    {
+                    if let Some(tags) = properties.get(&CheetahString::from_static_str(MessageConst::PROPERTY_TAGS)) {
                         if !tags.is_empty() {
                             index_file_new = self.put_key(
                                 index_file_new.take().unwrap(),
                                 dispatch_request,
-                                build_key_with_type(
-                                    topic,
-                                    tags.as_str(),
-                                    MessageConst::INDEX_TAG_TYPE,
-                                )
-                                .as_str(),
+                                build_key_with_type(topic, tags.as_str(), MessageConst::INDEX_TAG_TYPE).as_str(),
                             );
                             if index_file_new.is_none() {
                                 error!(
@@ -367,12 +334,7 @@ impl IndexService {
     }
 
     #[inline]
-    fn put_key(
-        &self,
-        mut index_file: Arc<IndexFile>,
-        msg: &DispatchRequest,
-        idx_key: &str,
-    ) -> Option<Arc<IndexFile>> {
+    fn put_key(&self, mut index_file: Arc<IndexFile>, msg: &DispatchRequest, idx_key: &str) -> Option<Arc<IndexFile>> {
         loop {
             if index_file.put_key(idx_key, msg.commit_log_offset, msg.store_timestamp) {
                 return Some(index_file);
@@ -477,8 +439,7 @@ impl IndexService {
         index_file.flush();
 
         if index_msg_timestamp > 0 {
-            self.store_checkpoint
-                .set_index_msg_timestamp(index_msg_timestamp);
+            self.store_checkpoint.set_index_msg_timestamp(index_msg_timestamp);
             let _ = self.store_checkpoint.flush();
         }
     }
@@ -522,8 +483,7 @@ mod tests {
         let store_checkpoint = Arc::new(StoreCheckpoint::new(&temp_file).unwrap());
         let running_flags = Arc::new(RunningFlags::default());
 
-        let index_service =
-            IndexService::new(message_store_config, store_checkpoint, running_flags);
+        let index_service = IndexService::new(message_store_config, store_checkpoint, running_flags);
 
         // Create dispatch request with tags in properties_map
         let mut properties = HashMap::new();
@@ -570,8 +530,7 @@ mod tests {
         let store_checkpoint = Arc::new(StoreCheckpoint::new(&temp_file).unwrap());
         let running_flags = Arc::new(RunningFlags::default());
 
-        let index_service =
-            IndexService::new(message_store_config, store_checkpoint, running_flags);
+        let index_service = IndexService::new(message_store_config, store_checkpoint, running_flags);
 
         // Test default query (no type)
         let result1 = index_service.query_offset("TestTopic", "key1", 10, 0, i64::MAX);

@@ -43,13 +43,7 @@ mod tests {
         assert!(matches!(change, ConsumerGroupEvent::Change));
         assert!(matches!(unregister, ConsumerGroupEvent::Unregister));
         assert!(matches!(register, ConsumerGroupEvent::Register));
-        assert!(matches!(
-            client_register,
-            ConsumerGroupEvent::ClientRegister
-        ));
-        assert!(matches!(
-            client_unregister,
-            ConsumerGroupEvent::ClientUnregister
-        ));
+        assert!(matches!(client_register, ConsumerGroupEvent::ClientRegister));
+        assert!(matches!(client_unregister, ConsumerGroupEvent::ClientUnregister));
     }
 }

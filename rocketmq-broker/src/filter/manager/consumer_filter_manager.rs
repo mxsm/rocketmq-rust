@@ -40,12 +40,8 @@ pub(crate) struct ConsumerFilterManager {
 }
 
 impl ConsumerFilterManager {
-    pub fn new(
-        mut broker_config: Arc<BrokerConfig>,
-        message_store_config: Arc<MessageStoreConfig>,
-    ) -> Self {
-        let consumer_filter_wrapper =
-            Arc::new(parking_lot::RwLock::new(ConsumerFilterWrapper::default()));
+    pub fn new(mut broker_config: Arc<BrokerConfig>, message_store_config: Arc<MessageStoreConfig>) -> Self {
+        let consumer_filter_wrapper = Arc::new(parking_lot::RwLock::new(ConsumerFilterWrapper::default()));
         let bloom_filter = BloomFilter::new(
             broker_config.max_error_rate_of_bloom_filter,
             broker_config.expect_consumer_num_use_filter,

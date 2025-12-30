@@ -58,9 +58,7 @@ impl<MS> SubscriptionGroupManager<MS>
 where
     MS: MessageStore,
 {
-    pub fn new(
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    ) -> SubscriptionGroupManager<MS> {
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> SubscriptionGroupManager<MS> {
         let mut manager = Self {
             subscription_group_table: Arc::new(DashMap::new()),
             forbidden_table: Arc::new(DashMap::new()),
@@ -87,8 +85,7 @@ where
         ];
 
         for (group_name, broadcast_enable) in system_groups {
-            let mut config =
-                SubscriptionGroupConfig::new(CheetahString::from_static_str(group_name));
+            let mut config = SubscriptionGroupConfig::new(CheetahString::from_static_str(group_name));
             if broadcast_enable {
                 config.set_consume_broadcast_enable(true);
             }
@@ -100,9 +97,7 @@ where
     }
 
     /// Get the subscription group table
-    pub fn subscription_group_table(
-        &self,
-    ) -> &Arc<DashMap<CheetahString, Arc<SubscriptionGroupConfig>>> {
+    pub fn subscription_group_table(&self) -> &Arc<DashMap<CheetahString, Arc<SubscriptionGroupConfig>>> {
         &self.subscription_group_table
     }
 
@@ -174,10 +169,7 @@ where
         }
 
         if TopicValidator::is_topic_or_group_illegal(topic) {
-            warn!(
-                "Topic name validation failed: contains illegal characters: {}",
-                topic
-            );
+            warn!("Topic name validation failed: contains illegal characters: {}", topic);
             return false;
         }
 
@@ -202,23 +194,16 @@ where
         true
     }
 
-    pub(crate) fn update_subscription_group_config(
-        &mut self,
-        config: &mut SubscriptionGroupConfig,
-    ) {
+    pub(crate) fn update_subscription_group_config(&mut self, config: &mut SubscriptionGroupConfig) {
         self.update_subscription_group_config_without_persist(config);
         self.persist();
     }
 
-    fn update_subscription_group_config_without_persist(
-        &mut self,
-        config: &mut SubscriptionGroupConfig,
-    ) {
+    fn update_subscription_group_config_without_persist(&mut self, config: &mut SubscriptionGroupConfig) {
         let new_attributes = self.request(config);
         let current_attributes = self.current(config.group_name());
         let final_attributes = match AttributeUtil::alter_current_attributes(
-            self.subscription_group_table
-                .contains_key(config.group_name()),
+            self.subscription_group_table.contains_key(config.group_name()),
             SubscriptionGroupAttributes::all(),
             &current_attributes,
             &new_attributes,
@@ -255,10 +240,7 @@ where
 
         self.update_data_version();
     }
-    fn request(
-        &self,
-        subscription_group_config: &SubscriptionGroupConfig,
-    ) -> HashMap<CheetahString, CheetahString> {
+    fn request(&self, subscription_group_config: &SubscriptionGroupConfig) -> HashMap<CheetahString, CheetahString> {
         subscription_group_config.attributes().clone()
     }
 
@@ -276,9 +258,7 @@ where
             .map(|store| store.get_state_machine_version())
             .unwrap_or(0);
 
-        self.data_version
-            .write()
-            .next_version_with(state_machine_version);
+        self.data_version.write().next_version_with(state_machine_version);
     }
 
     pub fn data_version(&self) -> Arc<parking_lot::RwLock<DataVersion>> {
@@ -288,12 +268,7 @@ where
 
 impl<MS: MessageStore> ConfigManager for SubscriptionGroupManager<MS> {
     fn config_file_path(&self) -> String {
-        get_subscription_group_path(
-            self.broker_runtime_inner
-                .broker_config()
-                .store_path_root_dir
-                .as_str(),
-        )
+        get_subscription_group_path(self.broker_runtime_inner.broker_config().store_path_root_dir.as_str())
     }
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
@@ -308,11 +283,7 @@ impl<MS: MessageStore> ConfigManager for SubscriptionGroupManager<MS> {
                 .forbidden_table
                 .iter()
                 .map(|entry| {
-                    let inner: HashMap<_, _> = entry
-                        .value()
-                        .iter()
-                        .map(|e| (e.key().clone(), *e.value()))
-                        .collect();
+                    let inner: HashMap<_, _> = entry.value().iter().map(|e| (e.key().clone(), *e.value())).collect();
                     (entry.key().clone(), inner)
                 })
                 .collect(),
@@ -332,8 +303,7 @@ impl<MS: MessageStore> ConfigManager for SubscriptionGroupManager<MS> {
             return;
         }
 
-        let wrapper =
-            serde_json::from_str::<SubscriptionGroupWrapperInner>(json_string).unwrap_or_default();
+        let wrapper = serde_json::from_str::<SubscriptionGroupWrapperInner>(json_string).unwrap_or_default();
 
         // Load subscription group table
         for (key, config) in wrapper.subscription_group_table {
@@ -350,9 +320,7 @@ impl<MS: MessageStore> ConfigManager for SubscriptionGroupManager<MS> {
         }
 
         // Update data version
-        self.data_version
-            .write()
-            .assign_new_one(&wrapper.data_version);
+        self.data_version.write().assign_new_one(&wrapper.data_version);
     }
 }
 
@@ -367,21 +335,13 @@ where
         self.subscription_group_table.contains_key(group)
     }
 
-    pub fn find_subscription_group_config(
-        &self,
-        group: &CheetahString,
-    ) -> Option<Arc<SubscriptionGroupConfig>> {
+    pub fn find_subscription_group_config(&self, group: &CheetahString) -> Option<Arc<SubscriptionGroupConfig>> {
         let mut subscription_group_config = self.find_subscription_group_config_inner(group);
         if subscription_group_config.is_none()
-            && (self
-                .broker_runtime_inner
-                .broker_config()
-                .auto_create_subscription_group
+            && (self.broker_runtime_inner.broker_config().auto_create_subscription_group
                 || is_sys_consumer_group(group))
         {
-            if group.len() > CHARACTER_MAX_LENGTH
-                || TopicValidator::is_topic_or_group_illegal(group)
-            {
+            if group.len() > CHARACTER_MAX_LENGTH || TopicValidator::is_topic_or_group_illegal(group) {
                 return None;
             }
             let mut subscription_group_config_new = SubscriptionGroupConfig::default();
@@ -391,10 +351,7 @@ where
                 .subscription_group_table
                 .insert(group.clone(), Arc::clone(&arc_config));
             if pre_config.is_none() {
-                info!(
-                    "auto create a subscription group, {:?}",
-                    subscription_group_config_new
-                );
+                info!("auto create a subscription group, {:?}", subscription_group_config_new);
             }
             self.update_data_version();
             self.persist();
@@ -403,21 +360,13 @@ where
         subscription_group_config
     }
 
-    fn find_subscription_group_config_inner(
-        &self,
-        group: &CheetahString,
-    ) -> Option<Arc<SubscriptionGroupConfig>> {
+    fn find_subscription_group_config_inner(&self, group: &CheetahString) -> Option<Arc<SubscriptionGroupConfig>> {
         self.subscription_group_table
             .get(group)
             .map(|entry| Arc::clone(entry.value()))
     }
 
-    pub fn get_forbidden(
-        &self,
-        group: &CheetahString,
-        topic: &CheetahString,
-        forbidden_index: i32,
-    ) -> bool {
+    pub fn get_forbidden(&self, group: &CheetahString, topic: &CheetahString, forbidden_index: i32) -> bool {
         if !Self::validate_forbidden_index(forbidden_index) {
             return false;
         }
@@ -440,20 +389,14 @@ where
     ///
     /// # Returns
     /// Returns the updated config if the group exists, None otherwise
-    pub fn disable_consume(
-        &mut self,
-        group_name: &CheetahString,
-    ) -> Option<Arc<SubscriptionGroupConfig>> {
-        let result = self
-            .subscription_group_table
-            .get_mut(group_name)
-            .map(|mut entry| {
-                let mut new_config = (**entry.value()).clone();
-                new_config.set_consume_enable(false);
-                let arc_config = Arc::new(new_config);
-                *entry.value_mut() = Arc::clone(&arc_config);
-                arc_config
-            });
+    pub fn disable_consume(&mut self, group_name: &CheetahString) -> Option<Arc<SubscriptionGroupConfig>> {
+        let result = self.subscription_group_table.get_mut(group_name).map(|mut entry| {
+            let mut new_config = (**entry.value()).clone();
+            new_config.set_consume_enable(false);
+            let arc_config = Arc::new(new_config);
+            *entry.value_mut() = Arc::clone(&arc_config);
+            arc_config
+        });
 
         if result.is_some() {
             self.update_data_version();
@@ -473,16 +416,13 @@ where
     /// # Returns
     /// Returns the updated config if the group exists, None otherwise
     pub fn enable_consume(&mut self, group_name: &str) -> Option<Arc<SubscriptionGroupConfig>> {
-        let result = self
-            .subscription_group_table
-            .get_mut(group_name)
-            .map(|mut entry| {
-                let mut new_config = (**entry.value()).clone();
-                new_config.set_consume_enable(true);
-                let arc_config = Arc::new(new_config);
-                *entry.value_mut() = Arc::clone(&arc_config);
-                arc_config
-            });
+        let result = self.subscription_group_table.get_mut(group_name).map(|mut entry| {
+            let mut new_config = (**entry.value()).clone();
+            new_config.set_consume_enable(true);
+            let arc_config = Arc::new(new_config);
+            *entry.value_mut() = Arc::clone(&arc_config);
+            arc_config
+        });
 
         if result.is_some() {
             self.update_data_version();
@@ -516,14 +456,8 @@ where
     ///
     /// # Returns
     /// Returns the deleted config if it existed, None otherwise
-    pub fn delete_subscription_group_config(
-        &mut self,
-        group_name: &str,
-    ) -> Option<Arc<SubscriptionGroupConfig>> {
-        let old = self
-            .subscription_group_table
-            .remove(group_name)
-            .map(|(_, v)| v);
+    pub fn delete_subscription_group_config(&mut self, group_name: &str) -> Option<Arc<SubscriptionGroupConfig>> {
+        let old = self.subscription_group_table.remove(group_name).map(|(_, v)| v);
         self.forbidden_table.remove(group_name);
 
         if old.is_some() {
@@ -531,10 +465,7 @@ where
             self.update_data_version();
             self.persist();
         } else {
-            warn!(
-                "Delete failed, subscription group not found: {}",
-                group_name
-            );
+            warn!("Delete failed, subscription group not found: {}", group_name);
         }
 
         old
@@ -546,10 +477,7 @@ where
     /// * `config_list` - List of subscription group configs to update
     ///
     /// This method updates multiple subscription groups in a single persist operation
-    pub fn update_subscription_group_config_list(
-        &mut self,
-        config_list: Vec<SubscriptionGroupConfig>,
-    ) {
+    pub fn update_subscription_group_config_list(&mut self, config_list: Vec<SubscriptionGroupConfig>) {
         if config_list.is_empty() {
             return;
         }
@@ -570,12 +498,7 @@ where
     /// * `forbidden_index` - Forbidden flag bit index (0-31)
     ///
     /// Uses bitwise OR to set the forbidden flag at the specified index
-    pub fn set_forbidden(
-        &mut self,
-        group: &CheetahString,
-        topic: &CheetahString,
-        forbidden_index: i32,
-    ) {
+    pub fn set_forbidden(&mut self, group: &CheetahString, topic: &CheetahString, forbidden_index: i32) {
         let topic_forbidden = self.get_forbidden_internal(group, topic);
         let new_forbidden = topic_forbidden | (1 << forbidden_index);
         self.update_forbidden_value(group, topic, new_forbidden);
@@ -589,12 +512,7 @@ where
     /// * `forbidden_index` - Forbidden flag bit index (0-31)
     ///
     /// Uses bitwise AND with complement to clear the forbidden flag at the specified index
-    pub fn clear_forbidden(
-        &mut self,
-        group: &CheetahString,
-        topic: &CheetahString,
-        forbidden_index: i32,
-    ) {
+    pub fn clear_forbidden(&mut self, group: &CheetahString, topic: &CheetahString, forbidden_index: i32) {
         if !Self::validate_forbidden_index(forbidden_index) {
             warn!("Invalid forbidden index: {}", forbidden_index);
             return;
@@ -613,12 +531,7 @@ where
     ///
     /// Directly sets the forbidden value, replacing any existing value.
     /// If forbidden_value <= 0, removes the group from the forbidden table.
-    pub fn update_forbidden_value(
-        &mut self,
-        group: &CheetahString,
-        topic: &CheetahString,
-        forbidden_value: i32,
-    ) {
+    pub fn update_forbidden_value(&mut self, group: &CheetahString, topic: &CheetahString, forbidden_value: i32) {
         if forbidden_value <= 0 {
             self.forbidden_table.remove(group);
             info!("Cleared group forbidden, {}@{}", group, topic);
@@ -663,11 +576,7 @@ where
 
         self.forbidden_table
             .get(group)
-            .and_then(|topic_map| {
-                topic_map
-                    .get(topic)
-                    .map(|v| (*v & (1 << forbidden_index)) != 0)
-            })
+            .and_then(|topic_map| topic_map.get(topic).map(|v| (*v & (1 << forbidden_index)) != 0))
             .unwrap_or(false)
     }
 
@@ -708,10 +617,7 @@ where
     pub fn remove_forbidden_topic(&self, group: &str, topic: &str) {
         if let Some(topic_map) = self.forbidden_table.get(group) {
             if topic_map.remove(topic).is_some() {
-                info!(
-                    "Removed forbidden flags for group: {}, topic: {}",
-                    group, topic
-                );
+                info!("Removed forbidden flags for group: {}, topic: {}", group, topic);
             }
         }
     }
@@ -763,11 +669,7 @@ where
 
             let end_index = std::cmp::min(begin_index + max_group_num, total_size);
 
-            for key in sorted_keys
-                .iter()
-                .skip(begin_index)
-                .take(end_index - begin_index)
-            {
+            for key in sorted_keys.iter().skip(begin_index).take(end_index - begin_index) {
                 if let Some(config) = self.subscription_group_table.get(key) {
                     result.insert(key.clone(), Arc::clone(config.value()));
                 }
@@ -931,8 +833,8 @@ where
         let (forbidden_groups, forbidden_topics, forbidden_flags) = self.get_forbidden_statistics();
 
         info!(
-            "SubscriptionGroupManager Statistics: Total Groups: {}, Enabled: {}, Disabled: {}, \
-             Forbidden Groups: {}, Forbidden Topics: {}, Active Forbidden Flags: {}",
+            "SubscriptionGroupManager Statistics: Total Groups: {}, Enabled: {}, Disabled: {}, Forbidden Groups: {}, \
+             Forbidden Topics: {}, Active Forbidden Flags: {}",
             total_groups, enabled, disabled, forbidden_groups, forbidden_topics, forbidden_flags
         );
     }
@@ -964,9 +866,7 @@ impl SubscriptionGroupWrapperInner {
         &self.subscription_group_table
     }
 
-    pub fn subscription_group_table_mut(
-        &mut self,
-    ) -> &mut HashMap<CheetahString, SubscriptionGroupConfig> {
+    pub fn subscription_group_table_mut(&mut self) -> &mut HashMap<CheetahString, SubscriptionGroupConfig> {
         &mut self.subscription_group_table
     }
 
@@ -989,8 +889,7 @@ mod tests {
     #[test]
     fn test_subscription_group_config_creation() {
         let group_name = "TEST_GROUP";
-        let config =
-            SubscriptionGroupConfig::new(CheetahString::from_string(group_name.to_string()));
+        let config = SubscriptionGroupConfig::new(CheetahString::from_string(group_name.to_string()));
 
         assert_eq!(config.group_name(), group_name);
         assert!(config.consume_enable());
@@ -1046,12 +945,7 @@ mod tests {
             .entry(topic.clone())
             .and_modify(|v| *v |= 1 << 3);
 
-        let value = forbidden_table
-            .get(&group)
-            .unwrap()
-            .get(&topic)
-            .map(|v| *v)
-            .unwrap();
+        let value = forbidden_table.get(&group).unwrap().get(&topic).map(|v| *v).unwrap();
         assert_eq!(value, 0b1001); // bits 0 and 3 set
     }
 
@@ -1110,19 +1004,14 @@ mod tests {
 
         let invalid_indices = vec![-1, -10, 32, 33, 100];
         for index in invalid_indices {
-            assert!(
-                !(0..32).contains(&index),
-                "Index {} should be invalid",
-                index
-            );
+            assert!(!(0..32).contains(&index), "Index {} should be invalid", index);
         }
     }
 
     #[test]
     fn test_dashmap_concurrent_access_pattern() {
         // Simulate concurrent access pattern using DashMap
-        let table: Arc<DashMap<CheetahString, Arc<SubscriptionGroupConfig>>> =
-            Arc::new(DashMap::new());
+        let table: Arc<DashMap<CheetahString, Arc<SubscriptionGroupConfig>>> = Arc::new(DashMap::new());
 
         let group_name = CheetahString::from_static_str("TEST_GROUP");
         let config = SubscriptionGroupConfig::new(group_name.clone());
@@ -1317,8 +1206,7 @@ mod tests {
         use std::time::Instant;
 
         // High concurrency stress test: 10k+ operations
-        let table: Arc<DashMap<CheetahString, Arc<SubscriptionGroupConfig>>> =
-            Arc::new(DashMap::new());
+        let table: Arc<DashMap<CheetahString, Arc<SubscriptionGroupConfig>>> = Arc::new(DashMap::new());
         let operations = Arc::new(AtomicUsize::new(0));
         let num_threads = 20;
         let ops_per_thread = 500;
@@ -1330,8 +1218,7 @@ mod tests {
                 let ops = operations.clone();
                 thread::spawn(move || {
                     for i in 0..ops_per_thread {
-                        let key =
-                            CheetahString::from_string(format!("STRESS_GROUP_{}_{}", thread_id, i));
+                        let key = CheetahString::from_string(format!("STRESS_GROUP_{}_{}", thread_id, i));
 
                         // Insert
                         let config = SubscriptionGroupConfig::new(key.clone());
@@ -1382,8 +1269,7 @@ mod tests {
         use std::thread;
 
         // Test concurrent access to nested DashMap
-        let forbidden_table: Arc<DashMap<CheetahString, DashMap<CheetahString, i32>>> =
-            Arc::new(DashMap::new());
+        let forbidden_table: Arc<DashMap<CheetahString, DashMap<CheetahString, i32>>> = Arc::new(DashMap::new());
 
         let handles: Vec<_> = (0..10)
             .map(|thread_id| {
@@ -1491,11 +1377,7 @@ mod tests {
 
         for (index, expected_valid) in test_cases {
             let is_valid = (0..32).contains(&index);
-            assert_eq!(
-                is_valid, expected_valid,
-                "Index {} validity mismatch",
-                index
-            );
+            assert_eq!(is_valid, expected_valid, "Index {} validity mismatch", index);
         }
     }
 
@@ -1505,8 +1387,7 @@ mod tests {
         use std::thread;
 
         // Test for potential data races with concurrent read/write
-        let table: Arc<DashMap<CheetahString, Arc<SubscriptionGroupConfig>>> =
-            Arc::new(DashMap::new());
+        let table: Arc<DashMap<CheetahString, Arc<SubscriptionGroupConfig>>> = Arc::new(DashMap::new());
 
         // Pre-populate
         for i in 0..100 {
@@ -1560,8 +1441,7 @@ mod tests {
     fn test_pagination_consistency_under_concurrent_modifications() {
         use std::thread;
 
-        let table: Arc<DashMap<CheetahString, Arc<SubscriptionGroupConfig>>> =
-            Arc::new(DashMap::new());
+        let table: Arc<DashMap<CheetahString, Arc<SubscriptionGroupConfig>>> = Arc::new(DashMap::new());
 
         // Initial data
         for i in 0..1000 {

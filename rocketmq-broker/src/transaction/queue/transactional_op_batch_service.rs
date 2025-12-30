@@ -93,18 +93,13 @@ where
             std::sync::atomic::Ordering::Relaxed,
         );
         while !context.is_stopped() {
-            let mut interval = self
-                .wakeup_timestamp
-                .load(std::sync::atomic::Ordering::Relaxed) as i64
-                - get_current_millis() as i64;
+            let mut interval =
+                self.wakeup_timestamp.load(std::sync::atomic::Ordering::Relaxed) as i64 - get_current_millis() as i64;
             if interval <= 0 {
                 interval = 0;
                 context.wakeup();
             }
-            if context
-                .wait_for_running(Duration::from_millis(interval as u64))
-                .await
-            {
+            if context.wait_for_running(Duration::from_millis(interval as u64)).await {
                 self.on_wait_end().await;
             }
         }
@@ -113,11 +108,10 @@ where
     async fn on_wait_end(&self) {
         if let Some(transactional_message_service) = self.transactional_message_service.upgrade() {
             let time = transactional_message_service.batch_send_op_message().await;
-            self.wakeup_timestamp
-                .store(time, std::sync::atomic::Ordering::Relaxed);
+            self.wakeup_timestamp.store(time, std::sync::atomic::Ordering::Relaxed);
         } else {
-            const WARN_MESSAGE: &str = "TransactionalMessageService has been dropped, skipping \
-                                        batch send operation message.";
+            const WARN_MESSAGE: &str =
+                "TransactionalMessageService has been dropped, skipping batch send operation message.";
             warn!(WARN_MESSAGE);
         }
     }

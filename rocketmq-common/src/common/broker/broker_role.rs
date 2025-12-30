@@ -63,11 +63,7 @@ impl<'de> Deserialize<'de> for BrokerRole {
                     "SLAVE" | "Slave" => Ok(BrokerRole::Slave),
                     _ => Err(serde::de::Error::unknown_variant(
                         value,
-                        &[
-                            "ASYNC_MASTER/AsyncMaster",
-                            "SYNC_MASTER/SyncMaster",
-                            "SLAVE/Slave",
-                        ],
+                        &["ASYNC_MASTER/AsyncMaster", "SYNC_MASTER/SyncMaster", "SLAVE/Slave"],
                     )),
                 }
             }

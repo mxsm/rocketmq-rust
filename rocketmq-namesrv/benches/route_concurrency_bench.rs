@@ -173,22 +173,11 @@ impl SegmentedLockModel {
 fn create_broker_data(broker_name: &str) -> BrokerData {
     let mut broker_addrs = HashMap::new();
     broker_addrs.insert(0, format!("192.168.1.{}:10911", broker_name.len()).into());
-    BrokerData::new(
-        "DefaultCluster".into(),
-        broker_name.into(),
-        broker_addrs,
-        None,
-    )
+    BrokerData::new("DefaultCluster".into(), broker_name.into(), broker_addrs, None)
 }
 
 fn create_queue_data(broker_name: &str) -> QueueData {
-    QueueData::new(
-        CheetahString::from_string(broker_name.to_string()),
-        8,
-        8,
-        6,
-        0,
-    )
+    QueueData::new(CheetahString::from_string(broker_name.to_string()), 8, 8, 6, 0)
 }
 
 // ============================================================================
@@ -280,13 +269,8 @@ where
     );
 }
 
-fn bench_mixed_workload<R, W>(
-    name: &str,
-    read_fn: R,
-    write_fn: W,
-    num_threads: usize,
-    duration: Duration,
-) where
+fn bench_mixed_workload<R, W>(name: &str, read_fn: R, write_fn: W, num_threads: usize, duration: Duration)
+where
     R: Fn(&str) + Send + Sync + 'static + Clone,
     W: Fn(String, BrokerData) + Send + Sync + 'static + Clone,
 {
@@ -368,9 +352,7 @@ fn main() {
         let queue_data = create_queue_data(&broker_name);
 
         // Can't easily pre-populate global lock model without exposing internals
-        lock_free
-            .topics
-            .insert(topic.clone(), vec![queue_data.clone()]);
+        lock_free.topics.insert(topic.clone(), vec![queue_data.clone()]);
         segmented.topics.insert(topic, vec![queue_data]);
     }
 

@@ -75,9 +75,7 @@ fn bench_random_write(c: &mut Criterion) {
         let data = vec![0xBBu8; size];
 
         // Pre-generate random offsets
-        let offsets: Vec<usize> = (0..1000)
-            .map(|i| (i * 113) % (1024 * 1024 - size))
-            .collect();
+        let offsets: Vec<usize> = (0..1000).map(|i| (i * 113) % (1024 * 1024 - size)).collect();
 
         b.iter(|| {
             for &offset in &offsets {
@@ -113,8 +111,7 @@ fn bench_batch_write(c: &mut Criterion) {
         let data = vec![0xCCu8; 1024];
 
         b.iter(|| {
-            let writes: Vec<(usize, &[u8])> =
-                (0..100).map(|i| (i * 1024, data.as_slice())).collect();
+            let writes: Vec<(usize, &[u8])> = (0..100).map(|i| (i * 1024, data.as_slice())).collect();
             buffer.batch_write(writes).unwrap();
         });
     });

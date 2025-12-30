@@ -121,9 +121,7 @@ impl<T: Default> SegmentedLock<T> {
         let segment_count = segment_count.next_power_of_two();
         let segment_mask = segment_count - 1;
 
-        let segments = (0..segment_count)
-            .map(|_| RwLock::new(T::default()))
-            .collect();
+        let segments = (0..segment_count).map(|_| RwLock::new(T::default())).collect();
 
         Self {
             segments,
@@ -199,10 +197,7 @@ impl<T: Default> SegmentedLock<T> {
         indices.sort_unstable();
         indices.dedup();
 
-        indices
-            .into_iter()
-            .map(|idx| self.segments[idx].read())
-            .collect()
+        indices.into_iter().map(|idx| self.segments[idx].read()).collect()
     }
 
     /// Acquire write locks for multiple keys
@@ -225,10 +220,7 @@ impl<T: Default> SegmentedLock<T> {
         indices.sort_unstable();
         indices.dedup();
 
-        indices
-            .into_iter()
-            .map(|idx| self.segments[idx].write())
-            .collect()
+        indices.into_iter().map(|idx| self.segments[idx].write()).collect()
     }
 
     /// Get the number of segments

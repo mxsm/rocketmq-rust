@@ -82,12 +82,7 @@ pub trait RemotingClient: RemotingService {
     /// * `addr` - The address to invoke the command on.
     /// * `request` - The `RemotingCommand` to be sent.
     /// * `timeout_millis` - The timeout for the operation in milliseconds.
-    async fn invoke_request_oneway(
-        &self,
-        addr: &CheetahString,
-        request: RemotingCommand,
-        timeout_millis: u64,
-    );
+    async fn invoke_request_oneway(&self, addr: &CheetahString, request: RemotingCommand, timeout_millis: u64);
 
     /// Checks if a specified address is reachable.
     ///
@@ -106,9 +101,7 @@ pub trait RemotingClient: RemotingService {
 
 impl<T> InvokeCallback for T
 where
-    T: Fn(Option<RemotingCommand>, Option<Box<dyn std::error::Error>>, Option<ResponseFuture>)
-        + Send
-        + Sync,
+    T: Fn(Option<RemotingCommand>, Option<Box<dyn std::error::Error>>, Option<ResponseFuture>) + Send + Sync,
 {
     fn operation_complete(&self, response_future: ResponseFuture) {
         self(None, None, Some(response_future))

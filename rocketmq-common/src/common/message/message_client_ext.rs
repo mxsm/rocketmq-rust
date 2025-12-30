@@ -145,8 +145,7 @@ impl MessageTrait for MessageClientExt {
 
     #[inline]
     fn set_compressed_body_mut(&mut self, compressed_body: Bytes) {
-        self.message_ext_inner
-            .set_compressed_body_mut(compressed_body);
+        self.message_ext_inner.set_compressed_body_mut(compressed_body);
     }
 
     #[inline]

@@ -101,39 +101,15 @@ mod tests {
 
     #[test]
     fn test_get_by_name() {
-        assert_eq!(
-            ResourceType::get_by_name("Unknown"),
-            Some(ResourceType::Unknown)
-        );
+        assert_eq!(ResourceType::get_by_name("Unknown"), Some(ResourceType::Unknown));
         assert_eq!(ResourceType::get_by_name("Any"), Some(ResourceType::Any));
-        assert_eq!(
-            ResourceType::get_by_name("Cluster"),
-            Some(ResourceType::Cluster)
-        );
-        assert_eq!(
-            ResourceType::get_by_name("Namespace"),
-            Some(ResourceType::Namespace)
-        );
-        assert_eq!(
-            ResourceType::get_by_name("Topic"),
-            Some(ResourceType::Topic)
-        );
-        assert_eq!(
-            ResourceType::get_by_name("TOPIC"),
-            Some(ResourceType::Topic)
-        );
-        assert_eq!(
-            ResourceType::get_by_name("ToPiC"),
-            Some(ResourceType::Topic)
-        );
-        assert_eq!(
-            ResourceType::get_by_name("GROUP"),
-            Some(ResourceType::Group)
-        );
-        assert_eq!(
-            ResourceType::get_by_name("Group"),
-            Some(ResourceType::Group)
-        );
+        assert_eq!(ResourceType::get_by_name("Cluster"), Some(ResourceType::Cluster));
+        assert_eq!(ResourceType::get_by_name("Namespace"), Some(ResourceType::Namespace));
+        assert_eq!(ResourceType::get_by_name("Topic"), Some(ResourceType::Topic));
+        assert_eq!(ResourceType::get_by_name("TOPIC"), Some(ResourceType::Topic));
+        assert_eq!(ResourceType::get_by_name("ToPiC"), Some(ResourceType::Topic));
+        assert_eq!(ResourceType::get_by_name("GROUP"), Some(ResourceType::Group));
+        assert_eq!(ResourceType::get_by_name("Group"), Some(ResourceType::Group));
         assert_eq!(ResourceType::get_by_name("Invalid"), None);
     }
 

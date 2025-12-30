@@ -68,19 +68,14 @@ fn parse_config_file() -> Result<(BrokerConfig, MessageStoreConfig)> {
         let config_file = PathBuf::from(config_file);
         info!("Using config file: {:?}", config_file);
         if !config_file.exists() || !config_file.is_file() {
-            bail!(
-                "Config file does not exist or is not a file: {:?}",
-                config_file
-            );
+            bail!("Config file does not exist or is not a file: {:?}", config_file);
         }
         Ok((
             ParseConfigFile::parse_config_file::<BrokerConfig>(config_file.clone())?,
             ParseConfigFile::parse_config_file::<MessageStoreConfig>(config_file)?,
         ))
     } else {
-        let config_file = PathBuf::from(home.as_str())
-            .join("conf")
-            .join("broker.toml");
+        let config_file = PathBuf::from(home.as_str()).join("conf").join("broker.toml");
         info!("Using config file: {:?}", config_file);
         if !config_file.exists() || !config_file.is_file() {
             return Ok((Default::default(), Default::default()));

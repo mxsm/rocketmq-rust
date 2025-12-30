@@ -52,13 +52,11 @@ impl BloomFilter {
         }
 
         let error_rate = f as f64 / 100.0;
-        let k =
-            (0.5f64.log2() * (n as f64 * error_rate.ln()).abs() / error_rate.ln()).ceil() as i32;
+        let k = (0.5f64.log2() * (n as f64 * error_rate.ln()).abs() / error_rate.ln()).ceil() as i32;
 
         if k < 1 {
             return Err(
-                "Hash function num is less than 1, maybe you should change the value of error \
-                 rate or bit num!",
+                "Hash function num is less than 1, maybe you should change the value of error rate or bit num!",
             );
         }
 
@@ -86,9 +84,7 @@ impl BloomFilter {
 
     pub fn is_valid(&self, filter_data: Option<&BloomFilterData>) -> bool {
         match filter_data {
-            Some(data) => {
-                data.bit_num() == self.m as u32 && data.bit_pos().len() == self.k as usize
-            }
+            Some(data) => data.bit_num() == self.m as u32 && data.bit_pos().len() == self.k as usize,
             None => false,
         }
     }

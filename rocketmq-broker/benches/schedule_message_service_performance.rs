@@ -46,19 +46,15 @@ fn bench_vecdeque_allocation(c: &mut Criterion) {
     let mut group = c.benchmark_group("vecdeque_allocation");
 
     for size in [SMALL_CAPACITY, MEDIUM_CAPACITY, LARGE_CAPACITY].iter() {
-        group.bench_with_input(
-            BenchmarkId::new("without_capacity", size),
-            size,
-            |b, &size| {
-                b.iter(|| {
-                    let mut queue: VecDeque<i64> = VecDeque::new();
-                    for i in 0..size {
-                        queue.push_back(black_box(i as i64));
-                    }
-                    queue
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("without_capacity", size), size, |b, &size| {
+            b.iter(|| {
+                let mut queue: VecDeque<i64> = VecDeque::new();
+                for i in 0..size {
+                    queue.push_back(black_box(i as i64));
+                }
+                queue
+            });
+        });
 
         group.bench_with_input(BenchmarkId::new("with_capacity", size), size, |b, &size| {
             b.iter(|| {

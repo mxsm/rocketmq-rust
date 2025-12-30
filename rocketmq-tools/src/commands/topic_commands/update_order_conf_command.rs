@@ -53,20 +53,14 @@ impl CommandExecute for UpdateOrderConfCommand {
             let order_conf = default_mq_admin_ext
                 .get_kv_config(NAMESPACE_ORDER_TOPIC_CONFIG.into(), topic.into())
                 .await?;
-            println!(
-                "get orderConf success. topic={}, orderConf={}",
-                topic, order_conf
-            );
+            println!("get orderConf success. topic={}, orderConf={}", topic, order_conf);
         } else if "put".eq(method) {
             if let Some(order_conf) = &self.order_conf {
                 default_mq_admin_ext
                     .create_or_update_order_conf(topic.into(), order_conf.into(), true)
                     .await?;
 
-                println!(
-                    "update orderConf success. topic={}, orderConf={}",
-                    topic, order_conf
-                );
+                println!("update orderConf success. topic={}, orderConf={}", topic, order_conf);
             } else if self.order_conf.is_none() {
                 default_mq_admin_ext.shutdown().await;
                 return Err(RocketMQError::Internal(

@@ -74,8 +74,7 @@ mod tests {
     #[test]
     fn query_subscription_by_consumer_request_header_handles_invalid_data() {
         let data = r#"{"group":12345,"topic":"test_topic"}"#;
-        let result: Result<QuerySubscriptionByConsumerRequestHeader, _> =
-            serde_json::from_str(data);
+        let result: Result<QuerySubscriptionByConsumerRequestHeader, _> = serde_json::from_str(data);
         assert!(result.is_err());
     }
 }

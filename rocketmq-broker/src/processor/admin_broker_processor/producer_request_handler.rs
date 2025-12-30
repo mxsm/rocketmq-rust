@@ -16,9 +16,7 @@ pub(super) struct ProducerRequestHandler<MS: MessageStore> {
 }
 impl<MS: MessageStore> ProducerRequestHandler<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self {
-            broker_runtime_inner,
-        }
+        Self { broker_runtime_inner }
     }
     pub async fn get_producer_connection_list(
         &self,
@@ -26,8 +24,7 @@ impl<MS: MessageStore> ProducerRequestHandler<MS> {
         request: &RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut response = RemotingCommand::create_response_command();
-        let request_header = request
-            .decode_command_custom_header_fast::<GetProducerConnectionListRequestHeader>()?;
+        let request_header = request.decode_command_custom_header_fast::<GetProducerConnectionListRequestHeader>()?;
         let mut producer_connection = ProducerConnection::new();
 
         if let Some(channel_info_hashmap) = self
@@ -51,12 +48,10 @@ impl<MS: MessageStore> ProducerRequestHandler<MS> {
             return Ok(Some(response));
         }
 
-        response = response
-            .set_code(ResponseCode::SystemError)
-            .set_remark(format!(
-                "the producer group[{}] not exist",
-                request_header.producer_group()
-            ));
+        response = response.set_code(ResponseCode::SystemError).set_remark(format!(
+            "the producer group[{}] not exist",
+            request_header.producer_group()
+        ));
         Ok(Some(response))
     }
 }
