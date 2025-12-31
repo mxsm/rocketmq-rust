@@ -21,3 +21,8 @@ pub mod authentication;
 pub mod authorization;
 pub mod config;
 pub mod migration;
+
+// Re-export commonly used authentication types
+pub use authentication::context::default_authentication_context::DefaultAuthenticationContext;
+pub use authentication::strategy::AllowAllAuthenticationStrategy;
+pub use authentication::strategy::AuthenticationStrategy;

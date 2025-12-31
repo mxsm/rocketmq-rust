@@ -21,6 +21,10 @@ pub mod builder;
 pub mod context;
 pub mod enums;
 pub mod model;
+pub mod strategy;
+
+// Re-export commonly used types for convenience
+pub use strategy::AuthenticationStrategy;
 
 pub trait AsAny: Any {
     fn as_any_mut(&mut self) -> &mut dyn Any;
