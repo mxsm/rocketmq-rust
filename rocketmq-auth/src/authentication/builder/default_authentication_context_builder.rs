@@ -29,7 +29,6 @@ use rocketmq_common::common::mix_all::UNIQUE_MSG_QUERY_FLAG;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_error::AuthError;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use tracing::warn;
 
 use crate::authentication::builder::AuthenticationContextBuilder;
 use crate::authentication::context::default_authentication_context::DefaultAuthenticationContext;
