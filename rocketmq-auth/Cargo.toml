@@ -1,40 +1,40 @@
 [package]
-name = "rocketmq-auth"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-homepage.workspace = true
-repository.workspace = true
-license.workspace = true
-keywords.workspace = true
-categories.workspace = true
-readme = "README.md"
-description.workspace = true
+name                   = "rocketmq-auth"
+version.workspace      = true
+authors.workspace      = true
+edition.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+license.workspace      = true
+keywords.workspace     = true
+categories.workspace   = true
+readme                 = "README.md"
+description.workspace  = true
 rust-version.workspace = true
 
 [features]
 default = []
-grpc = ["dep:tonic"]
+grpc    = ["dep:tonic"]
 
 [dependencies]
-rocketmq-common = { workspace = true }
+rocketmq-common   = { workspace = true }
 rocketmq-remoting = { workspace = true }
-
+rocketmq-error    = { workspace = true }
 
 cheetah-string = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-serde_yaml = { workspace = true }
-rocketmq-error = { workspace = true }
+serde          = { workspace = true }
+serde_json     = { workspace = true }
+serde_yaml     = { workspace = true }
 
-tracing = { workspace = true }
+
+tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 # IP utilities for authorization models
 ipnetwork = "0.21.1"
 
 # Hex and Base64 encoding/decoding
-hex = "0.4"
+hex    = "0.4"
 base64 = "0.22.1"
 
 # Optional: gRPC support
@@ -49,4 +49,4 @@ tokio = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
-tracing = { workspace = true }
+tracing  = { workspace = true }
