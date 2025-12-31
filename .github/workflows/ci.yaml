@@ -13,7 +13,9 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: full
   CI: true
-
+  CARGO_PROFILE_DEV_DEBUG: "false"
+  CARGO_PROFILE_DEV_OPT_LEVEL: 1
+  CARGO_PROFILE_DEV_OVERFLOW_CHECKS: "false"
   # ===== RocksDB / build cache =====
   CARGO_TARGET_DIR: target
   ROCKSDB_DISABLE_JEMALLOC: 1
@@ -130,11 +132,11 @@ jobs:
             ROCKSDB_DISABLE_JEMALLOC
 
       - name: Build (all features)
-        run: cargo build --workspace --all-features --release --verbose
+        run: cargo build --workspace --all-features --verbose
 
       - name: Test (all features)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo test --workspace --all-features --release --verbose
+        run: cargo test --workspace --all-features --verbose
 
   # =========================
   # Coverage (Ubuntu only)
@@ -181,7 +183,7 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Generate coverage (all features)
-        run: cargo llvm-cov --workspace --all-features --release --lcov --output-path lcov.info
+        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
 
       - name: Upload to Codecov
         uses: codecov/codecov-action@v5
