@@ -15,17 +15,15 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-#![allow(dead_code)]
+//! Authentication Provider Module (Rust 2021 Standard - No mod.rs)
 
-pub mod authentication;
-pub mod authorization;
-pub mod config;
-pub mod migration;
+// Declare submodules using #[path] attribute
 
-// Re-export commonly used authentication types
-pub use authentication::context::default_authentication_context::DefaultAuthenticationContext;
-pub use authentication::provider::AuthenticationMetadataProvider;
-pub use authentication::provider::AuthenticationProvider;
-pub use authentication::provider::DefaultAuthenticationProvider;
-pub use authentication::strategy::AllowAllAuthenticationStrategy;
-pub use authentication::strategy::AuthenticationStrategy;
+pub mod authentication_metadata_provider;
+pub mod authentication_provider;
+pub mod default_authentication_provider;
+
+// Re-export for convenience
+pub use authentication_metadata_provider::AuthenticationMetadataProvider;
+pub use authentication_provider::AuthenticationProvider;
+pub use default_authentication_provider::DefaultAuthenticationProvider;

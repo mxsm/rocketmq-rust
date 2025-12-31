@@ -21,9 +21,13 @@ pub mod builder;
 pub mod context;
 pub mod enums;
 pub mod model;
+pub mod provider;
 pub mod strategy;
 
 // Re-export commonly used types for convenience
+pub use provider::AuthenticationMetadataProvider;
+pub use provider::AuthenticationProvider;
+pub use provider::DefaultAuthenticationProvider;
 pub use strategy::AuthenticationStrategy;
 
 pub trait AsAny: Any {
