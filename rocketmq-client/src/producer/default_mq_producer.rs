@@ -659,7 +659,7 @@ impl MQProducer for DefaultMQProducer {
         let result = self
             .default_mqproducer_impl
             .as_mut()
-            .unwrap()
+            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send_with_timeout(&mut msg, timeout)
             .await?;
         Ok(result.expect("SendResult should not be None"))
