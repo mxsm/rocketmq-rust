@@ -1,25 +1,25 @@
 [package]
-name = "rocketmq-tui"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-homepage.workspace = true
-repository.workspace = true
-license.workspace = true
-keywords = ["tui", "terminal", "dashboard", "rocketmq", "tools"]
-categories = ["development-tools", "command-line-interface"]
-readme = "README.md"
-description = "A RocketMQ Rust terminal command management tool implemented based on Ratatui."
+name                   = "rocketmq-tui"
+version.workspace      = true
+authors.workspace      = true
+edition.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+license.workspace      = true
+keywords               = ["tui", "terminal", "dashboard", "rocketmq", "tools"]
+categories             = ["development-tools", "command-line-interface"]
+readme                 = "README.md"
+description            = "A RocketMQ Rust terminal command management tool implemented based on Ratatui."
 rust-version.workspace = true
 
 [dependencies]
 rocketmq-rust = { workspace = true }
-ratatui = { version = "0.29.0" }
-crossterm = { version = "0.28.1", features = ["event-stream"] }
+ratatui       = { version = "0.29.0" }
+crossterm     = { version = "0.28.1", features = ["event-stream"] }
 
 tokio.workspace = true
-tokio-stream = { workspace = true }
+tokio-stream    = { workspace = true }
 
 anyhow = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-strum = { workspace = true, features = ["derive"] }
+serde  = { workspace = true, features = ["derive"] }
+strum  = { workspace = true, features = ["derive"] }
