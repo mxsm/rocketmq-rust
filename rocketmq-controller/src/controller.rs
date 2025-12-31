@@ -103,6 +103,7 @@ pub mod broker_heartbeat_manager;
 pub mod broker_housekeeping_service;
 pub mod controller_manager;
 pub mod open_raft_controller;
+pub mod raft_rs_controller;
 
 use std::sync::Arc;
 
