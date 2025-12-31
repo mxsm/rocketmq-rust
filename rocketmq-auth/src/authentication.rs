@@ -25,6 +25,7 @@ pub mod provider;
 pub mod strategy;
 
 // Re-export commonly used types for convenience
+pub use provider::AuthenticationMetadataProvider;
 pub use provider::AuthenticationProvider;
 pub use strategy::AuthenticationStrategy;
 
