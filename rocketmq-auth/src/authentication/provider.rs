@@ -19,8 +19,9 @@
 
 // Declare submodules using #[path] attribute
 
+pub mod authentication_metadata_provider;
 pub mod authentication_provider;
-
 // Re-export for convenience
 
+pub use authentication_metadata_provider::AuthenticationMetadataProvider;
 pub use authentication_provider::AuthenticationProvider;
