@@ -21,7 +21,9 @@
 
 pub mod authentication_metadata_provider;
 pub mod authentication_provider;
-// Re-export for convenience
+pub mod default_authentication_provider;
 
+// Re-export for convenience
 pub use authentication_metadata_provider::AuthenticationMetadataProvider;
 pub use authentication_provider::AuthenticationProvider;
+pub use default_authentication_provider::DefaultAuthenticationProvider;

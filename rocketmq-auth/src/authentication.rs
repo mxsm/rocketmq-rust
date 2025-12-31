@@ -27,6 +27,7 @@ pub mod strategy;
 // Re-export commonly used types for convenience
 pub use provider::AuthenticationMetadataProvider;
 pub use provider::AuthenticationProvider;
+pub use provider::DefaultAuthenticationProvider;
 pub use strategy::AuthenticationStrategy;
 
 pub trait AsAny: Any {
