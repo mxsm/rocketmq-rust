@@ -18,10 +18,8 @@
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 
-use crate::base::mq_admin::MQAdmin;
-
 #[allow(async_fn_in_trait)]
-pub trait MQConsumer: MQAdmin {
+pub trait MQConsumer {
     async fn send_message_back(
         &mut self,
         msg: MessageExt,
