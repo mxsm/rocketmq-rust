@@ -1,23 +1,23 @@
 [package]
-name = "rocketmq-error"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-homepage.workspace = true
-repository.workspace = true
-license.workspace = true
-keywords = ["rocketmq-rust", "rocketmq-error"]
-categories = ["api-bindings"]
-readme = "README.md"
-description = "Rocketmq rust error module"
+name                   = "rocketmq-error"
+version.workspace      = true
+authors.workspace      = true
+edition.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+license.workspace      = true
+keywords               = ["rocketmq-rust", "rocketmq-error"]
+categories             = ["api-bindings"]
+readme                 = "README.md"
+description            = "Rocketmq rust error module"
 rust-version.workspace = true
 [dependencies]
 thiserror.workspace = true
-anyhow = { workspace = true }
-serde_json = { workspace = true, optional = true }
-config = { workspace = true, optional = true }
+anyhow              = { workspace = true }
+serde_json          = { workspace = true, optional = true }
+config              = { workspace = true, optional = true }
 
 [features]
-default = []
-with_serde = ["serde_json"] # alias for downstreams already using serde_json
-with_config = ["config"] # alias for downstreams already using config
+default     = []
+with_serde  = ["serde_json"] # alias for downstreams already using serde_json
+with_config = ["config"]     # alias for downstreams already using config
