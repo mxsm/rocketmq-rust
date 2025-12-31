@@ -29,6 +29,7 @@ use rocketmq_common::common::mix_all::UNIQUE_MSG_QUERY_FLAG;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_error::AuthError;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+#[cfg(feature = "grpc")]
 use tracing::warn;
 
 use crate::authentication::builder::AuthenticationContextBuilder;
