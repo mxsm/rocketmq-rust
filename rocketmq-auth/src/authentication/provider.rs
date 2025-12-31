@@ -15,21 +15,12 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-use std::any::Any;
+//! Authentication Provider Module (Rust 2021 Standard - No mod.rs)
 
-pub mod builder;
-pub mod context;
-pub mod enums;
-pub mod model;
-pub mod provider;
-pub mod strategy;
+// Declare submodules using #[path] attribute
 
-// Re-export commonly used types for convenience
-pub use provider::AuthenticationProvider;
-pub use strategy::AuthenticationStrategy;
+pub mod authentication_provider;
 
-pub trait AsAny: Any {
-    fn as_any_mut(&mut self) -> &mut dyn Any;
+// Re-export for convenience
 
-    fn as_any(&self) -> &dyn Any;
-}
+pub use authentication_provider::AuthenticationProvider;
