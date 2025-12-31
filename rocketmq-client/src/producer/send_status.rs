@@ -120,7 +120,7 @@ mod tests {
     #[test]
     fn test_send_status_deserialization() {
         for (&serialized, &expected) in ALL_SEND_STATUS_SERIALIZED.iter().zip(ALL_SEND_STATUS.iter()) {
-            let deserialized: SendStatus = serde_json::from_str(&serialized).unwrap();
+            let deserialized: SendStatus = serde_json::from_str(serialized).unwrap();
             assert_eq!(deserialized, expected);
         }
     }
