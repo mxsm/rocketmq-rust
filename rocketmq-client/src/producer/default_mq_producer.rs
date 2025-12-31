@@ -31,6 +31,7 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::MESSAGE_COMPRESS_LEVEL;
 use rocketmq_common::common::mix_all::MESSAGE_COMPRESS_TYPE;
 use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_error::RocketMQError;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
@@ -630,7 +631,7 @@ impl MQProducer for DefaultMQProducer {
         let topic = self.with_namespace(topic);
         self.default_mqproducer_impl
             .as_mut()
-            .unwrap()
+            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .fetch_publish_message_queues(topic.as_ref())
             .await
     }
