@@ -130,11 +130,11 @@ jobs:
             ROCKSDB_DISABLE_JEMALLOC
 
       - name: Build (all features)
-        run: cargo build --workspace --all-features --verbose
+        run: cargo build --workspace --all-features --release --verbose
 
       - name: Test (all features)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo test --workspace --all-features --verbose
+        run: cargo test --workspace --all-features --release --verbose
 
   # =========================
   # Coverage (Ubuntu only)
@@ -181,7 +181,7 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Generate coverage (all features)
-        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+        run: cargo llvm-cov --workspace --all-features --release --lcov --output-path lcov.info
 
       - name: Upload to Codecov
         uses: codecov/codecov-action@v5
