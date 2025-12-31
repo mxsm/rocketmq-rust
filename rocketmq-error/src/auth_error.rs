@@ -78,3 +78,49 @@ impl From<&str> for AuthError {
         AuthError::Other(msg.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_auth_error_variants() {
+        let errors = vec![
+            AuthError::AuthenticationFailed("could not authenticate".to_string()),
+            AuthError::ContextCreationError("could not create context".to_string()),
+            AuthError::InvalidAuthorizationHeader("invalid authorization header".to_string()),
+            AuthError::InvalidCredential("invalid credential".to_string()),
+            AuthError::InvalidHexSignature("invalid hex signature".to_string()),
+            AuthError::InvalidSignature("invalid signature".to_string()),
+            AuthError::InvalidUserStatus("invalid user status".to_string()),
+            AuthError::MissingDateTime("missing date time".to_string()),
+            AuthError::Other("other error".to_string()),
+            AuthError::UserNotFound("user not found".to_string()),
+        ];
+
+        for error in errors {
+            let _msg = format!("{}", error);
+            let _debug = format!("{:?}", error);
+        }
+    }
+
+    #[test]
+    fn test_from_string_creates_other() {
+        let error: AuthError = String::from("custom error").into();
+
+        match error {
+            AuthError::Other(msg) => assert_eq!(msg, "custom error"),
+            _ => panic!("Expected AuthError::Other"),
+        }
+    }
+
+    #[test]
+    fn test_from_str_creates_other() {
+        let error: AuthError = "custom error".into();
+
+        match error {
+            AuthError::Other(msg) => assert_eq!(msg, "custom error"),
+            _ => panic!("Expected AuthError::Other"),
+        }
+    }
+}
