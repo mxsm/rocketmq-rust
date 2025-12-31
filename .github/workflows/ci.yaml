@@ -13,7 +13,9 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: full
   CI: true
-
+  CARGO_PROFILE_DEV_DEBUG: "false"
+  CARGO_PROFILE_DEV_OPT_LEVEL: 1
+  CARGO_PROFILE_DEV_OVERFLOW_CHECKS: "false"
   # ===== RocksDB / build cache =====
   CARGO_TARGET_DIR: target
   ROCKSDB_DISABLE_JEMALLOC: 1
