@@ -112,7 +112,7 @@ mod tests {
 
     #[test]
     fn test_default_creates_strategy() {
-        let strategy = AllowAllAuthenticationStrategy::default();
+        let strategy = AllowAllAuthenticationStrategy;
         let context = DefaultAuthenticationContext::new();
         assert!(strategy.authenticate(&context).is_ok());
     }
