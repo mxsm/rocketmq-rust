@@ -34,20 +34,29 @@
 //! │  (Abstract interface for all controller implementations)     │
 //! └──────────────────────┬───────────────────────────────────────┘
 //!                        │
-//!          ┌─────────────┴─────────────┐
-//!          │                           │
-//! ┌────────▼──────────┐    ┌──────────▼────────────┐
-//! │  RaftController   │    │  DLedgerController    │
-//! │  (raft-rs based)  │    │  (DLedger based)      │
-//! └───────────────────┘    └───────────────────────┘
-//!          │                           │
-//!          └─────────────┬─────────────┘
+//!                        │ implements
 //!                        │
 //!          ┌─────────────▼──────────────┐
-//!          │  ReplicasInfoManager       │
-//!          │  BrokerHeartbeatManager    │
-//!          │  MetadataStore             │
-//!          └────────────────────────────┘
+//!          │     RaftController         │
+//!          │  (Wrapper/Dispatcher)      │
+//!          └──────────────┬─────────────┘
+//!                         │
+//!          ┌──────────────┴──────────────┐
+//!          │                             │
+//!          │ delegates                   │ delegates
+//!          │                             │
+//! ┌────────▼──────────┐       ┌─────────▼──────────┐
+//! │ OpenRaftController│       │  RaftRsController  │
+//! │ (OpenRaft backend)│       │  (raft-rs backend) │
+//! └───────────────────┘       └────────────────────┘
+//!          │                             │
+//!          └──────────────┬──────────────┘
+//!                         │
+//!          ┌──────────────▼──────────────┐
+//!          │  ReplicasInfoManager        │
+//!          │  BrokerHeartbeatManager     │
+//!          │  MetadataStore              │
+//!          └─────────────────────────────┘
 //! ```
 //!
 //! ## Lifecycle
@@ -103,6 +112,7 @@ pub mod broker_heartbeat_manager;
 pub mod broker_housekeeping_service;
 pub mod controller_manager;
 pub mod open_raft_controller;
+pub mod raft_controller;
 pub mod raft_rs_controller;
 
 use std::sync::Arc;
