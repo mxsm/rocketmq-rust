@@ -99,6 +99,11 @@ pub mod protobuf {
 
 pub use command::Args;
 pub use config::ControllerConfig;
+pub use controller::open_raft_controller::OpenRaftController;
+pub use controller::raft_controller::RaftController;
+pub use controller::raft_rs_controller::RaftRsController;
+pub use controller::Controller;
+pub use controller::MockController;
 pub use elect::policy::DefaultElectPolicy;
 pub use error::ControllerError;
 pub use error::Result;
