@@ -1,18 +1,17 @@
 [package]
-name = "rocketmq-runtime"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-homepage.workspace = true
-repository.workspace = true
-license.workspace = true
-keywords = ["Runtime", "async", "tokio", "futures"]
-categories = ["asynchronous"]
-readme.workspace = true
-description.workspace = true
+name                   = "rocketmq-runtime"
+version.workspace      = true
+authors.workspace      = true
+edition.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+license.workspace      = true
+keywords               = ["Runtime", "async", "tokio", "futures"]
+categories             = ["asynchronous"]
+readme.workspace       = true
+description.workspace  = true
 rust-version.workspace = true
 
 [dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
 #once_cell = { workspace = true }
-
