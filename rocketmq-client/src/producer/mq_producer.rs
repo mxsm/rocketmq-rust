@@ -156,9 +156,14 @@ pub trait MQProducer {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<SendResult>` - A result containing the send result or an
-    ///   error.
-    async fn send_to_queue<M>(&mut self, msg: M, mq: MessageQueue) -> rocketmq_error::RocketMQResult<SendResult>
+    /// * `rocketmq_error::RocketMQResult<SendResult>` - A result containing an optional send result
+    ///   or an error. Returns `Some(SendResult)` for synchronous sends, or `None` when the result
+    ///   is delivered asynchronously via a callback.
+    async fn send_to_queue<M>(
+        &mut self,
+        msg: M,
+        mq: MessageQueue,
+    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync;
 

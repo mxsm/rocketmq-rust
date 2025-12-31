@@ -140,7 +140,7 @@ impl MQProducer for TransactionMQProducer {
         self.default_producer.send_oneway(msg).await
     }
 
-    async fn send_to_queue<M>(&mut self, msg: M, mq: MessageQueue) -> rocketmq_error::RocketMQResult<SendResult>
+    async fn send_to_queue<M>(&mut self, msg: M, mq: MessageQueue) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
