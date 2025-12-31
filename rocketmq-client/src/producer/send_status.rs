@@ -84,3 +84,60 @@ impl<'de> Deserialize<'de> for SendStatus {
         deserializer.deserialize_str(StoreTypeVisitor)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ALL_SEND_STATUS: &[SendStatus] = &[
+        SendStatus::SendOk,
+        SendStatus::FlushDiskTimeout,
+        SendStatus::FlushSlaveTimeout,
+        SendStatus::SlaveNotAvailable,
+    ];
+
+    const ALL_SEND_STATUS_SERIALIZED: &[&str] = &[
+        "\"SEND_OK\"",
+        "\"FLUSH_DISK_TIMEOUT\"",
+        "\"FLUSH_SLAVE_TIMEOUT\"",
+        "\"SLAVE_NOT_AVAILABLE\"",
+    ];
+
+    #[test]
+    fn test_send_status_default() {
+        let default = SendStatus::default();
+        assert_eq!(default, SendStatus::SendOk);
+    }
+
+    #[test]
+    fn test_send_status_serialization() {
+        for (&status, &expected) in ALL_SEND_STATUS.iter().zip(ALL_SEND_STATUS_SERIALIZED.iter()) {
+            let serialized = serde_json::to_string(&status).unwrap();
+            assert_eq!(serialized, expected);
+        }
+    }
+
+    #[test]
+    fn test_send_status_deserialization() {
+        for (&serialized, &expected) in ALL_SEND_STATUS_SERIALIZED.iter().zip(ALL_SEND_STATUS.iter()) {
+            let deserialized: SendStatus = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(deserialized, expected);
+        }
+    }
+
+    #[test]
+    fn test_send_status_invalid_deserialization() {
+        let json = "\"INVALID_STATUS\"";
+        let status: Result<SendStatus, _> = serde_json::from_str(json);
+        assert!(status.is_err());
+    }
+
+    #[test]
+    fn test_send_status_round_trip() {
+        for &original in ALL_SEND_STATUS {
+            let serialized = serde_json::to_string(&original).unwrap();
+            let deserialized: SendStatus = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(original, deserialized);
+        }
+    }
+}
