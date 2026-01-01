@@ -3567,6 +3567,7 @@ dependencies = [
  "cheetah-string",
  "chrono",
  "clap",
+ "config",
  "criterion",
  "dashmap",
  "env_logger",

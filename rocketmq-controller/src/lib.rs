@@ -67,7 +67,7 @@
 #![allow(dead_code)]
 #![allow(clippy::module_inception)]
 
-mod command;
+pub mod cli;
 pub mod config;
 pub mod controller;
 pub(crate) mod elect;
@@ -94,7 +94,8 @@ pub mod protobuf {
     }
 }
 
-pub use command::Args;
+pub use cli::parse_command_line;
+pub use cli::ControllerCli;
 pub use config::ControllerConfig;
 pub use controller::open_raft_controller::OpenRaftController;
 pub use controller::raft_controller::RaftController;
