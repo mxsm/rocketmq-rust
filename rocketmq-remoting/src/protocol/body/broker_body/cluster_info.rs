@@ -44,3 +44,65 @@ impl ClusterInfo {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cluster_info_default() {
+        let cluster_info = ClusterInfo::default();
+        assert!(cluster_info.broker_addr_table.is_none());
+        assert!(cluster_info.cluster_addr_table.is_none());
+    }
+
+    #[test]
+    fn test_cluster_info_new() {
+        let mut broker_addr_table = HashMap::new();
+        let broker_data = BrokerData::default();
+        broker_addr_table.insert(CheetahString::from("broker1"), broker_data);
+
+        let mut cluster_addr_table = HashMap::new();
+        let mut brokers = HashSet::new();
+        brokers.insert(CheetahString::from("broker1"));
+        cluster_addr_table.insert(CheetahString::from("cluster1"), brokers);
+
+        let cluster_info = ClusterInfo::new(Some(broker_addr_table.clone()), Some(cluster_addr_table.clone()));
+        assert_eq!(cluster_info.broker_addr_table, Some(broker_addr_table));
+        assert_eq!(cluster_info.cluster_addr_table, Some(cluster_addr_table));
+    }
+
+    #[test]
+    fn test_cluster_info_serialization() {
+        let mut broker_addr_table = HashMap::new();
+        let broker_data = BrokerData::default();
+        broker_addr_table.insert(CheetahString::from("broker1"), broker_data);
+
+        let mut cluster_addr_table = HashMap::new();
+        let mut brokers = HashSet::new();
+        brokers.insert(CheetahString::from("broker1"));
+        cluster_addr_table.insert(CheetahString::from("cluster1"), brokers);
+
+        let cluster_info = ClusterInfo::new(Some(broker_addr_table), Some(cluster_addr_table));
+        let serialized = serde_json::to_string(&cluster_info).unwrap();
+        assert!(serialized.contains("brokerAddrTable"));
+        assert!(serialized.contains("clusterAddrTable"));
+    }
+
+    #[test]
+    fn test_cluster_info_deserialization() {
+        let json = r#"{"brokerAddrTable":{"broker1":{"cluster":"c1","brokerName":"b1","brokerAddrs":{"0":"127.0.0.1:10911"},"enableActingMaster":false}},"clusterAddrTable":{"cluster1":["broker1"]}}"#;
+        let cluster_info: ClusterInfo = serde_json::from_str(json).unwrap();
+        assert!(cluster_info.broker_addr_table.is_some());
+        assert!(cluster_info.cluster_addr_table.is_some());
+        assert_eq!(
+            cluster_info
+                .broker_addr_table
+                .unwrap()
+                .get(&CheetahString::from("broker1"))
+                .unwrap()
+                .broker_name(),
+            "b1"
+        );
+    }
+}
