@@ -1,0 +1,119 @@
+# RocketMQ Controller Configuration Example (TOML Format)
+# This file demonstrates the TOML configuration format for RocketMQ Controller
+# Supported formats: TOML (.toml), JSON (.json), YAML (.yaml)
+
+# ============================================================
+# Basic Configuration
+# ============================================================
+
+# RocketMQ installation directory
+rocketmq_home = "/opt/rocketmq"
+
+# Configuration storage path
+config_store_path = "/opt/rocketmq/controller/controller.toml"
+
+# Controller type (always "Raft" in current implementation)
+controller_type = "Raft"
+
+# ============================================================
+# Node Configuration
+# ============================================================
+
+# Unique node identifier in the cluster
+# Must be unique across all controller nodes
+node_id = 1
+
+# Listen address for controller
+# Format: "ip:port"
+# Default: "127.0.0.1:9878"
+listen_addr = "127.0.0.1:9878"
+
+# ============================================================
+# Controller Behavior Configuration
+# ============================================================
+
+# Interval to scan for inactive brokers (in milliseconds)
+# Default: 3000 ms (3 seconds)
+scan_not_active_broker_interval = 3000
+
+# Number of threads in controller thread pool
+# Default: 16
+controller_thread_pool_nums = 16
+
+# Request thread pool queue capacity
+# Default: 5000
+controller_request_thread_pool_queue_capacity = 5000
+
+# ============================================================
+# Raft Configuration
+# ============================================================
+
+# Election timeout in milliseconds
+# Time to wait before starting a new election
+# Default: 1000 ms
+election_timeout_ms = 1000
+
+# Heartbeat interval in milliseconds
+# How often the leader sends heartbeats to followers
+# Default: 500 ms (must be less than election_timeout_ms)
+heartbeat_interval_ms = 500
+
+# ============================================================
+# Storage Configuration
+# ============================================================
+
+# Path to store Raft logs and state machine data
+storage_path = "/opt/rocketmq/controller/storage"
+
+# Storage backend type
+# Options: "RocksDB", "Memory"
+# Default: "RocksDB"
+storage_backend = "RocksDB"
+
+# Mapped file size for storage (in bytes)
+# Default: 1073741824 (1GB)
+mapped_file_size = 1073741824
+
+# ============================================================
+# Raft Peers Configuration
+# ============================================================
+
+# Define cluster peers (example for 3-node cluster)
+# Each peer represents a controller node in the Raft cluster
+
+[[raft_peers]]
+id = 1
+addr = "127.0.0.1:9878"
+
+[[raft_peers]]
+id = 2
+addr = "127.0.0.1:9879"
+
+[[raft_peers]]
+id = 3
+addr = "127.0.0.1:9880"
+
+# ============================================================
+# Notes
+# ============================================================
+
+# 1. Field names use snake_case (Rust convention)
+#    - Java uses camelCase (e.g., rocketmqHome)
+#    - Rust uses snake_case (e.g., rocketmq_home)
+#    - serde handles automatic conversion
+
+# 2. For single-node testing, you can use just one peer entry
+
+# 3. Ensure node_id matches one of the raft_peers IDs
+
+# 4. All nodes in the cluster must have the same raft_peers configuration
+
+# 5. Port recommendations:
+#    - Controller: 9878-9880
+#    - Avoid conflicts with RocketMQ broker (10911, 10909)
+
+# 6. For production use:
+#    - Use absolute paths
+#    - Ensure storage_path has sufficient disk space
+#    - Set election_timeout_ms based on network latency
+#    - heartbeat_interval_ms should be < election_timeout_ms / 2
