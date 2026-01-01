@@ -1567,8 +1567,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn topic_queue_mapping_clean_service_mut(&mut self) -> &mut Option<TopicQueueMappingCleanService> {
-        &mut self.topic_queue_mapping_clean_service
+    pub fn topic_queue_mapping_clean_service_mut(&mut self) -> Option<&mut TopicQueueMappingCleanService> {
+        self.topic_queue_mapping_clean_service.as_mut()
     }
 
     #[inline]
