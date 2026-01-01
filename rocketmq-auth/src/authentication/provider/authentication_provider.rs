@@ -28,19 +28,12 @@ use crate::authorization::context::authentication_context::AuthenticationContext
 use crate::config::AuthConfig;
 
 /// Authentication provider trait.
-///
-/// Maps to Java interface:
-/// ```java
-/// public interface AuthenticationProvider<T extends AuthenticationContext>
-/// ```
 #[allow(async_fn_in_trait)]
 pub trait AuthenticationProvider: Send + Sync {
     /// Associated authentication context type.
     type Context: AuthenticationContext;
 
     /// Initialize the provider.
-    ///
-    /// Maps to: `void initialize(AuthConfig config, Supplier<?> metadataService)`
     async fn initialize(
         &mut self,
         config: AuthConfig,
@@ -48,13 +41,9 @@ pub trait AuthenticationProvider: Send + Sync {
     ) -> RocketMQResult<()>;
 
     /// Authenticate a request.
-    ///
-    /// Maps to: `CompletableFuture<Void> authenticate(T context)`
     async fn authenticate(&self, context: &Self::Context) -> RocketMQResult<()>;
 
     /// Create context from gRPC metadata.
-    ///
-    /// Maps to: `T newContext(Metadata metadata, GeneratedMessageV3 request)`
     fn new_context_from_metadata(
         &self,
         metadata: &HashMap<String, String>,
@@ -62,7 +51,5 @@ pub trait AuthenticationProvider: Send + Sync {
     ) -> Self::Context;
 
     /// Create context from remoting command.
-    ///
-    /// Maps to: `T newContext(ChannelHandlerContext context, RemotingCommand command)`
     fn new_context_from_command(&self, command: &RemotingCommand) -> Self::Context;
 }
