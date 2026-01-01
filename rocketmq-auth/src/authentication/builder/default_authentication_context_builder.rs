@@ -18,8 +18,7 @@
 //! Default implementation of authentication context builder.
 //!
 //! This module provides the standard implementation for building authentication contexts
-//! from both gRPC and Remoting protocol requests, strictly following the Java reference
-//! implementation's parsing logic.
+//! from both gRPC and Remoting protocol requests.
 
 use std::collections::BTreeMap;
 
@@ -109,7 +108,7 @@ impl DefaultAuthenticationContextBuilder {
     /// Combine request content for signature verification (Remoting protocol).
     ///
     /// This method combines the RemotingCommand fields into a single byte array
-    /// for signature verification, following the Java implementation's logic.
+    /// for signature verification.
     ///
     /// # Arguments
     ///

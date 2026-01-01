@@ -38,8 +38,6 @@ use crate::authentication::provider::AuthenticationMetadataProvider;
 /// 1. Retrieve user from metadata provider
 /// 2. Check user status (enabled/disabled)
 /// 3. Calculate signature and verify against provided signature
-///
-/// This maps from Java's `DefaultAuthenticationHandler` class.
 pub struct DefaultAuthenticationHandler<P: AuthenticationMetadataProvider> {
     authentication_metadata_provider: Arc<P>,
 }
@@ -122,8 +120,6 @@ impl<P: AuthenticationMetadataProvider> DefaultAuthenticationHandler<P> {
 }
 
 /// Constant-time equality check to prevent timing attacks.
-///
-/// Uses the same approach as Java's `MessageDigest.isEqual()`.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
