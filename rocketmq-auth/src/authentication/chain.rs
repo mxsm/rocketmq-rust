@@ -15,26 +15,16 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-use std::any::Any;
+//! Authentication chain module - Chain of Responsibility pattern for authentication.
 
-pub mod builder;
-mod chain;
-pub mod context;
-pub mod enums;
-pub mod evaluator;
-pub mod model;
-pub mod provider;
-pub mod strategy;
+pub mod acl_signer;
+pub mod default_authentication_handler;
+pub mod handler;
+pub mod handler_chain;
 
-// Re-export commonly used types for convenience
-pub use evaluator::AuthenticationEvaluator;
-pub use provider::AuthenticationMetadataProvider;
-pub use provider::AuthenticationProvider;
-pub use provider::DefaultAuthenticationProvider;
-pub use strategy::AuthenticationStrategy;
-
-pub trait AsAny: Any {
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-
-    fn as_any(&self) -> &dyn Any;
-}
+#[allow(unused_imports)]
+pub use default_authentication_handler::DefaultAuthenticationHandler;
+#[allow(unused_imports)]
+pub use handler::AuthenticationHandler;
+#[allow(unused_imports)]
+pub use handler_chain::AuthenticationHandlerChain;

@@ -37,6 +37,10 @@ ipnetwork = "0.21.1"
 hex    = "0.4"
 base64 = "0.22.1"
 
+# Cryptographic operations
+hmac = "0.12"
+sha1 = "0.10"
+
 # Optional: gRPC support
 tonic = { version = "0.14.2", optional = true }
 

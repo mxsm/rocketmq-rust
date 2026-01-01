@@ -18,6 +18,8 @@
 //! Authentication Metadata Provider Trait (Rust 2021 Standard)
 
 use std::any::Any;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use rocketmq_error::RocketMQResult;
@@ -26,30 +28,44 @@ use crate::authentication::model::user::User;
 use crate::config::AuthConfig;
 
 /// Authentication metadata provider for user management.
-#[allow(async_fn_in_trait)]
 pub trait AuthenticationMetadataProvider: Send + Sync {
     /// Initialize the provider.
-    async fn initialize(
-        &mut self,
+    fn initialize<'a>(
+        &'a mut self,
         config: AuthConfig,
         metadata_service: Option<Arc<dyn Any + Send + Sync>>,
-    ) -> RocketMQResult<()>;
+    ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>>;
 
     /// Shutdown the provider.
-    async fn shutdown(&mut self) -> RocketMQResult<()>;
+    fn shutdown(&mut self) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + '_>>;
 
     /// Create a user.
-    async fn create_user(&self, user: User) -> RocketMQResult<()>;
+    fn create_user<'a>(
+        &'a self,
+        user: User,
+    ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>>;
 
     /// Delete a user.
-    async fn delete_user(&self, username: &str) -> RocketMQResult<()>;
+    fn delete_user<'a>(
+        &'a self,
+        username: &'a str,
+    ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>>;
 
     /// Update a user.
-    async fn update_user(&self, user: User) -> RocketMQResult<()>;
+    fn update_user<'a>(
+        &'a self,
+        user: User,
+    ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>>;
 
     /// Get a user by username.
-    async fn get_user(&self, username: &str) -> RocketMQResult<User>;
+    fn get_user<'a>(
+        &'a self,
+        username: &'a str,
+    ) -> Pin<Box<dyn Future<Output = RocketMQResult<User>> + Send + 'a>>;
 
     /// List users with optional filter.
-    async fn list_user(&self, filter: Option<&str>) -> RocketMQResult<Vec<User>>;
+    fn list_user<'a>(
+        &'a self,
+        filter: Option<&'a str>,
+    ) -> Pin<Box<dyn Future<Output = RocketMQResult<Vec<User>>> + Send + 'a>>;
 }

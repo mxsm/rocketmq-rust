@@ -19,7 +19,9 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use rocketmq_error::RocketMQError;
@@ -72,88 +74,117 @@ impl Default for LocalAuthenticationMetadataProvider {
 
 impl AuthenticationMetadataProvider for LocalAuthenticationMetadataProvider {
     /// Initialize the provider with storage.
-    async fn initialize(
-        &mut self,
+    fn initialize<'a>(
+        &'a mut self,
         config: AuthConfig,
         _metadata_service: Option<Arc<dyn Any + Send + Sync>>,
-    ) -> RocketMQResult<()> {
-        // Build storage path
-        let mut storage_path = PathBuf::from(config.auth_config_path.to_string());
-        storage_path.push("users");
-        self.storage_path = Some(storage_path.clone());
+    ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
+        Box::pin(async move {
+            // Build storage path
+            let mut storage_path = PathBuf::from(config.auth_config_path.to_string());
+            storage_path.push("users");
+            self.storage_path = Some(storage_path.clone());
 
-        tracing::info!(
-            "LocalAuthenticationMetadataProvider initialized (in-memory mode) at {:?}",
-            storage_path
-        );
-        Ok(())
+            tracing::info!(
+                "LocalAuthenticationMetadataProvider initialized (in-memory mode) at {:?}",
+                storage_path
+            );
+            Ok(())
+        })
     }
 
     /// Shutdown the provider and release resources.
-    async fn shutdown(&mut self) -> RocketMQResult<()> {
-        let mut storage = self.storage.write().await;
-        storage.clear();
-        tracing::info!("LocalAuthenticationMetadataProvider shutdown successfully");
-        Ok(())
+    fn shutdown(&mut self) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + '_>> {
+        Box::pin(async move {
+            let mut storage = self.storage.write().await;
+            storage.clear();
+            tracing::info!("LocalAuthenticationMetadataProvider shutdown successfully");
+            Ok(())
+        })
     }
 
     /// Create a new user.
-    async fn create_user(&self, user: User) -> RocketMQResult<()> {
-        let username = user.username().to_string();
-        let mut storage = self.storage.write().await;
-        storage.insert(username.clone(), user);
+    fn create_user<'a>(
+        &'a self,
+        user: User,
+    ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let username = user.username().to_string();
+            let mut storage = self.storage.write().await;
+            storage.insert(username.clone(), user);
 
-        tracing::info!("User '{}' created successfully", username);
-        Ok(())
+            tracing::info!("User '{}' created successfully", username);
+            Ok(())
+        })
     }
 
     /// Delete a user.
-    async fn delete_user(&self, username: &str) -> RocketMQResult<()> {
-        let mut storage = self.storage.write().await;
-        storage.remove(username);
+    fn delete_user<'a>(
+        &'a self,
+        username: &'a str,
+    ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut storage = self.storage.write().await;
+            storage.remove(username);
 
-        tracing::info!("User '{}' deleted successfully", username);
-        Ok(())
+            tracing::info!("User '{}' deleted successfully", username);
+            Ok(())
+        })
     }
 
     /// Update a user.
-    async fn update_user(&self, user: User) -> RocketMQResult<()> {
-        let username = user.username().to_string();
-        let mut storage = self.storage.write().await;
-        storage.insert(username.clone(), user);
+    fn update_user<'a>(
+        &'a self,
+        user: User,
+    ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let username = user.username().to_string();
+            let mut storage = self.storage.write().await;
+            storage.insert(username.clone(), user);
 
-        tracing::info!("User '{}' updated successfully", username);
-        Ok(())
+            tracing::info!("User '{}' updated successfully", username);
+            Ok(())
+        })
     }
 
     /// Get a user by username.
-    async fn get_user(&self, username: &str) -> RocketMQResult<User> {
-        let storage = self.storage.read().await;
+    fn get_user<'a>(
+        &'a self,
+        username: &'a str,
+    ) -> Pin<Box<dyn Future<Output = RocketMQResult<User>> + Send + 'a>> {
+        Box::pin(async move {
+            let storage = self.storage.read().await;
 
-        storage
-            .get(username)
-            .cloned()
-            .ok_or_else(|| RocketMQError::user_not_found(username))
+            storage
+                .get(username)
+                .cloned()
+                .ok_or_else(|| RocketMQError::user_not_found(username))
+        })
     }
 
     /// List all users, optionally filtered by username pattern.
-    async fn list_user(&self, filter: Option<&str>) -> RocketMQResult<Vec<User>> {
-        let storage = self.storage.read().await;
-        let mut result = Vec::new();
+    fn list_user<'a>(
+        &'a self,
+        filter: Option<&'a str>,
+    ) -> Pin<Box<dyn Future<Output = RocketMQResult<Vec<User>>> + Send + 'a>> {
+        Box::pin(async move {
+            let storage = self.storage.read().await;
+            let mut result = Vec::new();
 
-        for (username, user) in storage.iter() {
-            // Apply filter if provided
-            if let Some(filter_str) = filter {
-                if !filter_str.is_empty() && !username.contains(filter_str) {
-                    continue;
+            for (username, user) in storage.iter() {
+                // Apply filter if provided
+                if let Some(filter_str) = filter {
+                    if !filter_str.is_empty() && !username.contains(filter_str) {
+                        continue;
+                    }
                 }
+
+                result.push(user.clone());
             }
 
-            result.push(user.clone());
-        }
-
-        tracing::debug!("Listed {} users (filter: {:?})", result.len(), filter);
-        Ok(result)
+            tracing::debug!("Listed {} users (filter: {:?})", result.len(), filter);
+            Ok(result)
+        })
     }
 }
 
