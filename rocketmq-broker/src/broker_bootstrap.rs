@@ -61,7 +61,6 @@ impl BrokerBootstrap {
 pub struct Builder {
     broker_config: BrokerConfig,
     message_store_config: MessageStoreConfig,
-    //server_config: ServerConfig,
 }
 
 impl Builder {
@@ -70,7 +69,6 @@ impl Builder {
         Builder {
             broker_config: Default::default(),
             message_store_config: MessageStoreConfig::default(),
-            //server_config: Default::default(),
         }
     }
     #[inline]
@@ -83,18 +81,12 @@ impl Builder {
         self.message_store_config = message_store_config;
         self
     }
-    /*    #[inline]
-    pub fn set_server_config(mut self, server_config: ServerConfig) -> Self {
-        self.server_config = server_config;
-        self
-    }*/
     #[inline]
     pub fn build(self) -> BrokerBootstrap {
         BrokerBootstrap {
             broker_runtime: BrokerRuntime::new(
                 Arc::new(self.broker_config),
                 Arc::new(self.message_store_config),
-                //Arc::new(self.server_config),
             ),
         }
     }
