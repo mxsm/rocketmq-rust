@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use cheetah_string::CheetahString;
 use rand::seq::SliceRandom;
 use rocketmq_common::common::config::TopicConfig;
-// Copyright 2025-2026 The RocketMQ Rust Authors
+// Copyright 2023 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
