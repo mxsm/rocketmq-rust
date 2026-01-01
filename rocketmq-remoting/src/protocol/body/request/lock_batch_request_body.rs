@@ -44,3 +44,58 @@ impl Display for LockBatchRequestBody {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lock_batch_request_body_default() {
+        let body = LockBatchRequestBody::default();
+        assert!(body.consumer_group.is_none());
+        assert!(body.client_id.is_none());
+        assert!(!body.only_this_broker);
+        assert!(body.mq_set.is_empty());
+    }
+
+    #[test]
+    fn test_lock_batch_request_body_serialization() {
+        let mut mq_set = HashSet::new();
+        mq_set.insert(MessageQueue::from_parts("topic", "broker", 1));
+        let body = LockBatchRequestBody {
+            consumer_group: Some(CheetahString::from("group")),
+            client_id: Some(CheetahString::from("client")),
+            only_this_broker: true,
+            mq_set,
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("consumerGroup"));
+        assert!(json.contains("clientId"));
+        assert!(json.contains("onlyThisBroker"));
+        assert!(json.contains("mqSet"));
+    }
+
+    #[test]
+    fn test_lock_batch_request_body_deserialization() {
+        let json = r#"{"consumerGroup":"group","clientId":"client","onlyThisBroker":true,"mqSet":[{"topic":"topic","brokerName":"broker","queueId":1}]}"#;
+        let body: LockBatchRequestBody = serde_json::from_str(json).unwrap();
+        assert_eq!(body.consumer_group.unwrap(), "group");
+        assert_eq!(body.client_id.unwrap(), "client");
+        assert!(body.only_this_broker);
+        assert_eq!(body.mq_set.len(), 1);
+    }
+
+    #[test]
+    fn test_lock_batch_request_body_display() {
+        let body = LockBatchRequestBody {
+            consumer_group: Some(CheetahString::from("group")),
+            client_id: Some(CheetahString::from("client")),
+            only_this_broker: true,
+            mq_set: HashSet::new(),
+        };
+        let display = format!("{}", body);
+        let expected =
+            "LockBatchRequestBody [consumer_group=group, client_id=client, only_this_broker=true, mq_set={}]";
+        assert_eq!(display, expected);
+    }
+}
