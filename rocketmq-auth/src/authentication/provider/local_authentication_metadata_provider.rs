@@ -70,7 +70,6 @@ impl Default for LocalAuthenticationMetadataProvider {
     }
 }
 
-
 impl AuthenticationMetadataProvider for LocalAuthenticationMetadataProvider {
     /// Initialize the provider with storage.
     async fn initialize(
@@ -103,7 +102,7 @@ impl AuthenticationMetadataProvider for LocalAuthenticationMetadataProvider {
         let username = user.username().to_string();
         let mut storage = self.storage.write().await;
         storage.insert(username.clone(), user);
-        
+
         tracing::info!("User '{}' created successfully", username);
         Ok(())
     }
@@ -112,7 +111,7 @@ impl AuthenticationMetadataProvider for LocalAuthenticationMetadataProvider {
     async fn delete_user(&self, username: &str) -> RocketMQResult<()> {
         let mut storage = self.storage.write().await;
         storage.remove(username);
-        
+
         tracing::info!("User '{}' deleted successfully", username);
         Ok(())
     }
@@ -122,7 +121,7 @@ impl AuthenticationMetadataProvider for LocalAuthenticationMetadataProvider {
         let username = user.username().to_string();
         let mut storage = self.storage.write().await;
         storage.insert(username.clone(), user);
-        
+
         tracing::info!("User '{}' updated successfully", username);
         Ok(())
     }
@@ -130,7 +129,7 @@ impl AuthenticationMetadataProvider for LocalAuthenticationMetadataProvider {
     /// Get a user by username.
     async fn get_user(&self, username: &str) -> RocketMQResult<User> {
         let storage = self.storage.read().await;
-        
+
         storage
             .get(username)
             .cloned()
@@ -149,7 +148,7 @@ impl AuthenticationMetadataProvider for LocalAuthenticationMetadataProvider {
                     continue;
                 }
             }
-            
+
             result.push(user.clone());
         }
 
@@ -166,17 +165,14 @@ mod tests {
     async fn test_local_provider_initialization() {
         let config = AuthConfig::default();
         let mut provider = LocalAuthenticationMetadataProvider::new();
-        
+
         assert!(provider.initialize(config, None).await.is_ok());
     }
 
     #[tokio::test]
     async fn test_create_and_get_user() {
         let mut provider = LocalAuthenticationMetadataProvider::new();
-        provider
-            .initialize(AuthConfig::default(), None)
-            .await
-            .unwrap();
+        provider.initialize(AuthConfig::default(), None).await.unwrap();
 
         let user = User::of("testuser");
         provider.create_user(user).await.unwrap();
@@ -188,10 +184,7 @@ mod tests {
     #[tokio::test]
     async fn test_update_user() {
         let mut provider = LocalAuthenticationMetadataProvider::new();
-        provider
-            .initialize(AuthConfig::default(), None)
-            .await
-            .unwrap();
+        provider.initialize(AuthConfig::default(), None).await.unwrap();
 
         let user = User::of_with_password("testuser", "password");
         provider.create_user(user).await.unwrap();
@@ -206,26 +199,20 @@ mod tests {
     #[tokio::test]
     async fn test_delete_user() {
         let mut provider = LocalAuthenticationMetadataProvider::new();
-        provider
-            .initialize(AuthConfig::default(), None)
-            .await
-            .unwrap();
+        provider.initialize(AuthConfig::default(), None).await.unwrap();
 
         let user = User::of("testuser");
         provider.create_user(user).await.unwrap();
-        
+
         provider.delete_user("testuser").await.unwrap();
-        
+
         assert!(provider.get_user("testuser").await.is_err());
     }
 
     #[tokio::test]
     async fn test_list_users() {
         let mut provider = LocalAuthenticationMetadataProvider::new();
-        provider
-            .initialize(AuthConfig::default(), None)
-            .await
-            .unwrap();
+        provider.initialize(AuthConfig::default(), None).await.unwrap();
 
         provider.create_user(User::of("user1")).await.unwrap();
         provider.create_user(User::of("user2")).await.unwrap();
