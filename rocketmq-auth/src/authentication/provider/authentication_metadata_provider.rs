@@ -40,28 +40,16 @@ pub trait AuthenticationMetadataProvider: Send + Sync {
     fn shutdown(&mut self) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + '_>>;
 
     /// Create a user.
-    fn create_user<'a>(
-        &'a self,
-        user: User,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>>;
+    fn create_user<'a>(&'a self, user: User) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>>;
 
     /// Delete a user.
-    fn delete_user<'a>(
-        &'a self,
-        username: &'a str,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>>;
+    fn delete_user<'a>(&'a self, username: &'a str) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>>;
 
     /// Update a user.
-    fn update_user<'a>(
-        &'a self,
-        user: User,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>>;
+    fn update_user<'a>(&'a self, user: User) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>>;
 
     /// Get a user by username.
-    fn get_user<'a>(
-        &'a self,
-        username: &'a str,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<User>> + Send + 'a>>;
+    fn get_user<'a>(&'a self, username: &'a str) -> Pin<Box<dyn Future<Output = RocketMQResult<User>> + Send + 'a>>;
 
     /// List users with optional filter.
     fn list_user<'a>(

@@ -69,17 +69,13 @@ impl<P: AuthenticationMetadataProvider> DefaultAuthenticationHandler<P> {
             .ok_or_else(|| AuthError::AuthenticationFailed("username cannot be null".to_string()))?;
 
         if username.is_empty() {
-            return Err(AuthError::AuthenticationFailed(
-                "username cannot be empty".to_string(),
-            ));
+            return Err(AuthError::AuthenticationFailed("username cannot be empty".to_string()));
         }
 
         self.authentication_metadata_provider
             .get_user(username.as_str())
             .await
-            .map_err(|e| {
-                AuthError::AuthenticationFailed(format!("Failed to get user: {}", e))
-            })
+            .map_err(|e| AuthError::AuthenticationFailed(format!("Failed to get user: {}", e)))
     }
 
     /// Perform authentication logic.
@@ -89,11 +85,7 @@ impl<P: AuthenticationMetadataProvider> DefaultAuthenticationHandler<P> {
     /// Returns error if:
     /// - User is disabled
     /// - Signature verification fails
-    fn do_authenticate(
-        &self,
-        context: &DefaultAuthenticationContext,
-        user: &User,
-    ) -> Result<(), AuthError> {
+    fn do_authenticate(&self, context: &DefaultAuthenticationContext, user: &User) -> Result<(), AuthError> {
         // Check user status
         if let Some(UserStatus::Disable) = user.user_status() {
             return Err(AuthError::AuthenticationFailed(format!(
@@ -104,33 +96,25 @@ impl<P: AuthenticationMetadataProvider> DefaultAuthenticationHandler<P> {
 
         // Get password for signature calculation
         let password = user.password().ok_or_else(|| {
-            AuthError::AuthenticationFailed(format!(
-                "User:{} has no password configured",
-                user.username()
-            ))
+            AuthError::AuthenticationFailed(format!("User:{} has no password configured", user.username()))
         })?;
 
         // Get content for signing
-        let content = context.content().ok_or_else(|| {
-            AuthError::AuthenticationFailed("Authentication content cannot be null".to_string())
-        })?;
+        let content = context
+            .content()
+            .ok_or_else(|| AuthError::AuthenticationFailed("Authentication content cannot be null".to_string()))?;
 
         // Calculate expected signature
         let expected_signature = acl_signer::cal_signature(content, password.as_str())?;
 
         // Get provided signature
-        let provided_signature = context.signature().ok_or_else(|| {
-            AuthError::AuthenticationFailed("Signature cannot be null".to_string())
-        })?;
+        let provided_signature = context
+            .signature()
+            .ok_or_else(|| AuthError::AuthenticationFailed("Signature cannot be null".to_string()))?;
 
         // Constant-time comparison to prevent timing attacks
-        if !constant_time_eq(
-            expected_signature.as_bytes(),
-            provided_signature.as_bytes(),
-        ) {
-            return Err(AuthError::AuthenticationFailed(
-                "check signature failed".to_string(),
-            ));
+        if !constant_time_eq(expected_signature.as_bytes(), provided_signature.as_bytes()) {
+            return Err(AuthError::AuthenticationFailed("check signature failed".to_string()));
         }
 
         Ok(())
@@ -206,10 +190,7 @@ mod tests {
             Box::pin(async move { result })
         }
 
-        fn create_user<'a>(
-            &'a self,
-            _user: User,
-        ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
+        fn create_user<'a>(&'a self, _user: User) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
             unimplemented!()
         }
 
@@ -220,10 +201,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn update_user<'a>(
-            &'a self,
-            _user: User,
-        ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
+        fn update_user<'a>(&'a self, _user: User) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
             unimplemented!()
         }
 
@@ -273,10 +251,7 @@ mod tests {
 
         let result = handler.handle(&context).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("User:test_user is disabled"));
+        assert!(result.unwrap_err().to_string().contains("User:test_user is disabled"));
     }
 
     #[tokio::test]
@@ -293,10 +268,7 @@ mod tests {
 
         let result = handler.handle(&context).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("check signature failed"));
+        assert!(result.unwrap_err().to_string().contains("check signature failed"));
     }
 
     #[tokio::test]
@@ -327,10 +299,7 @@ mod tests {
 
         let result = handler.handle(&context).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("username cannot be null"));
+        assert!(result.unwrap_err().to_string().contains("username cannot be null"));
     }
 
     #[tokio::test]
@@ -363,10 +332,7 @@ mod tests {
 
         let result = handler.handle(&context).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Signature cannot be null"));
+        assert!(result.unwrap_err().to_string().contains("Signature cannot be null"));
     }
 
     #[test]

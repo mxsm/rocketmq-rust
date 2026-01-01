@@ -104,10 +104,7 @@ impl AuthenticationMetadataProvider for LocalAuthenticationMetadataProvider {
     }
 
     /// Create a new user.
-    fn create_user<'a>(
-        &'a self,
-        user: User,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
+    fn create_user<'a>(&'a self, user: User) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
         Box::pin(async move {
             let username = user.username().to_string();
             let mut storage = self.storage.write().await;
@@ -119,10 +116,7 @@ impl AuthenticationMetadataProvider for LocalAuthenticationMetadataProvider {
     }
 
     /// Delete a user.
-    fn delete_user<'a>(
-        &'a self,
-        username: &'a str,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
+    fn delete_user<'a>(&'a self, username: &'a str) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
         Box::pin(async move {
             let mut storage = self.storage.write().await;
             storage.remove(username);
@@ -133,10 +127,7 @@ impl AuthenticationMetadataProvider for LocalAuthenticationMetadataProvider {
     }
 
     /// Update a user.
-    fn update_user<'a>(
-        &'a self,
-        user: User,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
+    fn update_user<'a>(&'a self, user: User) -> Pin<Box<dyn Future<Output = RocketMQResult<()>> + Send + 'a>> {
         Box::pin(async move {
             let username = user.username().to_string();
             let mut storage = self.storage.write().await;
@@ -148,10 +139,7 @@ impl AuthenticationMetadataProvider for LocalAuthenticationMetadataProvider {
     }
 
     /// Get a user by username.
-    fn get_user<'a>(
-        &'a self,
-        username: &'a str,
-    ) -> Pin<Box<dyn Future<Output = RocketMQResult<User>> + Send + 'a>> {
+    fn get_user<'a>(&'a self, username: &'a str) -> Pin<Box<dyn Future<Output = RocketMQResult<User>> + Send + 'a>> {
         Box::pin(async move {
             let storage = self.storage.read().await;
 

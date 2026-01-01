@@ -48,9 +48,7 @@ pub struct AuthenticationHandlerChain {
 impl AuthenticationHandlerChain {
     /// Create a new empty handler chain.
     pub fn new() -> Self {
-        Self {
-            handlers: Vec::new(),
-        }
+        Self { handlers: Vec::new() }
     }
 
     /// Create a handler chain with pre-configured handlers.
