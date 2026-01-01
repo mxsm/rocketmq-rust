@@ -29,32 +29,33 @@ pub struct BrokerBootstrap {
 impl BrokerBootstrap {
     pub async fn boot(mut self) {
         if !self.initialize().await {
-            error!("initialize fail");
+            error!("Broker initialization failed");
             return;
         }
+
+        // Start broker and wait for shutdown signal concurrently
         let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
         self.broker_runtime.shutdown_rx = Some(shutdown_rx);
 
-        tokio::join!(self.start(), wait_for_signal_inner(shutdown_tx));
+        tokio::join!(self.start(), Self::wait_for_shutdown_signal(shutdown_tx));
     }
+
     #[inline]
     async fn initialize(&mut self) -> bool {
         self.broker_runtime.initialize().await
     }
+
     #[inline]
     async fn start(&mut self) {
         self.broker_runtime.start().await;
     }
-}
 
-async fn wait_for_signal_inner(shutdown_tx: tokio::sync::broadcast::Sender<()>) {
-    tokio::select! {
-        _ = wait_for_signal() => {
-            info!("Broker Received signal, initiating shutdown...");
-        }
+    async fn wait_for_shutdown_signal(shutdown_tx: tokio::sync::broadcast::Sender<()>) {
+        wait_for_signal().await;
+        info!("Broker received shutdown signal, initiating graceful shutdown...");
+        // Send shutdown signal to broker runtime
+        let _ = shutdown_tx.send(());
     }
-    // Send shutdown signal to all tasks
-    let _ = shutdown_tx.send(());
 }
 
 pub struct Builder {
