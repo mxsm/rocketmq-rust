@@ -82,6 +82,14 @@ impl User {
     pub fn set_user_status(&mut self, status: UserStatus) {
         self.user_status = Some(status);
     }
+
+    pub fn set_password(&mut self, password: impl Into<CheetahString>) {
+        self.password = Some(password.into());
+    }
+
+    pub fn set_user_type(&mut self, user_type: UserType) {
+        self.user_type = Some(user_type);
+    }
 }
 
 impl Subject for User {

@@ -15,29 +15,12 @@
 //  specific language governing permissions and limitations
 //  under the License.
 
-use std::any::Any;
+//! Authentication metadata manager module.
+//!
+//! This module provides high-level management APIs for authentication metadata,
+//! including user creation, update, deletion, and querying operations.
 
-pub mod builder;
-mod chain;
-pub mod context;
-pub mod enums;
-pub mod evaluator;
-pub mod manager;
-pub mod model;
-pub mod provider;
-pub mod strategy;
+pub mod authentication_metadata_manager;
 
-// Re-export commonly used types for convenience
-pub use evaluator::AuthenticationEvaluator;
-pub use manager::AuthenticationMetadataManager;
-pub use manager::ManagerResult;
-pub use provider::AuthenticationMetadataProvider;
-pub use provider::AuthenticationProvider;
-pub use provider::DefaultAuthenticationProvider;
-pub use strategy::AuthenticationStrategy;
-
-pub trait AsAny: Any {
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-
-    fn as_any(&self) -> &dyn Any;
-}
+pub use authentication_metadata_manager::AuthenticationMetadataManager;
+pub use authentication_metadata_manager::ManagerResult;
