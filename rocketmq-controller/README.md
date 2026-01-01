@@ -37,112 +37,205 @@ RocketMQ Controller is the core management component of RocketMQ cluster, respon
 └──────────────────────────────────────────┘
 ```
 
-## Features
-
-### ✅ Implemented
-- Basic project structure
-- Configuration management (ControllerConfig)
-- Error handling (ControllerError)
-- Raft controller framework
-- Metadata storage (Broker, Topic, Config)
-- Processor manager framework
-
-### 🚧 In Progress
-- Complete Raft node implementation
-- Network communication layer
-- RPC processor implementation
-
-### 📋 Planned
-- Persistent storage (RocksDB/custom logging)
-- Snapshot management
-- Complete integration tests
-- Performance benchmarks
-- Monitoring metrics
-
 ## Quick Start
 
-### Basic Usage
+### Installation
 
-```rust
-use rocketmq_controller::*;
+Build from source:
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    // Create configuration
-    let config = ControllerConfig::new(
-        1,  // node_id
-        "127.0.0.1:9876".parse().unwrap()
-    )
-    .with_raft_peers(vec![
-        RaftPeer { id: 1, addr: "127.0.0.1:9876".parse().unwrap() },
-        RaftPeer { id: 2, addr: "127.0.0.1:9877".parse().unwrap() },
-        RaftPeer { id: 3, addr: "127.0.0.1:9878".parse().unwrap() },
-    ])
-    .with_storage_path("/data/controller".into());
+```bash
+cargo build --release --bin rocketmq-controller-rust
+```
 
-    // Create and start Controller
-    let manager = ControllerManager::new(config).await?;
-    manager.start().await?;
+The binary will be located at `target/release/rocketmq-controller-rust`.
 
-    // Wait...
-    
-    // Graceful shutdown
-    manager.shutdown().await?;
-    Ok(())
+### Running the Controller
+
+#### 1. Using Default Configuration
+
+Start the controller with default settings:
+
+```bash
+# Set ROCKETMQ_HOME environment variable
+export ROCKETMQ_HOME=/opt/rocketmq
+
+# Run the controller
+./target/release/rocketmq-controller-rust
+```
+
+#### 2. Using Configuration File (TOML)
+
+Create a configuration file `controller.toml`:
+
+```toml
+# Basic Configuration
+rocketmq_home = "/opt/rocketmq"
+controller_type = "Raft"
+
+# Node Configuration
+node_id = 1
+listen_addr = "127.0.0.1:9878"
+
+# Controller Behavior
+scan_not_active_broker_interval = 3000
+controller_thread_pool_nums = 16
+
+# Raft Configuration
+election_timeout_ms = 1000
+heartbeat_interval_ms = 500
+storage_path = "/opt/rocketmq/controller/storage"
+
+# Raft Peers (3-node cluster example)
+[[raft_peers]]
+id = 1
+addr = "127.0.0.1:9878"
+
+[[raft_peers]]
+id = 2
+addr = "127.0.0.1:9879"
+
+[[raft_peers]]
+id = 3
+addr = "127.0.0.1:9880"
+```
+
+Start with configuration file:
+
+```bash
+./target/release/rocketmq-controller-rust -c controller.toml
+```
+
+Or using the long form:
+
+```bash
+./target/release/rocketmq-controller-rust --config-file /path/to/controller.toml
+```
+
+#### 3. Print Configuration
+
+View the current configuration without starting:
+
+```bash
+./target/release/rocketmq-controller-rust -c controller.toml -p
+```
+
+Output example:
+```
+========== Controller Configuration ==========
+RocketMQ Home:           /opt/rocketmq
+Config Store Path:       "/opt/rocketmq/controller/controller.toml"
+Controller Type:         Raft
+Scan Interval:           3000 ms
+Thread Pool Nums:        16
+
+========== Node Configuration ==========
+Node ID:                 1
+Listen Address:          127.0.0.1:9878
+
+========== Raft Configuration ==========
+Election Timeout:        1000 ms
+Heartbeat Interval:      500 ms
+Raft Peers:              3 peers
+  - Node 1: 127.0.0.1:9878
+  - Node 2: 127.0.0.1:9879
+  - Node 3: 127.0.0.1:9880
+
+========== Storage Configuration ==========
+Storage Path:            /opt/rocketmq/controller/storage
+Storage Backend:         RocksDB
+Mapped File Size:        1073741824 bytes
+```
+
+#### 4. View Help
+
+```bash
+./target/release/rocketmq-controller-rust --help
+```
+
+Output:
+```
+RocketMQ Controller Server (Rust)
+
+Usage: rocketmq-controller-rust [OPTIONS]
+
+Options:
+  -c, --config-file <FILE>  Controller config file (TOML/JSON/YAML)
+  -p, --print-config-item   Print all config items
+  -m, --print-important-config  Print important config items
+  -h, --help               Print help
+  -V, --version            Print version
+```
+
+### Running a 3-Node Cluster
+
+For a production setup with 3 controller nodes:
+
+**Node 1** (controller.toml):
+```bash
+export ROCKETMQ_HOME=/opt/rocketmq
+./rocketmq-controller-rust -c controller-node1.toml
+```
+
+**Node 2** (controller-node2.toml):
+```toml
+node_id = 2
+listen_addr = "192.168.1.102:9878"
+# ... same raft_peers configuration
+```
+
+```bash
+export ROCKETMQ_HOME=/opt/rocketmq
+./rocketmq-controller-rust -c controller-node2.toml
+```
+
+**Node 3** (controller-node3.toml):
+```toml
+node_id = 3
+listen_addr = "192.168.1.103:9878"
+# ... same raft_peers configuration
+```
+
+```bash
+export ROCKETMQ_HOME=/opt/rocketmq
+./rocketmq-controller-rust -c controller-node3.toml
+```
+
+### Configuration Formats
+
+The controller supports multiple configuration formats:
+
+- **TOML** (`.toml`) - Recommended, Rust-native format
+- **JSON** (`.json`) - Standard JSON format
+- **YAML** (`.yaml`, `.yml`) - YAML format
+
+Example JSON configuration:
+
+```json
+{
+  "rocketmq_home": "/opt/rocketmq",
+  "node_id": 1,
+  "listen_addr": "127.0.0.1:9878",
+  "election_timeout_ms": 1000,
+  "raft_peers": [
+    {"id": 1, "addr": "127.0.0.1:9878"},
+    {"id": 2, "addr": "127.0.0.1:9879"},
+    {"id": 3, "addr": "127.0.0.1:9880"}
+  ]
 }
 ```
 
-## Dependencies
+### Stopping the Controller
 
-Main dependencies:
+Press `Ctrl+C` to gracefully shutdown the controller:
 
-- `raft-rs` - Raft consensus algorithm implementation
-- `tokio` - Async runtime
-- `dashmap` - Concurrent hash map
-- `serde` - Serialization/deserialization
-- `tracing` - Logging and tracing
+```
+Controller is running. Press Ctrl+C to stop.
+^C
+Received shutdown signal, shutting down controller...
+Controller shutdown completed.
+```
 
 ## Development
 
-### Build
+See [CLI_README.md](CLI_README.md) for detailed CLI usage and [CLI_MAPPING.md](CLI_MAPPING.md) for Java-Rust parameter mapping.
 
-```bash
-cargo build -p rocketmq-controller
-```
-
-### 测试
-
-```bash
-cargo test -p rocketmq-controller
-```
-
-### Benchmark
-
-```bash
-cargo bench -p rocketmq-controller
-```
-
-## Comparison with Java Version
-
-| Feature | Java (DLedger) | Rust (raft-rs) |
-|---------|---------------|----------------|
-| Consensus Algorithm | DLedger | raft-rs |
-| Async Model | Netty | Tokio |
-| Concurrency Control | ConcurrentHashMap | DashMap |
-| Error Handling | Exceptions | Result<T, E> |
-| Type Safety | Runtime | Compile-time |
-
-## Performance Goals
-
-- Leader election latency: < 500ms
-- Heartbeat throughput: > 10,000 ops/s
-- Metadata write latency: < 10ms (p99)
-- Metadata read latency: < 1ms (p99)
-
-## Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](../CONTRIBUTING.md).
-
-## License
-
-Licensed under Apache License 2.0 or MIT license, at your option.
