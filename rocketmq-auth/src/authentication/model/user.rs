@@ -15,17 +15,21 @@
 //  specific language governing permissions and limitations
 //  under the License.
 use cheetah_string::CheetahString;
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::authentication::enums::subject_type::SubjectType;
 use crate::authentication::enums::user_status::UserStatus;
 use crate::authentication::enums::user_type::UserType;
 use crate::authentication::model::subject::Subject;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     username: CheetahString,
     password: Option<CheetahString>,
+    #[serde(rename = "userType")]
     user_type: Option<UserType>,
+    #[serde(rename = "userStatus")]
     user_status: Option<UserStatus>,
 }
 

@@ -533,7 +533,6 @@ impl AuthorizationMetadataManagerImpl {
     /// Initialize ACL by setting default policy types.
     ///
     /// Sets PolicyType to CUSTOM for any policy without an explicit type.
-    /// This matches the Java implementation's `initAcl` method.
     fn init_acl(acl: &mut Acl) {
         let mut policies = acl.policies().clone();
         for policy in policies.iter_mut() {
@@ -551,8 +550,6 @@ impl AuthorizationMetadataManagerImpl {
     /// - Subject type is valid (not None/Unknown)
     /// - Policies list is not empty
     /// - Each policy is structurally valid
-    ///
-    /// This matches the Java implementation's `validate(Acl)` method.
     fn validate_acl(&self, acl: &Acl) -> ManagerResult<()> {
         // Validate subject type (currently only User is supported)
         // SubjectType enum doesn't have Unknown variant in Rust
@@ -575,8 +572,6 @@ impl AuthorizationMetadataManagerImpl {
     /// Validates:
     /// - Policy entries list is not empty
     /// - Each entry is structurally valid
-    ///
-    /// This matches the Java implementation's `validate(Policy)` method.
     fn validate_policy(&self, policy: &Policy) -> ManagerResult<()> {
         // Validate entries exist
         if policy.entries().is_empty() {
@@ -603,8 +598,6 @@ impl AuthorizationMetadataManagerImpl {
     /// - Actions do not include Action::ANY
     /// - Environment (if present) has valid IP addresses
     /// - Decision is set
-    ///
-    /// This matches the Java implementation's `validate(PolicyEntry)` method.
     fn validate_policy_entry(&self, entry: &PolicyEntry) -> ManagerResult<()> {
         // Validate resource
         let resource = entry.resource();
@@ -651,8 +644,6 @@ impl AuthorizationMetadataManagerImpl {
     /// Validates:
     /// - Source IPs are not blank
     /// - Source IPs are valid IP addresses or CIDR blocks
-    ///
-    /// This matches the validation logic in Java's `validate(PolicyEntry)` method.
     fn validate_environment(&self, environment: &Environment) -> ManagerResult<()> {
         let source_ips = environment.source_ips();
         // source_ips() returns &Vec<String>
@@ -714,9 +705,6 @@ impl AuthorizationMetadataManagerImpl {
     ///
     /// For USER subjects, checks with authentication provider (when available).
     /// For other subject types, assumes existence.
-    ///
-    /// This matches the Java implementation's subject validation logic in
-    /// `createAcl`, `updateAcl`, and `deleteAcl` methods.
     async fn verify_subject_exists(&self, acl: &Acl) -> ManagerResult<()> {
         if acl.subject_type() == SubjectType::User {
             // TODO: When AuthenticationMetadataProvider is available:
@@ -764,18 +752,12 @@ impl AuthorizationMetadataManagerImpl {
     }
 
     /// Get the authorization provider reference.
-    ///
-    /// This is used internally to access the provider. In Java, this would
-    /// throw IllegalStateException if provider is null.
     #[allow(dead_code)]
     fn get_authorization_provider(&self) -> &Arc<LocalAuthorizationMetadataProvider> {
         &self.authorization_provider
     }
 
     /// Get the authentication provider reference.
-    ///
-    /// This is used internally to access the provider. In Java, this would
-    /// throw IllegalStateException if provider is null.
     #[allow(dead_code)]
     fn get_authentication_provider(&self) -> ManagerResult<&Arc<dyn std::any::Any + Send + Sync>> {
         self.authentication_provider.as_ref().ok_or_else(|| {
