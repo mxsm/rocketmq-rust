@@ -696,7 +696,7 @@ impl MQProducer for DefaultMQProducer {
         msg.set_topic(self.with_namespace(msg.get_topic().as_str()));
         self.default_mqproducer_impl
             .as_mut()
-            .unwrap()
+            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .async_send_with_callback_timeout(msg, Some(Arc::new(send_callback)), timeout)
             .await?;
         Ok(())
