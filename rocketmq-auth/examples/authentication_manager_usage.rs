@@ -65,7 +65,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 2: JSON format (same as Java)
     let config = AuthConfig {
-        init_authentication_user: CheetahString::from(r#"{"username":"superadmin","password":"superpass","userType":"SUPER"}"#),
+        init_authentication_user: CheetahString::from(
+            r#"{"username":"superadmin","password":"superpass","userType":"SUPER"}"#,
+        ),
         ..Default::default()
     };
     manager.init_user(&config).await?;
@@ -73,7 +75,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 3: SessionCredentials format (inner client)
     let config = AuthConfig {
-        inner_client_authentication_credentials: CheetahString::from(r#"{"accessKey":"innerClient","secretKey":"innerSecret"}"#),
+        inner_client_authentication_credentials: CheetahString::from(
+            r#"{"accessKey":"innerClient","secretKey":"innerSecret"}"#,
+        ),
         ..Default::default()
     };
     manager.init_user(&config).await?;
