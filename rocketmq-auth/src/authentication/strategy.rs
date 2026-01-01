@@ -19,9 +19,13 @@
 //! This module provides the core `AuthenticationStrategy` trait and related implementations
 //! for pluggable authentication in RocketMQ.
 
+pub mod abstract_authentication_strategy;
 pub mod allow_all;
 pub mod authentication_strategy;
 
 // Re-export the main trait and implementations for convenience
+pub use abstract_authentication_strategy::AbstractAuthenticationStrategy;
+pub use abstract_authentication_strategy::AuthenticationStrategyFactory;
+pub use abstract_authentication_strategy::BaseAuthenticationStrategy;
 pub use allow_all::AllowAllAuthenticationStrategy;
 pub use authentication_strategy::AuthenticationStrategy;
