@@ -21,10 +21,10 @@
 //!
 //! ```bash
 //! # Parse command line with config file
-//! cargo run --example cli_usage -- -c examples/controller.properties
+//! cargo run --example cli_usage -- -c examples/controller.toml
 //!
 //! # Print configuration
-//! cargo run --example cli_usage -- -c examples/controller.properties -p
+//! cargo run --example cli_usage -- -c examples/controller.toml -p
 //!
 //! # Show help
 //! cargo run --example cli_usage -- --help
@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
     println!("Method 1: Using parse_command_line()");
     let (cli, config) = parse_command_line()?;
 
-    println!("✓ Configuration loaded successfully!\n");
+    println!(" Configuration loaded successfully!\n");
 
     // Display CLI arguments
     println!("CLI Arguments:");
@@ -67,12 +67,12 @@ async fn main() -> Result<()> {
 
     // Validate
     cli_manual.validate()?;
-    println!("✓ Arguments validated");
+    println!("Arguments validated");
 
     // Load config
     let default_config = rocketmq_controller::ControllerConfig::default();
     let config_manual = cli_manual.load_config(default_config)?;
-    println!("✓ Configuration loaded");
+    println!(" Configuration loaded");
     println!();
 
     // Print detailed configuration if requested
