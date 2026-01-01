@@ -122,7 +122,7 @@ impl PlainPermissionManager {
     fn assure_acl_config_files_exist(&self) -> RocketMQResult<()> {
         let default_acl_path = Path::new(&self.default_acl_file);
         if !default_acl_path.exists() {
-            // create file, similar to Java implementation
+            // Create file if it doesn't exist
             match File::create(default_acl_path) {
                 Ok(_) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => { /* maybe created by other threads */ }

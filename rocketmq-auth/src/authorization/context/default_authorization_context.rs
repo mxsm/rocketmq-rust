@@ -70,7 +70,7 @@ impl Clone for SubjectWrapper {
 
 /// Default authorization context containing all information needed for authorization decisions.
 ///
-/// This struct mirrors the Java `DefaultAuthorizationContext` class and contains:
+/// This struct contains:
 /// - Subject: who is performing the action (user, role, service account)
 /// - Resource: what is being accessed (topic, group, cluster)
 /// - Actions: what operations are being performed (PUB, SUB, CREATE, etc.)

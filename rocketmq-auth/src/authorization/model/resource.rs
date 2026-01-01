@@ -114,7 +114,7 @@ impl Resource {
         Some(Self::of(resource_type, resource_name, resource_pattern))
     }
 
-    /// Serialized resource key similar to Java `getResourceKey()`.
+    /// Serialized resource key for matching and storage.
     pub fn resource_key(&self) -> Option<String> {
         if self.resource_type == ResourceType::Any {
             return Some("*".to_string());
