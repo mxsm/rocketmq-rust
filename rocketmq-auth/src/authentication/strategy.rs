@@ -23,6 +23,7 @@ pub mod abstract_authentication_strategy;
 pub mod allow_all;
 pub mod authentication_strategy;
 pub mod stateful_authentication_strategy;
+pub mod stateless_authentication_strategy;
 
 // Re-export the main trait and implementations for convenience
 pub use abstract_authentication_strategy::AbstractAuthenticationStrategy;
@@ -31,3 +32,4 @@ pub use abstract_authentication_strategy::BaseAuthenticationStrategy;
 pub use allow_all::AllowAllAuthenticationStrategy;
 pub use authentication_strategy::AuthenticationStrategy;
 pub use stateful_authentication_strategy::StatefulAuthenticationStrategy;
+pub use stateless_authentication_strategy::StatelessAuthenticationStrategy;
