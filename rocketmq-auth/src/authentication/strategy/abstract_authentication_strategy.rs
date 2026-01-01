@@ -177,8 +177,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_whitelist_parsing() {
-        let mut config = AuthConfig::default();
-        config.authentication_whitelist = "100,200, 300 ".into();
+        let config = AuthConfig {
+            authentication_whitelist: "100,200, 300 ".into(),
+            ..Default::default()
+        };
 
         let strategy: BaseAuthenticationStrategy<DefaultAuthenticationProvider> =
             BaseAuthenticationStrategy::new(config, None);
@@ -191,8 +193,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_authentication_disabled() {
-        let mut config = AuthConfig::default();
-        config.authentication_enabled = false;
+        let config = AuthConfig {
+            authentication_enabled: false,
+            ..Default::default()
+        };
 
         let strategy: BaseAuthenticationStrategy<DefaultAuthenticationProvider> =
             BaseAuthenticationStrategy::new(config, None);
@@ -205,9 +209,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_whitelisted_rpc_code() {
-        let mut config = AuthConfig::default();
-        config.authentication_enabled = true;
-        config.authentication_whitelist = "SEND_MESSAGE,PULL_MESSAGE".into();
+        let config = AuthConfig {
+            authentication_enabled: true,
+            authentication_whitelist: "SEND_MESSAGE,PULL_MESSAGE".into(),
+            ..Default::default()
+        };
 
         let strategy: BaseAuthenticationStrategy<DefaultAuthenticationProvider> =
             BaseAuthenticationStrategy::new(config, None);
