@@ -69,3 +69,64 @@ impl std::fmt::Display for TopicOffset {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_topic_offset_default_and_new() {
+        let offset = TopicOffset::default();
+        assert_eq!(offset.get_min_offset(), 0);
+        assert_eq!(offset.get_max_offset(), 0);
+        assert_eq!(offset.get_last_update_timestamp(), 0);
+
+        let offset = TopicOffset::new();
+        assert_eq!(offset.get_min_offset(), 0);
+        assert_eq!(offset.get_max_offset(), 0);
+        assert_eq!(offset.get_last_update_timestamp(), 0);
+    }
+
+    #[test]
+    fn test_topic_offset_setters_and_getters() {
+        let mut offset = TopicOffset::new();
+        offset.set_min_offset(10);
+        offset.set_max_offset(20);
+        offset.set_last_update_timestamp(1000);
+
+        assert_eq!(offset.get_min_offset(), 10);
+        assert_eq!(offset.get_max_offset(), 20);
+        assert_eq!(offset.get_last_update_timestamp(), 1000);
+    }
+
+    #[test]
+    fn test_topic_offset_serialization_and_deserialization() {
+        let mut offset = TopicOffset::new();
+        offset.set_min_offset(-10);
+        offset.set_max_offset(-20);
+        offset.set_last_update_timestamp(-1000);
+
+        let serialized = serde_json::to_string(&offset).unwrap();
+        let expected = r#"{"minOffset":-10,"maxOffset":-20,"lastUpdateTimestamp":-1000}"#;
+        assert_eq!(serialized, expected);
+
+        let deserialized: TopicOffset = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.get_min_offset(), -10);
+        assert_eq!(deserialized.get_max_offset(), -20);
+        assert_eq!(deserialized.get_last_update_timestamp(), -1000);
+    }
+
+    #[test]
+    fn test_topic_offset_display() {
+        let mut offset = TopicOffset::new();
+        offset.set_min_offset(10);
+        offset.set_max_offset(20);
+        offset.set_last_update_timestamp(1000);
+
+        let display = format!("{}", offset);
+        assert_eq!(
+            display,
+            "TopicOffset{min_offset=10, max_offset=20, last_update_timestamp=1000}"
+        );
+    }
+}
