@@ -26,11 +26,6 @@ use crate::authentication::model::user::User;
 use crate::config::AuthConfig;
 
 /// Authentication metadata provider for user management.
-///
-/// Maps to Java interface:
-/// ```java
-/// public interface AuthenticationMetadataProvider
-/// ```
 #[allow(async_fn_in_trait)]
 pub trait AuthenticationMetadataProvider: Send + Sync {
     /// Initialize the provider.

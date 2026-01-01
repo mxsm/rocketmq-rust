@@ -34,26 +34,14 @@ use crate::config::AuthConfig;
 use super::authentication_provider::AuthenticationProvider;
 
 /// Default authentication provider.
-///
-/// Maps to Java class:
-/// ```java
-/// public class DefaultAuthenticationProvider implements AuthenticationProvider<DefaultAuthenticationContext>
-/// ```
 pub struct DefaultAuthenticationProvider {
     /// Authentication configuration.
-    ///
-    /// Maps to: `protected AuthConfig authConfig;`
     auth_config: Option<AuthConfig>,
 
     /// Metadata service supplier.
-    ///
-    /// Maps to: `protected Supplier<?> metadataService;`
     metadata_service: Option<Arc<dyn Any + Send + Sync>>,
 
     /// Authentication context builder.
-    ///
-    /// Maps to: `protected AuthenticationContextBuilder<DefaultAuthenticationContext>
-    /// authenticationContextBuilder;`
     authentication_context_builder: DefaultAuthenticationContextBuilder,
 }
 
@@ -68,8 +56,6 @@ impl DefaultAuthenticationProvider {
     }
 
     /// Perform audit logging.
-    ///
-    /// Maps to: `protected void doAuditLog(DefaultAuthenticationContext context, Throwable ex)`
     fn do_audit_log(&self, context: &DefaultAuthenticationContext, error: Option<&str>) {
         if let Some(username) = context.username() {
             if username.is_empty() {
@@ -96,7 +82,6 @@ impl DefaultAuthenticationProvider {
     /// Internal authentication logic.
     ///
     /// This is where you'd implement the actual authentication handler chain logic.
-    /// In Java this is: `this.newHandlerChain().handle(context)`
     async fn authenticate_internal(&self, _context: &DefaultAuthenticationContext) -> RocketMQResult<()> {
         // TODO: Implement handler chain logic here
         // For now, just return Ok for compatibility
@@ -114,15 +99,6 @@ impl AuthenticationProvider for DefaultAuthenticationProvider {
     type Context = DefaultAuthenticationContext;
 
     /// Initialize the provider.
-    ///
-    /// Maps to Java method:
-    /// ```java
-    /// public void initialize(AuthConfig config, Supplier<?> metadataService) {
-    ///     this.authConfig = config;
-    ///     this.metadataService = metadataService;
-    ///     this.authenticationContextBuilder = new DefaultAuthenticationContextBuilder();
-    /// }
-    /// ```
     async fn initialize(
         &mut self,
         config: AuthConfig,
@@ -135,17 +111,9 @@ impl AuthenticationProvider for DefaultAuthenticationProvider {
     }
 
     /// Authenticate a request.
-    ///
-    /// Maps to Java method:
-    /// ```java
-    /// public CompletableFuture<Void> authenticate(DefaultAuthenticationContext context) {
-    ///     return this.newHandlerChain().handle(context)
-    ///         .whenComplete((nil, ex) -> doAuditLog(context, ex));
-    /// }
-    /// ```
     async fn authenticate(&self, context: &Self::Context) -> RocketMQResult<()> {
-        // Note: In Java this uses HandlerChain. In Rust, we'll implement the authentication
-        // logic directly here. For full chain support, you'd need to implement a handler chain.
+        // Note: This uses handler chain pattern. For full chain support,
+        // you'd need to implement a handler chain.
 
         let result = self.authenticate_internal(context).await;
 
@@ -159,13 +127,6 @@ impl AuthenticationProvider for DefaultAuthenticationProvider {
     }
 
     /// Create context from gRPC metadata.
-    ///
-    /// Maps to Java method:
-    /// ```java
-    /// public DefaultAuthenticationContext newContext(Metadata metadata, GeneratedMessageV3 request) {
-    ///     return this.authenticationContextBuilder.build(metadata, request);
-    /// }
-    /// ```
     fn new_context_from_metadata(
         &self,
         _metadata: &HashMap<String, String>,
@@ -176,13 +137,6 @@ impl AuthenticationProvider for DefaultAuthenticationProvider {
     }
 
     /// Create context from remoting command.
-    ///
-    /// Maps to Java method:
-    /// ```java
-    /// public DefaultAuthenticationContext newContext(ChannelHandlerContext context, RemotingCommand command) {
-    ///     return this.authenticationContextBuilder.build(context, command);
-    /// }
-    /// ```
     fn new_context_from_command(&self, command: &RemotingCommand) -> Self::Context {
         self.authentication_context_builder
             .build_from_remoting(command, None)
