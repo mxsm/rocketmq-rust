@@ -68,3 +68,56 @@ impl OffsetWrapper {
         self.last_timestamp = last_timestamp;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_offset_wrapper_default_and_new() {
+        let wrapper = OffsetWrapper::default();
+        assert_eq!(wrapper.get_broker_offset(), 0);
+        assert_eq!(wrapper.get_consumer_offset(), 0);
+        assert_eq!(wrapper.get_pull_offset(), 0);
+        assert_eq!(wrapper.get_last_timestamp(), 0);
+
+        let wrapper = OffsetWrapper::new();
+        assert_eq!(wrapper.get_broker_offset(), 0);
+        assert_eq!(wrapper.get_consumer_offset(), 0);
+        assert_eq!(wrapper.get_pull_offset(), 0);
+        assert_eq!(wrapper.get_last_timestamp(), 0);
+    }
+
+    #[test]
+    fn test_offset_wrapper_setters_and_getters() {
+        let mut wrapper = OffsetWrapper::new();
+        wrapper.set_broker_offset(100);
+        wrapper.set_consumer_offset(200);
+        wrapper.set_pull_offset(300);
+        wrapper.set_last_timestamp(400);
+
+        assert_eq!(wrapper.get_broker_offset(), 100);
+        assert_eq!(wrapper.get_consumer_offset(), 200);
+        assert_eq!(wrapper.get_pull_offset(), 300);
+        assert_eq!(wrapper.get_last_timestamp(), 400);
+    }
+
+    #[test]
+    fn test_offset_wrapper_serialization_and_deserialization() {
+        let mut wrapper = OffsetWrapper::new();
+        wrapper.set_broker_offset(-100);
+        wrapper.set_consumer_offset(-200);
+        wrapper.set_pull_offset(-300);
+        wrapper.set_last_timestamp(-400);
+
+        let serialized = serde_json::to_string(&wrapper).unwrap();
+        let expected = r#"{"broker_offset":-100,"consumer_offset":-200,"pull_offset":-300,"last_timestamp":-400}"#;
+        assert_eq!(serialized, expected);
+
+        let deserialized: OffsetWrapper = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.get_broker_offset(), -100);
+        assert_eq!(deserialized.get_consumer_offset(), -200);
+        assert_eq!(deserialized.get_pull_offset(), -300);
+        assert_eq!(deserialized.get_last_timestamp(), -400);
+    }
+}
