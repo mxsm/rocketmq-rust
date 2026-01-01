@@ -1104,7 +1104,7 @@ impl MQProducer for DefaultMQProducer {
         msg.set_topic(self.with_namespace(msg.get_topic()));
         self.default_mqproducer_impl
             .as_mut()
-            .unwrap()
+            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl is not initialized"))?
             .request_with_callback(msg, Arc::new(request_callback), timeout)
             .await
     }
@@ -1193,5 +1193,41 @@ impl MQProducer for DefaultMQProducer {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rocketmq_common::common::message::message_single::Message;
+
+    #[tokio::test]
+    async fn request_with_callback_not_initialized() {
+        // Arrange
+        let mut producer = DefaultMQProducer {
+            client_config: Default::default(),
+            producer_config: Default::default(),
+            default_mqproducer_impl: None,
+        };
+        let msg = Message {
+            topic: "test-topic".into(),
+            flag: 0,
+            properties: Default::default(),
+            body: None,
+            compressed_body: None,
+            transaction_id: None,
+        };
+        let callback = |_msg: Option<&dyn MessageTrait>, _err: Option<&dyn std::error::Error>| {
+            // no-op
+        };
+        let result = producer.request_with_callback(msg, callback, 1000).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            RocketMQError::NotInitialized(reason) => {
+                assert!(reason.contains("not initialized"), "unexpected error message: {reason}");
+            }
+            other => panic!("Unexpected error: {other:?}"),
+        }
     }
 }
