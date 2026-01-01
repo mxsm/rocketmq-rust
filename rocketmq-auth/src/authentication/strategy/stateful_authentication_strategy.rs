@@ -123,9 +123,10 @@ where
     /// - `{channel_id}` if username is not available
     /// - `{channel_id}#{username}` if username is available
     fn build_cache_key(&self, context: &DefaultAuthenticationContext) -> Result<String, AuthError> {
-        let channel_id = context.base.channel_id().ok_or_else(|| {
-            AuthError::AuthenticationFailed("Channel ID is required for stateful auth".to_string())
-        })?;
+        let channel_id = context
+            .base
+            .channel_id()
+            .ok_or_else(|| AuthError::AuthenticationFailed("Channel ID is required for stateful auth".to_string()))?;
 
         if let Some(username) = context.username() {
             Ok(format!("{}{}{}", channel_id, POUND, username))
@@ -135,10 +136,7 @@ where
     }
 
     /// Perform actual authentication without caching.
-    fn do_authenticate_internal(
-        &self,
-        context: &dyn AuthenticationContext,
-    ) -> Result<(), AuthError> {
+    fn do_authenticate_internal(&self, context: &dyn AuthenticationContext) -> Result<(), AuthError> {
         if !self.auth_config.authentication_enabled {
             return Ok(());
         }
@@ -164,8 +162,7 @@ where
         };
 
         let auth_result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(provider.authenticate(default_context))
+            tokio::runtime::Handle::current().block_on(provider.authenticate(default_context))
         });
 
         auth_result.map_err(|e| AuthError::AuthenticationFailed(e.to_string()))
@@ -190,9 +187,7 @@ where
     }
 
     fn authentication_provider(&self) -> Option<&dyn Any> {
-        self.authentication_provider
-            .as_ref()
-            .map(|p| p.as_ref() as &dyn Any)
+        self.authentication_provider.as_ref().map(|p| p.as_ref() as &dyn Any)
     }
 
     async fn authenticate_with_provider<C: AuthenticationContext>(
@@ -234,9 +229,7 @@ where
                     Err(e) => Ok(AuthCacheEntry::failure(e.to_string())),
                 }
             })
-            .map_err(|e| {
-                AuthError::AuthenticationFailed(format!("Cache operation failed: {}", e))
-            })?;
+            .map_err(|e| AuthError::AuthenticationFailed(format!("Cache operation failed: {}", e)))?;
 
         if !result.success {
             return Err(AuthError::AuthenticationFailed(
@@ -275,9 +268,7 @@ mod tests {
             StatefulAuthenticationStrategy::new(config, None);
 
         let mut context = DefaultAuthenticationContext::new();
-        context
-            .base
-            .set_channel_id(Some(CheetahString::from("channel-123")));
+        context.base.set_channel_id(Some(CheetahString::from("channel-123")));
         context.set_username(CheetahString::from("user-456"));
 
         let key = strategy.build_cache_key(&context).unwrap();
@@ -291,9 +282,7 @@ mod tests {
             StatefulAuthenticationStrategy::new(config, None);
 
         let mut context = DefaultAuthenticationContext::new();
-        context
-            .base
-            .set_channel_id(Some(CheetahString::from("channel-789")));
+        context.base.set_channel_id(Some(CheetahString::from("channel-789")));
 
         let key = strategy.build_cache_key(&context).unwrap();
         assert_eq!(key, "channel-789");
@@ -325,14 +314,8 @@ mod tests {
         let strategy: StatefulAuthenticationStrategy<DefaultAuthenticationProvider> =
             StatefulAuthenticationStrategy::new(config, None);
 
-        assert_eq!(
-            strategy.auth_config.stateful_authentication_cache_max_num,
-            500
-        );
-        assert_eq!(
-            strategy.auth_config.stateful_authentication_cache_expired_second,
-            30
-        );
+        assert_eq!(strategy.auth_config.stateful_authentication_cache_max_num, 500);
+        assert_eq!(strategy.auth_config.stateful_authentication_cache_expired_second, 30);
     }
 
     #[test]
