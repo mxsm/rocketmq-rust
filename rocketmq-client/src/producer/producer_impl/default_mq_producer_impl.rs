@@ -1708,7 +1708,10 @@ impl DefaultMQProducerImpl {
         if let Err(e) = result {
             return Err(mq_client_err!(format!("send message in transaction error, {}", e)));
         }
-        let send_result = result.unwrap().expect("send result is none");
+        let send_result = match result.unwrap() {
+            Some(res) => res,
+            None => return Err(mq_client_err!("send result is none")),
+        };
         let local_transaction_state = match send_result.send_status {
             SendStatus::SendOk => {
                 if let Some(ref transaction_id) = send_result.transaction_id {
