@@ -1128,16 +1128,21 @@ impl BrokerRuntime {
                 Ok(())
             });
         info!(
-            "Rocketmq Broker({} ----Rust) start success",
+            "RocketMQ Broker({}) started successfully",
             self.inner.broker_config.broker_identity.broker_name
         );
-        tokio::select! {
-            _ = self.shutdown_rx.as_mut().unwrap().recv() => {
-                info!("Broker Shutdown received, initiating graceful shutdown...");
-                self.shutdown().await;
-                info!("Broker Shutdown complete");
-            }
-        }
+    }
+
+    /// Wait for shutdown signal. This method blocks until a shutdown signal is received.
+    /// Should be called after start() to keep the broker running.
+    pub async fn run(&mut self) {
+        self.shutdown_rx
+            .as_mut()
+            .expect("shutdown_rx not initialized - must be set before calling run()")
+            .recv()
+            .await
+            .ok();
+        info!("Broker shutdown signal received");
     }
 
     pub(crate) fn schedule_send_heartbeat(&mut self) {
