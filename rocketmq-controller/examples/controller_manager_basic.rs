@@ -31,6 +31,7 @@ use rocketmq_controller::config::ControllerConfig;
 use rocketmq_controller::config::RaftPeer;
 use rocketmq_controller::error::Result;
 use rocketmq_controller::manager::ControllerManager;
+use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
 use tracing_subscriber::fmt;
@@ -48,7 +49,7 @@ async fn main() -> Result<()> {
 
     // Create the controller manager
     info!("Creating ControllerManager...");
-    let manager = ControllerManager::new(config).await?;
+    let mut manager = ControllerManager::new(config).await?;
 
     // Initialize the manager
     info!("Initializing ControllerManager...");
@@ -58,23 +59,24 @@ async fn main() -> Result<()> {
     }
     info!(" Controller initialized successfully");
 
+    // Wrap in Arc for start
+    let manager = ArcMut::new(manager);
+
     // Start the manager
     info!("Starting ControllerManager...");
-    manager.start().await?;
+    manager.clone().start().await?;
     info!(" Controller started successfully");
 
     // Query controller state
     info!("Checking controller state...");
-    let is_running = manager.is_running().await;
-    let is_initialized = manager.is_initialized().await;
-    let is_leader = manager.is_leader().await;
-    let leader_id = manager.get_leader().await;
+    let is_running = manager.is_running();
+    let is_initialized = manager.is_initialized();
+    let is_leader = manager.is_leader();
 
     info!("Controller State:");
     info!("  - Running: {}", is_running);
     info!("  - Initialized: {}", is_initialized);
     info!("  - Is Leader: {}", is_leader);
-    info!("  - Leader ID: {:?}", leader_id);
 
     // Run for a short time
     info!("Controller is running... (will shutdown in 5 seconds)");

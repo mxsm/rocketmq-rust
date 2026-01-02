@@ -48,8 +48,6 @@
 //!
 //! ## Implementation Notes
 //!
-//! **This is a complete translation from Java RocketMQ 5.3.1 ControllerRequestProcessor**
-//!
 //! The following types and modules need to be implemented in rocketmq-rust:
 //!
 //! 1. **rocketmq-remoting additions**:
@@ -87,6 +85,8 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
+use crate::manager::ControllerManager;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -95,9 +95,8 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
-
-use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
-use crate::manager::ControllerManager;
+use rocketmq_rust::ArcMut;
+use tokio::sync::Mutex;
 // Note: These types need to be implemented in their respective modules
 // Placeholder imports that need actual implementation:
 // - SyncStateSet in rocketmq-remoting::protocol::body
@@ -116,12 +115,13 @@ const WAIT_TIMEOUT_SECONDS: u64 = 5;
 /// - Metrics collection and reporting
 /// - Error handling and response generation
 /// - Configuration blacklist validation
+#[derive(Clone)]
 pub struct ControllerRequestProcessor {
     /// Reference to the controller manager
-    controller_manager: Arc<ControllerManager>,
+    controller_manager: ArcMut<ControllerManager>,
 
-    /// Reference to the heartbeat manager
-    heartbeat_manager: Arc<dyn BrokerHeartbeatManager>,
+    /// Reference to the heartbeat manager (wrapped in Mutex)
+    heartbeat_manager: Arc<Mutex<DefaultBrokerHeartbeatManager>>,
 
     /// Configuration blacklist - configs that cannot be dynamically updated
     config_blacklist: Arc<HashSet<String>>,
@@ -137,13 +137,18 @@ impl ControllerRequestProcessor {
     /// # Returns
     ///
     /// A new instance of `ControllerRequestProcessor`
-    pub fn new(_controller_manager: Arc<ControllerManager>) -> Self {
-        unimplemented!("Implement ControllerRequestProcessor::new")
+    pub fn new(controller_manager: ArcMut<ControllerManager>) -> Self {
+        let heartbeat_manager = controller_manager.heartbeat_manager().clone();
+        let config_blacklist = Arc::new(Self::init_config_blacklist(&controller_manager));
+
+        Self {
+            controller_manager,
+            heartbeat_manager,
+            config_blacklist,
+        }
     }
 
-    /// Initialize the configuration blacklist
-    ///
-    /// These configurations cannot be updated dynamically for security and stability reasons.
+    /// Initialize configuration blacklist
     ///
     /// # Arguments
     ///
@@ -219,7 +224,6 @@ impl ControllerRequestProcessor {
     /// Handle ALTER_SYNC_STATE_SET request
     ///
     /// This changes the in-sync replica set for a broker group.
-    /// Equivalent to Java's handleAlterSyncStateSet method.
     ///
     /// # Request Flow
     ///

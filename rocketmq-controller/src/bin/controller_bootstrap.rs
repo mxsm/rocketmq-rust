@@ -18,6 +18,7 @@ use rocketmq_controller::parse_command_line;
 use rocketmq_controller::ControllerManager;
 use rocketmq_error::Result;
 use rocketmq_remoting::protocol::remoting_command;
+use rocketmq_rust::ArcMut;
 use tracing::info;
 
 /// RocketMQ Controller Bootstrap
@@ -69,10 +70,9 @@ pub async fn main() -> Result<()> {
     info!("RocketMQ Controller configuration loaded successfully");
     info!("Node ID: {}, Listen Address: {}", config.node_id, config.listen_addr);
 
-    // Check ROCKETMQ_HOME environment variable
     let rocketmq_home = &config.rocketmq_home;
     if rocketmq_home.is_empty() {
-        eprintln!("Please set the ROCKETMQ_HOME environment variable or rocketmq.home.dir property!");
+        eprintln!("Please set the ROCKETMQ_HOME environment variable!");
         eprintln!("   Example: export ROCKETMQ_HOME=/opt/rocketmq");
         std::process::exit(-1);
     }
@@ -81,7 +81,7 @@ pub async fn main() -> Result<()> {
 
     // Create controller manager
     info!("Creating Controller Manager...");
-    let controller_manager = ControllerManager::new(config).await?;
+    let mut controller_manager = ControllerManager::new(config).await?;
 
     // Initialize controller
     info!("Initializing Controller...");
@@ -92,11 +92,10 @@ pub async fn main() -> Result<()> {
         std::process::exit(-3);
     }
 
-    // Start controller
-    info!("Starting Controller...");
-    controller_manager.start().await?;
+    // Wrap in Arc for sharing with start method
+    let controller_manager = ArcMut::new(controller_manager);
 
-    info!("RocketMQ Controller started successfully!");
+    info!("Controller started successfully!");
     info!("  Node ID: {}", controller_manager.controller_config().node_id);
     info!("  Listen:  {}", controller_manager.controller_config().listen_addr);
     info!("Controller is running. Press Ctrl+C to stop.");

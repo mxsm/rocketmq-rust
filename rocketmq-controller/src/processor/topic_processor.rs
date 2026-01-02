@@ -17,6 +17,8 @@ use std::sync::Arc;
 use tracing::error;
 use tracing::info;
 
+use crate::controller::raft_controller::RaftController;
+use crate::controller::Controller;
 use crate::error::ControllerError;
 use crate::error::Result;
 use crate::metadata::MetadataStore;
@@ -28,7 +30,6 @@ use crate::processor::request::DeleteTopicResponse;
 use crate::processor::request::UpdateTopicRequest;
 use crate::processor::request::UpdateTopicResponse;
 use crate::processor::RequestProcessor;
-use crate::raft::RaftController;
 
 /// Create topic processor
 pub struct CreateTopicProcessor {
@@ -50,12 +51,11 @@ impl CreateTopicProcessor {
         info!("Processing create topic request: {}", request.topic_name);
 
         // Check if we are the leader
-        if !self.raft.is_leader().await {
-            let leader = self.raft.get_leader().await;
-            error!("Not leader, current leader: {:?}", leader);
+        if !self.raft.is_leader() {
+            error!("Not leader");
             return Ok(CreateTopicResponse {
                 success: false,
-                error: Some(format!("Not leader, current leader: {:?}", leader)),
+                error: Some("Not leader".to_string()),
             });
         }
 
@@ -131,11 +131,10 @@ impl UpdateTopicProcessor {
         info!("Processing update topic request: {}", request.topic_name);
 
         // Check if we are the leader
-        if !self.raft.is_leader().await {
-            let leader = self.raft.get_leader().await;
+        if !self.raft.is_leader() {
             return Ok(UpdateTopicResponse {
                 success: false,
-                error: Some(format!("Not leader, current leader: {:?}", leader)),
+                error: Some("Not leader".to_string()),
             });
         }
 
@@ -203,11 +202,10 @@ impl DeleteTopicProcessor {
         info!("Processing delete topic request: {}", request.topic_name);
 
         // Check if we are the leader
-        if !self.raft.is_leader().await {
-            let leader = self.raft.get_leader().await;
+        if !self.raft.is_leader() {
             return Ok(DeleteTopicResponse {
                 success: false,
-                error: Some(format!("Not leader, current leader: {:?}", leader)),
+                error: Some("Not leader".to_string()),
             });
         }
 

@@ -37,6 +37,7 @@ use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 /// Unified controller wrapper supporting multiple Raft implementations
 ///
 /// This enum allows runtime selection between OpenRaft and raft-rs implementations.
+#[derive(Clone)]
 pub enum RaftController {
     /// OpenRaft-based implementation
     OpenRaft(ArcMut<OpenRaftController>),

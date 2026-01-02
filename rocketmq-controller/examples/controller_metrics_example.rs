@@ -42,7 +42,7 @@ async fn main() {
     // 2. Initialize metrics manager (singleton)
     println!("2. Initializing metrics manager...");
     let metrics_manager = ControllerMetricsManager::get_instance(config.clone());
-    println!("   ✓ Metrics manager initialized\n");
+    println!("    Metrics manager initialized\n");
 
     // 3. Simulate role change
     println!("3. Simulating role changes...");
@@ -56,22 +56,22 @@ async fn main() {
 
     println!("   - Elected as LEADER (3)");
     ControllerMetricsManager::record_role_change(3, 1); // CANDIDATE -> LEADER
-    println!("   ✓ Role changes recorded\n");
+    println!("    Role changes recorded\n");
 
     // 4. Simulate controller requests
     println!("4. Simulating controller requests...");
     simulate_controller_requests(&metrics_manager).await;
-    println!("   ✓ Controller requests simulated\n");
+    println!("    Controller requests simulated\n");
 
     // 5. Simulate DLedger operations
     println!("5. Simulating DLedger operations...");
     simulate_dledger_operations(&metrics_manager).await;
-    println!("   ✓ DLedger operations simulated\n");
+    println!("    DLedger operations simulated\n");
 
     // 6. Simulate elections
     println!("6. Simulating elections...");
     simulate_elections(&metrics_manager).await;
-    println!("   ✓ Elections simulated\n");
+    println!("    Elections simulated\n");
 
     println!("=== Example completed ===");
     println!("\nNote: In production, metrics would be exported to:");
