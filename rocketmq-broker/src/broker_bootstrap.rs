@@ -33,23 +33,12 @@ impl BrokerBootstrap {
             return;
         }
 
-        // Initialize shutdown channel
-        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
-        self.broker_runtime.shutdown_rx = Some(shutdown_rx);
-
         // Start broker services (non-blocking)
         self.start().await;
 
-        // Wait for shutdown signal from either source
-        tokio::select! {
-            _ = self.broker_runtime.run() => {
-                info!("Broker run completed");
-            }
-            _ = wait_for_signal() => {
-                info!("Broker received shutdown signal");
-                let _ = shutdown_tx.send(());
-            }
-        }
+        // Wait for shutdown signal (Ctrl+C or SIGTERM)
+        wait_for_signal().await;
+        info!("Broker received shutdown signal");
 
         // Graceful shutdown
         self.shutdown().await;
