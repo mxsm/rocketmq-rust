@@ -1,26 +1,26 @@
 [package]
-name = "rocketmq-example"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-homepage.workspace = true
-repository.workspace = true
-license.workspace = true
-keywords.workspace = true
-readme = "README.md"
-description.workspace = true
+name                   = "rocketmq-example"
+version.workspace      = true
+authors.workspace      = true
+edition.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+license.workspace      = true
+keywords.workspace     = true
+readme                 = "README.md"
+description.workspace  = true
 rust-version.workspace = true
 
 [dependencies]
-rocketmq-rust = { workspace = true }
-rocketmq-common = { workspace = true }
-rocketmq-tools = { workspace = true }
+rocketmq-rust        = { workspace = true }
+rocketmq-common      = { workspace = true }
+rocketmq-tools       = { workspace = true }
 rocketmq-client-rust = { workspace = true }
-rocketmq-error = { workspace = true }
+rocketmq-error       = { workspace = true }
 
 tracing.workspace = true
-cheetah-string = { workspace = true }
-tokio =  { workspace = true }
+cheetah-string    = { workspace = true }
+tokio             = { workspace = true }
 
 [[example]]
 name = "pop-consumer"
