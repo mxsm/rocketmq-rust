@@ -28,7 +28,6 @@ tokio.workspace = true
 trait-variant = { workspace = true }
 num_cpus      = { workspace = true }
 rand          = { workspace = true }
-lazy_static   = { workspace = true }
 
 #log
 tracing.workspace = true

@@ -3495,7 +3495,6 @@ dependencies = [
  "cheetah-string",
  "dashmap",
  "futures",
- "lazy_static",
  "num_cpus",
  "once_cell",
  "parking_lot",
