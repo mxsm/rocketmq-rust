@@ -1749,8 +1749,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn broker_stats(&self) -> &Option<BrokerStats<MS>> {
-        &self.broker_stats
+    pub fn broker_stats(&self) -> Option<&BrokerStats<MS>> {
+        self.broker_stats.as_ref()
     }
 
     #[inline]
