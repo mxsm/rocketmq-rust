@@ -19,6 +19,7 @@ mod chain;
 pub mod context;
 pub mod enums;
 pub mod evaluator;
+pub mod factory;
 pub mod manager;
 pub mod model;
 pub mod provider;
@@ -26,6 +27,7 @@ pub mod strategy;
 
 // Re-export commonly used types for convenience
 pub use evaluator::AuthenticationEvaluator;
+pub use factory::AuthenticationFactory;
 pub use manager::AuthenticationMetadataManager;
 pub use manager::ManagerResult;
 pub use provider::AuthenticationMetadataProvider;
