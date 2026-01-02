@@ -28,3 +28,9 @@ pub use authentication::provider::AuthenticationProvider;
 pub use authentication::provider::DefaultAuthenticationProvider;
 pub use authentication::strategy::AllowAllAuthenticationStrategy;
 pub use authentication::strategy::AuthenticationStrategy;
+
+// Re-export commonly used authorization types
+pub use authorization::context::default_authorization_context::DefaultAuthorizationContext;
+pub use authorization::evaluator::AuthorizationEvaluator;
+pub use authorization::provider::AuthorizationProvider;
+pub use authorization::strategy::abstract_authorization_strategy::AuthorizationStrategy;
