@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Quick benchmark runner to validate EncodeBuffer performance
 //!
@@ -140,16 +137,8 @@ fn main() {
 
     let (eb_time, eb_cap, bm_time, bm_cap) = spike_test();
 
-    println!(
-        "  EncodeBuffer: {} ns, final capacity: {} KB",
-        eb_time,
-        eb_cap / 1024
-    );
-    println!(
-        "  BytesMut:     {} ns, final capacity: {} KB",
-        bm_time,
-        bm_cap / 1024
-    );
+    println!("  EncodeBuffer: {} ns, final capacity: {} KB", eb_time, eb_cap / 1024);
+    println!("  BytesMut:     {} ns, final capacity: {} KB", bm_time, bm_cap / 1024);
     println!(
         "  Memory saved: {} KB ({:.1}%)",
         (bm_cap - eb_cap) / 1024,

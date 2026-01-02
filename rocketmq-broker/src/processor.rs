@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 
@@ -92,51 +89,21 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match self {
-            BrokerProcessorType::Send(processor) => {
-                processor.process_request(channel, ctx, request).await
-            }
-            BrokerProcessorType::Pull(processor) => {
-                processor.process_request(channel, ctx, request).await
-            }
-            BrokerProcessorType::Peek(processor) => {
-                processor.process_request(channel, ctx, request).await
-            }
-            BrokerProcessorType::Pop(processor) => {
-                processor.process_request(channel, ctx, request).await
-            }
-            BrokerProcessorType::Ack(processor) => {
-                processor.process_request(channel, ctx, request).await
-            }
-            BrokerProcessorType::ChangeInvisible(processor) => {
-                processor.process_request(channel, ctx, request).await
-            }
-            BrokerProcessorType::Notification(processor) => {
-                processor.process_request(channel, ctx, request).await
-            }
-            BrokerProcessorType::PollingInfo(processor) => {
-                processor.process_request(channel, ctx, request).await
-            }
-            BrokerProcessorType::Reply(processor) => {
-                processor.process_request(channel, ctx, request).await
-            }
-            BrokerProcessorType::QueryMessage(processor) => {
-                processor.process_request(channel, ctx, request).await
-            }
-            BrokerProcessorType::ClientManage(processor) => {
-                processor.process_request(channel, ctx, request).await
-            }
-            BrokerProcessorType::ConsumerManage(processor) => {
-                processor.process_request(channel, ctx, request).await
-            }
-            BrokerProcessorType::QueryAssignment(processor) => {
-                processor.process_request(channel, ctx, request).await
-            }
-            BrokerProcessorType::EndTransaction(processor) => {
-                processor.process_request(channel, ctx, request).await
-            }
-            BrokerProcessorType::AdminBroker(processor) => {
-                processor.process_request(channel, ctx, request).await
-            }
+            BrokerProcessorType::Send(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::Pull(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::Peek(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::Pop(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::Ack(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::ChangeInvisible(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::Notification(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::PollingInfo(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::Reply(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::QueryMessage(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::ClientManage(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::ConsumerManage(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::QueryAssignment(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::EndTransaction(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::AdminBroker(processor) => processor.process_request(channel, ctx, request).await,
         }
     }
 
@@ -180,11 +147,7 @@ where
         }
     }
 
-    pub fn register_processor(
-        &mut self,
-        request_code: RequestCodeType,
-        processor: BrokerProcessorType<MS, TS>,
-    ) {
+    pub fn register_processor(&mut self, request_code: RequestCodeType, processor: BrokerProcessorType<MS, TS>) {
         self.process_table.insert(request_code, processor);
     }
 
@@ -216,17 +179,12 @@ where
         match self.process_table.get_mut(request.code_ref()) {
             Some(processor) => processor.process_request(channel, ctx, request).await,
             None => match self.default_request_processor.as_mut() {
-                Some(default_processor) => {
-                    default_processor
-                        .process_request(channel, ctx, request)
-                        .await
-                }
+                Some(default_processor) => default_processor.process_request(channel, ctx, request).await,
                 None => {
-                    let response_command =
-                        RemotingCommand::create_response_command_with_code_remark(
-                            rocketmq_remoting::code::response_code::ResponseCode::RequestCodeNotSupported,
-                            format!("The request code {} is not supported.", request.code_ref()),
-                        );
+                    let response_command = RemotingCommand::create_response_command_with_code_remark(
+                        rocketmq_remoting::code::response_code::ResponseCode::RequestCodeNotSupported,
+                        format!("The request code {} is not supported.", request.code_ref()),
+                    );
                     Ok(Some(response_command.set_opaque(request.opaque())))
                 }
             },
@@ -240,11 +198,10 @@ where
                 if let Some(default_processor) = &self.default_request_processor {
                     default_processor.reject_request(code)
                 } else {
-                    let response_command =
-                        RemotingCommand::create_response_command_with_code_remark(
-                            rocketmq_remoting::code::response_code::ResponseCode::RequestCodeNotSupported,
-                            format!("The request code {code} is not supported."),
-                        );
+                    let response_command = RemotingCommand::create_response_command_with_code_remark(
+                        rocketmq_remoting::code::response_code::ResponseCode::RequestCodeNotSupported,
+                        format!("The request code {code} is not supported."),
+                    );
                     (true, Some(response_command))
                 }
             }

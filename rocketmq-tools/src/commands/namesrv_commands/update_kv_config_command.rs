@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 
@@ -33,23 +30,13 @@ pub struct UpdateKvConfigCommand {
     #[command(flatten)]
     common_args: CommonArgs,
 
-    #[arg(
-        short = 's',
-        long = "namespace",
-        required = true,
-        help = "set the namespace"
-    )]
+    #[arg(short = 's', long = "namespace", required = true, help = "set the namespace")]
     namespace: String,
 
     #[arg(short = 'k', long = "key", required = true, help = "set the key name")]
     key: String,
 
-    #[arg(
-        short = 'v',
-        long = "value",
-        required = true,
-        help = "set the key value"
-    )]
+    #[arg(short = 'v', long = "value", required = true, help = "set the key value")]
     value: String,
 }
 
@@ -65,14 +52,9 @@ impl CommandExecute for UpdateKvConfigCommand {
                 default_mqadmin_ext.set_namesrv_addr(addr.trim());
             }
 
-            MQAdminExt::start(&mut default_mqadmin_ext)
-                .await
-                .map_err(|e| {
-                    RocketMQError::Internal(format!(
-                        "UpdateKvConfigCommand: Failed to start MQAdminExt: {}",
-                        e
-                    ))
-                })?;
+            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
+                RocketMQError::Internal(format!("UpdateKvConfigCommand: Failed to start MQAdminExt: {}", e))
+            })?;
 
             default_mqadmin_ext
                 .create_and_update_kv_config(
@@ -82,10 +64,7 @@ impl CommandExecute for UpdateKvConfigCommand {
                 )
                 .await
                 .map_err(|e| {
-                    RocketMQError::Internal(format!(
-                        "UpdateKvConfigCommand: Failed to update kv config: {}",
-                        e
-                    ))
+                    RocketMQError::Internal(format!("UpdateKvConfigCommand: Failed to update kv config: {}", e))
                 })?;
 
             println!("update kv config in namespace success.");

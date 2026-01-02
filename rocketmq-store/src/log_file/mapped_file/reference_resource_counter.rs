@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
@@ -219,10 +216,7 @@ mod tests {
     fn test_hold_fails_after_shutdown() {
         let resource = ReferenceResourceCounter::new();
         resource.shutdown(0);
-        assert!(
-            !resource.is_available(),
-            "Should not be available after shutdown"
-        );
+        assert!(!resource.is_available(), "Should not be available after shutdown");
         assert!(!resource.hold(), "Hold should fail after shutdown");
     }
 
@@ -233,10 +227,7 @@ mod tests {
         resource.base.ref_count.store(-5, Ordering::Release);
         resource.base.available.store(true, Ordering::Release);
 
-        assert!(
-            !resource.hold(),
-            "Hold should fail when refCount is negative"
-        );
+        assert!(!resource.hold(), "Hold should fail when refCount is negative");
         assert_eq!(resource.get_ref_count(), -5, "Should rollback increment");
     }
 
@@ -314,11 +305,7 @@ mod tests {
         resource.shutdown(50);
 
         let count = resource.get_ref_count();
-        assert!(
-            count <= -1000,
-            "Should force negative after timeout, got {}",
-            count
-        );
+        assert!(count <= -1000, "Should force negative after timeout, got {}", count);
     }
 
     #[test]
@@ -330,11 +317,7 @@ mod tests {
         thread::sleep(Duration::from_millis(10));
         resource.shutdown(1000); // Should NOT force yet
 
-        assert_eq!(
-            resource.get_ref_count(),
-            1,
-            "Should not force before timeout"
-        );
+        assert_eq!(resource.get_ref_count(), 1, "Should not force before timeout");
     }
 
     #[test]
@@ -342,18 +325,12 @@ mod tests {
         let resource = ReferenceResourceCounter::new();
         let timestamp_after_first = {
             resource.shutdown(1000);
-            resource
-                .base
-                .first_shutdown_timestamp
-                .load(Ordering::Acquire)
+            resource.base.first_shutdown_timestamp.load(Ordering::Acquire)
         };
 
         thread::sleep(Duration::from_millis(10));
         resource.shutdown(1000);
-        let timestamp_after_second = resource
-            .base
-            .first_shutdown_timestamp
-            .load(Ordering::Acquire);
+        let timestamp_after_second = resource.base.first_shutdown_timestamp.load(Ordering::Acquire);
 
         assert_eq!(
             timestamp_after_first, timestamp_after_second,
@@ -393,11 +370,7 @@ mod tests {
         resource.release(); // refCount = 1
         resource.release(); // refCount = 0, triggers cleanup
 
-        assert_eq!(
-            cleanup_count.load(Ordering::SeqCst),
-            1,
-            "Cleanup called once"
-        );
+        assert_eq!(cleanup_count.load(Ordering::SeqCst), 1, "Cleanup called once");
 
         // Additional releases should not trigger cleanup again
         resource.release(); // refCount = -1
@@ -431,11 +404,7 @@ mod tests {
             handle.join().unwrap();
         }
 
-        assert_eq!(
-            resource.get_ref_count(),
-            1,
-            "Should return to initial state"
-        );
+        assert_eq!(resource.get_ref_count(), 1, "Should return to initial state");
     }
 
     #[test]

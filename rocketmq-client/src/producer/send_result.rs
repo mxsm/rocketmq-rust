@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -155,13 +152,159 @@ impl std::fmt::Display for SendResult {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "SendResult [sendStatus={:?}, msgId={:?}, offsetMsgId={:?}, messageQueue={:?}, \
-             queueOffset={}]",
-            self.send_status,
-            self.msg_id,
-            self.offset_msg_id,
-            self.message_queue,
-            self.queue_offset,
+            "SendResult [sendStatus={:?}, msgId={:?}, offsetMsgId={:?}, messageQueue={:?}, queueOffset={}]",
+            self.send_status, self.msg_id, self.offset_msg_id, self.message_queue, self.queue_offset,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_send_result_default() {
+        let result = SendResult::default();
+        assert_eq!(result.send_status, SendStatus::SendOk);
+        assert!(result.msg_id.is_none());
+        assert!(result.message_queue.is_none());
+        assert_eq!(result.queue_offset, 0);
+        assert!(result.transaction_id.is_none());
+        assert!(result.offset_msg_id.is_none());
+        assert!(result.region_id.is_none());
+        assert!(result.is_trace_on());
+        assert!(result.get_raw_resp_body().is_none());
+    }
+
+    #[test]
+    fn test_send_result_new() {
+        let send_status = SendStatus::SendOk;
+        let msg_id = Some(CheetahString::from("msg_id"));
+        let offset_msg_id = Some("offset_msg_id".to_string());
+        let message_queue = Some(MessageQueue::default());
+        let queue_offset = 123;
+
+        let result = SendResult::new(
+            send_status,
+            msg_id.clone(),
+            offset_msg_id.clone(),
+            message_queue.clone(),
+            queue_offset,
+        );
+
+        assert_eq!(result.send_status, send_status);
+        assert_eq!(result.msg_id, msg_id);
+        assert_eq!(result.message_queue, message_queue);
+        assert_eq!(result.queue_offset, queue_offset);
+        assert!(result.transaction_id.is_none());
+        assert_eq!(result.offset_msg_id, offset_msg_id);
+        assert!(result.region_id.is_none());
+        assert!(result.is_trace_on());
+        assert!(result.get_raw_resp_body().is_none());
+    }
+
+    #[test]
+    fn test_send_result_new_with_additional_fields() {
+        let send_status = SendStatus::SendOk;
+        let msg_id = Some(CheetahString::from("msg_id"));
+        let message_queue = Some(MessageQueue::default());
+        let queue_offset = 123;
+        let transaction_id = Some("transaction_id".to_string());
+        let offset_msg_id = Some("offset_msg_id".to_string());
+        let region_id = Some("region_id".to_string());
+
+        let result = SendResult::new_with_additional_fields(
+            send_status,
+            msg_id.clone(),
+            message_queue.clone(),
+            queue_offset,
+            transaction_id.clone(),
+            offset_msg_id.clone(),
+            region_id.clone(),
+        );
+
+        assert_eq!(result.send_status, send_status);
+        assert_eq!(result.msg_id, msg_id);
+        assert_eq!(result.message_queue, message_queue);
+        assert_eq!(result.queue_offset, queue_offset);
+        assert_eq!(result.transaction_id, transaction_id);
+        assert_eq!(result.offset_msg_id, offset_msg_id);
+        assert_eq!(result.region_id, region_id);
+        assert!(result.is_trace_on());
+        assert!(result.get_raw_resp_body().is_none());
+    }
+
+    #[test]
+    fn test_send_result_setters_and_getters() {
+        let mut result = SendResult::default();
+
+        result.set_trace_on(false);
+        assert!(!result.is_trace_on());
+
+        result.set_region_id("region_id".to_string());
+        assert_eq!(result.region_id, Some("region_id".to_string()));
+
+        result.set_msg_id(CheetahString::from("msg_id"));
+        assert_eq!(result.msg_id, Some(CheetahString::from("msg_id")));
+
+        result.set_send_status(SendStatus::FlushDiskTimeout);
+        assert_eq!(result.send_status, SendStatus::FlushDiskTimeout);
+
+        let mq = MessageQueue::default();
+        result.set_message_queue(mq.clone());
+        assert_eq!(result.message_queue, Some(mq));
+
+        result.set_queue_offset(456);
+        assert_eq!(result.queue_offset, 456);
+
+        result.set_transaction_id("transaction_id".to_string());
+        assert_eq!(result.transaction_id, Some("transaction_id".to_string()));
+
+        result.set_offset_msg_id("offset_msg_id".to_string());
+        assert_eq!(result.offset_msg_id, Some("offset_msg_id".to_string()));
+
+        let body = vec![1, 2, 3];
+        result.set_raw_resp_body(body.clone());
+        assert_eq!(result.get_raw_resp_body(), Some(body.as_slice()));
+    }
+
+    #[test]
+    fn test_send_result_serialization_and_deserialization() {
+        let send_status = SendStatus::SendOk;
+        let msg_id = Some(CheetahString::from("msg_id"));
+        let offset_msg_id = Some("offset_msg_id".to_string());
+        let message_queue = Some(MessageQueue::default());
+        let queue_offset = 123;
+
+        let result = SendResult::new(
+            send_status,
+            msg_id.clone(),
+            offset_msg_id.clone(),
+            message_queue.clone(),
+            queue_offset,
+        );
+
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: SendResult = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.send_status, result.send_status);
+        assert_eq!(deserialized.msg_id, result.msg_id);
+        assert_eq!(deserialized.message_queue, result.message_queue);
+        assert_eq!(deserialized.queue_offset, result.queue_offset);
+        assert_eq!(deserialized.transaction_id, result.transaction_id);
+        assert_eq!(deserialized.offset_msg_id, result.offset_msg_id);
+        assert_eq!(deserialized.region_id, result.region_id);
+        assert_eq!(deserialized.is_trace_on(), result.is_trace_on());
+        assert_eq!(deserialized.get_raw_resp_body(), result.get_raw_resp_body());
+    }
+
+    #[test]
+    fn test_send_result_display() {
+        let result = SendResult::default();
+        let display = format!("{}", result);
+        assert_eq!(
+            display,
+            "SendResult [sendStatus=SendOk, msgId=None, offsetMsgId=None, messageQueue=None, queueOffset=0]"
+        );
     }
 }

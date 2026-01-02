@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 
@@ -74,9 +71,7 @@ impl CommandExecute for UpdateTopicPermSubCommand {
     async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         if self.broker_addr.is_none() && self.cluster_name.is_none() {
             return Err(RocketMQError::IllegalArgument(
-                "UpdateTopicPermSubCommand: Either brokerAddr (-b) or clusterName (-c) must be \
-                 provided"
-                    .into(),
+                "UpdateTopicPermSubCommand: Either brokerAddr (-b) or clusterName (-c) must be provided".into(),
             ));
         }
 
@@ -93,14 +88,9 @@ impl CommandExecute for UpdateTopicPermSubCommand {
             .client_config_mut()
             .set_instance_name(get_current_millis().to_string().into());
         let operation_result = async {
-            MQAdminExt::start(&mut default_mqadmin_ext)
-                .await
-                .map_err(|e| {
-                    RocketMQError::Internal(format!(
-                        "UpdateTopicPermSubCommand: Failed to start MQAdminExt: {}",
-                        e
-                    ))
-                })?;
+            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
+                RocketMQError::Internal(format!("UpdateTopicPermSubCommand: Failed to start MQAdminExt: {}", e))
+            })?;
             let topic = self.topic.trim();
             let topic_route_data = default_mqadmin_ext
                 .examine_topic_route_info(topic.into())
@@ -173,9 +163,7 @@ impl CommandExecute for UpdateTopicPermSubCommand {
                         .await
                         .map_err(|_e| {
                             RocketMQError::Internal(
-                                "UpdateTopicPermSubCommand error broker not exit or broker is not \
-                                 master!."
-                                    .to_string(),
+                                "UpdateTopicPermSubCommand error broker not exit or broker is not master!.".to_string(),
                             )
                         })?;
                     println!(
@@ -191,22 +179,19 @@ impl CommandExecute for UpdateTopicPermSubCommand {
                 let cluster_name = cluster_name.trim();
                 let cluster_info = default_mqadmin_ext.examine_broker_cluster_info().await?;
                 let master_set =
-                    CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name)
-                        .map_err(|_e| {
-                            RocketMQError::IllegalArgument(format!(
-                                "UpdateTopicPermSubCommand: Cluster '{}' not found",
-                                cluster_name
-                            ))
-                        })?;
+                    CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name).map_err(|_e| {
+                        RocketMQError::IllegalArgument(format!(
+                            "UpdateTopicPermSubCommand: Cluster '{}' not found",
+                            cluster_name
+                        ))
+                    })?;
                 for addr in master_set {
                     default_mqadmin_ext
                         .create_and_update_topic_config(addr.clone(), topic_config.clone())
                         .await
                         .map_err(|_e| {
                             RocketMQError::Internal(
-                                "UpdateTopicPermSubCommand error broker not exit or broker is not \
-                                 master!."
-                                    .to_string(),
+                                "UpdateTopicPermSubCommand error broker not exit or broker is not master!.".to_string(),
                             )
                         })?;
                     println!(
@@ -233,16 +218,9 @@ mod tests {
     #[test]
     fn test_update_topic_perm_sub_command_parse() {
         // Test parsing with broker address
-        let args = UpdateTopicPermSubCommand::try_parse_from([
-            "test",
-            "-b",
-            "127.0.0.1:10911",
-            "-t",
-            "TestTopic",
-            "-p",
-            "6",
-        ])
-        .unwrap();
+        let args =
+            UpdateTopicPermSubCommand::try_parse_from(["test", "-b", "127.0.0.1:10911", "-t", "TestTopic", "-p", "6"])
+                .unwrap();
 
         assert_eq!(args.broker_addr, Some("127.0.0.1:10911".to_string()));
         assert_eq!(args.cluster_name, None);
@@ -253,16 +231,9 @@ mod tests {
     #[test]
     fn test_update_topic_perm_sub_command_parse_with_cluster() {
         // Test parsing with cluster name
-        let args = UpdateTopicPermSubCommand::try_parse_from([
-            "test",
-            "-c",
-            "DefaultCluster",
-            "-t",
-            "TestTopic",
-            "-p",
-            "4",
-        ])
-        .unwrap();
+        let args =
+            UpdateTopicPermSubCommand::try_parse_from(["test", "-c", "DefaultCluster", "-t", "TestTopic", "-p", "4"])
+                .unwrap();
 
         assert_eq!(args.broker_addr, None);
         assert_eq!(args.cluster_name, Some("DefaultCluster".to_string()));
@@ -306,10 +277,7 @@ mod tests {
 
         let result = command.execute(None).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid topic name"));
+        assert!(result.unwrap_err().to_string().contains("Invalid topic name"));
     }
 
     #[test]

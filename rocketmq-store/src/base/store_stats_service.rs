@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -105,9 +102,7 @@ impl StoreStatsService {
             get_times_miss_list: Mutex::new(LinkedList::new()),
             transferred_msg_count_list: Mutex::new(LinkedList::new()),
             put_message_distribute_time: Arc::new((0..13).map(|_| AtomicUsize::new(0)).collect()),
-            last_put_message_distribute_time: Arc::new(
-                (0..13).map(|_| AtomicUsize::new(0)).collect(),
-            ),
+            last_put_message_distribute_time: Arc::new((0..13).map(|_| AtomicUsize::new(0)).collect()),
             message_store_boot_timestamp: get_current_millis(),
             put_message_entire_time_max: Arc::new(AtomicUsize::new(0)),
             get_message_entire_time_max: Arc::new(AtomicUsize::new(0)),
@@ -195,16 +190,12 @@ impl StoreStatsService {
         result.insert("runtime".to_string(), self.get_format_runtime());
         result.insert(
             "putMessageEntireTimeMax".to_string(),
-            self.put_message_entire_time_max
-                .load(Ordering::Relaxed)
-                .to_string(),
+            self.put_message_entire_time_max.load(Ordering::Relaxed).to_string(),
         );
         result.insert("putMessageTimesTotal".to_string(), total_times.to_string());
         result.insert(
             "putMessageFailedTimes".to_string(),
-            self.put_message_failed_times
-                .load(Ordering::Relaxed)
-                .to_string(),
+            self.put_message_failed_times.load(Ordering::Relaxed).to_string(),
         );
         result.insert(
             "putMessageSizeTotal".to_string(),
@@ -224,18 +215,13 @@ impl StoreStatsService {
         );
         result.insert(
             "getMessageEntireTimeMax".to_string(),
-            self.get_message_entire_time_max
-                .load(Ordering::Relaxed)
-                .to_string(),
+            self.get_message_entire_time_max.load(Ordering::Relaxed).to_string(),
         );
         result.insert("putTps".to_string(), self.get_put_tps());
         result.insert("getFoundTps".to_string(), self.get_get_found_tps());
         result.insert("getMissTps".to_string(), self.get_get_miss_tps());
         result.insert("getTotalTps".to_string(), self.get_get_total_tps());
-        result.insert(
-            "getTransferredTps".to_string(),
-            self.get_get_transferred_tps(),
-        );
+        result.insert("getTransferredTps".to_string(), self.get_get_transferred_tps());
         result.insert(
             "putLatency99".to_string(),
             format!("{:.2}", self.find_put_message_entire_time_px(0.99)),
@@ -252,18 +238,12 @@ impl StoreStatsService {
         let last_buckets = &self.last_buckets;
         let start = Instant::now();
         let mut result = 0.0;
-        let total_request: u64 = last_buckets
-            .values()
-            .map(|v| v.load(Ordering::SeqCst) as u64)
-            .sum();
+        let total_request: u64 = last_buckets.values().map(|v| v.load(Ordering::SeqCst) as u64).sum();
         let px_index = (total_request as f64 * px).round() as u64;
         let mut pass_count = 0;
         let bucket_values: Vec<_> = last_buckets.keys().collect();
         for i in 0..bucket_values.len() {
-            let count = last_buckets
-                .get(bucket_values[i])
-                .unwrap()
-                .load(Ordering::SeqCst) as u64;
+            let count = last_buckets.get(bucket_values[i]).unwrap().load(Ordering::SeqCst) as u64;
             if px_index <= pass_count + count {
                 let relative_index = px_index - pass_count;
                 if i == 0 {
@@ -278,8 +258,7 @@ impl StoreStatsService {
                         + if count == 0 {
                             0.0
                         } else {
-                            (*bucket_values[i] as f64 - last_bucket) * relative_index as f64
-                                / count as f64
+                            (*bucket_values[i] as f64 - last_bucket) * relative_index as f64 / count as f64
                         };
                 }
                 break;
@@ -308,9 +287,7 @@ impl StoreStatsService {
         let transferred_msg_count_vec: Vec<_> = transferred_msg_count_list.iter().collect();
         if let Some(last) = transferred_msg_count_vec.last() {
             if transferred_msg_count_vec.len() > time {
-                if let Some(last_before) =
-                    transferred_msg_count_vec.get(transferred_msg_count_vec.len() - (time + 1))
-                {
+                if let Some(last_before) = transferred_msg_count_vec.get(transferred_msg_count_vec.len() - (time + 1)) {
                     result = format!("{}", CallSnapshot::get_tps(last_before, last));
                 }
             }
@@ -341,9 +318,7 @@ impl StoreStatsService {
             let get_times_found_vec: Vec<_> = get_times_found_list.iter().collect();
             if let Some(last) = get_times_found_vec.last() {
                 if get_times_found_vec.len() > time {
-                    if let Some(last_before) =
-                        get_times_found_vec.get(get_times_found_vec.len() - (time + 1))
-                    {
+                    if let Some(last_before) = get_times_found_vec.get(get_times_found_vec.len() - (time + 1)) {
                         found = CallSnapshot::get_tps(last_before, last);
                     }
                 }
@@ -355,9 +330,7 @@ impl StoreStatsService {
             let get_times_miss_vec: Vec<_> = get_times_miss_list.iter().collect();
             if let Some(last) = get_times_miss_vec.last() {
                 if get_times_miss_vec.len() > time {
-                    if let Some(last_before) =
-                        get_times_miss_vec.get(get_times_miss_vec.len() - (time + 1))
-                    {
+                    if let Some(last_before) = get_times_miss_vec.get(get_times_miss_vec.len() - (time + 1)) {
                         miss = CallSnapshot::get_tps(last_before, last);
                     }
                 }
@@ -386,9 +359,7 @@ impl StoreStatsService {
         let get_times_miss_vec: Vec<_> = get_times_miss_list.iter().collect();
         if let Some(last) = get_times_miss_vec.last() {
             if get_times_miss_vec.len() > time {
-                if let Some(last_before) =
-                    get_times_miss_vec.get(get_times_miss_vec.len() - (time + 1))
-                {
+                if let Some(last_before) = get_times_miss_vec.get(get_times_miss_vec.len() - (time + 1)) {
                     result = format!("{}", CallSnapshot::get_tps(last_before, last));
                 }
             }
@@ -416,9 +387,7 @@ impl StoreStatsService {
         let get_times_found_vec: Vec<_> = get_times_found_list.iter().collect();
         if let Some(last) = get_times_found_vec.last() {
             if get_times_found_vec.len() > time {
-                if let Some(last_before) =
-                    get_times_found_vec.get(get_times_found_vec.len() - (time + 1))
-                {
+                if let Some(last_before) = get_times_found_vec.get(get_times_found_vec.len() - (time + 1)) {
                     result = format!("{}", CallSnapshot::get_tps(last_before, last));
                 }
             }
@@ -467,10 +436,7 @@ impl StoreStatsService {
         let mut result = String::new();
         for (i, time) in times.iter().enumerate() {
             let value = time.load(Ordering::Relaxed);
-            result.push_str(&format!(
-                "{}:{}, ",
-                PUT_MESSAGE_ENTIRE_TIME_MAX_DESC[i], value
-            ));
+            result.push_str(&format!("{}:{}, ", PUT_MESSAGE_ENTIRE_TIME_MAX_DESC[i], value));
         }
         result
     }
@@ -526,11 +492,7 @@ impl fmt::Display for StoreStatsService {
             "\tgetPutMessageFailedTimes: {}",
             self.get_put_message_failed_times().load(Ordering::Relaxed)
         )?;
-        writeln!(
-            f,
-            "\tputMessageSizeTotal: {}",
-            self.get_put_message_size_total()
-        )?;
+        writeln!(f, "\tputMessageSizeTotal: {}", self.get_put_message_size_total())?;
         writeln!(
             f,
             "\tputMessageDistributeTime: {}",

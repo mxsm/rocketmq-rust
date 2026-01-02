@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashSet;
 use std::fs;
@@ -49,13 +46,10 @@ impl PlainPermissionManager {
             .to_string_lossy()
             .to_string();
 
-        let acl_file_prop = std::env::var("rocketmq.acl.plain.file")
-            .unwrap_or_else(|_| "conf/plain_acl.yml".to_string());
+        let acl_file_prop =
+            std::env::var("rocketmq.acl.plain.file").unwrap_or_else(|_| "conf/plain_acl.yml".to_string());
 
-        let default_acl_file = Path::new(&file_home)
-            .join(acl_file_prop)
-            .to_string_lossy()
-            .to_string();
+        let default_acl_file = Path::new(&file_home).join(acl_file_prop).to_string_lossy().to_string();
 
         let mut manager = Self {
             file_home,
@@ -75,10 +69,7 @@ impl PlainPermissionManager {
     pub fn get_all_acl_files<P: AsRef<Path>>(&self, path: P) -> Vec<String> {
         let path = path.as_ref();
         if !path.exists() {
-            tracing::info!(
-                "The default acl dir {} is not exist",
-                path.to_string_lossy()
-            );
+            tracing::info!("The default acl dir {} is not exist", path.to_string_lossy());
             return Vec::new();
         }
 
@@ -118,9 +109,7 @@ impl PlainPermissionManager {
 
         self.file_list = self.get_all_acl_files(&self.default_acl_dir);
 
-        if Path::new(&self.default_acl_file).exists()
-            && !self.file_list.contains(&self.default_acl_file)
-        {
+        if Path::new(&self.default_acl_file).exists() && !self.file_list.contains(&self.default_acl_file) {
             self.file_list.push(self.default_acl_file.clone());
         }
 
@@ -130,11 +119,10 @@ impl PlainPermissionManager {
     fn assure_acl_config_files_exist(&self) -> RocketMQResult<()> {
         let default_acl_path = Path::new(&self.default_acl_file);
         if !default_acl_path.exists() {
-            // create file, similar to Java implementation
+            // Create file if it doesn't exist
             match File::create(default_acl_path) {
                 Ok(_) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => { /* maybe created by other threads */
-                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => { /* maybe created by other threads */ }
                 Err(e) => {
                     tracing::error!("Error in creating {}: {:?}", self.default_acl_file, e);
                     return Err(e.into());
@@ -164,14 +152,14 @@ impl PlainPermissionManager {
                 RocketMQError::IO(e)
             })?;
 
-            let plain_acl_conf_data: PlainAccessData =
-                serde_yaml::from_str(&content).map_err(|e| {
-                    tracing::error!("Failed to parse YAML {}: {:?}", path, e);
-                    // map to unified serialization error
-                    rocketmq_error::RocketMQError::Serialization(
-                        rocketmq_error::SerializationError::decode_failed("YAML", e.to_string()),
-                    )
-                })?;
+            let plain_acl_conf_data: PlainAccessData = serde_yaml::from_str(&content).map_err(|e| {
+                tracing::error!("Failed to parse YAML {}: {:?}", path, e);
+                // map to unified serialization error
+                rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::decode_failed(
+                    "YAML",
+                    e.to_string(),
+                ))
+            })?;
 
             let global_white_addrs = plain_acl_conf_data.global_white_remote_addresses();
             if !global_white_addrs.is_empty() {
@@ -259,11 +247,7 @@ accounts:
         let mut mgr = PlainPermissionManager::new();
         mgr.file_home = root.to_string_lossy().to_string();
         mgr.default_acl_dir = conf_acl.to_string_lossy().to_string();
-        mgr.default_acl_file = root
-            .join("conf")
-            .join("plain_acl.yml")
-            .to_string_lossy()
-            .to_string();
+        mgr.default_acl_file = root.join("conf").join("plain_acl.yml").to_string_lossy().to_string();
 
         // test discovery
         let files = mgr.get_all_acl_files(&mgr.default_acl_dir);

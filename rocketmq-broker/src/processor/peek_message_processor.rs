@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
@@ -62,8 +59,7 @@ impl<MS: MessageStore> RequestProcessor for PeekMessageProcessor<MS> {
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_internal(channel, ctx, request, true)
-            .await
+        self.process_request_internal(channel, ctx, request, true).await
     }
 }
 
@@ -81,36 +77,31 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
             .map(|store| store.now())
             .unwrap_or(0);
 
-        let mut response = RemotingCommand::create_response_command_with_header(
-            PopMessageResponseHeader::default(),
-        )
-        .set_opaque(request.opaque());
+        let mut response = RemotingCommand::create_response_command_with_header(PopMessageResponseHeader::default())
+            .set_opaque(request.opaque());
 
         // Decode request header
-        let request_header =
-            match request.decode_command_custom_header::<PeekMessageRequestHeader>() {
-                Ok(header) => header,
-                Err(e) => {
-                    error!(
-                        "Failed to decode PeekMessageRequestHeader: {:?}, channel: {}",
-                        e,
-                        channel.remote_address()
-                    );
-                    return Ok(Some(
-                        response
-                            .set_code(ResponseCode::RequestCodeNotSupported)
-                            .set_remark(format!("decode request header failed: {:?}", e)),
-                    ));
-                }
-            };
+        let request_header = match request.decode_command_custom_header::<PeekMessageRequestHeader>() {
+            Ok(header) => header,
+            Err(e) => {
+                error!(
+                    "Failed to decode PeekMessageRequestHeader: {:?}, channel: {}",
+                    e,
+                    channel.remote_address()
+                );
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::RequestCodeNotSupported)
+                        .set_remark(format!("decode request header failed: {:?}", e)),
+                ));
+            }
+        };
 
         if !PermName::is_readable(self.broker_runtime_inner.broker_config().broker_permission) {
-            let response = response
-                .set_code(ResponseCode::NoPermission)
-                .set_remark(format!(
-                    "the broker[{}] peeking message is forbidden",
-                    self.broker_runtime_inner.broker_config().broker_ip1()
-                ));
+            let response = response.set_code(ResponseCode::NoPermission).set_remark(format!(
+                "the broker[{}] peeking message is forbidden",
+                self.broker_runtime_inner.broker_config().broker_ip1()
+            ));
             return Ok(Some(response));
         }
 
@@ -125,25 +116,21 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
                 request_header.topic,
                 channel.remote_address()
             );
-            let response = response
-                .set_code(ResponseCode::TopicNotExist)
-                .set_remark(format!(
-                    "topic[{}] not exist, apply first please! {}",
-                    request_header.topic,
-                    FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
-                ));
+            let response = response.set_code(ResponseCode::TopicNotExist).set_remark(format!(
+                "topic[{}] not exist, apply first please! {}",
+                request_header.topic,
+                FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
+            ));
             return Ok(Some(response));
         }
 
         let topic_config = topic_config.unwrap();
 
         if !PermName::is_readable(topic_config.perm) {
-            let response = response
-                .set_code(ResponseCode::NoPermission)
-                .set_remark(format!(
-                    "the topic[{}] peeking message is forbidden",
-                    request_header.topic
-                ));
+            let response = response.set_code(ResponseCode::NoPermission).set_remark(format!(
+                "the topic[{}] peeking message is forbidden",
+                request_header.topic
+            ));
             return Ok(Some(response));
         }
 
@@ -156,9 +143,7 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
                 channel.remote_address()
             );
             warn!("{}", error_info);
-            let response = response
-                .set_code(ResponseCode::SystemError)
-                .set_remark(error_info);
+            let response = response.set_code(ResponseCode::SystemError).set_remark(error_info);
             return Ok(Some(response));
         }
 
@@ -181,22 +166,18 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
         let subscription_group_config = subscription_group_config.unwrap();
 
         if !subscription_group_config.consume_enable() {
-            let response = response
-                .set_code(ResponseCode::NoPermission)
-                .set_remark(format!(
-                    "subscription group no permission, {}",
-                    request_header.consumer_group
-                ));
+            let response = response.set_code(ResponseCode::NoPermission).set_remark(format!(
+                "subscription group no permission, {}",
+                request_header.consumer_group
+            ));
             return Ok(Some(response));
         }
 
         // Random seed for queue selection
         let random_q = self.random_counter.fetch_add(1, Ordering::Relaxed) % 100;
-        let revive_qid =
-            (random_q % self.broker_runtime_inner.broker_config().revive_queue_num) as i32;
+        let revive_qid = (random_q % self.broker_runtime_inner.broker_config().revive_queue_num) as i32;
 
-        let mut get_message_result =
-            GetMessageResult::new_result_size(request_header.max_msg_nums as usize);
+        let mut get_message_result = GetMessageResult::new_result_size(request_header.max_msg_nums as usize);
         let mut rest_num: i64 = 0;
         let pop_time = self
             .broker_runtime_inner
@@ -250,9 +231,7 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
                 .await;
         }
 
-        if !need_retry
-            && get_message_result.message_mapped_list().len() < request_header.max_msg_nums as usize
-        {
+        if !need_retry && get_message_result.message_mapped_list().len() < request_header.max_msg_nums as usize {
             rest_num = self
                 .peek_retry_topic(
                     &request_header,
@@ -271,8 +250,7 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
             response = response.set_code(ResponseCode::PullNotFound);
         }
 
-        if let Some(response_header) = response.read_custom_header_mut::<PopMessageResponseHeader>()
-        {
+        if let Some(response_header) = response.read_custom_header_mut::<PopMessageResponseHeader>() {
             response_header.rest_num = rest_num as u64;
         }
 
@@ -286,30 +264,22 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
         match response.code_ref() {
             &code if code == ResponseCode::Success as i32 => {
                 // Record statistics
-                self.broker_runtime_inner
-                    .broker_stats_manager()
-                    .inc_group_get_nums(
-                        &request_header.consumer_group,
-                        &request_header.topic,
-                        get_message_result.message_count(),
-                    );
-                self.broker_runtime_inner
-                    .broker_stats_manager()
-                    .inc_group_get_size(
-                        &request_header.consumer_group,
-                        &request_header.topic,
-                        get_message_result.buffer_total_size(),
-                    );
+                self.broker_runtime_inner.broker_stats_manager().inc_group_get_nums(
+                    &request_header.consumer_group,
+                    &request_header.topic,
+                    get_message_result.message_count(),
+                );
+                self.broker_runtime_inner.broker_stats_manager().inc_group_get_size(
+                    &request_header.consumer_group,
+                    &request_header.topic,
+                    get_message_result.buffer_total_size(),
+                );
                 self.broker_runtime_inner
                     .broker_stats_manager()
                     .inc_broker_get_nums(&request_header.topic, get_message_result.message_count());
 
                 // Transfer messages to response body
-                if self
-                    .broker_runtime_inner
-                    .broker_config()
-                    .transfer_msg_by_heap
-                {
+                if self.broker_runtime_inner.broker_config().transfer_msg_by_heap {
                     // Transfer by heap
                     let body = self.read_get_message_result(
                         &get_message_result,
@@ -318,19 +288,17 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
                         request_header.queue_id,
                     );
 
-                    self.broker_runtime_inner
-                        .broker_stats_manager()
-                        .inc_group_get_latency(
-                            &request_header.consumer_group,
-                            &request_header.topic,
-                            request_header.queue_id,
-                            (self
-                                .broker_runtime_inner
-                                .message_store()
-                                .map(|store| store.now())
-                                .unwrap_or(0)
-                                - begin_time_mills) as i32,
-                        );
+                    self.broker_runtime_inner.broker_stats_manager().inc_group_get_latency(
+                        &request_header.consumer_group,
+                        &request_header.topic,
+                        request_header.queue_id,
+                        (self
+                            .broker_runtime_inner
+                            .message_store()
+                            .map(|store| store.now())
+                            .unwrap_or(0)
+                            - begin_time_mills) as i32,
+                    );
 
                     if let Some(body_bytes) = body {
                         response = response.set_body(body_bytes.to_vec());
@@ -369,9 +337,7 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
         let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
             request_header.topic.as_str(),
             request_header.consumer_group.as_str(),
-            self.broker_runtime_inner
-                .broker_config()
-                .enable_retry_topic_v2,
+            self.broker_runtime_inner.broker_config().enable_retry_topic_v2,
         ));
 
         let retry_topic_config = self
@@ -418,9 +384,7 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
             CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
                 request_header.topic.as_str(),
                 request_header.consumer_group.as_str(),
-                self.broker_runtime_inner
-                    .broker_config()
-                    .enable_retry_topic_v2,
+                self.broker_runtime_inner.broker_config().enable_retry_topic_v2,
             ))
         } else {
             request_header.topic.clone()
@@ -446,8 +410,7 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
         }
 
         // Calculate how many messages to fetch
-        let max_to_fetch =
-            request_header.max_msg_nums - get_message_result.message_mapped_list().len() as i32;
+        let max_to_fetch = request_header.max_msg_nums - get_message_result.message_mapped_list().len() as i32;
 
         // Get messages from store
         let mut offset_to_use = offset;
@@ -466,8 +429,7 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
             // Handle offset correction if needed
             if matches!(
                 tmp_result.status(),
-                Some(GetMessageStatus::OffsetTooSmall)
-                    | Some(GetMessageStatus::OffsetOverflowBadly)
+                Some(GetMessageStatus::OffsetTooSmall) | Some(GetMessageStatus::OffsetOverflowBadly)
             ) {
                 offset_to_use = tmp_result.next_begin_offset();
                 tmp_result = message_store
@@ -492,17 +454,12 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
         rest_num
     }
 
-    async fn get_pop_offset(
-        &self,
-        topic: &CheetahString,
-        consumer_group: &CheetahString,
-        queue_id: i32,
-    ) -> i64 {
+    async fn get_pop_offset(&self, topic: &CheetahString, consumer_group: &CheetahString, queue_id: i32) -> i64 {
         // Get consumer offset
-        let mut offset = self
-            .broker_runtime_inner
-            .consumer_offset_manager()
-            .query_offset(consumer_group, topic, queue_id);
+        let mut offset =
+            self.broker_runtime_inner
+                .consumer_offset_manager()
+                .query_offset(consumer_group, topic, queue_id);
 
         // If no consumer offset, use min offset
         if offset < 0 {
@@ -512,18 +469,17 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
         }
 
         // Get pop buffer offset
-        let buffer_offset =
-            if let Some(processor) = self.broker_runtime_inner.pop_message_processor() {
-                let service = processor.pop_buffer_merge_service();
-                let key = CheetahString::from_string(KeyBuilder::build_polling_key(
-                    topic.as_str(),
-                    consumer_group.as_str(),
-                    queue_id,
-                ));
-                service.get_latest_offset(&key).await
-            } else {
-                -1
-            };
+        let buffer_offset = if let Some(processor) = self.broker_runtime_inner.pop_message_processor() {
+            let service = processor.pop_buffer_merge_service();
+            let key = CheetahString::from_string(KeyBuilder::build_polling_key(
+                topic.as_str(),
+                consumer_group.as_str(),
+                queue_id,
+            ));
+            service.get_latest_offset(&key).await
+        } else {
+            -1
+        };
 
         if buffer_offset < 0 {
             offset
@@ -539,14 +495,11 @@ impl<MS: MessageStore> PeekMessageProcessor<MS> {
         _topic: &str,
         _queue_id: i32,
     ) -> Option<Bytes> {
-        if get_message_result.buffer_total_size() <= 0
-            || get_message_result.message_mapped_list().is_empty()
-        {
+        if get_message_result.buffer_total_size() <= 0 || get_message_result.message_mapped_list().is_empty() {
             return None;
         }
 
-        let mut bytes_mut =
-            BytesMut::with_capacity(get_message_result.buffer_total_size() as usize);
+        let mut bytes_mut = BytesMut::with_capacity(get_message_result.buffer_total_size() as usize);
 
         for msg in get_message_result.message_mapped_list() {
             if let Some(mapped_file) = &msg.mapped_file {

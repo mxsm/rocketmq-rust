@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::hash::Hash;
 
@@ -27,9 +24,7 @@ use crate::migration::alc::plain_access_config::PlainAccessConfig;
 #[serde(default)]
 pub struct PlainAccessData {
     pub global_white_remote_addresses: Vec<CheetahString>,
-
     pub accounts: Vec<PlainAccessConfig>,
-
     pub data_version: Vec<DataVersion>,
 }
 
@@ -38,6 +33,7 @@ pub struct DataVersion {
     pub timestamp: u64,
     pub counter: u64,
 }
+
 impl PlainAccessData {
     pub fn new() -> Self {
         Self::default()
@@ -75,5 +71,77 @@ impl PlainAccessData {
 
     pub fn latest_version(&self) -> Option<&DataVersion> {
         self.data_version.last()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_access_data_default_and_new() {
+        let data = PlainAccessData::default();
+        assert!(data.global_white_remote_addresses().is_empty());
+        assert!(data.accounts().is_empty());
+        assert!(data.data_version().is_empty());
+
+        let data = PlainAccessData::new();
+        assert!(data.global_white_remote_addresses().is_empty());
+        assert!(data.accounts().is_empty());
+        assert!(data.data_version().is_empty());
+    }
+
+    #[test]
+    fn plain_access_data_setters_and_getters() {
+        let mut data = PlainAccessData::new();
+        let addrs = vec![CheetahString::from("127.0.0.1")];
+        data.set_global_white_remote_addresses(addrs.clone());
+        assert_eq!(data.global_white_remote_addresses(), addrs.as_slice());
+
+        let accounts = vec![PlainAccessConfig::default()];
+        data.set_accounts(accounts.clone());
+        assert_eq!(data.accounts(), accounts.as_slice());
+
+        let versions = vec![DataVersion {
+            timestamp: 100,
+            counter: 1,
+        }];
+        data.set_data_version(versions.clone());
+        assert_eq!(data.data_version(), versions.as_slice());
+    }
+
+    #[test]
+    fn plain_access_data_has_changed() {
+        let mut data1 = PlainAccessData::new();
+        let data2 = PlainAccessData::new();
+        assert!(!data1.has_changed(&data2));
+
+        data1.set_data_version(vec![DataVersion {
+            timestamp: 100,
+            counter: 1,
+        }]);
+        assert!(data1.has_changed(&data2));
+    }
+
+    #[test]
+    fn plain_access_data_latest_version() {
+        let mut data = PlainAccessData::new();
+        assert!(data.latest_version().is_none());
+
+        let version = DataVersion {
+            timestamp: 100,
+            counter: 1,
+        };
+        data.set_data_version(vec![version]);
+        assert_eq!(data.latest_version(), Some(&version));
+    }
+
+    #[test]
+    fn plain_access_data_serialization_and_deserialization() {
+        let mut data = PlainAccessData::new();
+        data.set_global_white_remote_addresses(vec![CheetahString::from("127.0.0.1")]);
+        let json = serde_json::to_string(&data).unwrap();
+        let deserialized: PlainAccessData = serde_json::from_str(&json).unwrap();
+        assert_eq!(data, deserialized);
     }
 }

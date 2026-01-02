@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -44,16 +41,10 @@ const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 pub(crate) struct TopicRouteInfoManager<MS: MessageStore> {
     pub(crate) lock: Arc<RocketMQTokioMutex<()>>,
     pub(crate) topic_route_table: ArcMut<HashMap<CheetahString /* Topic */, TopicRouteData>>,
-    pub(crate) broker_addr_table: ArcMut<
-        HashMap<
-            CheetahString, /* Broker Name */
-            HashMap<u64 /* brokerId */, CheetahString /* address */>,
-        >,
-    >,
-    pub(crate) topic_publish_info_table:
-        ArcMut<HashMap<CheetahString /* topic */, TopicPublishInfo>>,
-    pub(crate) topic_subscribe_info_table:
-        ArcMut<HashMap<CheetahString /* topic */, HashSet<MessageQueue>>>,
+    pub(crate) broker_addr_table:
+        ArcMut<HashMap<CheetahString /* Broker Name */, HashMap<u64 /* brokerId */, CheetahString /* address */>>>,
+    pub(crate) topic_publish_info_table: ArcMut<HashMap<CheetahString /* topic */, TopicPublishInfo>>,
+    pub(crate) topic_subscribe_info_table: ArcMut<HashMap<CheetahString /* topic */, HashSet<MessageQueue>>>,
     pub(crate) broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
@@ -145,8 +136,8 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
                 }
 
                 warn!(
-                    "TopicRouteInfoManager: updateTopicRouteInfoFromNameServer, \
-                     getTopicRouteInfoFromNameServer return null, Topic: {}.",
+                    "TopicRouteInfoManager: updateTopicRouteInfoFromNameServer, getTopicRouteInfoFromNameServer \
+                     return null, Topic: {}.",
                     topic
                 );
                 return;
@@ -169,11 +160,7 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
         self.topic_subscribe_info_table.mut_from_ref().remove(topic);
     }
 
-    fn update_subscribe_info_table(
-        &self,
-        topic: CheetahString,
-        topic_route_data: &TopicRouteData,
-    ) -> bool {
+    fn update_subscribe_info_table(&self, topic: CheetahString, topic_route_data: &TopicRouteData) -> bool {
         let mut tmp = TopicRouteData::from_existing(topic_route_data);
         tmp.topic_queue_mapping_by_broker = None;
         let new_subscribe_info = topic_route_data2topic_subscribe_info(topic.as_str(), &tmp);
@@ -195,11 +182,7 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
         true
     }
 
-    fn update_topic_route_table(
-        &self,
-        topic_route_data: &mut TopicRouteData,
-        topic: CheetahString,
-    ) -> bool {
+    fn update_topic_route_table(&self, topic_route_data: &mut TopicRouteData, topic: CheetahString) -> bool {
         let old = self.topic_route_table.get(&topic);
         let changed = topic_route_data.topic_route_data_changed(old);
         if !changed {
@@ -217,8 +200,7 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
                 .mut_from_ref()
                 .insert(bd.broker_name().clone(), bd.broker_addrs().clone());
         }
-        let mut publish_info =
-            topic_route_data2topic_publish_info(topic.as_str(), topic_route_data);
+        let mut publish_info = topic_route_data2topic_publish_info(topic.as_str(), topic_route_data);
         publish_info.have_topic_router_info = true;
         self.update_topic_publish_info(&topic, publish_info);
 
@@ -235,9 +217,7 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
 
     #[inline]
     fn update_topic_publish_info(&self, topic: &CheetahString, info: TopicPublishInfo) {
-        self.topic_publish_info_table
-            .mut_from_ref()
-            .insert(topic.clone(), info);
+        self.topic_publish_info_table.mut_from_ref().insert(topic.clone(), info);
     }
 
     #[inline]
@@ -250,10 +230,7 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
         }
     }
 
-    pub async fn try_to_find_topic_publish_info(
-        &self,
-        topic: &CheetahString,
-    ) -> Option<TopicPublishInfo> {
+    pub async fn try_to_find_topic_publish_info(&self, topic: &CheetahString) -> Option<TopicPublishInfo> {
         let mut topic_publish_info = self.topic_publish_info_table.get(topic).cloned();
         if topic_publish_info.is_none() || !topic_publish_info.as_ref().unwrap().ok() {
             self.update_topic_route_info_from_name_server_ext(topic, true, false)
@@ -263,10 +240,7 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
         topic_publish_info
     }
 
-    pub fn find_broker_address_in_publish(
-        &self,
-        broker_name: Option<&CheetahString>,
-    ) -> Option<CheetahString> {
+    pub fn find_broker_address_in_publish(&self, broker_name: Option<&CheetahString>) -> Option<CheetahString> {
         let broker_name = broker_name?;
         let map = self.broker_addr_table.get(broker_name);
         if let Some(map) = map {
@@ -309,10 +283,7 @@ impl<MS: MessageStore> TopicRouteInfoManager<MS> {
         broker_addr
     }
 
-    pub async fn get_topic_subscribe_info(
-        &self,
-        topic: &CheetahString,
-    ) -> Option<HashSet<MessageQueue>> {
+    pub async fn get_topic_subscribe_info(&self, topic: &CheetahString) -> Option<HashSet<MessageQueue>> {
         let mut queues = self.topic_subscribe_info_table.get(topic).cloned();
         if queues.as_ref().is_none_or(|q| q.is_empty()) {
             self.update_topic_route_info_from_name_server_ext(topic, false, true)

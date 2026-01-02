@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicI64;
@@ -95,11 +92,8 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
         let queue_dir = PathBuf::from(store_path.as_str())
             .join(topic.as_str())
             .join(queue_id.to_string());
-        let mapped_file_queue = MappedFileQueue::new(
-            queue_dir.to_string_lossy().to_string(),
-            mapped_file_size as u64,
-            None,
-        );
+        let mapped_file_queue =
+            MappedFileQueue::new(queue_dir.to_string_lossy().to_string(), mapped_file_size as u64, None);
         let consume_queue_ext = if message_store_config.enable_consume_queue_ext {
             Some(ConsumeQueueExt::new(
                 topic.clone(),
@@ -152,10 +146,8 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
             mapped_file.set_flushed_position(0);
 
             for index in 0..(mapped_file_size / CQ_STORE_UNIT_SIZE) {
-                let bytes_option = mapped_file.get_bytes(
-                    (index * CQ_STORE_UNIT_SIZE) as usize,
-                    CQ_STORE_UNIT_SIZE as usize,
-                );
+                let bytes_option =
+                    mapped_file.get_bytes((index * CQ_STORE_UNIT_SIZE) as usize, CQ_STORE_UNIT_SIZE as usize);
                 if bytes_option.is_none() {
                     break;
                 }
@@ -200,10 +192,8 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
                 if delete_file {
                     self.mapped_file_queue.delete_last_mapped_file();
                 } else {
-                    self.mapped_file_queue.delete_expired_file(vec![self
-                        .mapped_file_queue
-                        .get_last_mapped_file()
-                        .unwrap()]);
+                    self.mapped_file_queue
+                        .delete_expired_file(vec![self.mapped_file_queue.get_last_mapped_file().unwrap()]);
                 }
             }
         }
@@ -227,24 +217,13 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
 
     #[inline]
     pub fn is_ext_write_enable(&self) -> bool {
-        self.consume_queue_ext.is_some()
-            && self
-                .message_store
-                .get_message_store_config()
-                .enable_consume_queue_ext
+        self.consume_queue_ext.is_some() && self.message_store.get_message_store_config().enable_consume_queue_ext
     }
 
-    pub fn put_message_position_info(
-        &mut self,
-        offset: i64,
-        size: i32,
-        tags_code: i64,
-        cq_offset: i64,
-    ) -> bool {
+    pub fn put_message_position_info(&mut self, offset: i64, size: i32, tags_code: i64, cq_offset: i64) -> bool {
         if offset + size as i64 <= self.get_max_physic_offset() {
             warn!(
-                "Maybe try to build consume queue repeatedly maxPhysicOffset={} phyOffset={}, \
-                 size={}",
+                "Maybe try to build consume queue repeatedly maxPhysicOffset={} phyOffset={}, size={}",
                 self.get_max_physic_offset(),
                 offset,
                 size
@@ -261,16 +240,10 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
             .mapped_file_queue
             .get_last_mapped_file_mut_start_offset(expect_logic_offset as u64, true)
         {
-            if mapped_file.is_first_create_in_queue()
-                && cq_offset != 0
-                && mapped_file.get_wrote_position() == 0
-            {
-                self.min_logic_offset
-                    .store(expect_logic_offset, Ordering::Release);
-                self.mapped_file_queue
-                    .set_flushed_where(expect_logic_offset);
-                self.mapped_file_queue
-                    .set_committed_where(expect_logic_offset);
+            if mapped_file.is_first_create_in_queue() && cq_offset != 0 && mapped_file.get_wrote_position() == 0 {
+                self.min_logic_offset.store(expect_logic_offset, Ordering::Release);
+                self.mapped_file_queue.set_flushed_where(expect_logic_offset);
+                self.mapped_file_queue.set_committed_where(expect_logic_offset);
                 self.fill_pre_blank(&mapped_file, expect_logic_offset);
                 info!(
                     "fill pre blank space {} {}",
@@ -280,13 +253,13 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
             }
 
             if cq_offset != 0 {
-                let current_logic_offset = mapped_file.get_wrote_position() as i64
-                    + mapped_file.get_file_from_offset() as i64;
+                let current_logic_offset =
+                    mapped_file.get_wrote_position() as i64 + mapped_file.get_file_from_offset() as i64;
 
                 if expect_logic_offset < current_logic_offset {
                     warn!(
-                        "Build  consume queue repeatedly, expectLogicOffset: {} \
-                         currentLogicOffset: {} Topic: {} QID: {} Diff: {}",
+                        "Build  consume queue repeatedly, expectLogicOffset: {} currentLogicOffset: {} Topic: {} QID: \
+                         {} Diff: {}",
                         expect_logic_offset,
                         current_logic_offset,
                         self.topic,
@@ -298,8 +271,8 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
 
                 if expect_logic_offset != current_logic_offset {
                     warn!(
-                        "[BUG]logic queue order maybe wrong, expectLogicOffset: {} \
-                         currentLogicOffset: {} Topic: {} QID: {} Diff: {}",
+                        "[BUG]logic queue order maybe wrong, expectLogicOffset: {} currentLogicOffset: {} Topic: {} \
+                         QID: {} Diff: {}",
                         expect_logic_offset,
                         current_logic_offset,
                         self.topic,
@@ -323,8 +296,7 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
         bytes_mut.put_i32(i32::MAX);
         bytes_mut.put_i64(0);
         let bytes = bytes_mut.freeze();
-        let until = (until_where % self.mapped_file_queue.mapped_file_size as i64) as i32
-            / CQ_STORE_UNIT_SIZE;
+        let until = (until_where % self.mapped_file_queue.mapped_file_size as i64) as i32 / CQ_STORE_UNIT_SIZE;
         for n in 0..until {
             mapped_file.append_message_bytes(&bytes);
         }
@@ -335,12 +307,9 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
         let mapped_file_size = self.mapped_file_size;
         let offset = start_index * CQ_STORE_UNIT_SIZE as i64;
         if offset >= self.get_min_logic_offset() {
-            if let Some(mapped_file) = self
-                .mapped_file_queue
-                .find_mapped_file_by_offset(offset, false)
-            {
-                let mut result = mapped_file
-                    .select_mapped_buffer_with_position((offset % mapped_file_size as i64) as i32);
+            if let Some(mapped_file) = self.mapped_file_queue.find_mapped_file_by_offset(offset, false) {
+                let mut result =
+                    mapped_file.select_mapped_buffer_with_position((offset % mapped_file_size as i64) as i32);
                 if let Some(ref mut result) = result {
                     result.mapped_file = Some(mapped_file);
                 }
@@ -411,28 +380,17 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
 
         // Handle case 1: ceiling store time < timestamp
         if ceiling >= 0 && (ceiling as usize + CQ_STORE_UNIT_SIZE as usize) <= buffer.len() {
-            let phy_offset = i64::from_be_bytes(
-                buffer[ceiling as usize..ceiling as usize + 8]
-                    .try_into()
-                    .unwrap(),
-            );
-            let size = i32::from_be_bytes(
-                buffer[ceiling as usize + 8..ceiling as usize + 12]
-                    .try_into()
-                    .unwrap(),
-            );
+            let phy_offset = i64::from_be_bytes(buffer[ceiling as usize..ceiling as usize + 8].try_into().unwrap());
+            let size = i32::from_be_bytes(buffer[ceiling as usize + 8..ceiling as usize + 12].try_into().unwrap());
             let store_time = commit_log.pickup_store_timestamp(phy_offset, size);
             if store_time < timestamp {
                 return match boundary_type {
                     BoundaryType::Lower => {
-                        (mapped_file.get_file_from_offset() as i64
-                            + ceiling as i64
-                            + CQ_STORE_UNIT_SIZE as i64)
+                        (mapped_file.get_file_from_offset() as i64 + ceiling as i64 + CQ_STORE_UNIT_SIZE as i64)
                             / CQ_STORE_UNIT_SIZE as i64
                     }
                     BoundaryType::Upper => {
-                        (mapped_file.get_file_from_offset() as i64 + ceiling as i64)
-                            / CQ_STORE_UNIT_SIZE as i64
+                        (mapped_file.get_file_from_offset() as i64 + ceiling as i64) / CQ_STORE_UNIT_SIZE as i64
                     }
                 };
             }
@@ -440,22 +398,12 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
 
         // Handle case 2: floor store time > timestamp
         if floor >= 0 && (floor as usize + 12) <= buffer.len() {
-            let phy_offset = i64::from_be_bytes(
-                buffer[floor as usize..floor as usize + 8]
-                    .try_into()
-                    .unwrap(),
-            );
-            let size = i32::from_be_bytes(
-                buffer[floor as usize + 8..floor as usize + 12]
-                    .try_into()
-                    .unwrap(),
-            );
+            let phy_offset = i64::from_be_bytes(buffer[floor as usize..floor as usize + 8].try_into().unwrap());
+            let size = i32::from_be_bytes(buffer[floor as usize + 8..floor as usize + 12].try_into().unwrap());
             let store_time = commit_log.pickup_store_timestamp(phy_offset, size);
             if store_time > timestamp {
                 return match boundary_type {
-                    BoundaryType::Lower => {
-                        mapped_file.get_file_from_offset() as i64 / CQ_STORE_UNIT_SIZE as i64
-                    }
+                    BoundaryType::Lower => mapped_file.get_file_from_offset() as i64 / CQ_STORE_UNIT_SIZE as i64,
                     BoundaryType::Upper => 0,
                 };
             }
@@ -468,11 +416,8 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
                 break;
             }
 
-            let phy_offset = i64::from_be_bytes(
-                buffer[mid_offset as usize..mid_offset as usize + 8]
-                    .try_into()
-                    .unwrap(),
-            );
+            let phy_offset =
+                i64::from_be_bytes(buffer[mid_offset as usize..mid_offset as usize + 8].try_into().unwrap());
             let size = i32::from_be_bytes(
                 buffer[mid_offset as usize + 8..mid_offset as usize + 12]
                     .try_into()
@@ -488,10 +433,7 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
 
             let store_time = commit_log.pickup_store_timestamp(phy_offset, size);
             if store_time < 0 {
-                warn!(
-                    "Failed to query store timestamp for commit log offset: {}",
-                    phy_offset
-                );
+                warn!("Failed to query store timestamp for commit log offset: {}", phy_offset);
                 return 0;
             }
 
@@ -526,18 +468,11 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
                         if (attempt as usize + 12) > buffer.len() {
                             break;
                         }
-                        let physical_offset = i64::from_be_bytes(
-                            buffer[attempt as usize..attempt as usize + 8]
-                                .try_into()
-                                .unwrap(),
-                        );
-                        let message_size = i32::from_be_bytes(
-                            buffer[attempt as usize + 8..attempt as usize + 12]
-                                .try_into()
-                                .unwrap(),
-                        );
-                        let message_store_timestamp =
-                            commit_log.pickup_store_timestamp(physical_offset, message_size);
+                        let physical_offset =
+                            i64::from_be_bytes(buffer[attempt as usize..attempt as usize + 8].try_into().unwrap());
+                        let message_size =
+                            i32::from_be_bytes(buffer[attempt as usize + 8..attempt as usize + 12].try_into().unwrap());
+                        let message_store_timestamp = commit_log.pickup_store_timestamp(physical_offset, message_size);
                         if message_store_timestamp == timestamp {
                             previous_attempt = attempt;
                             continue;
@@ -557,18 +492,11 @@ impl<MS: MessageStore> ConsumeQueue<MS> {
                         if (attempt as usize + 12) > buffer.len() {
                             break;
                         }
-                        let physical_offset = i64::from_be_bytes(
-                            buffer[attempt as usize..attempt as usize + 8]
-                                .try_into()
-                                .unwrap(),
-                        );
-                        let message_size = i32::from_be_bytes(
-                            buffer[attempt as usize + 8..attempt as usize + 12]
-                                .try_into()
-                                .unwrap(),
-                        );
-                        let message_store_timestamp =
-                            commit_log.pickup_store_timestamp(physical_offset, message_size);
+                        let physical_offset =
+                            i64::from_be_bytes(buffer[attempt as usize..attempt as usize + 8].try_into().unwrap());
+                        let message_size =
+                            i32::from_be_bytes(buffer[attempt as usize + 8..attempt as usize + 12].try_into().unwrap());
+                        let message_store_timestamp = commit_log.pickup_store_timestamp(physical_offset, message_size);
                         if message_store_timestamp == timestamp {
                             previous_attempt = attempt;
                             continue;
@@ -652,10 +580,8 @@ impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
         let mut max_ext_addr = 1i64;
         loop {
             for index in 0..(mapped_file_size_logics / CQ_STORE_UNIT_SIZE) {
-                let bytes_option = mapped_file.get_bytes(
-                    (index * CQ_STORE_UNIT_SIZE) as usize,
-                    CQ_STORE_UNIT_SIZE as usize,
-                );
+                let bytes_option =
+                    mapped_file.get_bytes((index * CQ_STORE_UNIT_SIZE) as usize, CQ_STORE_UNIT_SIZE as usize);
                 if bytes_option.is_none() {
                     break;
                 }
@@ -664,8 +590,7 @@ impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
                 let size = byte_buffer.get_i32();
                 let tags_code = byte_buffer.get_i64();
                 if offset >= 0 && size > 0 {
-                    mapped_file_offset =
-                        (index * CQ_STORE_UNIT_SIZE) as i64 + CQ_STORE_UNIT_SIZE as i64;
+                    mapped_file_offset = (index * CQ_STORE_UNIT_SIZE) as i64 + CQ_STORE_UNIT_SIZE as i64;
                     self.set_max_physic_offset(offset + size as i64);
                     if ConsumeQueue::<MS>::is_ext_addr(tags_code) {
                         max_ext_addr = tags_code;
@@ -694,10 +619,7 @@ impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
                     mapped_file = mapped_files.get(index).unwrap();
                     process_offset = mapped_file.get_file_from_offset();
                     mapped_file_offset = 0;
-                    info!(
-                        "recover next consume queue file, {}",
-                        mapped_file.get_file_name()
-                    );
+                    info!("recover next consume queue file, {}", mapped_file.get_file_name());
                 }
             } else {
                 info!(
@@ -709,12 +631,9 @@ impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
             }
         }
         process_offset += mapped_file_offset as u64;
-        self.mapped_file_queue
-            .set_flushed_where(process_offset as i64);
-        self.mapped_file_queue
-            .set_committed_where(process_offset as i64);
-        self.mapped_file_queue
-            .truncate_dirty_files(process_offset as i64);
+        self.mapped_file_queue.set_flushed_where(process_offset as i64);
+        self.mapped_file_queue.set_committed_where(process_offset as i64);
+        self.mapped_file_queue.truncate_dirty_files(process_offset as i64);
 
         if self.is_ext_read_enable() {
             let consume_queue_ext = self.consume_queue_ext.as_mut().unwrap();
@@ -775,12 +694,7 @@ impl<MS: MessageStore> FileQueueLifeCycle for ConsumeQueue<MS> {
 
 impl<MS: MessageStore> Swappable for ConsumeQueue<MS> {
     #[inline]
-    fn swap_map(
-        &self,
-        reserve_num: i32,
-        force_swap_interval_ms: i64,
-        normal_swap_interval_ms: i64,
-    ) {
+    fn swap_map(&self, reserve_num: i32, force_swap_interval_ms: i64, normal_swap_interval_ms: i64) {
         todo!()
     }
 
@@ -901,10 +815,8 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
         }
         let last_mapped_file = last_mapped_file.unwrap();
         let max_readable_position = last_mapped_file.get_read_position();
-        let mut last_record = last_mapped_file.select_mapped_buffer(
-            max_readable_position - CQ_STORE_UNIT_SIZE,
-            CQ_STORE_UNIT_SIZE,
-        );
+        let mut last_record =
+            last_mapped_file.select_mapped_buffer(max_readable_position - CQ_STORE_UNIT_SIZE, CQ_STORE_UNIT_SIZE);
         if let Some(ref mut result) = last_record {
             result.mapped_file = Some(last_mapped_file.clone());
         }
@@ -922,8 +834,7 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
                     Ordering::SeqCst,
                 );
                 info!(
-                    "ConsumeQueue[topic={}, queue-id={}] contains no valid entries. Min-offset is \
-                     assigned as: {}.",
+                    "ConsumeQueue[topic={}, queue-id={}] contains no valid entries. Min-offset is assigned as: {}.",
                     self.topic,
                     self.queue_id,
                     self.get_min_offset_in_queue()
@@ -939,8 +850,7 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
             // contains 300,000 entries searching from previous position saves
             // significant amount of comparisons and IOs
             let mut intact = true; // Assume previous value is still valid
-            let mut start = self.min_logic_offset.load(Ordering::Acquire)
-                - mapped_file.get_file_from_offset() as i64;
+            let mut start = self.min_logic_offset.load(Ordering::Acquire) - mapped_file.get_file_from_offset() as i64;
             if start < 0 {
                 intact = false;
                 start = 0;
@@ -955,8 +865,7 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
             let result = mapped_file.select_mapped_buffer_with_position(start as i32);
             if result.is_none() {
                 warn!(
-                    "[Bug] Failed to scan consume queue entries from file on correcting min \
-                     offset: {}",
+                    "[Bug] Failed to scan consume queue entries from file on correcting min offset: {}",
                     mapped_file.get_file_name()
                 );
                 return;
@@ -971,14 +880,10 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
                 return;
             }
             let mapped = result.mapped_file.as_ref().unwrap();
-            let commit_log_offset = mapped
-                .get_bytes(result.start_offset as usize, 8)
-                .unwrap()
-                .get_i64();
+            let commit_log_offset = mapped.get_bytes(result.start_offset as usize, 8).unwrap().get_i64();
             if intact && commit_log_offset >= min_commit_log_offset {
                 info!(
-                    "Abort correction as previous min-offset points to {}, which is greater than \
-                     {}",
+                    "Abort correction as previous min-offset points to {}, which is greater than {}",
                     commit_log_offset, min_commit_log_offset
                 );
                 return;
@@ -1046,8 +951,7 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
                     tags_code = ext_addr;
                 } else {
                     warn!(
-                        "Save consume queue extend fail, So just save tagsCode!  topic:{}, \
-                         queueId:{}, offset:{}",
+                        "Save consume queue extend fail, So just save tagsCode!  topic:{}, queueId:{}, offset:{}",
                         self.topic, self.queue_id, request.commit_log_offset,
                     )
                 }
@@ -1084,13 +988,8 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
             }
             i += 1;
         }
-        error!(
-            "[BUG]consume queue can not write, {} {}",
-            self.topic, self.queue_id
-        );
-        self.message_store
-            .get_running_flags()
-            .make_logics_queue_error();
+        error!("[BUG]consume queue can not write, {} {}", self.topic, self.queue_id);
+        self.message_store.get_running_flags().make_logics_queue_error();
     }
 
     #[inline]
@@ -1107,14 +1006,12 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
     }
 
     #[inline]
-    fn assign_queue_offset(
-        &self,
-        queue_offset_operator: &QueueOffsetOperator,
-        msg: &mut MessageExtBrokerInner,
-    ) {
-        let queue_offset = queue_offset_operator.get_queue_offset(CheetahString::from_string(
-            format!("{}-{}", msg.topic(), msg.queue_id()),
-        ));
+    fn assign_queue_offset(&self, queue_offset_operator: &QueueOffsetOperator, msg: &mut MessageExtBrokerInner) {
+        let queue_offset = queue_offset_operator.get_queue_offset(CheetahString::from_string(format!(
+            "{}-{}",
+            msg.topic(),
+            msg.queue_id()
+        )));
         msg.message_ext_inner.queue_offset = queue_offset;
     }
 
@@ -1124,10 +1021,7 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
     }
 
     #[inline]
-    fn iterate_from(
-        &self,
-        start_index: i64,
-    ) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
+    fn iterate_from(&self, start_index: i64) -> Option<Box<dyn Iterator<Item = CqUnit> + Send + '_>> {
         match self.get_index_buffer(start_index) {
             None => None,
             Some(value) => Some(Box::new(ConsumeQueueIterator {
@@ -1147,15 +1041,11 @@ impl<MS: MessageStore> ConsumeQueueTrait for ConsumeQueue<MS> {
         self.iterate_from(start_index)
     }
 
-    fn get_offset_in_queue_by_time_with_boundary(
-        &self,
-        timestamp: i64,
-        boundary_type: BoundaryType,
-    ) -> i64 {
+    fn get_offset_in_queue_by_time_with_boundary(&self, timestamp: i64, boundary_type: BoundaryType) -> i64 {
         let commit_log = self.message_store.get_commit_log();
-        let mapped_file = self
-            .mapped_file_queue
-            .get_consume_queue_mapped_file_by_time(timestamp, commit_log, boundary_type);
+        let mapped_file =
+            self.mapped_file_queue
+                .get_consume_queue_mapped_file_by_time(timestamp, commit_log, boundary_type);
         if let Some(mapped_file) = mapped_file {
             return self.binary_search_in_queue_by_time(&mapped_file, timestamp, boundary_type);
         }
@@ -1190,8 +1080,7 @@ impl Iterator for ConsumeQueueIterator {
                     return None;
                 }
                 let mmp = value.mapped_file.as_ref().unwrap().get_mapped_file();
-                let start =
-                    value.start_offset as usize + (self.counter * CQ_STORE_UNIT_SIZE) as usize;
+                let start = value.start_offset as usize + (self.counter * CQ_STORE_UNIT_SIZE) as usize;
                 self.counter += 1;
                 let end = start + CQ_STORE_UNIT_SIZE as usize;
                 let mut bytes = Bytes::copy_from_slice(&mmp[start..end]);
@@ -1214,8 +1103,7 @@ impl Iterator for ConsumeQueueIterator {
                         cq_unit.cq_ext_unit = Some(cq_ext_unit);
                     } else {
                         error!(
-                            "[BUG] can't find consume queue extend file content! addr={}, \
-                             offsetPy={}, sizePy={}",
+                            "[BUG] can't find consume queue extend file content! addr={}, offsetPy={}, sizePy={}",
                             cq_unit.tags_code, cq_unit.pos, cq_unit.pos,
                         );
                     }

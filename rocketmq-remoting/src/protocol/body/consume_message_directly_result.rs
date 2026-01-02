@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::fmt::Display;
 
@@ -49,8 +46,8 @@ impl Display for ConsumeMessageDirectlyResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "ConsumeMessageDirectlyResult [order={}, auto_commit={}, consume_result={:?}, \
-             remark={:?}, spent_time_mills={}]",
+            "ConsumeMessageDirectlyResult [order={}, auto_commit={}, consume_result={:?}, remark={:?}, \
+             spent_time_mills={}]",
             self.order, self.auto_commit, self.consume_result, self.remark, self.spent_time_mills
         )
     }
@@ -145,8 +142,7 @@ mod tests {
     fn consume_message_directly_result_new_initializes_correctly() {
         let consume_result = CMResult::default();
         let remark = CheetahString::from_static_str("test remark");
-        let result =
-            ConsumeMessageDirectlyResult::new(true, false, consume_result, remark.clone(), 12345);
+        let result = ConsumeMessageDirectlyResult::new(true, false, consume_result, remark.clone(), 12345);
         assert!(result.order());
         assert!(!result.auto_commit());
         assert_eq!(result.consume_result().unwrap(), &consume_result);
@@ -176,12 +172,11 @@ mod tests {
     fn consume_message_directly_result_display_formats_correctly() {
         let consume_result = CMResult::default();
         let remark = CheetahString::from_static_str("test remark");
-        let result =
-            ConsumeMessageDirectlyResult::new(true, false, consume_result, remark.clone(), 12345);
+        let result = ConsumeMessageDirectlyResult::new(true, false, consume_result, remark.clone(), 12345);
         let display = format!("{}", result);
         let expected = format!(
-            "ConsumeMessageDirectlyResult [order=true, auto_commit=false, consume_result={:?}, \
-             remark={:?}, spent_time_mills=12345]",
+            "ConsumeMessageDirectlyResult [order=true, auto_commit=false, consume_result={:?}, remark={:?}, \
+             spent_time_mills=12345]",
             Some(consume_result),
             Some(remark)
         );

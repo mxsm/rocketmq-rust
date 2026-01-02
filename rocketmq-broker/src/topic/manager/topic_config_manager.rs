@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -84,11 +81,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
 
         //auto create topic setting
         {
-            if self
-                .broker_runtime_inner
-                .broker_config()
-                .auto_create_topic_enable
-            {
+            if self.broker_runtime_inner.broker_config().auto_create_topic_enable {
                 let default_topic_queue_nums = self
                     .broker_runtime_inner
                     .broker_config()
@@ -119,11 +112,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             TopicValidator::add_system_topic(topic.as_str());
             let mut config = TopicConfig::new(topic);
             let mut perm = PermName::PERM_INHERIT;
-            if self
-                .broker_runtime_inner
-                .broker_config()
-                .cluster_topic_enable
-            {
+            if self.broker_runtime_inner.broker_config().cluster_topic_enable {
                 perm |= PermName::PERM_READ | PermName::PERM_WRITE;
             }
             config.perm = perm;
@@ -142,11 +131,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             config.write_queue_nums = 1;
             config.read_queue_nums = 1;
             let mut perm = PermName::PERM_INHERIT;
-            if self
-                .broker_runtime_inner
-                .broker_config()
-                .broker_topic_enable
-            {
+            if self.broker_runtime_inner.broker_config().broker_topic_enable {
                 perm |= PermName::PERM_READ | PermName::PERM_WRITE;
             }
             config.perm = perm;
@@ -171,11 +156,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
 
         {
             if self.broker_runtime_inner.broker_config().trace_topic_enable {
-                let topic = self
-                    .broker_runtime_inner
-                    .broker_config()
-                    .msg_trace_topic_name
-                    .clone();
+                let topic = self.broker_runtime_inner.broker_config().msg_trace_topic_name.clone();
                 TopicValidator::add_system_topic(topic.as_str());
                 self.put_topic_config(ArcMut::new(TopicConfig::with_queues(topic, 1, 1)));
             }
@@ -184,10 +165,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         {
             let topic = format!(
                 "{}_{}",
-                self.broker_runtime_inner
-                    .broker_config()
-                    .broker_identity
-                    .broker_name,
+                self.broker_runtime_inner.broker_config().broker_identity.broker_name,
                 mix_all::REPLY_TOPIC_POSTFIX
             );
             TopicValidator::add_system_topic(topic.as_str());
@@ -214,18 +192,10 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             let topic = format!(
                 "{}_{}",
                 TopicValidator::SYNC_BROKER_MEMBER_GROUP_PREFIX,
-                self.broker_runtime_inner
-                    .broker_config()
-                    .broker_identity
-                    .broker_name,
+                self.broker_runtime_inner.broker_config().broker_identity.broker_name,
             );
             TopicValidator::add_system_topic(topic.as_str());
-            self.put_topic_config(ArcMut::new(TopicConfig::with_perm(
-                topic,
-                1,
-                1,
-                PermName::PERM_INHERIT,
-            )));
+            self.put_topic_config(ArcMut::new(TopicConfig::with_perm(topic, 1, 1, PermName::PERM_INHERIT)));
         }
 
         {
@@ -245,11 +215,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         }
 
         {
-            if self
-                .broker_runtime_inner
-                .message_store_config()
-                .timer_wheel_enable
-            {
+            if self.broker_runtime_inner.message_store_config().timer_wheel_enable {
                 TopicValidator::add_system_topic(timer_message_store::TIMER_TOPIC);
                 self.put_topic_config(ArcMut::new(TopicConfig::with_queues(
                     timer_message_store::TIMER_TOPIC,
@@ -277,11 +243,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         topic_config_table: HashMap<CheetahString, TopicConfig>,
         topic_queue_mapping_info_map: DashMap<CheetahString, ArcMut<TopicQueueMappingInfo>>,
     ) -> TopicConfigAndMappingSerializeWrapper {
-        if self
-            .broker_runtime_inner
-            .broker_config()
-            .enable_split_registration
-        {
+        if self.broker_runtime_inner.broker_config().enable_split_registration {
             self.data_version.mut_from_ref().next_version();
         }
         TopicConfigAndMappingSerializeWrapper {
@@ -306,14 +268,9 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         self.topic_config_table.get(topic_name).as_deref().cloned()
     }
 
-    pub(crate) fn put_topic_config(
-        &self,
-        topic_config: ArcMut<TopicConfig>,
-    ) -> Option<ArcMut<TopicConfig>> {
-        self.topic_config_table.insert(
-            topic_config.topic_name.as_ref().unwrap().clone(),
-            topic_config,
-        )
+    pub(crate) fn put_topic_config(&self, topic_config: ArcMut<TopicConfig>) -> Option<ArcMut<TopicConfig>> {
+        self.topic_config_table
+            .insert(topic_config.topic_name.as_ref().unwrap().clone(), topic_config)
     }
 
     pub async fn create_topic_in_send_message_method(
@@ -345,8 +302,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                         Some(config) => config,
                         None => {
                             warn!(
-                                "Create new topic failed, because the default topic[{}] not \
-                                 exist. producer:[{}]",
+                                "Create new topic failed, because the default topic[{}] not exist. producer:[{}]",
                                 default_topic, remote_address
                             );
                             return None;
@@ -354,18 +310,14 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                     };
 
                     if default_topic == TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC
-                        && !self
-                            .broker_runtime_inner
-                            .broker_config()
-                            .auto_create_topic_enable
+                        && !self.broker_runtime_inner.broker_config().auto_create_topic_enable
                     {
                         default_topic_config.perm = PermName::PERM_READ | PermName::PERM_WRITE;
                     }
 
                     if !PermName::is_inherited(default_topic_config.perm) {
                         warn!(
-                            "Create new topic failed, because the default topic[{}] has no perm \
-                             [{}] producer:[{}]",
+                            "Create new topic failed, because the default topic[{}] has no perm [{}] producer:[{}]",
                             default_topic, default_topic_config.perm, remote_address
                         );
                         return None;
@@ -474,16 +426,10 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         let data_version = self.data_version.as_ref().clone();
 
         if broker_config.enable_single_topic_register {
-            broker_runtime_inner
-                .register_single_topic_all(topic_config)
-                .await;
+            broker_runtime_inner.register_single_topic_all(topic_config).await;
         } else {
-            BrokerRuntimeInner::register_increment_broker_data(
-                broker_runtime_inner,
-                vec![topic_config],
-                data_version,
-            )
-            .await;
+            BrokerRuntimeInner::register_increment_broker_data(broker_runtime_inner, vec![topic_config], data_version)
+                .await;
         }
     }
 
@@ -506,12 +452,11 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
         let old = self.remove_topic_config(topic);
         if let Some(old) = old {
             info!("delete topic config OK, topic: {:?}", old);
-            let state_machine_version =
-                if let Some(message_store) = self.broker_runtime_inner.message_store() {
-                    message_store.get_state_machine_version()
-                } else {
-                    0
-                };
+            let state_machine_version = if let Some(message_store) = self.broker_runtime_inner.message_store() {
+                message_store.get_state_machine_version()
+            } else {
+                0
+            };
             self.data_version
                 .mut_from_ref()
                 .next_version_with(state_machine_version);
@@ -550,10 +495,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                 info!("create new topic [{:?}]", topic_config)
             }
             Some(ref old) => {
-                info!(
-                    "update topic config, old:[{:?}] new:[{:?}]",
-                    old, topic_config
-                );
+                info!("update topic config, old:[{:?}] new:[{:?}]", old, topic_config);
             }
         }
 
@@ -592,10 +534,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             .collect::<HashMap<CheetahString, TopicConfig>>()
     }
 
-    pub fn set_topic_config_table(
-        &mut self,
-        topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
-    ) {
+    pub fn set_topic_config_table(&mut self, topic_config_table: Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>) {
         self.topic_config_table = topic_config_table;
     }
 
@@ -614,16 +553,13 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
 
         // Use DashMap entry API for atomic check-and-insert
         let (topic_config, create_new) = {
-            let topic_key =
-                CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC);
+            let topic_key = CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC);
             let entry = self.topic_config_table.entry(topic_key);
 
             match entry {
                 dashmap::mapref::entry::Entry::Occupied(e) => (Some(e.get().clone()), false),
                 dashmap::mapref::entry::Entry::Vacant(e) => {
-                    let mut config = ArcMut::new(TopicConfig::new(
-                        TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC,
-                    ));
+                    let mut config = ArcMut::new(TopicConfig::new(TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC));
                     config.read_queue_nums = client_default_topic_queue_nums as u32;
                     config.write_queue_nums = client_default_topic_queue_nums as u32;
                     config.perm = perm;
@@ -726,10 +662,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             match entry {
                 dashmap::mapref::entry::Entry::Occupied(e) => (Some(e.get().clone()), false),
                 dashmap::mapref::entry::Entry::Vacant(e) => {
-                    info!(
-                        "Create new topic [{}] config:[{:?}]",
-                        topic_name, topic_config
-                    );
+                    info!("Create new topic [{}] config:[{:?}]", topic_name, topic_config);
 
                     // Ensure topic_name is set
                     topic_config.topic_name = Some(topic_name.clone());
@@ -823,9 +756,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
             Ok(json_string) => {
                 if let Ok(wrapper) = TopicConfigSerializeWrapper::decode_string(json_string) {
                     if let Some(data_version) = wrapper.data_version() {
-                        self.data_version
-                            .mut_from_ref()
-                            .assign_new_one(data_version);
+                        self.data_version.mut_from_ref().assign_new_one(data_version);
                         info!(
                             "load topic metadata dataVersion success {}, {:?}",
                             file_path, data_version
@@ -836,10 +767,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
                 false
             }
             Err(e) => {
-                error!(
-                    "load topic metadata dataVersion failed {}: {:?}",
-                    file_path, e
-                );
+                error!("load topic metadata dataVersion failed {}: {:?}", file_path, e);
                 false
             }
         }
@@ -848,12 +776,7 @@ impl<MS: MessageStore> TopicConfigManager<MS> {
 
 impl<MS: MessageStore> ConfigManager for TopicConfigManager<MS> {
     fn config_file_path(&self) -> String {
-        get_topic_config_path(
-            self.broker_runtime_inner
-                .broker_config()
-                .store_path_root_dir
-                .as_str(),
-        )
+        get_topic_config_path(self.broker_runtime_inner.broker_config().store_path_root_dir.as_str())
     }
 
     fn encode_pretty(&self, pretty_format: bool) -> String {

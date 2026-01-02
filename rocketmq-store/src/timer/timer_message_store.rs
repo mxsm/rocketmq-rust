@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::atomic::AtomicI64;
 
@@ -62,14 +59,8 @@ pub struct TimerMessageStore {
 impl Clone for TimerMessageStore {
     fn clone(&self) -> Self {
         Self {
-            curr_read_time_ms: AtomicI64::new(
-                self.curr_read_time_ms
-                    .load(std::sync::atomic::Ordering::Relaxed),
-            ),
-            curr_queue_offset: AtomicI64::new(
-                self.curr_queue_offset
-                    .load(std::sync::atomic::Ordering::Relaxed),
-            ),
+            curr_read_time_ms: AtomicI64::new(self.curr_read_time_ms.load(std::sync::atomic::Ordering::Relaxed)),
+            curr_queue_offset: AtomicI64::new(self.curr_queue_offset.load(std::sync::atomic::Ordering::Relaxed)),
             last_enqueue_but_expired_time: self.last_enqueue_but_expired_time,
             last_enqueue_but_expired_store_time: self.last_enqueue_but_expired_store_time,
             default_message_store: self.default_message_store.clone(),
@@ -96,10 +87,7 @@ impl TimerMessageStore {
     }
 
     pub fn get_dequeue_behind_millis(&self) -> i64 {
-        (SystemClock::now() as i64)
-            - self
-                .curr_read_time_ms
-                .load(std::sync::atomic::Ordering::Relaxed)
+        (SystemClock::now() as i64) - self.curr_read_time_ms.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn get_enqueue_behind_millis(&self) -> i64 {
@@ -115,9 +103,7 @@ impl TimerMessageStore {
     }
 
     pub fn get_enqueue_behind_messages(&self) -> i64 {
-        let temp_queue_offset = self
-            .curr_queue_offset
-            .load(std::sync::atomic::Ordering::Relaxed);
+        let temp_queue_offset = self.curr_queue_offset.load(std::sync::atomic::Ordering::Relaxed);
         let consume_queue = self
             .default_message_store
             .as_ref()
@@ -164,10 +150,7 @@ impl TimerMessageStore {
         }
     }
 
-    pub fn set_default_message_store(
-        &mut self,
-        default_message_store: Option<ArcMut<LocalFileMessageStore>>,
-    ) {
+    pub fn set_default_message_store(&mut self, default_message_store: Option<ArcMut<LocalFileMessageStore>>) {
         self.default_message_store = default_message_store;
     }
 

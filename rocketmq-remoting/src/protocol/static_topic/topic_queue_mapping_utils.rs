@@ -5,22 +5,19 @@ use std::collections::HashSet;
 use cheetah_string::CheetahString;
 use rand::seq::SliceRandom;
 use rocketmq_common::common::config::TopicConfig;
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 use rocketmq_common::common::mix_all;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::FileUtils::string_to_file;
@@ -104,12 +101,7 @@ impl TopicQueueMappingUtils {
         assert!(!scope.is_empty(), "Scope cannot be null");
 
         if scope == mix_all::METADATA_SCOPE_GLOBAL {
-            format!(
-                "{}{}",
-                mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX,
-                &scope[2..]
-            )
-            .into()
+            format!("{}{}", mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX, &scope[2..]).into()
         } else {
             format!("{}{}", mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX, scope).into()
         }
@@ -183,27 +175,18 @@ impl TopicQueueMappingUtils {
                                         m_scope, scope, broker
                                     )));
                                 }
-                                if max_epoch != -1
-                                    && max_epoch != mapping_detail.topic_queue_mapping_info.epoch
-                                {
+                                if max_epoch != -1 && max_epoch != mapping_detail.topic_queue_mapping_info.epoch {
                                     return Err(RocketMQError::Internal(format!(
                                         "epoch does not match {} != {} in {}",
-                                        max_epoch,
-                                        mapping_detail.topic_queue_mapping_info.epoch,
-                                        broker_name
+                                        max_epoch, mapping_detail.topic_queue_mapping_info.epoch, broker_name
                                     )));
                                 } else {
                                     max_epoch = mapping_detail.topic_queue_mapping_info.epoch;
                                 }
-                                if max_num != -1
-                                    && max_num
-                                        != mapping_detail.topic_queue_mapping_info.total_queues
-                                {
+                                if max_num != -1 && max_num != mapping_detail.topic_queue_mapping_info.total_queues {
                                     return Err(RocketMQError::Internal(format!(
                                         "total queue number does not match {} != {} in {}",
-                                        max_num,
-                                        mapping_detail.topic_queue_mapping_info.total_queues,
-                                        broker_name
+                                        max_num, mapping_detail.topic_queue_mapping_info.total_queues, broker_name
                                     )));
                                 } else {
                                     max_num = mapping_detail.topic_queue_mapping_info.total_queues;
@@ -219,9 +202,7 @@ impl TopicQueueMappingUtils {
             "check_name_epoch_num_consistence err ! maybe some var is none".to_string(),
         ))
     }
-    pub fn check_if_reuse_physical_queue(
-        mapping_ones: &Vec<TopicQueueMappingOne>,
-    ) -> RocketMQResult<()> {
+    pub fn check_if_reuse_physical_queue(mapping_ones: &Vec<TopicQueueMappingOne>) -> RocketMQResult<()> {
         let mut physical_queue_id_map = HashMap::new();
         for mapping_one in mapping_ones {
             for item in mapping_one.items() {
@@ -245,9 +226,7 @@ impl TopicQueueMappingUtils {
         Ok(())
     }
 
-    pub fn check_logic_queue_mapping_item_offset(
-        items: &[LogicQueueMappingItem],
-    ) -> RocketMQResult<()> {
+    pub fn check_logic_queue_mapping_item_offset(items: &[LogicQueueMappingItem]) -> RocketMQResult<()> {
         if items.is_empty() {
             return Err(RocketMQError::Internal(
                 "check_logic_queue_mapping_item_offset input items is empty".to_string(),
@@ -296,9 +275,7 @@ impl TopicQueueMappingUtils {
         }
         Ok(())
     }
-    pub fn get_leader_item(
-        items: &[LogicQueueMappingItem],
-    ) -> RocketMQResult<LogicQueueMappingItem> {
+    pub fn get_leader_item(items: &[LogicQueueMappingItem]) -> RocketMQResult<LogicQueueMappingItem> {
         if items.is_empty() {
             return Err(RocketMQError::Internal(
                 "get_leader_item failed with empty items".to_string(),
@@ -379,8 +356,7 @@ impl TopicQueueMappingUtils {
         if check_consistence {
             if max_num as usize != global_id_map.len() {
                 return Err(RocketMQError::Internal(format!(
-                    "The total queue number in config does not match the real hosted queues {} != \
-                     {}",
+                    "The total queue number in config does not match the real hosted queues {} != {}",
                     max_num,
                     global_id_map.len()
                 )));
@@ -398,10 +374,7 @@ impl TopicQueueMappingUtils {
         TopicQueueMappingUtils::check_if_reuse_physical_queue(&values)?;
         Ok(global_id_map)
     }
-    pub fn write_to_temp(
-        wrapper: &TopicRemappingDetailWrapper,
-        after: bool,
-    ) -> RocketMQResult<CheetahString> {
+    pub fn write_to_temp(wrapper: &TopicRemappingDetailWrapper, after: bool) -> RocketMQResult<CheetahString> {
         let topic = wrapper.topic();
         let data = wrapper.serialize_json()?;
         let mut suffix = topic_remapping_detail_wrapper::SUFFIX_BEFORE;
@@ -446,9 +419,7 @@ impl TopicQueueMappingUtils {
         for entry in broker_config_map {
             let config_mapping = entry.1;
             if let Some(detail) = config_mapping.get_topic_queue_mapping_detail() {
-                if config_mapping.topic_config.read_queue_nums
-                    < config_mapping.topic_config.write_queue_nums
-                {
+                if config_mapping.topic_config.read_queue_nums < config_mapping.topic_config.write_queue_nums {
                     return Err(RocketMQError::Internal(
                         "Read queues is smaller than write queues".to_string(),
                     ));
@@ -462,19 +433,15 @@ impl TopicQueueMappingUtils {
                                 ));
                             }
                             if let Some(bname) = &item.bname {
-                                let topic_config =
-                                    broker_config_map.get(&CheetahString::from(bname));
+                                let topic_config = broker_config_map.get(&CheetahString::from(bname));
                                 if topic_config.is_none() {
                                     return Err(RocketMQError::Internal(
                                         "The broker of item does not exist".to_string(),
                                     ));
                                 } else if let Some(topic_config) = topic_config {
-                                    if item.queue_id
-                                        >= topic_config.topic_config.write_queue_nums as i32
-                                    {
+                                    if item.queue_id >= topic_config.topic_config.write_queue_nums as i32 {
                                         return Err(RocketMQError::Internal(
-                                            "The physical queue id is overflow the write queues"
-                                                .to_string(),
+                                            "The physical queue id is overflow the write queues".to_string(),
                                         ));
                                     }
                                 }
@@ -507,11 +474,8 @@ impl TopicQueueMappingUtils {
             detail_list.extend(TopicQueueMappingUtils::get_mapping_detail_from_config(
                 broker_config_map.values().cloned().collect(),
             )?);
-            global_id_map =
-                TopicQueueMappingUtils::check_and_build_mapping_items(detail_list, false, true)?;
-            TopicQueueMappingUtils::check_if_reuse_physical_queue(
-                &global_id_map.values().cloned().collect(),
-            )?;
+            global_id_map = TopicQueueMappingUtils::check_and_build_mapping_items(detail_list, false, true)?;
+            TopicQueueMappingUtils::check_if_reuse_physical_queue(&global_id_map.values().cloned().collect())?;
             TopicQueueMappingUtils::check_physical_queue_consistence(broker_config_map)?;
         }
         if (queue_num as usize) < global_id_map.len() {
@@ -589,11 +553,7 @@ impl TopicQueueMappingUtils {
                 time_of_end: -1,
             };
             if let Some(detail) = config_mapping.topic_queue_mapping_detail {
-                TopicQueueMappingDetail::put_mapping_info(
-                    detail.clone(),
-                    *queue_id,
-                    vec![mapping_item],
-                );
+                TopicQueueMappingDetail::put_mapping_info(detail.clone(), *queue_id, vec![mapping_item]);
             }
         }
 
@@ -607,20 +567,13 @@ impl TopicQueueMappingUtils {
         }
         //double check the config
 
-        TopicQueueMappingUtils::check_name_epoch_num_consistence(
-            &CheetahString::from(topic),
-            broker_config_map,
-        )?;
+        TopicQueueMappingUtils::check_name_epoch_num_consistence(&CheetahString::from(topic), broker_config_map)?;
         global_id_map = TopicQueueMappingUtils::check_and_build_mapping_items(
-            TopicQueueMappingUtils::get_mapping_detail_from_config(
-                broker_config_map.values().cloned().collect(),
-            )?,
+            TopicQueueMappingUtils::get_mapping_detail_from_config(broker_config_map.values().cloned().collect())?,
             false,
             true,
         )?;
-        TopicQueueMappingUtils::check_if_reuse_physical_queue(
-            &global_id_map.values().cloned().collect(),
-        )?;
+        TopicQueueMappingUtils::check_if_reuse_physical_queue(&global_id_map.values().cloned().collect())?;
         TopicQueueMappingUtils::check_physical_queue_consistence(broker_config_map)?;
         let map = broker_config_map
             .iter()
@@ -628,9 +581,7 @@ impl TopicQueueMappingUtils {
             .collect();
         Ok(TopicRemappingDetailWrapper::new(
             topic.to_string().into(),
-            topic_remapping_detail_wrapper::TYPE_CREATE_OR_UPDATE
-                .to_string()
-                .into(),
+            topic_remapping_detail_wrapper::TYPE_CREATE_OR_UPDATE.to_string().into(),
             new_epoch,
             map,
             HashSet::new(),
@@ -765,23 +716,17 @@ impl TopicQueueMappingUtils {
         broker_config_map: &mut HashMap<CheetahString, TopicConfigAndQueueMapping>,
         target_brokers: &HashSet<CheetahString>,
     ) -> RocketMQResult<TopicRemappingDetailWrapper> {
-        let max_epoch_and_num = TopicQueueMappingUtils::check_name_epoch_num_consistence(
-            &CheetahString::from(topic),
-            broker_config_map,
-        )?;
+        let max_epoch_and_num =
+            TopicQueueMappingUtils::check_name_epoch_num_consistence(&CheetahString::from(topic), broker_config_map)?;
 
         let mut global_id_map = TopicQueueMappingUtils::check_and_build_mapping_items(
-            TopicQueueMappingUtils::get_mapping_detail_from_config(
-                broker_config_map.values().cloned().collect(),
-            )?,
+            TopicQueueMappingUtils::get_mapping_detail_from_config(broker_config_map.values().cloned().collect())?,
             false,
             true,
         )?;
 
         TopicQueueMappingUtils::check_physical_queue_consistence(broker_config_map)?;
-        TopicQueueMappingUtils::check_if_reuse_physical_queue(
-            &global_id_map.values().cloned().collect(),
-        )?;
+        TopicQueueMappingUtils::check_if_reuse_physical_queue(&global_id_map.values().cloned().collect())?;
 
         let max_num = max_epoch_and_num.1;
         let mut broker_num_map: HashMap<CheetahString, i32> = HashMap::new();
@@ -793,18 +738,14 @@ impl TopicQueueMappingUtils {
         for mapping_one in global_id_map.values() {
             let bname = CheetahString::from(mapping_one.bname());
             if broker_num_map_before_remapping.contains_key(&bname) {
-                broker_num_map_before_remapping
-                    .insert(bname.clone(), broker_num_map_before_remapping[&bname] + 1);
+                broker_num_map_before_remapping.insert(bname.clone(), broker_num_map_before_remapping[&bname] + 1);
             } else {
                 broker_num_map_before_remapping.insert(bname, 1);
             }
         }
 
-        let mut allocator = MappingAllocator::new(
-            HashMap::new(),
-            broker_num_map.clone(),
-            broker_num_map_before_remapping,
-        );
+        let mut allocator =
+            MappingAllocator::new(HashMap::new(), broker_num_map.clone(), broker_num_map_before_remapping);
         allocator.up_to_num(max_num);
         let expected_broker_num_map = allocator.broker_num_map().clone();
 
@@ -816,10 +757,8 @@ impl TopicQueueMappingUtils {
             if expected_broker_num_map_mut.contains_key(&leader_broker) {
                 if expected_broker_num_map_mut[&leader_broker] > 0 {
                     expected_id_to_broker.insert(*queue_id, leader_broker.clone());
-                    expected_broker_num_map_mut.insert(
-                        leader_broker.clone(),
-                        expected_broker_num_map_mut[&leader_broker] - 1,
-                    );
+                    expected_broker_num_map_mut
+                        .insert(leader_broker.clone(), expected_broker_num_map_mut[&leader_broker] - 1);
                 } else {
                     wait_assign_queues.push_back(*queue_id);
                     expected_broker_num_map_mut.remove(&leader_broker);
@@ -926,21 +865,14 @@ impl TopicQueueMappingUtils {
         }
 
         // double check
-        TopicQueueMappingUtils::check_name_epoch_num_consistence(
-            &CheetahString::from(topic),
-            broker_config_map,
-        )?;
+        TopicQueueMappingUtils::check_name_epoch_num_consistence(&CheetahString::from(topic), broker_config_map)?;
         global_id_map = TopicQueueMappingUtils::check_and_build_mapping_items(
-            TopicQueueMappingUtils::get_mapping_detail_from_config(
-                broker_config_map.values().cloned().collect(),
-            )?,
+            TopicQueueMappingUtils::get_mapping_detail_from_config(broker_config_map.values().cloned().collect())?,
             false,
             true,
         )?;
         TopicQueueMappingUtils::check_physical_queue_consistence(broker_config_map)?;
-        TopicQueueMappingUtils::check_if_reuse_physical_queue(
-            &global_id_map.values().cloned().collect(),
-        )?;
+        TopicQueueMappingUtils::check_if_reuse_physical_queue(&global_id_map.values().cloned().collect())?;
         TopicQueueMappingUtils::check_leader_in_target_brokers(
             &global_id_map.values().cloned().collect::<Vec<_>>(),
             target_brokers,
@@ -953,9 +885,7 @@ impl TopicQueueMappingUtils {
 
         Ok(TopicRemappingDetailWrapper::new(
             topic.to_string().into(),
-            topic_remapping_detail_wrapper::TYPE_REMAPPING
-                .to_string()
-                .into(),
+            topic_remapping_detail_wrapper::TYPE_REMAPPING.to_string().into(),
             new_epoch as u64,
             map,
             brokers_to_map_in,

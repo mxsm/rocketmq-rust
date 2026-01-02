@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 
@@ -93,15 +90,9 @@ mod tests {
     #[test]
     fn topic_route_data_with_values() {
         let mut filter_server_table = HashMap::new();
-        filter_server_table.insert(
-            CheetahString::from("key"),
-            vec![CheetahString::from("value")],
-        );
+        filter_server_table.insert(CheetahString::from("key"), vec![CheetahString::from("value")]);
         let mut topic_queue_mapping_by_broker = HashMap::new();
-        topic_queue_mapping_by_broker.insert(
-            CheetahString::from("broker"),
-            TopicQueueMappingInfo::default(),
-        );
+        topic_queue_mapping_by_broker.insert(CheetahString::from("broker"), TopicQueueMappingInfo::default());
         let topic_route_data = TopicRouteData {
             order_topic_conf: Some(CheetahString::from("conf")),
             queue_datas: vec![QueueData::default()],
@@ -109,10 +100,7 @@ mod tests {
             filter_server_table,
             topic_queue_mapping_by_broker: Some(topic_queue_mapping_by_broker),
         };
-        assert_eq!(
-            topic_route_data.order_topic_conf,
-            Some(CheetahString::from("conf"))
-        );
+        assert_eq!(topic_route_data.order_topic_conf, Some(CheetahString::from("conf")));
         assert_eq!(topic_route_data.queue_datas.len(), 1);
         assert_eq!(topic_route_data.broker_datas.len(), 1);
         assert_eq!(topic_route_data.filter_server_table.len(), 1);
@@ -122,15 +110,9 @@ mod tests {
     #[test]
     fn serialize_topic_route_data() {
         let mut filter_server_table = HashMap::new();
-        filter_server_table.insert(
-            CheetahString::from("key"),
-            vec![CheetahString::from("value")],
-        );
+        filter_server_table.insert(CheetahString::from("key"), vec![CheetahString::from("value")]);
         let mut topic_queue_mapping_by_broker = HashMap::new();
-        topic_queue_mapping_by_broker.insert(
-            CheetahString::from("broker"),
-            TopicQueueMappingInfo::default(),
-        );
+        topic_queue_mapping_by_broker.insert(CheetahString::from("broker"), TopicQueueMappingInfo::default());
         let topic_route_data = TopicRouteData {
             order_topic_conf: Some(CheetahString::from("conf")),
             queue_datas: vec![QueueData::default()],

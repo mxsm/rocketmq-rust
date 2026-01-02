@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::fmt;
 
@@ -82,5 +79,62 @@ impl<'de> Deserialize<'de> for SendStatus {
             }
         }
         deserializer.deserialize_str(StoreTypeVisitor)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ALL_SEND_STATUS: &[SendStatus] = &[
+        SendStatus::SendOk,
+        SendStatus::FlushDiskTimeout,
+        SendStatus::FlushSlaveTimeout,
+        SendStatus::SlaveNotAvailable,
+    ];
+
+    const ALL_SEND_STATUS_SERIALIZED: &[&str] = &[
+        "\"SEND_OK\"",
+        "\"FLUSH_DISK_TIMEOUT\"",
+        "\"FLUSH_SLAVE_TIMEOUT\"",
+        "\"SLAVE_NOT_AVAILABLE\"",
+    ];
+
+    #[test]
+    fn test_send_status_default() {
+        let default = SendStatus::default();
+        assert_eq!(default, SendStatus::SendOk);
+    }
+
+    #[test]
+    fn test_send_status_serialization() {
+        for (&status, &expected) in ALL_SEND_STATUS.iter().zip(ALL_SEND_STATUS_SERIALIZED.iter()) {
+            let serialized = serde_json::to_string(&status).unwrap();
+            assert_eq!(serialized, expected);
+        }
+    }
+
+    #[test]
+    fn test_send_status_deserialization() {
+        for (&serialized, &expected) in ALL_SEND_STATUS_SERIALIZED.iter().zip(ALL_SEND_STATUS.iter()) {
+            let deserialized: SendStatus = serde_json::from_str(serialized).unwrap();
+            assert_eq!(deserialized, expected);
+        }
+    }
+
+    #[test]
+    fn test_send_status_invalid_deserialization() {
+        let json = "\"INVALID_STATUS\"";
+        let status: Result<SendStatus, _> = serde_json::from_str(json);
+        assert!(status.is_err());
+    }
+
+    #[test]
+    fn test_send_status_round_trip() {
+        for &original in ALL_SEND_STATUS {
+            let serialized = serde_json::to_string(&original).unwrap();
+            let deserialized: SendStatus = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(original, deserialized);
+        }
     }
 }

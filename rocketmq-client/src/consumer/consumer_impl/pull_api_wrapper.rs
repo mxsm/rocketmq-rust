@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
@@ -61,11 +58,7 @@ pub struct PullAPIWrapper {
 }
 
 impl PullAPIWrapper {
-    pub fn new(
-        mq_client_factory: ArcMut<MQClientInstance>,
-        consumer_group: CheetahString,
-        unit_mode: bool,
-    ) -> Self {
+    pub fn new(mq_client_factory: ArcMut<MQClientInstance>, consumer_group: CheetahString, unit_mode: bool) -> Self {
         Self {
             client_instance: mq_client_factory,
             consumer_group,
@@ -181,19 +174,14 @@ impl PullAPIWrapper {
                     CheetahString::from_static_str(MessageConst::PROPERTY_MAX_OFFSET),
                     CheetahString::from_string(pull_result_ext.pull_result.max_offset.to_string()),
                 );
-                msg.broker_name =
-                    CheetahString::from_string(message_queue.get_broker_name().to_string());
+                msg.broker_name = CheetahString::from_string(message_queue.get_broker_name().to_string());
                 msg.queue_id = message_queue.get_queue_id();
                 if let Some(offset_delta) = pull_result_ext.offset_delta {
                     msg.queue_offset += offset_delta;
                 }
             }
-            pull_result_ext.pull_result.msg_found_list = Some(
-                msg_list_filter_again
-                    .into_iter()
-                    .map(ArcMut::new)
-                    .collect::<Vec<_>>(),
-            );
+            pull_result_ext.pull_result.msg_found_list =
+                Some(msg_list_filter_again.into_iter().map(ArcMut::new).collect::<Vec<_>>());
         }
     }
 
@@ -257,10 +245,7 @@ impl PullAPIWrapper {
     where
         PCB: PullCallback + 'static,
     {
-        let broker_name = self
-            .client_instance
-            .get_broker_name_from_message_queue(mq)
-            .await;
+        let broker_name = self.client_instance.get_broker_name_from_message_queue(mq).await;
         let broker_id = self.recalculate_pull_from_which_node(mq);
         let mut find_broker_result = self
             .client_instance
@@ -271,10 +256,7 @@ impl PullAPIWrapper {
             self.client_instance
                 .update_topic_route_info_from_name_server_topic(mq.get_topic_cs())
                 .await;
-            let broker_name_again = self
-                .client_instance
-                .get_broker_name_from_message_queue(mq)
-                .await;
+            let broker_name_again = self.client_instance.get_broker_name_from_message_queue(mq).await;
             let broker_id_again = self.recalculate_pull_from_which_node(mq);
             find_broker_result = self
                 .client_instance
@@ -288,8 +270,7 @@ impl PullAPIWrapper {
                     && find_broker_result.broker_version < RocketMqVersion::V4_1_0_SNAPSHOT as i32
                 {
                     return Err(mq_client_err!(format!(
-                        "The broker[{}],[{}] does not support consumer to filter message by \
-                         tag[{}]",
+                        "The broker[{}],[{}] does not support consumer to filter message by tag[{}]",
                         mq.get_broker_name(),
                         find_broker_result.broker_version,
                         expression_type
@@ -299,8 +280,7 @@ impl PullAPIWrapper {
 
             let mut sys_flag_inner = sys_flag;
             if find_broker_result.slave {
-                sys_flag_inner =
-                    PullSysFlag::clear_commit_offset_flag(sys_flag_inner as u32) as i32;
+                sys_flag_inner = PullSysFlag::clear_commit_offset_flag(sys_flag_inner as u32) as i32;
             }
 
             let request_header = PullMessageRequestHeader {
@@ -323,9 +303,7 @@ impl PullAPIWrapper {
                     rpc: Some(RpcRequestHeader {
                         namespace: None,
                         namespaced: None,
-                        broker_name: Some(CheetahString::from_string(
-                            mq.get_broker_name().to_string(),
-                        )),
+                        broker_name: Some(CheetahString::from_string(mq.get_broker_name().to_string())),
                         oneway: None,
                     }),
                 }),
@@ -362,10 +340,7 @@ impl PullAPIWrapper {
     ) -> rocketmq_error::RocketMQResult<CheetahString> {
         let topic_route_table = self.client_instance.topic_route_table.read().await;
         let topic_route_data = topic_route_table.get(topic);
-        let vec = topic_route_data
-            .unwrap()
-            .filter_server_table
-            .get(broker_addr);
+        let vec = topic_route_data.unwrap().filter_server_table.get(broker_addr);
         if let Some(vec) = vec {
             return vec.get(random_num() as usize % vec.len()).map_or(
                 Err(mq_client_err!(format!(
@@ -427,9 +402,7 @@ impl PullAPIWrapper {
                     rpc: Some(RpcRequestHeader {
                         namespace: None,
                         namespaced: None,
-                        broker_name: Some(CheetahString::from_string(
-                            mq.get_broker_name().to_string(),
-                        )),
+                        broker_name: Some(CheetahString::from_string(mq.get_broker_name().to_string())),
                         oneway: None,
                     }),
                 }),

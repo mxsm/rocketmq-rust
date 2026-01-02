@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::fmt;
 
@@ -58,5 +55,43 @@ impl fmt::Display for AclConfig {
             "AclConfig{{ global_white_addrs={:?}, plain_access_configs={:?} }}",
             self.global_white_addrs, self.plain_access_configs
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn acl_config_default_and_new() {
+        let config = AclConfig::default();
+        assert!(config.global_white_addrs().is_none());
+        assert!(config.plain_access_configs().is_none());
+
+        let config = AclConfig::new();
+        assert!(config.global_white_addrs().is_none());
+        assert!(config.plain_access_configs().is_none());
+    }
+
+    #[test]
+    fn acl_config_setters_and_getters() {
+        let mut config = AclConfig::new();
+
+        let addrs = vec![CheetahString::from("127.0.0.1")];
+        config.set_global_white_addrs(addrs.clone());
+        assert_eq!(config.global_white_addrs(), Some(addrs.as_slice()));
+
+        let plain_configs = vec![PlainAccessConfig::default()];
+        config.set_plain_access_configs(plain_configs.clone());
+        assert_eq!(config.plain_access_configs(), Some(plain_configs.as_slice()));
+    }
+
+    #[test]
+    fn acl_config_display() {
+        let config = AclConfig::new();
+        let display = format!("{}", config);
+        assert!(display.contains("AclConfig"));
+        assert!(display.contains("global_white_addrs=None"));
+        assert!(display.contains("plain_access_configs=None"));
     }
 }

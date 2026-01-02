@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 pub use blocking_client::BlockingClient;
 use cheetah_string::CheetahString;
@@ -82,12 +79,7 @@ pub trait RemotingClient: RemotingService {
     /// * `addr` - The address to invoke the command on.
     /// * `request` - The `RemotingCommand` to be sent.
     /// * `timeout_millis` - The timeout for the operation in milliseconds.
-    async fn invoke_request_oneway(
-        &self,
-        addr: &CheetahString,
-        request: RemotingCommand,
-        timeout_millis: u64,
-    );
+    async fn invoke_request_oneway(&self, addr: &CheetahString, request: RemotingCommand, timeout_millis: u64);
 
     /// Checks if a specified address is reachable.
     ///
@@ -106,9 +98,7 @@ pub trait RemotingClient: RemotingService {
 
 impl<T> InvokeCallback for T
 where
-    T: Fn(Option<RemotingCommand>, Option<Box<dyn std::error::Error>>, Option<ResponseFuture>)
-        + Send
-        + Sync,
+    T: Fn(Option<RemotingCommand>, Option<Box<dyn std::error::Error>>, Option<ResponseFuture>) + Send + Sync,
 {
     fn operation_complete(&self, response_future: ResponseFuture) {
         self(None, None, Some(response_future))

@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
@@ -64,26 +61,15 @@ impl Inner {
             return;
         }
 
-        if self
-            .default_message_store
-            .get_message_store_config()
-            .broker_role
-            == BrokerRole::Slave
-        {
+        if self.default_message_store.get_message_store_config().broker_role == BrokerRole::Slave {
             let connection_state = self.ha_service.get_ha_client().unwrap().get_current_state();
             if connection_state == request.expect_state() {
                 request.complete(true).await;
             } else if connection_state == HAConnectionState::Ready {
-                if get_current_millis()
-                    - self
-                        .last_check_time_stamp
-                        .load(std::sync::atomic::Ordering::Relaxed)
+                if get_current_millis() - self.last_check_time_stamp.load(std::sync::atomic::Ordering::Relaxed)
                     > CONNECTION_ESTABLISH_TIMEOUT
                 {
-                    error!(
-                        "Wait HA connection establish with {} timeout",
-                        request.remote_addr()
-                    );
+                    error!("Wait HA connection establish with {} timeout", request.remote_addr());
                     request.complete(false).await;
                 }
             } else {
@@ -93,10 +79,7 @@ impl Inner {
         } else {
             let mut connection_found = false;
             for connection in self.ha_service.get_connection_list().await {
-                if self
-                    .check_connection_state_and_notify(connection.as_ref())
-                    .await
-                {
+                if self.check_connection_state_and_notify(connection.as_ref()).await {
                     connection_found = true;
                 }
             }
@@ -106,16 +89,10 @@ impl Inner {
                     .store(get_current_millis(), std::sync::atomic::Ordering::Relaxed);
             }
             if !connection_found
-                && (get_current_millis()
-                    - self
-                        .last_check_time_stamp
-                        .load(std::sync::atomic::Ordering::Relaxed)
+                && (get_current_millis() - self.last_check_time_stamp.load(std::sync::atomic::Ordering::Relaxed)
                     > CONNECTION_ESTABLISH_TIMEOUT)
             {
-                error!(
-                    "Wait HA connection establish with {} timeout",
-                    request.remote_addr()
-                );
+                error!("Wait HA connection establish with {} timeout", request.remote_addr());
                 request.complete(false).await;
             }
         }
@@ -156,10 +133,7 @@ impl ServiceTask for Inner {
 }
 
 impl HAConnectionStateNotificationService {
-    pub fn new(
-        ha_service: GeneralHAService,
-        default_message_store: ArcMut<LocalFileMessageStore>,
-    ) -> Self {
+    pub fn new(ha_service: GeneralHAService, default_message_store: ArcMut<LocalFileMessageStore>) -> Self {
         let inner = Arc::new(Inner {
             ha_service,
             default_message_store,
@@ -180,22 +154,14 @@ impl HAConnectionStateNotificationService {
         match self.service_manager.start().await {
             Ok(_) => Ok(()),
             Err(e) => {
-                error!(
-                    "Failed to start HAConnectionStateNotificationService, error: {:?}",
-                    e
-                );
+                error!("Failed to start HAConnectionStateNotificationService, error: {:?}", e);
                 Err(HAError::Service(e.to_string()))
             }
         }
     }
 
-    pub async fn check_connection_state_and_notify(
-        &self,
-        connection: &GeneralHAConnection,
-    ) -> bool {
-        self.inner
-            .check_connection_state_and_notify(connection)
-            .await
+    pub async fn check_connection_state_and_notify(&self, connection: &GeneralHAConnection) -> bool {
+        self.inner.check_connection_state_and_notify(connection).await
     }
 
     pub async fn set_request(&self, request: HAConnectionStateNotificationRequest) {

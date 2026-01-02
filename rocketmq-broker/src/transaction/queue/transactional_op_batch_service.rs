@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
@@ -93,18 +90,13 @@ where
             std::sync::atomic::Ordering::Relaxed,
         );
         while !context.is_stopped() {
-            let mut interval = self
-                .wakeup_timestamp
-                .load(std::sync::atomic::Ordering::Relaxed) as i64
-                - get_current_millis() as i64;
+            let mut interval =
+                self.wakeup_timestamp.load(std::sync::atomic::Ordering::Relaxed) as i64 - get_current_millis() as i64;
             if interval <= 0 {
                 interval = 0;
                 context.wakeup();
             }
-            if context
-                .wait_for_running(Duration::from_millis(interval as u64))
-                .await
-            {
+            if context.wait_for_running(Duration::from_millis(interval as u64)).await {
                 self.on_wait_end().await;
             }
         }
@@ -113,11 +105,10 @@ where
     async fn on_wait_end(&self) {
         if let Some(transactional_message_service) = self.transactional_message_service.upgrade() {
             let time = transactional_message_service.batch_send_op_message().await;
-            self.wakeup_timestamp
-                .store(time, std::sync::atomic::Ordering::Relaxed);
+            self.wakeup_timestamp.store(time, std::sync::atomic::Ordering::Relaxed);
         } else {
-            const WARN_MESSAGE: &str = "TransactionalMessageService has been dropped, skipping \
-                                        batch send operation message.";
+            const WARN_MESSAGE: &str =
+                "TransactionalMessageService has been dropped, skipping batch send operation message.";
             warn!(WARN_MESSAGE);
         }
     }

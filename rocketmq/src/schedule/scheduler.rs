@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -143,9 +140,7 @@ impl TaskScheduler {
     pub async fn start(&self) -> SchedulerResult<()> {
         let mut running = self.running.write().await;
         if *running {
-            return Err(SchedulerError::SystemError(
-                "Scheduler is already running".to_string(),
-            ));
+            return Err(SchedulerError::SystemError("Scheduler is already running".to_string()));
         }
         *running = true;
 
@@ -199,11 +194,7 @@ impl TaskScheduler {
     }
 
     /// Schedule a new job
-    pub async fn schedule_job(
-        &self,
-        task: Arc<Task>,
-        trigger: Arc<dyn Trigger>,
-    ) -> SchedulerResult<String> {
+    pub async fn schedule_job(&self, task: Arc<Task>, trigger: Arc<dyn Trigger>) -> SchedulerResult<String> {
         let job = ScheduledJob::new(task.clone(), trigger);
         let job_id = job.id.clone();
 
@@ -306,11 +297,7 @@ impl TaskScheduler {
     }
 
     /// Schedule a delayed job (execute once after delay)
-    pub async fn schedule_delayed_job(
-        &self,
-        task: Arc<Task>,
-        delay: Duration,
-    ) -> SchedulerResult<String> {
+    pub async fn schedule_delayed_job(&self, task: Arc<Task>, delay: Duration) -> SchedulerResult<String> {
         let trigger = Arc::new(DelayTrigger::new(delay));
         self.schedule_job(task, trigger).await
     }
@@ -365,10 +352,7 @@ impl TaskScheduler {
             let execution_id = executor
                 .execute_task_with_delay(job.task, SystemTime::now(), execution_delay)
                 .await?;
-            info!(
-                "Job executed immediately with delay: {} ({})",
-                job_id, execution_id
-            );
+            info!("Job executed immediately with delay: {} ({})", job_id, execution_id);
             Ok(execution_id)
         } else {
             Err(SchedulerError::TaskNotFound(job_id.to_string()))

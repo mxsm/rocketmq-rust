@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 
@@ -38,8 +35,7 @@ use crate::broker_path_config_helper::get_topic_queue_mapping_path;
 #[derive(Default)]
 pub(crate) struct TopicQueueMappingManager {
     pub(crate) data_version: Arc<parking_lot::Mutex<DataVersion>>,
-    pub(crate) topic_queue_mapping_table:
-        DashMap<CheetahString /* topic */, ArcMut<TopicQueueMappingDetail>>,
+    pub(crate) topic_queue_mapping_table: DashMap<CheetahString /* topic */, ArcMut<TopicQueueMappingDetail>>,
     pub(crate) broker_config: Arc<BrokerConfig>,
 }
 
@@ -95,13 +91,7 @@ impl TopicQueueMappingManager {
     ) -> TopicQueueMappingContext {
         if let Some(value) = request_header.lo() {
             if !value {
-                return TopicQueueMappingContext::new(
-                    request_header.topic().clone(),
-                    None,
-                    None,
-                    vec![],
-                    None,
-                );
+                return TopicQueueMappingContext::new(request_header.topic().clone(), None, None, vec![], None);
             }
             //do
         }
@@ -121,11 +111,7 @@ impl TopicQueueMappingManager {
         let mapping_detail = tqmd.unwrap();
 
         assert_eq!(
-            mapping_detail
-                .topic_queue_mapping_info
-                .bname
-                .clone()
-                .unwrap(),
+            mapping_detail.topic_queue_mapping_info.bname.clone().unwrap(),
             self.broker_config.broker_name().clone()
         );
 
@@ -187,26 +173,17 @@ impl TopicQueueMappingManager {
     }
 
     pub fn get_topic_queue_mapping(&self, topic: &str) -> Option<ArcMut<TopicQueueMappingDetail>> {
-        self.topic_queue_mapping_table
-            .get(topic)
-            .as_deref()
-            .cloned()
+        self.topic_queue_mapping_table.get(topic).as_deref().cloned()
     }
 
     pub fn delete(&self, topic: &CheetahString) {
         let old = self.topic_queue_mapping_table.remove(topic);
         match old {
             None => {
-                warn!(
-                    "delete topic queue mapping failed, static topic: {} not exists",
-                    topic
-                )
+                warn!("delete topic queue mapping failed, static topic: {} not exists", topic)
             }
             Some(value) => {
-                info!(
-                    "delete topic queue mapping OK, static topic queue mapping: {:?}",
-                    value
-                );
+                info!("delete topic queue mapping OK, static topic queue mapping: {:?}", value);
                 self.data_version.lock().next_version();
                 self.persist();
             }
@@ -229,9 +206,7 @@ impl ConfigManager for TopicQueueMappingManager {
             true => wrapper
                 .serialize_json_pretty()
                 .expect("encode topic queue mapping pretty failed"),
-            false => wrapper
-                .serialize_json()
-                .expect("encode topic queue mapping failed"),
+            false => wrapper.serialize_json().expect("encode topic queue mapping failed"),
         }
     }
 
@@ -239,8 +214,7 @@ impl ConfigManager for TopicQueueMappingManager {
         if json_string.is_empty() {
             return;
         }
-        let mut wrapper = serde_json::from_str::<TopicQueueMappingSerializeWrapper>(json_string)
-            .unwrap_or_default();
+        let mut wrapper = serde_json::from_str::<TopicQueueMappingSerializeWrapper>(json_string).unwrap_or_default();
         if let Some(value) = wrapper.data_version() {
             self.data_version.lock().assign_new_one(value);
         }
@@ -275,9 +249,7 @@ mod tests {
         let broker_config = Arc::new(BrokerConfig::default());
         let manager = TopicQueueMappingManager::new(broker_config);
 
-        assert!(manager
-            .get_topic_queue_mapping("non_existent_topic")
-            .is_none());
+        assert!(manager.get_topic_queue_mapping("non_existent_topic").is_none());
     }
 
     #[test]

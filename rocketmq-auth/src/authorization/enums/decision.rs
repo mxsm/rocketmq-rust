@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[repr(u8)]
@@ -60,5 +57,44 @@ impl TryFrom<u8> for Decision {
             2 => Ok(Decision::Deny),
             _ => Err(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_decision_code() {
+        assert_eq!(Decision::Allow.code(), 1);
+        assert_eq!(Decision::Deny.code(), 2);
+    }
+
+    #[test]
+    fn test_decision_name() {
+        assert_eq!(Decision::Allow.name(), "Allow");
+        assert_eq!(Decision::Deny.name(), "Deny");
+    }
+
+    #[test]
+    fn test_decision_get_by_name() {
+        assert_eq!(Decision::get_by_name("Allow"), Some(Decision::Allow));
+        assert_eq!(Decision::get_by_name("allow"), Some(Decision::Allow));
+        assert_eq!(Decision::get_by_name("Deny"), Some(Decision::Deny));
+        assert_eq!(Decision::get_by_name("deny"), Some(Decision::Deny));
+        assert_eq!(Decision::get_by_name("Unknown"), None);
+    }
+
+    #[test]
+    fn test_decision_from_u8() {
+        assert_eq!(u8::from(Decision::Allow), 1);
+        assert_eq!(u8::from(Decision::Deny), 2);
+    }
+
+    #[test]
+    fn test_decision_try_from_u8() {
+        assert_eq!(Decision::try_from(1), Ok(Decision::Allow));
+        assert_eq!(Decision::try_from(2), Ok(Decision::Deny));
+        assert_eq!(Decision::try_from(3), Err(()));
     }
 }

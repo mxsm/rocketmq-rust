@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_rust::ArcMut;
@@ -40,8 +37,7 @@ impl PullMessageService {
         }
     }
     pub async fn start(&mut self, mut instance: ArcMut<MQClientInstance>) {
-        let (tx, mut rx) =
-            tokio::sync::mpsc::channel::<Box<dyn MessageRequest + Send + 'static>>(1024 * 4);
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Box<dyn MessageRequest + Send + 'static>>(1024 * 4);
         let (mut shutdown, tx_shutdown) = Shutdown::new(1);
         self.tx = Some(tx);
         self.tx_shutdown = Some(tx_shutdown);
@@ -91,10 +87,7 @@ impl PullMessageService {
         if let Some(mut consumer) = instance.select_consumer(request.get_consumer_group()).await {
             consumer.pull_message(request).await;
         } else {
-            warn!(
-                "No matched consumer for the PullRequest {},drop it",
-                request
-            )
+            warn!("No matched consumer for the PullRequest {},drop it", request)
         }
     }
 
@@ -102,10 +95,7 @@ impl PullMessageService {
         if let Some(mut consumer) = instance.select_consumer(request.get_consumer_group()).await {
             consumer.pop_message(request).await;
         } else {
-            warn!(
-                "No matched consumer for the PopRequest {}, drop it",
-                request
-            )
+            warn!("No matched consumer for the PopRequest {}, drop it", request)
         }
     }
 
@@ -147,10 +137,7 @@ impl PullMessageService {
                 warn!("Failed to send shutdown signal to pull_tx, error: {:?}", e);
             }
         } else {
-            warn!(
-                "Attempted to shutdown but tx_shutdown is None. Ensure `start` is called before \
-                 `shutdown`."
-            );
+            warn!("Attempted to shutdown but tx_shutdown is None. Ensure `start` is called before `shutdown`.");
         }
     }
 }

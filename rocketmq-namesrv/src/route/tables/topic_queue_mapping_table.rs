@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Topic queue mapping info table with concurrent access
 //!
@@ -67,9 +64,7 @@ impl Default for TopicQueueMappingInfoTable {
 impl TopicQueueMappingInfoTable {
     /// Create a new topic queue mapping info table
     pub fn new() -> Self {
-        Self {
-            inner: DashMap::new(),
-        }
+        Self { inner: DashMap::new() }
     }
 
     /// Create with estimated capacity
@@ -97,10 +92,7 @@ impl TopicQueueMappingInfoTable {
         broker_name: BrokerName,
         mapping_info: Arc<TopicQueueMappingInfo>,
     ) -> Option<Arc<TopicQueueMappingInfo>> {
-        self.inner
-            .entry(topic)
-            .or_default()
-            .insert(broker_name, mapping_info)
+        self.inner.entry(topic).or_default().insert(broker_name, mapping_info)
     }
 
     /// Get topic queue mapping info for a specific broker
@@ -124,10 +116,7 @@ impl TopicQueueMappingInfoTable {
     ///
     /// # Returns
     /// HashMap of BrokerName -> TopicQueueMappingInfo if found
-    pub fn get_topic_mappings(
-        &self,
-        topic: &str,
-    ) -> Option<HashMap<CheetahString, TopicQueueMappingInfo>> {
+    pub fn get_topic_mappings(&self, topic: &str) -> Option<HashMap<CheetahString, TopicQueueMappingInfo>> {
         self.inner.get(topic).map(|broker_map| {
             broker_map
                 .iter()
@@ -144,11 +133,7 @@ impl TopicQueueMappingInfoTable {
     ///
     /// # Returns
     /// Removed mapping info if existed
-    pub fn remove_broker(
-        &self,
-        topic: &str,
-        broker_name: &str,
-    ) -> Option<Arc<TopicQueueMappingInfo>> {
+    pub fn remove_broker(&self, topic: &str, broker_name: &str) -> Option<Arc<TopicQueueMappingInfo>> {
         self.inner
             .get(topic)
             .and_then(|broker_map| broker_map.remove(broker_name).map(|(_, v)| v))
@@ -161,10 +146,7 @@ impl TopicQueueMappingInfoTable {
     ///
     /// # Returns
     /// Removed broker map if existed
-    pub fn remove_topic(
-        &self,
-        topic: &str,
-    ) -> Option<DashMap<BrokerName, Arc<TopicQueueMappingInfo>>> {
+    pub fn remove_topic(&self, topic: &str) -> Option<DashMap<BrokerName, Arc<TopicQueueMappingInfo>>> {
         self.inner.remove(topic).map(|(_, v)| v)
     }
 

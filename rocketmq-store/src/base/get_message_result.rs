@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::fmt;
 
@@ -74,8 +71,8 @@ impl fmt::Display for GetMessageResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "GetMessageResult [status={:?}, nextBeginOffset={}, minOffset={}, maxOffset={}, \
-             bufferTotalSize={}, messageCount={}, suggestPullingFromSlave={}]",
+            "GetMessageResult [status={:?}, nextBeginOffset={}, minOffset={}, maxOffset={}, bufferTotalSize={}, \
+             messageCount={}, suggestPullingFromSlave={}]",
             self.status,
             self.next_begin_offset,
             self.min_offset,
@@ -252,16 +249,10 @@ impl GetMessageResult {
     }
 
     #[inline]
-    pub fn add_message(
-        &mut self,
-        mapped_buffer: SelectMappedBufferResult,
-        queue_offset: u64,
-        batch_num: i32,
-    ) {
+    pub fn add_message(&mut self, mapped_buffer: SelectMappedBufferResult, queue_offset: u64, batch_num: i32) {
         self.buffer_total_size += mapped_buffer.size;
         self.message_count += batch_num;
-        self.msg_count4_commercial +=
-            (mapped_buffer.size as f64 / self.commercial_size_per_msg as f64).ceil() as i32;
+        self.msg_count4_commercial += (mapped_buffer.size as f64 / self.commercial_size_per_msg as f64).ceil() as i32;
         self.message_queue_offset.push(queue_offset);
         self.message_mapped_list.push(mapped_buffer);
     }
@@ -269,8 +260,7 @@ impl GetMessageResult {
     #[inline]
     pub fn add_message_inner(&mut self, mapped_buffer: SelectMappedBufferResult) {
         self.buffer_total_size += mapped_buffer.size;
-        self.msg_count4_commercial +=
-            (mapped_buffer.size as f64 / self.commercial_size_per_msg as f64).ceil() as i32;
+        self.msg_count4_commercial += (mapped_buffer.size as f64 / self.commercial_size_per_msg as f64).ceil() as i32;
         self.message_count += 1;
         self.message_mapped_list.push(mapped_buffer);
     }
@@ -356,10 +346,7 @@ mod tests {
         assert_eq!(result.max_offset, max_offset);
         assert_eq!(result.buffer_total_size, buffer_total_size);
         assert_eq!(result.message_count, message_count);
-        assert_eq!(
-            result.suggest_pulling_from_slave,
-            suggest_pulling_from_slave
-        );
+        assert_eq!(result.suggest_pulling_from_slave, suggest_pulling_from_slave);
         assert_eq!(result.msg_count4_commercial, msg_count4_commercial);
         assert_eq!(result.commercial_size_per_msg, commercial_size_per_msg);
         assert_eq!(result.cold_data_sum, cold_data_sum);

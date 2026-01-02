@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -34,9 +31,7 @@ pub struct BrokerEpochCacheHandler<MS: MessageStore> {
 
 impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self {
-            broker_runtime_inner,
-        }
+        Self { broker_runtime_inner }
     }
 
     pub async fn get_broker_epoch_cache(
@@ -48,8 +43,7 @@ impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let broker_runtime_inner = self.broker_runtime_inner.as_mut();
 
-        let replicas_manage = if let Some(replicas_manage) = broker_runtime_inner.replicas_manager()
-        {
+        let replicas_manage = if let Some(replicas_manage) = broker_runtime_inner.replicas_manager() {
             replicas_manage
         } else {
             panic!("`replicas_manage` object is empty")
@@ -79,8 +73,6 @@ impl<MS: MessageStore> BrokerEpochCacheHandler<MS> {
         );
 
         let cache = entry_code.encode().unwrap_or_default();
-        Ok(Some(
-            response.set_body(cache).set_code(ResponseCode::Success),
-        ))
+        Ok(Some(response.set_body(cache).set_code(ResponseCode::Success)))
     }
 }

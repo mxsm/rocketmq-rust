@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::env;
 use std::sync::atomic::AtomicBool;
@@ -75,8 +72,7 @@ impl Default for ClientConfig {
 }
 
 impl ClientConfig {
-    pub const SEND_MESSAGE_WITH_VIP_CHANNEL_PROPERTY: &'static str =
-        "com.rocketmq.sendMessageWithVIPChannel";
+    pub const SEND_MESSAGE_WITH_VIP_CHANNEL_PROPERTY: &'static str = "com.rocketmq.sendMessageWithVIPChannel";
     pub const SOCKS_PROXY_CONFIG: &'static str = "com.rocketmq.socks.proxy.config";
     pub const DECODE_READ_BODY: &'static str = "com.rocketmq.read.body";
     pub const DECODE_DECOMPRESS_BODY: &'static str = "com.rocketmq.decompress.body";
@@ -86,8 +82,7 @@ impl ClientConfig {
 
     pub fn new() -> Self {
         ClientConfig {
-            namesrv_addr: NameServerAddressUtils::get_name_server_addresses()
-                .map(|addr| addr.into()),
+            namesrv_addr: NameServerAddressUtils::get_name_server_addresses().map(|addr| addr.into()),
             client_ip: NetworkUtil::get_local_address().map(|addr| addr.into()),
             instance_name: env::var("rocketmq.client.name")
                 .unwrap_or_else(|_| "DEFAULT".to_string())
@@ -128,11 +123,8 @@ impl ClientConfig {
             detect_interval: Duration::from_secs(2).as_millis() as u32,
             language: LanguageCode::RUST,
             enable_stream_request_type: false,
-            send_latency_enable: env::var(Self::SEND_LATENCY_ENABLE)
-                .unwrap_or_else(|_| "false".to_string())
-                == "false",
-            start_detector_enable: env::var(Self::START_DETECTOR_ENABLE)
-                .unwrap_or_else(|_| "false".to_string())
+            send_latency_enable: env::var(Self::SEND_LATENCY_ENABLE).unwrap_or_else(|_| "false".to_string()) == "false",
+            start_detector_enable: env::var(Self::START_DETECTOR_ENABLE).unwrap_or_else(|_| "false".to_string())
                 == "false",
             enable_heartbeat_channel_event_listener: true,
             enable_trace: false,
@@ -144,18 +136,15 @@ impl ClientConfig {
 impl ClientConfig {
     #[inline]
     pub fn with_namespace(&mut self, resource: &str) -> CheetahString {
-        NamespaceUtil::wrap_namespace(self.get_namespace().unwrap_or_default().as_str(), resource)
-            .into()
+        NamespaceUtil::wrap_namespace(self.get_namespace().unwrap_or_default().as_str(), resource).into()
     }
 
     #[inline]
     pub fn queue_with_namespace(&mut self, mut queue: MessageQueue) -> MessageQueue {
         if let Some(namespace) = self.get_namespace() {
             if !namespace.is_empty() {
-                let topic = CheetahString::from_string(NamespaceUtil::wrap_namespace(
-                    namespace.as_str(),
-                    queue.get_topic(),
-                ));
+                let topic =
+                    CheetahString::from_string(NamespaceUtil::wrap_namespace(namespace.as_str(), queue.get_topic()));
                 queue.set_topic(topic);
                 return queue;
             }
@@ -177,8 +166,7 @@ impl ClientConfig {
         if let Some(ref namesrv_addr) = self.namesrv_addr {
             if NameServerAddressUtils::validate_instance_endpoint(namesrv_addr.as_ref()) {
                 self.namespace =
-                    NameServerAddressUtils::parse_instance_id_from_endpoint(namesrv_addr.as_ref())
-                        .map(|id| id.into());
+                    NameServerAddressUtils::parse_instance_id_from_endpoint(namesrv_addr.as_ref()).map(|id| id.into());
             }
         }
         self.namespace_initialized.store(true, Ordering::Release);

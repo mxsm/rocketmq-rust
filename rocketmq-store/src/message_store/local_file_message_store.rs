@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #![allow(unused_variables)]
 #![allow(unused_imports)]
@@ -147,8 +144,7 @@ pub struct LocalFileMessageStore {
     correct_logic_offset_service: Arc<CorrectLogicOffsetService>,
     clean_consume_queue_service: Arc<CleanConsumeQueueService>,
     broker_stats_manager: Option<Arc<BrokerStatsManager>>,
-    message_arriving_listener:
-        Option<Arc<Box<dyn MessageArrivingListener + Sync + Send + 'static>>>,
+    message_arriving_listener: Option<Arc<Box<dyn MessageArrivingListener + Sync + Send + 'static>>>,
     notify_message_arrive_in_batch: bool,
     store_stats_service: Arc<StoreStatsService>,
 
@@ -172,28 +168,23 @@ impl LocalFileMessageStore {
         broker_stats_manager: Option<Arc<BrokerStatsManager>>,
         notify_message_arrive_in_batch: bool,
     ) -> Self {
-        let (delay_level_table, max_delay_level) =
-            parse_delay_level(message_store_config.message_delay_level.as_str());
+        let (delay_level_table, max_delay_level) = parse_delay_level(message_store_config.message_delay_level.as_str());
         let running_flags = Arc::new(RunningFlags::new());
         let store_checkpoint = Arc::new(
-            StoreCheckpoint::new(get_store_checkpoint(
-                message_store_config.store_path_root_dir.as_str(),
-            ))
-            .unwrap(),
+            StoreCheckpoint::new(get_store_checkpoint(message_store_config.store_path_root_dir.as_str())).unwrap(),
         );
         let index_service = IndexService::new(
             message_store_config.clone(),
             store_checkpoint.clone(),
             running_flags.clone(),
         );
-        let build_index: Arc<dyn CommitLogDispatcher> = Arc::new(
-            CommitLogDispatcherBuildIndex::new(index_service.clone(), message_store_config.clone()),
-        );
-        let consume_queue_store =
-            ConsumeQueueStore::new(message_store_config.clone(), broker_config.clone());
-        let build_consume_queue: Arc<dyn CommitLogDispatcher> = Arc::new(
-            CommitLogDispatcherBuildConsumeQueue::new(consume_queue_store.clone()),
-        );
+        let build_index: Arc<dyn CommitLogDispatcher> = Arc::new(CommitLogDispatcherBuildIndex::new(
+            index_service.clone(),
+            message_store_config.clone(),
+        ));
+        let consume_queue_store = ConsumeQueueStore::new(message_store_config.clone(), broker_config.clone());
+        let build_consume_queue: Arc<dyn CommitLogDispatcher> =
+            Arc::new(CommitLogDispatcherBuildConsumeQueue::new(consume_queue_store.clone()));
 
         let dispatcher = ArcMut::new(CommitLogDispatcherDefault {
             dispatcher_vec: vec![build_consume_queue, build_index],
@@ -293,10 +284,8 @@ impl LocalFileMessageStore {
 
     pub fn set_message_store_arc(&mut self, message_store_arc: ArcMut<LocalFileMessageStore>) {
         self.message_store_arc = Some(message_store_arc.clone());
-        self.commit_log
-            .set_local_file_message_store(message_store_arc.clone());
-        self.consume_queue_store
-            .set_message_store(message_store_arc);
+        self.commit_log.set_local_file_message_store(message_store_arc.clone());
+        self.consume_queue_store.set_message_store(message_store_arc);
     }
 
     #[inline]
@@ -353,17 +342,11 @@ impl LocalFileMessageStore {
         let recover_concurrently = self.is_recover_concurrently();
         info!(
             "message store recover mode: {}",
-            if recover_concurrently {
-                "concurrent"
-            } else {
-                "normal"
-            },
+            if recover_concurrently { "concurrent" } else { "normal" },
         );
         let recover_consume_queue_start = Instant::now();
         self.recover_consume_queue().await;
-        let max_phy_offset_of_consume_queue = self
-            .consume_queue_store
-            .get_max_phy_offset_in_consume_queue_global();
+        let max_phy_offset_of_consume_queue = self.consume_queue_store.get_max_phy_offset_in_consume_queue_global();
         let recover_consume_queue = Instant::now()
             .saturating_duration_since(recover_consume_queue_start)
             .as_millis();
@@ -372,8 +355,7 @@ impl LocalFileMessageStore {
         if last_exit_ok {
             self.recover_normally(max_phy_offset_of_consume_queue).await;
         } else {
-            self.recover_abnormally(max_phy_offset_of_consume_queue)
-                .await;
+            self.recover_abnormally(max_phy_offset_of_consume_queue).await;
         }
         let recover_commit_log = Instant::now()
             .saturating_duration_since(recover_commit_log_start)
@@ -385,8 +367,8 @@ impl LocalFileMessageStore {
             .saturating_duration_since(recover_topic_queue_table_start)
             .as_millis();
         info!(
-            "message store recover total cost: {} ms, recoverConsumeQueue: {} ms, \
-             recoverCommitLog: {} ms, recoverOffsetTable: {} ms",
+            "message store recover total cost: {} ms, recoverConsumeQueue: {} ms, recoverCommitLog: {} ms, \
+             recoverOffsetTable: {} ms",
             recover_consume_queue + recover_commit_log + recover_topic_queue_table,
             recover_consume_queue,
             recover_commit_log,
@@ -403,17 +385,11 @@ impl LocalFileMessageStore {
 
         if use_optimized {
             self.commit_log
-                .recover_normally_optimized(
-                    max_phy_offset_of_consume_queue,
-                    self.message_store_arc.clone().unwrap(),
-                )
+                .recover_normally_optimized(max_phy_offset_of_consume_queue, self.message_store_arc.clone().unwrap())
                 .await;
         } else {
             self.commit_log
-                .recover_normally(
-                    max_phy_offset_of_consume_queue,
-                    self.message_store_arc.clone().unwrap(),
-                )
+                .recover_normally(max_phy_offset_of_consume_queue, self.message_store_arc.clone().unwrap())
                 .await;
         }
     }
@@ -427,24 +403,17 @@ impl LocalFileMessageStore {
 
         if use_optimized {
             self.commit_log
-                .recover_abnormally_optimized(
-                    max_phy_offset_of_consume_queue,
-                    self.message_store_arc.clone().unwrap(),
-                )
+                .recover_abnormally_optimized(max_phy_offset_of_consume_queue, self.message_store_arc.clone().unwrap())
                 .await;
         } else {
             self.commit_log
-                .recover_abnormally(
-                    max_phy_offset_of_consume_queue,
-                    self.message_store_arc.clone().unwrap(),
-                )
+                .recover_abnormally(max_phy_offset_of_consume_queue, self.message_store_arc.clone().unwrap())
                 .await;
         }
     }
 
     fn is_recover_concurrently(&self) -> bool {
-        self.broker_config.recover_concurrently
-            & self.message_store_config.is_enable_rocksdb_store()
+        self.broker_config.recover_concurrently & self.message_store_config.is_enable_rocksdb_store()
     }
 
     async fn recover_consume_queue(&mut self) {
@@ -497,8 +466,7 @@ impl LocalFileMessageStore {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(1000 * 60));
             interval.tick().await;
-            let mut interval =
-                tokio::time::interval(Duration::from_millis(clean_resource_interval));
+            let mut interval = tokio::time::interval(Duration::from_millis(clean_resource_interval));
             loop {
                 clean_commit_log_service_arc.run();
                 interval.tick().await;
@@ -533,8 +501,7 @@ impl LocalFileMessageStore {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(1000 * 60));
             interval.tick().await;
-            let mut interval =
-                tokio::time::interval(Duration::from_millis(clean_resource_interval));
+            let mut interval = tokio::time::interval(Duration::from_millis(clean_resource_interval));
             loop {
                 correct_logic_offset_service_arc.run();
                 clean_consume_queue_service_arc.run();
@@ -550,8 +517,7 @@ impl LocalFileMessageStore {
 
     pub fn next_offset_correction(&self, old_offset: i64, new_offset: i64) -> i64 {
         let mut next_offset = old_offset;
-        if self.message_store_config.broker_role != BrokerRole::Slave
-            || self.message_store_config.offset_check_in_slave
+        if self.message_store_config.broker_role != BrokerRole::Slave || self.message_store_config.offset_check_in_slave
         {
             next_offset = new_offset;
         }
@@ -568,9 +534,7 @@ impl LocalFileMessageStore {
 
     pub fn set_message_arriving_listener(
         &mut self,
-        message_arriving_listener: Option<
-            Arc<Box<dyn MessageArrivingListener + Sync + Send + 'static>>,
-        >,
+        message_arriving_listener: Option<Arc<Box<dyn MessageArrivingListener + Sync + Send + 'static>>>,
     ) {
         self.message_arriving_listener = message_arriving_listener;
     }
@@ -589,8 +553,8 @@ fn estimate_in_mem_by_commit_offset(
     max_offset_py: i64,
     message_store_config: &Arc<MessageStoreConfig>,
 ) -> bool {
-    let memory = (*TOTAL_PHYSICAL_MEMORY_SIZE as f64)
-        * (message_store_config.access_message_in_memory_max_ratio as f64 / 100.0);
+    let memory =
+        (*TOTAL_PHYSICAL_MEMORY_SIZE as f64) * (message_store_config.access_message_in_memory_max_ratio as f64 / 100.0);
     (max_offset_py - offset_py) <= memory as i64
 }
 
@@ -617,17 +581,13 @@ fn is_the_batch_full(
     }
 
     if is_in_mem {
-        if (buffer_total + size_py) as u64
-            > message_store_config.max_transfer_bytes_on_message_in_memory
-        {
+        if (buffer_total + size_py) as u64 > message_store_config.max_transfer_bytes_on_message_in_memory {
             return true;
         }
 
         message_total as u64 > message_store_config.max_transfer_count_on_message_in_memory - 1
     } else {
-        if (buffer_total + size_py) as u64
-            > message_store_config.max_transfer_bytes_on_message_in_disk
-        {
+        if (buffer_total + size_py) as u64 > message_store_config.max_transfer_bytes_on_message_in_disk {
             return true;
         }
 
@@ -642,11 +602,7 @@ impl MessageStore for LocalFileMessageStore {
         let last_exit_ok = !self.is_temp_file_exist();
         info!(
             "last shutdown {}, store path root dir: {}",
-            if last_exit_ok {
-                "normally"
-            } else {
-                "abnormally"
-            },
+            if last_exit_ok { "normally" } else { "abnormally" },
             self.message_store_config.store_path_root_dir
         );
         //load Commit log-- init commit mapped file queue
@@ -666,8 +622,7 @@ impl MessageStore for LocalFileMessageStore {
 
         if result {
             let checkpoint = self.store_checkpoint.as_ref().unwrap();
-            self.master_flushed_offset =
-                Arc::new(AtomicI64::new(checkpoint.master_flushed_offset() as i64));
+            self.master_flushed_offset = Arc::new(AtomicI64::new(checkpoint.master_flushed_offset() as i64));
             self.set_confirm_offset(checkpoint.confirm_phy_offset() as i64);
             result = self.index_service.load(last_exit_ok);
 
@@ -723,21 +678,16 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     async fn init(&mut self) -> Result<(), StoreError> {
-        if !self.message_store_config.enable_dleger_commit_log
-            && !self.message_store_config.duplication_enable
-        {
+        if !self.message_store_config.enable_dleger_commit_log && !self.message_store_config.duplication_enable {
             if self.message_store_config.enable_controller_mode {
-                let mut auto_switch_ha_service =
-                    GeneralHAService::AutoSwitchHAService(ArcMut::new(
-                        crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService,
-                    ));
+                let mut auto_switch_ha_service = GeneralHAService::AutoSwitchHAService(ArcMut::new(
+                    crate::ha::auto_switch::auto_switch_ha_service::AutoSwitchHAService,
+                ));
                 let _ = auto_switch_ha_service.init();
                 self.ha_service = Some(auto_switch_ha_service);
             } else {
                 let mut default_ha_service = GeneralHAService::DefaultHAService(ArcMut::new(
-                    crate::ha::default_ha_service::DefaultHAService::new(
-                        self.message_store_arc.clone().unwrap(),
-                    ),
+                    crate::ha::default_ha_service::DefaultHAService::new(self.message_store_arc.clone().unwrap()),
                 ));
                 let _ = default_ha_service.init();
                 self.ha_service = Some(default_ha_service);
@@ -784,9 +734,7 @@ impl MessageStore for LocalFileMessageStore {
             }
             if self.running_flags.is_writeable() && self.dispatch_behind_bytes() == 0 {
                 //delete abort file
-                self.delete_file(get_abort_file(
-                    self.message_store_config.store_path_root_dir.as_str(),
-                ))
+                self.delete_file(get_abort_file(self.message_store_config.store_path_root_dir.as_str()))
             }
         }
 
@@ -797,9 +745,7 @@ impl MessageStore for LocalFileMessageStore {
         self.consume_queue_store.destroy();
         self.commit_log.destroy();
         self.index_service.destroy();
-        self.delete_file(get_abort_file(
-            self.message_store_config.store_path_root_dir.as_str(),
-        ));
+        self.delete_file(get_abort_file(self.message_store_config.store_path_root_dir.as_str()));
         self.delete_file(get_store_checkpoint(
             self.message_store_config.store_path_root_dir.as_str(),
         ));
@@ -860,9 +806,7 @@ impl MessageStore for LocalFileMessageStore {
 
     async fn put_messages(&mut self, mut message_ext_batch: MessageExtBatch) -> PutMessageResult {
         for hook in self.put_message_hook_list.iter() {
-            if let Some(result) =
-                hook.execute_before_put_message(&mut message_ext_batch.message_ext_broker_inner)
-            {
+            if let Some(result) = hook.execute_before_put_message(&mut message_ext_batch.message_ext_broker_inner) {
                 return result;
             }
         }
@@ -937,14 +881,9 @@ impl MessageStore for LocalFileMessageStore {
         let policy = get_delete_policy_arc_mut(topic_config.as_ref());
         if policy == CleanupPolicy::COMPACTION && self.message_store_config.enable_compaction {
             //not implemented will be implemented in the future
-            return self.compaction_store.get_message(
-                group,
-                topic,
-                queue_id,
-                offset,
-                max_msg_nums,
-                max_total_msg_size,
-            );
+            return self
+                .compaction_store
+                .get_message(group, topic, queue_id, offset, max_msg_nums, max_total_msg_size);
         }
         let begin_time = Instant::now();
 
@@ -990,14 +929,10 @@ impl MessageStore for LocalFileMessageStore {
                 let mut cq_file_num = 0;
                 while get_result.as_ref().unwrap().buffer_total_size() <= 0
                     && next_begin_offset < max_offset
-                    && cq_file_num
-                        < self
-                            .message_store_config
-                            .travel_cq_file_num_when_get_message
+                    && cq_file_num < self.message_store_config.travel_cq_file_num_when_get_message
                 {
                     cq_file_num += 1;
-                    let buffer_consume_queue =
-                        consume_queue.iterate_from_with_count(next_begin_offset, max_msg_nums);
+                    let buffer_consume_queue = consume_queue.iterate_from_with_count(next_begin_offset, max_msg_nums);
                     if buffer_consume_queue.is_none() {
                         status = GetMessageStatus::OffsetFoundNull;
                         next_begin_offset = self.next_offset_correction(
@@ -1006,8 +941,8 @@ impl MessageStore for LocalFileMessageStore {
                                 .roll_next_file(&**consume_queue, next_begin_offset),
                         );
                         warn!(
-                            "consumer request topic: {}, offset: {}, minOffset: {}, maxOffset: \
-                             {}, but access logic queue failed. Correct nextBeginOffset to {}",
+                            "consumer request topic: {}, offset: {}, minOffset: {}, maxOffset: {}, but access logic \
+                             queue failed. Correct nextBeginOffset to {}",
                             topic, offset, min_offset, max_offset, next_begin_offset
                         );
                         break;
@@ -1021,13 +956,9 @@ impl MessageStore for LocalFileMessageStore {
                         if let Some(cq_unit) = buffer_consume_queue.next() {
                             let offset_py = cq_unit.pos;
                             let size_py = cq_unit.size;
-                            let is_in_mem = estimate_in_mem_by_commit_offset(
-                                offset_py,
-                                max_offset_py,
-                                &self.message_store_config,
-                            );
-                            if (cq_unit.queue_offset - offset)
-                                * consume_queue.get_unit_size() as i64
+                            let is_in_mem =
+                                estimate_in_mem_by_commit_offset(offset_py, max_offset_py, &self.message_store_config);
+                            if (cq_unit.queue_offset - offset) * consume_queue.get_unit_size() as i64
                                 > max_filter_message_size as i64
                             {
                                 break;
@@ -1050,9 +981,7 @@ impl MessageStore for LocalFileMessageStore {
                             }
                             max_phy_offset_pulling = offset_py;
                             next_begin_offset = cq_unit.queue_offset + cq_unit.batch_num as i64;
-                            if next_phy_file_start_offset != i64::MIN
-                                && offset_py < next_phy_file_start_offset
-                            {
+                            if next_phy_file_start_offset != i64::MIN && offset_py < next_phy_file_start_offset {
                                 continue;
                             }
 
@@ -1073,17 +1002,14 @@ impl MessageStore for LocalFileMessageStore {
                                 if get_result_ref.buffer_total_size() == 0 {
                                     status = GetMessageStatus::MessageWasRemoving;
                                 }
-                                next_phy_file_start_offset =
-                                    self.commit_log.roll_next_file(offset_py);
+                                next_phy_file_start_offset = self.commit_log.roll_next_file(offset_py);
                                 continue;
                             }
                             if self.message_store_config.cold_data_flow_control_enable
                                 && !is_sys_consumer_group_for_no_cold_read_limit(group)
                                 && !select_result.as_ref().unwrap().is_in_cache
                             {
-                                get_result_ref.set_cold_data_sum(
-                                    get_result_ref.cold_data_sum() + size_py as i64,
-                                );
+                                get_result_ref.set_cold_data_sum(get_result_ref.cold_data_sum() + size_py as i64);
                             }
 
                             if message_filter.is_some()
@@ -1091,10 +1017,7 @@ impl MessageStore for LocalFileMessageStore {
                                     .as_ref()
                                     .as_ref()
                                     .unwrap()
-                                    .is_matched_by_commit_log(
-                                        Some(select_result.as_ref().unwrap().get_buffer()),
-                                        None,
-                                    )
+                                    .is_matched_by_commit_log(Some(select_result.as_ref().unwrap().get_buffer()), None)
                             {
                                 if get_result_ref.buffer_total_size() == 0 {
                                     status = GetMessageStatus::NoMatchedMessage;
@@ -1175,16 +1098,9 @@ impl MessageStore for LocalFileMessageStore {
         self.get_max_offset_in_queue_committed(topic, queue_id, true)
     }
 
-    fn get_max_offset_in_queue_committed(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        committed: bool,
-    ) -> i64 {
+    fn get_max_offset_in_queue_committed(&self, topic: &CheetahString, queue_id: i32, committed: bool) -> i64 {
         if committed {
-            let queue = self
-                .consume_queue_store
-                .find_or_create_consume_queue(topic, queue_id);
+            let queue = self.consume_queue_store.find_or_create_consume_queue(topic, queue_id);
 
             queue.get_max_offset_in_queue()
         } else {
@@ -1196,8 +1112,7 @@ impl MessageStore for LocalFileMessageStore {
 
     #[inline]
     fn get_min_offset_in_queue(&self, topic: &CheetahString, queue_id: i32) -> i64 {
-        self.consume_queue_store
-            .get_min_offset_in_queue(topic, queue_id)
+        self.consume_queue_store.get_min_offset_in_queue(topic, queue_id)
     }
 
     #[inline]
@@ -1210,21 +1125,11 @@ impl MessageStore for LocalFileMessageStore {
         self.timer_message_store = Some(timer_message_store);
     }
 
-    fn get_commit_log_offset_in_queue(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        consume_queue_offset: i64,
-    ) -> i64 {
+    fn get_commit_log_offset_in_queue(&self, topic: &CheetahString, queue_id: i32, consume_queue_offset: i64) -> i64 {
         todo!()
     }
 
-    fn get_offset_in_queue_by_time(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        timestamp: i64,
-    ) -> i64 {
+    fn get_offset_in_queue_by_time(&self, topic: &CheetahString, queue_id: i32, timestamp: i64) -> i64 {
         todo!()
     }
 
@@ -1235,12 +1140,8 @@ impl MessageStore for LocalFileMessageStore {
         timestamp: i64,
         boundary_type: BoundaryType,
     ) -> i64 {
-        self.consume_queue_store.get_offset_in_queue_by_time(
-            topic,
-            queue_id,
-            timestamp,
-            boundary_type,
-        )
+        self.consume_queue_store
+            .get_offset_in_queue_by_time(topic, queue_id, timestamp, boundary_type)
     }
 
     fn look_message_by_offset(&self, commit_log_offset: i64) -> Option<MessageExt> {
@@ -1252,11 +1153,7 @@ impl MessageStore for LocalFileMessageStore {
         }
     }
 
-    fn look_message_by_offset_with_size(
-        &self,
-        commit_log_offset: i64,
-        size: i32,
-    ) -> Option<MessageExt> {
+    fn look_message_by_offset_with_size(&self, commit_log_offset: i64, size: i32) -> Option<MessageExt> {
         let sbr = self.commit_log.get_message(commit_log_offset, size);
         if let Some(sbr) = sbr {
             if let Some(mut value) = sbr.get_bytes() {
@@ -1269,10 +1166,7 @@ impl MessageStore for LocalFileMessageStore {
         }
     }
 
-    fn select_one_message_by_offset(
-        &self,
-        commit_log_offset: i64,
-    ) -> Option<SelectMappedBufferResult> {
+    fn select_one_message_by_offset(&self, commit_log_offset: i64) -> Option<SelectMappedBufferResult> {
         let sbr = self.commit_log.get_message(commit_log_offset, 4);
         if let Some(sbr) = sbr {
             let size = sbr.get_buffer().get_i32();
@@ -1387,17 +1281,11 @@ impl MessageStore for LocalFileMessageStore {
         }*/
 
         let mut size = MessageDecoder::MESSAGE_STORE_TIMESTAMP_POSITION + 8;
-        let result = self
-            .broker_config
-            .broker_ip1
-            .to_string()
-            .parse::<IpAddr>()
-            .unwrap();
+        let result = self.broker_config.broker_ip1.to_string().parse::<IpAddr>().unwrap();
         if result.is_ipv6() {
             size = MessageDecoder::MESSAGE_STORE_TIMESTAMP_POSITION + 20;
         }
-        self.commit_log
-            .pickup_store_timestamp(min_phy_offset, size as i32)
+        self.commit_log.pickup_store_timestamp(min_phy_offset, size as i32)
     }
 
     /*    async fn get_earliest_message_time_async(
@@ -1408,12 +1296,7 @@ impl MessageStore for LocalFileMessageStore {
 
     }*/
 
-    fn get_message_store_timestamp(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        consume_queue_offset: i64,
-    ) -> i64 {
+    fn get_message_store_timestamp(&self, topic: &CheetahString, queue_id: i32, consume_queue_offset: i64) -> i64 {
         if let Some(logic_queue) = self.get_consume_queue(topic, queue_id) {
             if let Some(cq) = logic_queue.get_cq_unit_and_store_time(consume_queue_offset) {
                 return cq.1;
@@ -1450,11 +1333,7 @@ impl MessageStore for LocalFileMessageStore {
         self.commit_log.get_data(offset)
     }
 
-    fn get_bulk_commit_log_data(
-        &self,
-        offset: i64,
-        size: i32,
-    ) -> Option<Vec<SelectMappedBufferResult>> {
+    fn get_bulk_commit_log_data(&self, offset: i64, size: i32) -> Option<Vec<SelectMappedBufferResult>> {
         if self.shutdown.load(Ordering::Acquire) {
             return None;
         }
@@ -1481,8 +1360,8 @@ impl MessageStore for LocalFileMessageStore {
             // TODO weak up to do commit log flush
         } else {
             error!(
-                "DefaultMessageStore#appendToCommitLog: failed to append data to commitLog, \
-                 physical offset={}, data length={}",
+                "DefaultMessageStore#appendToCommitLog: failed to append data to commitLog, physical offset={}, data \
+                 length={}",
                 start_offset, data_length
             )
         }
@@ -1490,8 +1369,7 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn execute_delete_files_manually(&self) {
-        self.clean_commit_log_service
-            .execute_delete_files_manually()
+        self.clean_commit_log_service.execute_delete_files_manually()
     }
 
     async fn query_message(
@@ -1505,23 +1383,17 @@ impl MessageStore for LocalFileMessageStore {
         let mut query_message_result = QueryMessageResult::default();
         let mut last_query_msg_time = end_timestamp;
         for i in 1..3 {
-            let mut query_offset_result = self.index_service.query_offset(
-                topic,
-                key,
-                max_num,
-                begin_timestamp,
-                end_timestamp,
-            );
+            let mut query_offset_result =
+                self.index_service
+                    .query_offset(topic, key, max_num, begin_timestamp, end_timestamp);
             if query_offset_result.get_phy_offsets().is_empty() {
                 break;
             }
 
             query_offset_result.get_phy_offsets_mut().sort();
 
-            query_message_result.index_last_update_timestamp =
-                query_offset_result.get_index_last_update_timestamp();
-            query_message_result.index_last_update_phyoffset =
-                query_offset_result.get_index_last_update_phyoffset();
+            query_message_result.index_last_update_timestamp = query_offset_result.get_index_last_update_timestamp();
+            query_message_result.index_last_update_phyoffset = query_offset_result.get_index_last_update_phyoffset();
             let phy_offsets = query_offset_result.get_phy_offsets();
             for m in 0..phy_offsets.len() {
                 let offset = *phy_offsets.get(m).unwrap();
@@ -1582,27 +1454,20 @@ impl MessageStore for LocalFileMessageStore {
             }
             let queue_table = queue_table.unwrap();
             for (queue_id, consume_queue) in queue_table {
-                self.consume_queue_store
-                    .destroy_queue(consume_queue.as_ref().deref());
-                self.consume_queue_store
-                    .remove_topic_queue_table(topic, queue_id);
+                self.consume_queue_store.destroy_queue(consume_queue.as_ref().deref());
+                self.consume_queue_store.remove_topic_queue_table(topic, queue_id);
             }
             // remove topic from cq table
             let consume_queue_table = self.consume_queue_store.get_consume_queue_table();
             consume_queue_table.lock().remove(topic);
 
             if self.broker_config.auto_delete_unused_stats {
-                self.broker_stats_manager
-                    .as_ref()
-                    .unwrap()
-                    .on_topic_deleted(topic);
+                self.broker_stats_manager.as_ref().unwrap().on_topic_deleted(topic);
             }
 
             let root_dir = self.message_store_config.store_path_root_dir.as_str();
-            let consume_queue_dir =
-                PathBuf::from(get_store_path_consume_queue(root_dir)).join(topic.as_str());
-            let consume_queue_ext_dir =
-                PathBuf::from(get_store_path_consume_queue_ext(root_dir)).join(topic.as_str());
+            let consume_queue_dir = PathBuf::from(get_store_path_consume_queue(root_dir)).join(topic.as_str());
+            let consume_queue_ext_dir = PathBuf::from(get_store_path_consume_queue_ext(root_dir)).join(topic.as_str());
             let batch_consume_queue_dir =
                 PathBuf::from(get_store_path_batch_consume_queue(root_dir)).join(topic.as_str());
 
@@ -1631,9 +1496,7 @@ impl MessageStore for LocalFileMessageStore {
         consume_offset: i64,
         batch_size: i32,
     ) -> bool {
-        let consume_queue = self
-            .consume_queue_store
-            .find_or_create_consume_queue(topic, queue_id);
+        let consume_queue = self.consume_queue_store.find_or_create_consume_queue(topic, queue_id);
         let first_cqitem = consume_queue.get(consume_offset);
         if first_cqitem.is_none() {
             return false;
@@ -1655,12 +1518,7 @@ impl MessageStore for LocalFileMessageStore {
         self.check_in_mem_by_commit_offset(start_offset_py, size as i32)
     }
 
-    fn check_in_store_by_consume_offset(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        consume_offset: i64,
-    ) -> bool {
+    fn check_in_store_by_consume_offset(&self, topic: &CheetahString, queue_id: i32, consume_offset: i64) -> bool {
         todo!()
     }
 
@@ -1727,10 +1585,7 @@ impl MessageStore for LocalFileMessageStore {
     }
 
     fn find_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<ArcConsumeQueue> {
-        Some(
-            self.consume_queue_store
-                .find_or_create_consume_queue(topic, queue_id),
-        )
+        Some(self.consume_queue_store.find_or_create_consume_queue(topic, queue_id))
     }
 
     fn get_broker_stats_manager(&self) -> Option<&Arc<BrokerStatsManager>> {
@@ -1971,8 +1826,7 @@ impl MessageStore for LocalFileMessageStore {
 
     fn recover_topic_queue_table(&mut self) {
         let min_phy_offset = self.commit_log.get_min_offset();
-        self.consume_queue_store
-            .recover_offset_table(min_phy_offset);
+        self.consume_queue_store.recover_offset_table(min_phy_offset);
     }
 
     fn notify_message_arrive_if_necessary(&self, dispatch_request: &mut DispatchRequest) {
@@ -2052,10 +1906,7 @@ struct ReputMessageService {
 impl ReputMessageService {
     fn notify_message_arrive4multi_queue(&self, dispatch_request: &mut DispatchRequest) {
         if dispatch_request.properties_map.is_none()
-            || dispatch_request
-                .topic
-                .as_str()
-                .starts_with(RETRY_GROUP_TOPIC_PREFIX)
+            || dispatch_request.topic.as_str().starts_with(RETRY_GROUP_TOPIC_PREFIX)
         {
             return;
         }
@@ -2125,8 +1976,7 @@ impl ReputMessageService {
         message_store: ArcMut<LocalFileMessageStore>,
     ) {
         // Create channel for decoupling read and dispatch
-        let (dispatch_tx, mut dispatch_rx) =
-            tokio::sync::mpsc::channel::<Vec<DispatchRequest>>(128);
+        let (dispatch_tx, mut dispatch_rx) = tokio::sync::mpsc::channel::<Vec<DispatchRequest>>(128);
         self.dispatch_tx = Some(dispatch_tx.clone());
 
         let mut inner = ReputMessageServiceInner {
@@ -2258,8 +2108,8 @@ impl ReputMessageService {
             // Warn if there are still undispatched messages
             if inner.is_commit_log_available() {
                 warn!(
-                    "shutdown ReputMessageService, but CommitLog have not finish to be \
-                     dispatched, CommitLog max offset={}, reputFromOffset={}",
+                    "shutdown ReputMessageService, but CommitLog have not finish to be dispatched, CommitLog max \
+                     offset={}, reputFromOffset={}",
                     inner.commit_log.get_max_offset(),
                     inner.reput_from_offset.load(Ordering::Relaxed)
                 );
@@ -2341,19 +2191,15 @@ impl ReputMessageServiceInner {
             if self.message_store_config.enable_lmq && is_lmq(Some(queue_name.as_str())) {
                 queue_id = 0;
             }
-            self.message_store
-                .message_arriving_listener
-                .as_ref()
-                .unwrap()
-                .arriving(
-                    &queue_name,
-                    queue_id,
-                    queue_offset + 1,
-                    Some(dispatch_request.tags_code),
-                    dispatch_request.store_timestamp,
-                    dispatch_request.bit_map.clone(),
-                    dispatch_request.properties_map.as_ref(),
-                );
+            self.message_store.message_arriving_listener.as_ref().unwrap().arriving(
+                &queue_name,
+                queue_id,
+                queue_offset + 1,
+                Some(dispatch_request.tags_code),
+                dispatch_request.store_timestamp,
+                dispatch_request.bit_map.clone(),
+                dispatch_request.properties_map.as_ref(),
+            );
         }
     }
 
@@ -2361,8 +2207,8 @@ impl ReputMessageServiceInner {
         let reput_from_offset = self.reput_from_offset.load(Ordering::Relaxed);
         if reput_from_offset < self.commit_log.get_min_offset() {
             warn!(
-                "The reputFromOffset={} is smaller than minPyOffset={}, this usually indicate \
-                 that the dispatch behind too much and the commitlog has expired.",
+                "The reputFromOffset={} is smaller than minPyOffset={}, this usually indicate that the dispatch \
+                 behind too much and the commitlog has expired.",
                 reput_from_offset,
                 self.commit_log.get_min_offset()
             );
@@ -2373,9 +2219,7 @@ impl ReputMessageServiceInner {
         let mut dispatch_batch: Vec<DispatchRequest> = Vec::with_capacity(64);
 
         while do_next && self.is_commit_log_available() {
-            let result = self
-                .commit_log
-                .get_data(self.reput_from_offset.load(Ordering::Acquire));
+            let result = self.commit_log.get_data(self.reput_from_offset.load(Ordering::Acquire));
             if result.is_none() {
                 break;
             }
@@ -2401,9 +2245,7 @@ impl ReputMessageServiceInner {
                 } else {
                     dispatch_request.buffer_size
                 };
-                if self.reput_from_offset.load(Ordering::Acquire) + size as i64
-                    > self.get_reput_end_offset()
-                {
+                if self.reput_from_offset.load(Ordering::Acquire) + size as i64 > self.get_reput_end_offset() {
                     do_next = false;
                     break;
                 }
@@ -2442,8 +2284,7 @@ impl ReputMessageServiceInner {
                                 dispatch_batch.clear();
                             }
 
-                            self.reput_from_offset
-                                .fetch_add(size as i64, Ordering::AcqRel);
+                            self.reput_from_offset.fetch_add(size as i64, Ordering::AcqRel);
                             read_size += size;
                         }
                         std::cmp::Ordering::Equal => {
@@ -2461,8 +2302,7 @@ impl ReputMessageServiceInner {
                         "[BUG]read total count not equals msg total size. reputFromOffset={}",
                         self.reput_from_offset.load(Ordering::Relaxed)
                     );
-                    self.reput_from_offset
-                        .fetch_add(size as i64, Ordering::SeqCst);
+                    self.reput_from_offset.fetch_add(size as i64, Ordering::SeqCst);
                 } else {
                     do_next = false;
                     if self.message_store_config.enable_dledger_commit_log {
@@ -2499,8 +2339,7 @@ impl ReputMessageServiceInner {
     }
 
     pub fn set_reput_from_offset(&mut self, reput_from_offset: i64) {
-        self.reput_from_offset
-            .store(reput_from_offset, Ordering::SeqCst);
+        self.reput_from_offset.store(reput_from_offset, Ordering::SeqCst);
     }
 
     /// Read and parse a batch of messages from CommitLog (for channel-based dispatch)
@@ -2508,8 +2347,8 @@ impl ReputMessageServiceInner {
         let reput_from_offset = self.reput_from_offset.load(Ordering::Relaxed);
         if reput_from_offset < self.commit_log.get_min_offset() {
             warn!(
-                "The reputFromOffset={} is smaller than minPyOffset={}, this usually indicate \
-                 that the dispatch behind too much and the commitlog has expired.",
+                "The reputFromOffset={} is smaller than minPyOffset={}, this usually indicate that the dispatch \
+                 behind too much and the commitlog has expired.",
                 reput_from_offset,
                 self.commit_log.get_min_offset()
             );
@@ -2523,9 +2362,7 @@ impl ReputMessageServiceInner {
 
         let mut dispatch_batch: Vec<DispatchRequest> = Vec::with_capacity(64);
 
-        let result = self
-            .commit_log
-            .get_data(self.reput_from_offset.load(Ordering::Acquire));
+        let result = self.commit_log.get_data(self.reput_from_offset.load(Ordering::Acquire));
         result.as_ref()?;
         let mut result = result.unwrap();
         self.reput_from_offset
@@ -2551,9 +2388,7 @@ impl ReputMessageServiceInner {
                 dispatch_request.buffer_size
             };
 
-            if self.reput_from_offset.load(Ordering::Acquire) + size as i64
-                > self.get_reput_end_offset()
-            {
+            if self.reput_from_offset.load(Ordering::Acquire) + size as i64 > self.get_reput_end_offset() {
                 break;
             }
 
@@ -2580,8 +2415,7 @@ impl ReputMessageServiceInner {
 
                         // Move dispatch_request into batch (no clone needed)
                         dispatch_batch.push(dispatch_request);
-                        self.reput_from_offset
-                            .fetch_add(size as i64, Ordering::AcqRel);
+                        self.reput_from_offset.fetch_add(size as i64, Ordering::AcqRel);
                         read_size += size;
                     }
                     std::cmp::Ordering::Equal => {
@@ -2599,8 +2433,7 @@ impl ReputMessageServiceInner {
                     "[BUG]read total count not equals msg total size. reputFromOffset={}",
                     self.reput_from_offset.load(Ordering::Relaxed)
                 );
-                self.reput_from_offset
-                    .fetch_add(size as i64, Ordering::SeqCst);
+                self.reput_from_offset.fetch_add(size as i64, Ordering::SeqCst);
             } else {
                 if self.message_store_config.enable_dledger_commit_log {
                     unimplemented!()

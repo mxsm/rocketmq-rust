@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -35,10 +32,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueAveragelyByCircle {
         if !check(consumer_group, current_cid, mq_all, cid_all)? {
             return Ok(result);
         }
-        let index = cid_all
-            .iter()
-            .position(|cid| cid == current_cid)
-            .unwrap_or(0);
+        let index = cid_all.iter().position(|cid| cid == current_cid).unwrap_or(0);
         for (i, item) in mq_all.iter().enumerate().skip(index) {
             if i % cid_all.len() == index {
                 result.push(item.clone());
@@ -157,9 +151,7 @@ mod tests {
         assert_eq!(vec![3, 7], consumer_allocate_queue["CID_PREFIX3"]);
     }
     fn create_consumer_id_list(size: usize) -> Vec<CheetahString> {
-        (0..size)
-            .map(|i| format!("CID_PREFIX{}", i).into())
-            .collect()
+        (0..size).map(|i| format!("CID_PREFIX{}", i).into()).collect()
     }
 
     fn create_message_queue_list(size: usize) -> Vec<MessageQueue> {

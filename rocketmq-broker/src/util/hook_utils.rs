@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
@@ -60,22 +57,16 @@ impl HookUtils {
     ) -> Option<PutMessageResult> {
         if message_store.is_shutdown() {
             warn!("message store has shutdown, so putMessage is forbidden");
-            return Some(PutMessageResult::new_default(
-                PutMessageStatus::ServiceNotAvailable,
-            ));
+            return Some(PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable));
         }
 
-        if message_store_config.duplication_enable
-            && matches!(message_store_config.broker_role, BrokerRole::Slave)
-        {
+        if message_store_config.duplication_enable && matches!(message_store_config.broker_role, BrokerRole::Slave) {
             let value = PRINT_TIMES.fetch_add(1, Ordering::Relaxed);
             if (value % 50000) == 0 {
                 warn!("message store is in slave mode, so putMessage is forbidden ");
             }
 
-            return Some(PutMessageResult::new_default(
-                PutMessageStatus::ServiceNotAvailable,
-            ));
+            return Some(PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable));
         }
 
         if !message_store.get_running_flags().is_writeable() {
@@ -87,9 +78,7 @@ impl HookUtils {
                 );
             }
 
-            return Some(PutMessageResult::new_default(
-                PutMessageStatus::ServiceNotAvailable,
-            ));
+            return Some(PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable));
         } else {
             PRINT_TIMES.store(0, Ordering::SeqCst);
         }
@@ -98,25 +87,19 @@ impl HookUtils {
         let retry_topic = msg.get_topic().starts_with(RETRY_GROUP_TOPIC_PREFIX);
         if !retry_topic && topic_data.len() > i8::MAX as usize {
             warn!(
-                "putMessage message topic[{}] length too long {}, but it is not supported by \
-                 broker",
+                "putMessage message topic[{}] length too long {}, but it is not supported by broker",
                 msg.get_topic(),
                 topic_data.len()
             );
-            return Some(PutMessageResult::new_default(
-                PutMessageStatus::MessageIllegal,
-            ));
+            return Some(PutMessageResult::new_default(PutMessageStatus::MessageIllegal));
         }
         if topic_data.len() > MAX_TOPIC_LENGTH {
             warn!(
-                "putMessage message topic[{}] length too long {}, but it is not supported by \
-                 broker",
+                "putMessage message topic[{}] length too long {}, but it is not supported by broker",
                 msg.get_topic(),
                 topic_data.len()
             );
-            return Some(PutMessageResult::new_default(
-                PutMessageStatus::MessageIllegal,
-            ));
+            return Some(PutMessageResult::new_default(PutMessageStatus::MessageIllegal));
         }
 
         if msg.get_body().is_none() {
@@ -124,14 +107,10 @@ impl HookUtils {
                 "putMessage message topic[{}], but message body is null",
                 msg.get_topic()
             );
-            return Some(PutMessageResult::new_default(
-                PutMessageStatus::MessageIllegal,
-            ));
+            return Some(PutMessageResult::new_default(PutMessageStatus::MessageIllegal));
         }
         if message_store.is_os_page_cache_busy() {
-            return Some(PutMessageResult::new_default(
-                PutMessageStatus::OsPageCacheBusy,
-            ));
+            return Some(PutMessageResult::new_default(PutMessageStatus::OsPageCacheBusy));
         }
 
         None
@@ -141,18 +120,14 @@ impl HookUtils {
         topic_config_table: &Arc<DashMap<CheetahString, ArcMut<TopicConfig>>>,
         msg: &MessageExt,
     ) -> Option<PutMessageResult> {
-        if msg
-            .properties()
-            .contains_key(MessageConst::PROPERTY_INNER_NUM)
+        if msg.properties().contains_key(MessageConst::PROPERTY_INNER_NUM)
             && !MessageSysFlag::check(msg.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG)
         {
             warn!(
                 "[BUG]The message had property {} but is not an inner batch",
                 MessageConst::PROPERTY_INNER_NUM
             );
-            return Some(PutMessageResult::new_default(
-                PutMessageStatus::MessageIllegal,
-            ));
+            return Some(PutMessageResult::new_default(PutMessageStatus::MessageIllegal));
         }
 
         if MessageSysFlag::check(msg.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG) {
@@ -160,9 +135,7 @@ impl HookUtils {
             let topic_config = topic_config_ref.as_deref();
             if !QueueTypeUtils::is_batch_cq_arc_mut(topic_config) {
                 error!("[BUG]The message is an inner batch but cq type is not batch cq");
-                return Some(PutMessageResult::new_default(
-                    PutMessageStatus::MessageIllegal,
-                ));
+                return Some(PutMessageResult::new_default(PutMessageStatus::MessageIllegal));
             }
         }
 
@@ -174,18 +147,11 @@ impl HookUtils {
         msg: &mut MessageExtBrokerInner,
     ) -> Option<PutMessageResult> {
         let tran_type = MessageSysFlag::get_transaction_value(msg.sys_flag());
-        if tran_type == MessageSysFlag::TRANSACTION_NOT_TYPE
-            || tran_type == MessageSysFlag::TRANSACTION_COMMIT_TYPE
-        {
+        if tran_type == MessageSysFlag::TRANSACTION_NOT_TYPE || tran_type == MessageSysFlag::TRANSACTION_COMMIT_TYPE {
             if !Self::is_rolled_timer_message(msg) && Self::check_if_timer_message(msg) {
-                if !broker_runtime_inner
-                    .message_store_config()
-                    .timer_wheel_enable
-                {
+                if !broker_runtime_inner.message_store_config().timer_wheel_enable {
                     // wheel timer is not enabled, reject the message
-                    return Some(PutMessageResult::new_default(
-                        PutMessageStatus::WheelTimerNotEnable,
-                    ));
+                    return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerNotEnable));
                 }
                 if let Some(transform_res) = Self::transform_timer_message(
                     broker_runtime_inner.timer_message_store_unchecked(),
@@ -274,23 +240,14 @@ impl HookUtils {
                 Some(delay_ms) => get_current_millis() + delay_ms.parse::<u64>().unwrap(),
                 None => match msg.property(MessageConst::PROPERTY_TIMER_DELIVER_MS) {
                     Some(deliver_ms) => deliver_ms.parse::<u64>().unwrap(),
-                    None => {
-                        return Some(PutMessageResult::new_default(
-                            PutMessageStatus::WheelTimerMsgIllegal,
-                        ))
-                    }
+                    None => return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerMsgIllegal)),
                 },
             },
         };
 
         if deliver_ms > get_current_millis() {
-            if delay_level <= 0
-                && deliver_ms - get_current_millis()
-                    > message_store_config.timer_max_delay_sec * 1000
-            {
-                return Some(PutMessageResult::new_default(
-                    PutMessageStatus::WheelTimerMsgIllegal,
-                ));
+            if delay_level <= 0 && deliver_ms - get_current_millis() > message_store_config.timer_max_delay_sec * 1000 {
+                return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerMsgIllegal));
             }
 
             let timer_precision_ms = message_store_config.timer_precision_ms;
@@ -301,9 +258,7 @@ impl HookUtils {
             };
 
             if timer_message_store.is_reject(deliver_ms) {
-                return Some(PutMessageResult::new_default(
-                    PutMessageStatus::WheelTimerFlowControl,
-                ));
+                return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerFlowControl));
             }
 
             msg.message_ext_inner.message.properties.insert(
@@ -318,10 +273,8 @@ impl HookUtils {
                 CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID),
                 CheetahString::from_string(msg.message_ext_inner.queue_id.to_string()),
             );
-            msg.properties_string =
-                message_properties_to_string(&msg.message_ext_inner.message.properties);
-            msg.message_ext_inner.message.topic =
-                CheetahString::from_static_str(timer_message_store::TIMER_TOPIC);
+            msg.properties_string = message_properties_to_string(&msg.message_ext_inner.message.properties);
+            msg.message_ext_inner.message.topic = CheetahString::from_static_str(timer_message_store::TIMER_TOPIC);
             msg.message_ext_inner.queue_id = 0;
         } else if msg
             .message_ext_inner
@@ -329,9 +282,7 @@ impl HookUtils {
             .properties
             .contains_key(MessageConst::PROPERTY_TIMER_DEL_UNIQKEY)
         {
-            return Some(PutMessageResult::new_default(
-                PutMessageStatus::WheelTimerMsgIllegal,
-            ));
+            return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerMsgIllegal));
         }
         None
     }
@@ -358,9 +309,7 @@ impl HookUtils {
         msg: &mut MessageExtBrokerInner,
     ) {
         let schedule_message_service = broker_runtime_inner.schedule_message_service();
-        if msg.message_ext_inner.message.get_delay_time_level()
-            > schedule_message_service.get_max_delay_level()
-        {
+        if msg.message_ext_inner.message.get_delay_time_level() > schedule_message_service.get_max_delay_level() {
             msg.message_ext_inner
                 .message
                 .set_delay_time_level(schedule_message_service.get_max_delay_level());
@@ -375,13 +324,10 @@ impl HookUtils {
             CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID),
             CheetahString::from_string(msg.message_ext_inner.queue_id.to_string()),
         );
-        msg.properties_string =
-            message_properties_to_string(&msg.message_ext_inner.message.properties);
+        msg.properties_string = message_properties_to_string(&msg.message_ext_inner.message.properties);
 
-        msg.message_ext_inner.message.topic =
-            CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC);
-        msg.message_ext_inner.queue_id =
-            delay_level_to_queue_id(msg.message_ext_inner.message.get_delay_time_level());
+        msg.message_ext_inner.message.topic = CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC);
+        msg.message_ext_inner.queue_id = delay_level_to_queue_id(msg.message_ext_inner.message.get_delay_time_level());
     }
 
     pub fn send_message_back(
@@ -425,8 +371,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn check_inner_batch_returns_message_illegal_when_inner_batch_flag_is_set_but_cq_type_is_not_batch_cq(
-    ) {
+    fn check_inner_batch_returns_message_illegal_when_inner_batch_flag_is_set_but_cq_type_is_not_batch_cq() {
         let topic_config_table = DashMap::new();
         topic_config_table.insert(
             CheetahString::from_static_str("test_topic"),
@@ -439,9 +384,6 @@ mod tests {
 
         let result = HookUtils::check_inner_batch(&topic_config_table, &msg);
 
-        assert_eq!(
-            result.unwrap().put_message_status(),
-            PutMessageStatus::MessageIllegal
-        );
+        assert_eq!(result.unwrap().put_message_status(), PutMessageStatus::MessageIllegal);
     }
 }

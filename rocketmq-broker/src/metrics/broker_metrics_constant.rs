@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 /// Broker metrics constants for RocketMQ metrics collection
 /// Equivalent to Java's BrokerMetricsConstant class
@@ -37,8 +34,7 @@ impl BrokerMetricsConstant {
 
     // Histogram Metrics - Performance
     pub const HISTOGRAM_MESSAGE_SIZE: &'static str = "rocketmq_message_size";
-    pub const HISTOGRAM_TOPIC_CREATE_EXECUTE_TIME: &'static str =
-        "rocketmq_topic_create_execution_time";
+    pub const HISTOGRAM_TOPIC_CREATE_EXECUTE_TIME: &'static str = "rocketmq_topic_create_execution_time";
     pub const HISTOGRAM_CONSUMER_GROUP_CREATE_EXECUTE_TIME: &'static str =
         "rocketmq_consumer_group_create_execution_time";
 
@@ -49,14 +45,12 @@ impl BrokerMetricsConstant {
     // Gauge Metrics - Consumer Lag and Latency
     pub const GAUGE_CONSUMER_LAG_MESSAGES: &'static str = "rocketmq_consumer_lag_messages";
     pub const GAUGE_CONSUMER_LAG_LATENCY: &'static str = "rocketmq_consumer_lag_latency";
-    pub const GAUGE_CONSUMER_INFLIGHT_MESSAGES: &'static str =
-        "rocketmq_consumer_inflight_messages";
+    pub const GAUGE_CONSUMER_INFLIGHT_MESSAGES: &'static str = "rocketmq_consumer_inflight_messages";
     pub const GAUGE_CONSUMER_QUEUEING_LATENCY: &'static str = "rocketmq_consumer_queueing_latency";
     pub const GAUGE_CONSUMER_READY_MESSAGES: &'static str = "rocketmq_consumer_ready_messages";
 
     // Counter Metrics - Consumer Actions
-    pub const COUNTER_CONSUMER_SEND_TO_DLQ_MESSAGES_TOTAL: &'static str =
-        "rocketmq_send_to_dlq_messages_total";
+    pub const COUNTER_CONSUMER_SEND_TO_DLQ_MESSAGES_TOTAL: &'static str = "rocketmq_send_to_dlq_messages_total";
 
     // Transaction Metrics
     pub const COUNTER_COMMIT_MESSAGES_TOTAL: &'static str = "rocketmq_commit_messages_total";
@@ -115,8 +109,7 @@ pub mod metrics {
         pub const MESSAGES_OUT_TOTAL: &str = BMC::COUNTER_MESSAGES_OUT_TOTAL;
         pub const THROUGHPUT_IN_TOTAL: &str = BMC::COUNTER_THROUGHPUT_IN_TOTAL;
         pub const THROUGHPUT_OUT_TOTAL: &str = BMC::COUNTER_THROUGHPUT_OUT_TOTAL;
-        pub const CONSUMER_SEND_TO_DLQ_MESSAGES_TOTAL: &str =
-            BMC::COUNTER_CONSUMER_SEND_TO_DLQ_MESSAGES_TOTAL;
+        pub const CONSUMER_SEND_TO_DLQ_MESSAGES_TOTAL: &str = BMC::COUNTER_CONSUMER_SEND_TO_DLQ_MESSAGES_TOTAL;
         pub const COMMIT_MESSAGES_TOTAL: &str = BMC::COUNTER_COMMIT_MESSAGES_TOTAL;
         pub const ROLLBACK_MESSAGES_TOTAL: &str = BMC::COUNTER_ROLLBACK_MESSAGES_TOTAL;
     }
@@ -127,8 +120,7 @@ pub mod metrics {
 
         pub const MESSAGE_SIZE: &str = BMC::HISTOGRAM_MESSAGE_SIZE;
         pub const TOPIC_CREATE_EXECUTE_TIME: &str = BMC::HISTOGRAM_TOPIC_CREATE_EXECUTE_TIME;
-        pub const CONSUMER_GROUP_CREATE_EXECUTE_TIME: &str =
-            BMC::HISTOGRAM_CONSUMER_GROUP_CREATE_EXECUTE_TIME;
+        pub const CONSUMER_GROUP_CREATE_EXECUTE_TIME: &str = BMC::HISTOGRAM_CONSUMER_GROUP_CREATE_EXECUTE_TIME;
         pub const FINISH_MSG_LATENCY: &str = BMC::HISTOGRAM_FINISH_MSG_LATENCY;
     }
 }
@@ -264,9 +256,7 @@ impl BrokerMetricsConstant {
 
     /// Check if a metric name is a histogram
     pub fn is_histogram_metric(metric_name: &str) -> bool {
-        metric_name.contains("_time")
-            || metric_name.contains("_size")
-            || metric_name.contains("_latency")
+        metric_name.contains("_time") || metric_name.contains("_size") || metric_name.contains("_latency")
     }
 }
 
@@ -315,23 +305,15 @@ impl MetricCategory {
             {
                 Some(Self::System)
             }
-            name if name.contains("messages")
-                || name.contains("throughput")
-                || name.contains("message_size") =>
-            {
+            name if name.contains("messages") || name.contains("throughput") || name.contains("message_size") => {
                 Some(Self::Message)
             }
             name if name.contains("consumer") => Some(Self::Consumer),
             name if name.contains("producer") => Some(Self::Producer),
-            name if name.contains("commit")
-                || name.contains("rollback")
-                || name.contains("half") =>
-            {
+            name if name.contains("commit") || name.contains("rollback") || name.contains("half") => {
                 Some(Self::Transaction)
             }
-            name if name.contains("latency") || name.contains("execution_time") => {
-                Some(Self::Performance)
-            }
+            name if name.contains("latency") || name.contains("execution_time") => Some(Self::Performance),
             _ => None,
         }
     }
@@ -363,10 +345,7 @@ mod tests {
             BrokerMetricsConstant::LABEL_CLUSTER_NAME
         );
         assert_eq!(labels::business::TOPIC, BrokerMetricsConstant::LABEL_TOPIC);
-        assert_eq!(
-            labels::node_types::BROKER,
-            BrokerMetricsConstant::NODE_TYPE_BROKER
-        );
+        assert_eq!(labels::node_types::BROKER, BrokerMetricsConstant::NODE_TYPE_BROKER);
     }
 
     #[test]
@@ -390,22 +369,12 @@ mod tests {
 
     #[test]
     fn test_metric_type_detection() {
-        assert!(BrokerMetricsConstant::is_counter_metric(
-            "rocketmq_messages_in_total"
-        ));
-        assert!(BrokerMetricsConstant::is_histogram_metric(
-            "rocketmq_message_size"
-        ));
-        assert!(BrokerMetricsConstant::is_gauge_metric(
-            "rocketmq_processor_watermark"
-        ));
+        assert!(BrokerMetricsConstant::is_counter_metric("rocketmq_messages_in_total"));
+        assert!(BrokerMetricsConstant::is_histogram_metric("rocketmq_message_size"));
+        assert!(BrokerMetricsConstant::is_gauge_metric("rocketmq_processor_watermark"));
 
-        assert!(!BrokerMetricsConstant::is_gauge_metric(
-            "rocketmq_messages_in_total"
-        ));
-        assert!(!BrokerMetricsConstant::is_counter_metric(
-            "rocketmq_message_size"
-        ));
+        assert!(!BrokerMetricsConstant::is_gauge_metric("rocketmq_messages_in_total"));
+        assert!(!BrokerMetricsConstant::is_counter_metric("rocketmq_message_size"));
     }
 
     #[test]

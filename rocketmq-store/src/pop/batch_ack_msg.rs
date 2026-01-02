@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::fmt::Display;
 
@@ -129,9 +126,9 @@ mod tests {
             ack_msg,
             ack_offset_list: vec![1, 2, 3],
         };
-        let expected = "BatchAckMsg [ack_msg=AckMsg [ack_offset=123, start_offset=456, \
-                        consumer_group=test_group, topic=test_topic, queue_id=1, pop_time=789, \
-                        broker_name=test_broker], ack_offset_list=[1, 2, 3]]";
+        let expected = "BatchAckMsg [ack_msg=AckMsg [ack_offset=123, start_offset=456, consumer_group=test_group, \
+                        topic=test_topic, queue_id=1, pop_time=789, broker_name=test_broker], ack_offset_list=[1, 2, \
+                        3]]";
         assert_eq!(format!("{}", batch_ack_msg), expected);
     }
 
@@ -151,13 +148,15 @@ mod tests {
             ack_offset_list: vec![1, 2, 3],
         };
         let json = serde_json::to_string(&batch_ack_msg).unwrap();
-        let expected = r#"{"ao":123,"so":456,"c":"test_group","t":"test_topic","q":1,"pt":789,"bn":"test_broker","aol":[1,2,3]}"#;
+        let expected =
+            r#"{"ao":123,"so":456,"c":"test_group","t":"test_topic","q":1,"pt":789,"bn":"test_broker","aol":[1,2,3]}"#;
         assert_eq!(json, expected);
     }
 
     #[test]
     fn batch_ack_msg_deserializes_correctly() {
-        let json = r#"{"ao":123,"so":456,"c":"test_group","t":"test_topic","q":1,"pt":789,"bn":"test_broker","aol":[1,2,3]}"#;
+        let json =
+            r#"{"ao":123,"so":456,"c":"test_group","t":"test_topic","q":1,"pt":789,"bn":"test_broker","aol":[1,2,3]}"#;
         let batch_ack_msg: BatchAckMsg = serde_json::from_str(json).unwrap();
         assert_eq!(batch_ack_msg.ack_msg.ack_offset, 123);
         assert_eq!(batch_ack_msg.ack_msg.start_offset, 456);

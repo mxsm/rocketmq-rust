@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -158,8 +155,8 @@ where
         if let Some(store_offset) = store_offset {
             if offset < store_offset {
                 warn!(
-                    "[NOTIFYME]update consumer offset less than store. clientHost={}, key={}, \
-                     queueId={}, requestOffset={}, storeOffset={}",
+                    "[NOTIFYME]update consumer offset less than store. clientHost={}, key={}, queueId={}, \
+                     requestOffset={}, storeOffset={}",
                     client_host, key, queue_id, offset, store_offset
                 );
             }
@@ -189,12 +186,7 @@ where
 
     pub fn has_offset_reset(&self, group: &str, topic: &str, queue_id: i32) -> bool {
         let key = format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}");
-        match self
-            .consumer_offset_wrapper
-            .reset_offset_table
-            .read()
-            .get(key.as_str())
-        {
+        match self.consumer_offset_wrapper.reset_offset_table.read().get(key.as_str()) {
             None => false,
             Some(inner) => inner.contains_key(&queue_id),
         }
@@ -203,21 +195,11 @@ where
     pub fn query_offset(&self, group: &CheetahString, topic: &CheetahString, queue_id: i32) -> i64 {
         let key = format!("{topic}{TOPIC_GROUP_SEPARATOR}{group}");
         if self.broker_config.use_server_side_reset_offset {
-            if let Some(value) = self
-                .consumer_offset_wrapper
-                .reset_offset_table
-                .read()
-                .get(key.as_str())
-            {
+            if let Some(value) = self.consumer_offset_wrapper.reset_offset_table.read().get(key.as_str()) {
                 return *value.get(&queue_id).unwrap_or(&-1);
             }
         }
-        if let Some(value) = self
-            .consumer_offset_wrapper
-            .offset_table
-            .read()
-            .get(key.as_str())
-        {
+        if let Some(value) = self.consumer_offset_wrapper.offset_table.read().get(key.as_str()) {
             return *value.get(&queue_id).unwrap_or(&-1);
         }
         -1
@@ -236,9 +218,7 @@ where
         topics
     }
 
-    pub fn offset_table(
-        &self,
-    ) -> Arc<parking_lot::RwLock<HashMap<CheetahString, HashMap<i32, i64>>>> {
+    pub fn offset_table(&self) -> Arc<parking_lot::RwLock<HashMap<CheetahString, HashMap<i32, i64>>>> {
         self.consumer_offset_wrapper.offset_table.clone()
     }
 
@@ -261,9 +241,7 @@ where
                 .serialize_json_pretty()
                 .expect("encode pretty failed")
         } else {
-            self.consumer_offset_wrapper
-                .serialize_json()
-                .expect("encode failed")
+            self.consumer_offset_wrapper.serialize_json().expect("encode failed")
         }
     }
 
@@ -286,23 +264,13 @@ where
 struct ConsumerOffsetWrapper {
     data_version: ArcMut<DataVersion>,
     // Pop mode offset table
-    offset_table: Arc<
-        parking_lot::RwLock<
-            HashMap<CheetahString /* topic@group */, HashMap<i32 /* queue id */, i64>>,
-        >,
-    >,
+    offset_table: Arc<parking_lot::RwLock<HashMap<CheetahString /* topic@group */, HashMap<i32 /* queue id */, i64>>>>,
     // Pop mode reset offset table
-    reset_offset_table: Arc<
-        parking_lot::RwLock<
-            HashMap<CheetahString /* topic@group */, HashMap<i32 /* queue id */, i64>>,
-        >,
-    >,
+    reset_offset_table:
+        Arc<parking_lot::RwLock<HashMap<CheetahString /* topic@group */, HashMap<i32 /* queue id */, i64>>>>,
     //Pull mode offset table
-    pull_offset_table: Arc<
-        parking_lot::RwLock<
-            HashMap<CheetahString /* topic@group */, HashMap<i32 /* queue id */, i64>>,
-        >,
-    >,
+    pull_offset_table:
+        Arc<parking_lot::RwLock<HashMap<CheetahString /* topic@group */, HashMap<i32 /* queue id */, i64>>>>,
     version_change_counter: Arc<AtomicI64>,
 }
 
@@ -358,9 +326,7 @@ impl<'de> Deserialize<'de> for ConsumerOffsetWrapper {
                     type Value = Field;
 
                     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                        formatter.write_str(
-                            "`dataVersion`, `offsetTable`, `resetOffsetTable` or `pullOffsetTable`",
-                        )
+                        formatter.write_str("`dataVersion`, `offsetTable`, `resetOffsetTable` or `pullOffsetTable`")
                     }
 
                     fn visit_str<E: de::Error>(self, value: &str) -> Result<Field, E> {
@@ -387,10 +353,7 @@ impl<'de> Deserialize<'de> for ConsumerOffsetWrapper {
                 formatter.write_str("struct ConsumerOffsetWrapper")
             }
 
-            fn visit_map<V: MapAccess<'de>>(
-                self,
-                mut map: V,
-            ) -> Result<ConsumerOffsetWrapper, V::Error> {
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<ConsumerOffsetWrapper, V::Error> {
                 let mut data_version = None;
                 let mut offset_table = None;
                 let mut reset_offset_table = None;
@@ -442,16 +405,7 @@ impl<'de> Deserialize<'de> for ConsumerOffsetWrapper {
             }
         }
 
-        const FIELDS: &[&str] = &[
-            "dataVersion",
-            "offsetTable",
-            "resetOffsetTable",
-            "pullOffsetTable",
-        ];
-        deserializer.deserialize_struct(
-            "ConsumerOffsetWrapper",
-            FIELDS,
-            ConsumerOffsetWrapperVisitor,
-        )
+        const FIELDS: &[&str] = &["dataVersion", "offsetTable", "resetOffsetTable", "pullOffsetTable"];
+        deserializer.deserialize_struct("ConsumerOffsetWrapper", FIELDS, ConsumerOffsetWrapperVisitor)
     }
 }

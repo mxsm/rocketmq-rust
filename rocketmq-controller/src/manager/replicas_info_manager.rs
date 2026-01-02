@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! # ReplicasInfoManager
 //!
@@ -46,6 +43,9 @@ use dashmap::DashMap;
 use rocketmq_common::common::mix_all::FIRST_BROKER_CONTROLLER_ID;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
+use rocketmq_remoting::protocol::body::broker_replicas_info::BrokerReplicasInfo;
+use rocketmq_remoting::protocol::body::broker_replicas_info::ReplicaIdentity;
+use rocketmq_remoting::protocol::body::broker_replicas_info::ReplicasInfo;
 use rocketmq_remoting::protocol::body::elect_master_response_body::ElectMasterResponseBody;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_response_header::AlterSyncStateSetResponseHeader;
@@ -54,7 +54,6 @@ use rocketmq_remoting::protocol::header::controller::get_next_broker_id_response
 use rocketmq_remoting::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader;
 use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_response_header::RegisterBrokerToControllerResponseHeader;
 use rocketmq_remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
-use rocketmq_remoting::protocol::body::broker_replicas_info::{BrokerReplicasInfo, ReplicaIdentity, ReplicasInfo};
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -160,12 +159,9 @@ impl ReplicasInfoManager {
 
         // Check whether the oldSyncStateSet is equal with newSyncStateSet
         if old_sync_state_set.len() == new_sync_state_set.len()
-            && old_sync_state_set
-                .iter()
-                .all(|id| new_sync_state_set.contains(id))
+            && old_sync_state_set.iter().all(|id| new_sync_state_set.contains(id))
         {
-            let err = "The newSyncStateSet is equal with oldSyncStateSet, no needed to update \
-                       syncStateSet";
+            let err = "The newSyncStateSet is equal with oldSyncStateSet, no needed to update syncStateSet";
             warn!("{}", err);
             result.set_code_and_remark(ResponseCode::ControllerAlterSyncStateSetFailed, err);
             return result;
@@ -186,8 +182,7 @@ impl ReplicasInfoManager {
         // Check master epoch
         if master_epoch != sync_state_info.master_epoch() {
             let err = format!(
-                "Rejecting alter syncStateSet request because the current master epoch is:{}, not \
-                 {}",
+                "Rejecting alter syncStateSet request because the current master epoch is:{}, not {}",
                 sync_state_info.master_epoch(),
                 master_epoch
             );
@@ -199,8 +194,7 @@ impl ReplicasInfoManager {
         // Check syncStateSet epoch
         if sync_state_set_epoch != sync_state_info.sync_state_set_epoch() {
             let err = format!(
-                "Rejecting alter syncStateSet request because the current syncStateSet epoch \
-                 is:{}, not {}",
+                "Rejecting alter syncStateSet request because the current syncStateSet epoch is:{}, not {}",
                 sync_state_info.sync_state_set_epoch(),
                 sync_state_set_epoch
             );
@@ -238,8 +232,7 @@ impl ReplicasInfoManager {
 
         if !new_sync_state_set.contains(&master_broker_id) {
             let err = format!(
-                "Rejecting alter syncStateSet request because the newSyncStateSet don't contains \
-                 origin leader {}",
+                "Rejecting alter syncStateSet request because the newSyncStateSet don't contains origin leader {}",
                 master_broker_id
             );
             error!("{}", err);
@@ -254,12 +247,9 @@ impl ReplicasInfoManager {
         }
 
         // Encode sync state set
-        let sync_state_set_i64: HashSet<i64> =
-            new_sync_state_set.iter().map(|&id| id as i64).collect();
+        let sync_state_set_i64: HashSet<i64> = new_sync_state_set.iter().map(|&id| id as i64).collect();
         let sync_state_set_data = SyncStateSet::with_values(sync_state_set_i64, new_epoch);
-        result.set_body(Bytes::from(
-            serde_json::to_vec(&sync_state_set_data).unwrap(),
-        ));
+        result.set_body(Bytes::from(serde_json::to_vec(&sync_state_set_data).unwrap()));
 
         let event = AlterSyncStateSetEvent::new(broker_name, new_sync_state_set);
         result.add_event(Arc::new(event));
@@ -329,14 +319,12 @@ impl ReplicasInfoManager {
             let assigned_broker_id = if designate_elect { broker_id } else { None };
 
             // Convert HashSet<u64> to HashSet<i64> for elect_policy
-            let sync_state_set_i64: HashSet<i64> =
-                sync_state_set.iter().map(|&id| id as i64).collect();
-            let all_replica_brokers_i64 =
-                all_replica_brokers.map(|set: std::collections::HashSet<u64>| {
-                    set.iter()
-                        .map(|&id| id as i64)
-                        .collect::<std::collections::HashSet<i64>>()
-                });
+            let sync_state_set_i64: HashSet<i64> = sync_state_set.iter().map(|&id| id as i64).collect();
+            let all_replica_brokers_i64 = all_replica_brokers.map(|set: std::collections::HashSet<u64>| {
+                set.iter()
+                    .map(|&id| id as i64)
+                    .collect::<std::collections::HashSet<i64>>()
+            });
 
             new_master = elect_policy
                 .elect(
@@ -499,8 +487,7 @@ impl ReplicasInfoManager {
                 result.set_code_and_remark(
                     ResponseCode::ControllerBrokerIdInvalid,
                     format!(
-                        "Broker-set: {} hasn't been registered in controller, but broker try to \
-                         apply brokerId: {}",
+                        "Broker-set: {} hasn't been registered in controller, but broker try to apply brokerId: {}",
                         broker_name, applied_broker_id
                     ),
                 );
@@ -531,10 +518,7 @@ impl ReplicasInfoManager {
         if !self.is_contains_broker(broker_name) {
             result.set_code_and_remark(
                 ResponseCode::ControllerBrokerNeedToBeRegistered,
-                format!(
-                    "Broker-set: {} hasn't been registered in controller",
-                    broker_name
-                ),
+                format!("Broker-set: {} hasn't been registered in controller", broker_name),
             );
             return result;
         }
@@ -571,26 +555,14 @@ impl ReplicasInfoManager {
             }
         }
 
-        let sync_state_set_i64: HashSet<i64> = sync_state_info
-            .sync_state_set()
-            .iter()
-            .map(|&id| id as i64)
-            .collect();
-        let sync_state_set_data =
-            SyncStateSet::with_values(sync_state_set_i64, sync_state_info.sync_state_set_epoch());
-        result.set_body(Bytes::from(
-            serde_json::to_vec(&sync_state_set_data).unwrap(),
-        ));
+        let sync_state_set_i64: HashSet<i64> = sync_state_info.sync_state_set().iter().map(|&id| id as i64).collect();
+        let sync_state_set_data = SyncStateSet::with_values(sync_state_set_i64, sync_state_info.sync_state_set_epoch());
+        result.set_body(Bytes::from(serde_json::to_vec(&sync_state_set_data).unwrap()));
 
         // If this broker's address has been changed, we need to update it
         if let Some(current_addr) = broker_replica_info.get_broker_address(broker_id) {
             if current_addr.as_str() != broker_address {
-                let event = UpdateBrokerAddressEvent::new(
-                    cluster_name,
-                    broker_name,
-                    broker_address,
-                    broker_id,
-                );
+                let event = UpdateBrokerAddressEvent::new(cluster_name, broker_name, broker_address, broker_id);
                 result.add_event(Arc::new(event));
             }
         }
@@ -599,10 +571,7 @@ impl ReplicasInfoManager {
     }
 
     /// Get replica info for a broker
-    pub fn get_replica_info(
-        &self,
-        broker_name: &str,
-    ) -> ControllerResult<GetReplicaInfoResponseHeader> {
+    pub fn get_replica_info(&self, broker_name: &str) -> ControllerResult<GetReplicaInfoResponseHeader> {
         let mut result = ControllerResult::new(Some(GetReplicaInfoResponseHeader::default()));
 
         if self.is_contains_broker(broker_name) {
@@ -624,18 +593,11 @@ impl ReplicasInfoManager {
                 response.master_epoch = Some(sync_state_info.master_epoch());
             }
 
-            let sync_state_set_i64: HashSet<i64> = sync_state_info
-                .sync_state_set()
-                .iter()
-                .map(|&id| id as i64)
-                .collect();
-            let sync_state_set_data = SyncStateSet::with_values(
-                sync_state_set_i64,
-                sync_state_info.sync_state_set_epoch(),
-            );
-            result.set_body(Bytes::from(
-                serde_json::to_vec(&sync_state_set_data).unwrap(),
-            ));
+            let sync_state_set_i64: HashSet<i64> =
+                sync_state_info.sync_state_set().iter().map(|&id| id as i64).collect();
+            let sync_state_set_data =
+                SyncStateSet::with_values(sync_state_set_i64, sync_state_info.sync_state_set_epoch());
+            result.set_body(Bytes::from(serde_json::to_vec(&sync_state_set_data).unwrap()));
         } else {
             result.set_code_and_remark(
                 ResponseCode::ControllerBrokerMetadataNotExist,
@@ -709,15 +671,10 @@ impl ReplicasInfoManager {
                 not_in_sync_replicas,
             );
 
-            broker_replicas_info.add_replica_info(
-                CheetahString::from_string(broker_name.to_string()),
-                replicas_info,
-            );
+            broker_replicas_info.add_replica_info(CheetahString::from_string(broker_name.to_string()), replicas_info);
         }
 
-        result.set_body(Bytes::from(
-            serde_json::to_vec(&broker_replicas_info).unwrap(),
-        ));
+        result.set_body(Bytes::from(serde_json::to_vec(&broker_replicas_info).unwrap()));
         result
     }
 
@@ -737,14 +694,9 @@ impl ReplicasInfoManager {
         if !clean_living_broker {
             // If SyncStateInfo.masterAddress is not empty, at least one broker is alive
             if let Some(sync_state_info) = self.sync_state_set_info_table.get(broker_name) {
-                if broker_controller_ids_to_clean.is_none()
-                    && sync_state_info.master_broker_id().is_some()
-                {
+                if broker_controller_ids_to_clean.is_none() && sync_state_info.master_broker_id().is_some() {
                     let remark = format!("Broker {} is still alive, clean up failure", broker_name);
-                    result.set_code_and_remark(
-                        ResponseCode::ControllerInvalidCleanBrokerMetadata,
-                        &remark,
-                    );
+                    result.set_code_and_remark(ResponseCode::ControllerInvalidCleanBrokerMetadata, &remark);
                     return result;
                 }
             }
@@ -754,19 +706,12 @@ impl ReplicasInfoManager {
                     Ok(ids) => {
                         // Check if any broker is still alive
                         for &broker_id in &ids {
-                            if valid_predicate.check(
-                                cluster_name,
-                                broker_name,
-                                Some(broker_id as i64),
-                            ) {
+                            if valid_predicate.check(cluster_name, broker_name, Some(broker_id as i64)) {
                                 let remark = format!(
                                     "Broker [{}, {}] is still alive, clean up failure",
                                     broker_name, broker_id
                                 );
-                                result.set_code_and_remark(
-                                    ResponseCode::ControllerInvalidCleanBrokerMetadata,
-                                    &remark,
-                                );
+                                result.set_code_and_remark(ResponseCode::ControllerInvalidCleanBrokerMetadata, &remark);
                                 return result;
                             }
                         }
@@ -774,14 +719,10 @@ impl ReplicasInfoManager {
                     }
                     Err(e) => {
                         let remark = format!(
-                            "Please set the option <brokerControllerIdsToClean> according to the \
-                             format, error: {}",
+                            "Please set the option <brokerControllerIdsToClean> according to the format, error: {}",
                             e
                         );
-                        result.set_code_and_remark(
-                            ResponseCode::ControllerInvalidCleanBrokerMetadata,
-                            &remark,
-                        );
+                        result.set_code_and_remark(ResponseCode::ControllerInvalidCleanBrokerMetadata, &remark);
                         return result;
                     }
                 }
@@ -796,19 +737,13 @@ impl ReplicasInfoManager {
 
         result.set_code_and_remark(
             ResponseCode::ControllerInvalidCleanBrokerMetadata,
-            format!(
-                "Broker {} is not existed, clean broker data failure.",
-                broker_name
-            ),
+            format!("Broker {} is not existed, clean broker data failure.", broker_name),
         );
         result
     }
 
     /// Scan broker sets that need reelection
-    pub fn scan_need_reelect_broker_sets(
-        &self,
-        valid_predicate: &dyn BrokerValidPredicate,
-    ) -> Vec<String> {
+    pub fn scan_need_reelect_broker_sets(&self, valid_predicate: &dyn BrokerValidPredicate) -> Vec<String> {
         let mut need_reelect_broker_sets = Vec::new();
 
         for entry in self.sync_state_set_info_table.iter() {
@@ -819,15 +754,13 @@ impl ReplicasInfoManager {
                 let cluster_name = sync_state_info.cluster_name();
 
                 // Now master is inactive
-                if !valid_predicate.check(cluster_name, broker_name, Some(master_broker_id as i64))
-                {
+                if !valid_predicate.check(cluster_name, broker_name, Some(master_broker_id as i64)) {
                     // Still at least one broker alive
-                    if let Some(broker_replica_info) =
-                        self.replica_info_table.get(broker_name.as_str())
-                    {
-                        let alive = broker_replica_info.get_all_broker().iter().any(|&id| {
-                            valid_predicate.check(cluster_name, broker_name, Some(id as i64))
-                        });
+                    if let Some(broker_replica_info) = self.replica_info_table.get(broker_name.as_str()) {
+                        let alive = broker_replica_info
+                            .get_all_broker()
+                            .iter()
+                            .any(|&id| valid_predicate.check(cluster_name, broker_name, Some(id as i64)));
 
                         if alive {
                             need_reelect_broker_sets.push(broker_name.to_string());
@@ -896,15 +829,14 @@ impl ReplicasInfoManager {
 
     /// Deserialize the state machine from bytes
     pub fn deserialize_from(&self, data: &[u8]) -> Result<()> {
-        let state: SerializedState = serde_json::from_slice(data)
-            .map_err(|e| ControllerError::SerializationError(e.to_string()))?;
+        let state: SerializedState =
+            serde_json::from_slice(data).map_err(|e| ControllerError::SerializationError(e.to_string()))?;
 
         self.replica_info_table.clear();
         self.sync_state_set_info_table.clear();
 
         for (key, value) in state.replica_info_table {
-            self.replica_info_table
-                .insert(CheetahString::from_string(key), value);
+            self.replica_info_table.insert(CheetahString::from_string(key), value);
         }
 
         for (key, value) in state.sync_state_set_info_table {
@@ -919,15 +851,11 @@ impl ReplicasInfoManager {
 
     /// Check if broker exists in both tables
     fn is_contains_broker(&self, broker_name: &str) -> bool {
-        self.replica_info_table.contains_key(broker_name)
-            && self.sync_state_set_info_table.contains_key(broker_name)
+        self.replica_info_table.contains_key(broker_name) && self.sync_state_set_info_table.contains_key(broker_name)
     }
 
     /// Build broker member group
-    fn build_broker_member_group(
-        &self,
-        broker_replica_info: &BrokerReplicaInfo,
-    ) -> BrokerMemberGroup {
+    fn build_broker_member_group(&self, broker_replica_info: &BrokerReplicaInfo) -> BrokerMemberGroup {
         let broker_addrs: HashMap<u64, CheetahString> = broker_replica_info
             .get_broker_id_table()
             .iter()
@@ -974,8 +902,7 @@ impl ReplicasInfoManager {
             }
         } else {
             // First time to register in this broker set
-            let broker_replica_info =
-                BrokerReplicaInfo::new(event.cluster_name(), event.broker_name());
+            let broker_replica_info = BrokerReplicaInfo::new(event.cluster_name(), event.broker_name());
             broker_replica_info.add_broker(
                 event.new_broker_id(),
                 event.broker_address(),
@@ -1079,10 +1006,7 @@ mod tests {
 
     #[test]
     fn test_replicas_info_manager_creation() {
-        let config = Arc::new(ControllerConfig::new_node(
-            1,
-            "127.0.0.1:9876".parse().unwrap(),
-        ));
+        let config = Arc::new(ControllerConfig::new_node(1, "127.0.0.1:9876".parse().unwrap()));
         let manager = ReplicasInfoManager::new(config);
         assert_eq!(manager.replica_info_table.len(), 0);
         assert_eq!(manager.sync_state_set_info_table.len(), 0);

@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -75,33 +72,24 @@ impl MessageRequestModeManager {
 
 impl ConfigManager for MessageRequestModeManager {
     fn config_file_path(&self) -> String {
-        broker_path_config_helper::get_message_request_mode_path(
-            self.message_store_config.store_path_root_dir.as_str(),
-        )
+        broker_path_config_helper::get_message_request_mode_path(self.message_store_config.store_path_root_dir.as_str())
     }
 
     fn encode_pretty(&self, pretty_format: bool) -> String {
         if pretty_format {
-            SerdeJsonUtils::serialize_json_pretty(&*self.message_request_mode_map.lock())
-                .expect("encode failed")
+            SerdeJsonUtils::serialize_json_pretty(&*self.message_request_mode_map.lock()).expect("encode failed")
         } else {
-            SerdeJsonUtils::serialize_json(&*self.message_request_mode_map.lock())
-                .expect("encode failed")
+            SerdeJsonUtils::serialize_json(&*self.message_request_mode_map.lock()).expect("encode failed")
         }
     }
 
     fn decode(&self, json_string: &str) {
-        info!(
-            "decode MessageRequestModeManager from json string:{}",
-            json_string
-        );
+        info!("decode MessageRequestModeManager from json string:{}", json_string);
         if json_string.is_empty() {
             return;
         }
-        let message_request_mode_map: HashMap<
-            CheetahString,
-            HashMap<CheetahString, SetMessageRequestModeRequestBody>,
-        > = SerdeJsonUtils::from_json_str(json_string).expect("decode failed");
+        let message_request_mode_map: HashMap<CheetahString, HashMap<CheetahString, SetMessageRequestModeRequestBody>> =
+            SerdeJsonUtils::from_json_str(json_string).expect("decode failed");
         let mut message_request_mode_map_ = self.message_request_mode_map.lock();
         *message_request_mode_map_ = message_request_mode_map;
     }
@@ -126,11 +114,7 @@ mod tests {
         let consumer_group = CheetahString::from("test_group");
         let request_body = SetMessageRequestModeRequestBody::default();
 
-        manager.set_message_request_mode(
-            topic.clone(),
-            consumer_group.clone(),
-            request_body.clone(),
-        );
+        manager.set_message_request_mode(topic.clone(), consumer_group.clone(), request_body.clone());
         let _result = manager.get_message_request_mode(&topic, &consumer_group);
 
         //assert_eq!(result, Some(request_body));
@@ -156,11 +140,7 @@ mod tests {
         let consumer_group = CheetahString::from("test_group");
         let request_body = SetMessageRequestModeRequestBody::default();
 
-        manager.set_message_request_mode(
-            topic.clone(),
-            consumer_group.clone(),
-            request_body.clone(),
-        );
+        manager.set_message_request_mode(topic.clone(), consumer_group.clone(), request_body.clone());
         let json = manager.encode_pretty(true);
 
         assert!(json.contains("\n"));
@@ -183,10 +163,8 @@ mod tests {
          }"#;
 
         manager.decode(json);
-        let result = manager.get_message_request_mode(
-            &CheetahString::from("test_topic"),
-            &CheetahString::from("test_group"),
-        );
+        let result =
+            manager.get_message_request_mode(&CheetahString::from("test_topic"), &CheetahString::from("test_group"));
 
         assert!(result.is_some());
         assert_eq!(result.unwrap().mode, MessageRequestMode::Pull);

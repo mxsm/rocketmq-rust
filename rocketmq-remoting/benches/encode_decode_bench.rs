@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Comprehensive benchmarks for RemotingCommand encode/decode operations
 
@@ -82,10 +79,7 @@ fn create_very_complex_command() -> RemotingCommand {
         .set_remark("Complex command with custom header and large body")
         .set_ext_fields(ext_fields)
         .set_body(Bytes::from(body))
-        .set_command_custom_header(GetRouteInfoRequestHeader::new(
-            "TestTopic_Complex",
-            Some(true),
-        ))
+        .set_command_custom_header(GetRouteInfoRequestHeader::new("TestTopic_Complex", Some(true)))
 }
 
 /// Benchmark: Encode simple command (JSON)
@@ -343,8 +337,7 @@ fn bench_throughput_rocketmq(c: &mut Criterion) {
         group.bench_with_input(format!("body_{}_bytes", size), size, |b, &size| {
             b.iter_batched(
                 || {
-                    let mut cmd =
-                        create_simple_command().set_serialize_type(SerializeType::ROCKETMQ);
+                    let mut cmd = create_simple_command().set_serialize_type(SerializeType::ROCKETMQ);
                     if size > 0 {
                         cmd = cmd.set_body(Bytes::from(vec![0u8; size]));
                     }
@@ -385,21 +378,8 @@ criterion_group!(
     bench_decode_rocketmq_very_complex
 );
 
-criterion_group!(
-    roundtrip_benches,
-    bench_roundtrip_json,
-    bench_roundtrip_rocketmq
-);
+criterion_group!(roundtrip_benches, bench_roundtrip_json, bench_roundtrip_rocketmq);
 
-criterion_group!(
-    throughput_benches,
-    bench_throughput_json,
-    bench_throughput_rocketmq
-);
+criterion_group!(throughput_benches, bench_throughput_json, bench_throughput_rocketmq);
 
-criterion_main!(
-    encode_benches,
-    decode_benches,
-    roundtrip_benches,
-    throughput_benches
-);
+criterion_main!(encode_benches, decode_benches, roundtrip_benches, throughput_benches);

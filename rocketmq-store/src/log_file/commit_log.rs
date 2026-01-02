@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -113,11 +110,7 @@ fn encode_message_ext_batch(
     put_message_context: &mut PutMessageContext,
     message_store_config: &Arc<MessageStoreConfig>,
 ) -> Option<BytesMut> {
-    message_encoder_pool::encode_message_batch_with_pool(
-        message_ext_batch,
-        put_message_context,
-        message_store_config,
-    )
+    message_encoder_pool::encode_message_batch_with_pool(message_ext_batch, put_message_context, message_store_config)
 }
 
 fn generate_key(msg: &MessageExtBrokerInner) -> String {
@@ -138,16 +131,11 @@ pub fn get_message_num(
 ) -> i16 {
     let mut message_num = 1i16;
     let cq_type = get_cq_type(topic_config_table, msg_inner);
-    if MessageSysFlag::check(msg_inner.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG)
-        || cq_type == CQType::BatchCQ
-    {
-        if let Some(num) =
-            msg_inner
-                .message_ext_inner
-                .message
-                .get_property(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_INNER_NUM,
-                ))
+    if MessageSysFlag::check(msg_inner.sys_flag(), MessageSysFlag::INNER_BATCH_FLAG) || cq_type == CQType::BatchCQ {
+        if let Some(num) = msg_inner
+            .message_ext_inner
+            .message
+            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_INNER_NUM))
         {
             message_num = num.parse().unwrap_or(1i16);
         }
@@ -187,11 +175,7 @@ impl CommitLog {
         let enabled_append_prop_crc = message_store_config.enabled_append_prop_crc;
         let store_path = message_store_config.get_store_path_commit_log();
         let mapped_file_size = message_store_config.mapped_file_size_commit_log;
-        let mapped_file_queue = ArcMut::new(MappedFileQueue::new(
-            store_path,
-            mapped_file_size as u64,
-            None,
-        ));
+        let mapped_file_queue = ArcMut::new(MappedFileQueue::new(store_path, mapped_file_size as u64, None));
         Self {
             mapped_file_queue: mapped_file_queue.clone(),
             message_store_config: message_store_config.clone(),
@@ -206,9 +190,7 @@ impl CommitLog {
                 topic_config_table.clone(),
             )),
             put_message_lock: Arc::new(Default::default()),
-            topic_queue_lock: Arc::new(TopicQueueLock::with_size(
-                message_store_config.topic_queue_lock_num,
-            )),
+            topic_queue_lock: Arc::new(TopicQueueLock::with_size(message_store_config.topic_queue_lock_num)),
             topic_config_table,
             consume_queue_store,
             flush_manager: ArcMut::new(DefaultFlushManager::new(
@@ -268,10 +250,7 @@ impl CommitLog {
                 false
             }
             Err(e) => {
-                error!(
-                    "Optimized load failed: {}, falling back to sequential load",
-                    e
-                );
+                error!("Optimized load failed: {}, falling back to sequential load", e);
                 self.load_sequential()
             }
         }
@@ -307,9 +286,7 @@ impl CommitLog {
                     // Copy-on-write update
                     let mut new_files = Vec::new();
                     new_files.extend(mapped_files);
-                    self.mapped_file_queue
-                        .get_mapped_files()
-                        .store(Arc::new(new_files));
+                    self.mapped_file_queue.get_mapped_files().store(Arc::new(new_files));
                 }
 
                 // Log detailed statistics
@@ -367,15 +344,12 @@ impl CommitLog {
 
     pub fn get_message(&self, offset: i64, size: i32) -> Option<SelectMappedBufferResult> {
         let mapped_file_size = self.message_store_config.mapped_file_size_commit_log;
-        let mapped_file = self
-            .mapped_file_queue
-            .find_mapped_file_by_offset(offset, offset == 0);
+        let mapped_file = self.mapped_file_queue.find_mapped_file_by_offset(offset, offset == 0);
         match mapped_file {
             None => None,
             Some(mmap_file) => {
                 let pos = offset % mapped_file_size as i64;
-                let mut select_mapped_buffer_result =
-                    mmap_file.select_mapped_buffer(pos as i32, size);
+                let mut select_mapped_buffer_result = mmap_file.select_mapped_buffer(pos as i32, size);
                 if let Some(ref mut result) = select_mapped_buffer_result {
                     result.mapped_file = Some(mmap_file);
                     result.is_in_cache = self.cold_data_check_service.is_data_in_page_cache();
@@ -387,18 +361,13 @@ impl CommitLog {
 
     pub fn set_confirm_offset(&mut self, phy_offset: i64) {
         self.confirm_offset = phy_offset;
-        self.store_checkpoint
-            .set_confirm_phy_offset(phy_offset as u64);
+        self.store_checkpoint.set_confirm_phy_offset(phy_offset as u64);
     }
 
     /// Handle HA service validation and calculate need_ack_nums
     /// Returns (need_ack_nums, should_continue) where should_continue indicates if processing can
     /// continue
-    fn handle_ha_service(
-        &self,
-        curr_offset: u64,
-        need_handle_ha: bool,
-    ) -> Result<i32, PutMessageResult> {
+    fn handle_ha_service(&self, curr_offset: u64, need_handle_ha: bool) -> Result<i32, PutMessageResult> {
         let mut need_ack_nums = self.message_store_config.in_sync_replicas;
 
         if !need_handle_ha {
@@ -419,9 +388,7 @@ impl CommitLog {
             if ha_service.in_sync_replicas_nums(curr_offset as i64)
                 < self.message_store_config.min_in_sync_replicas as i32
             {
-                return Err(PutMessageResult::new_default(
-                    PutMessageStatus::InSyncReplicasNotEnough,
-                ));
+                return Err(PutMessageResult::new_default(PutMessageStatus::InSyncReplicasNotEnough));
             }
             if self.message_store_config.all_ack_in_sync_state_set {
                 need_ack_nums = mix_all::ALL_ACK_IN_SYNC_STATE_SET;
@@ -432,9 +399,7 @@ impl CommitLog {
                 .min(ha_service.in_sync_replicas_nums(curr_offset as i64));
             need_ack_nums = self.calc_need_ack_nums(in_sync_replicas);
             if need_ack_nums > in_sync_replicas {
-                return Err(PutMessageResult::new_default(
-                    PutMessageStatus::InSyncReplicasNotEnough,
-                ));
+                return Err(PutMessageResult::new_default(PutMessageStatus::InSyncReplicasNotEnough));
             }
             if self.message_store_config.all_ack_in_sync_state_set {
                 need_ack_nums = mix_all::ALL_ACK_IN_SYNC_STATE_SET;
@@ -445,12 +410,8 @@ impl CommitLog {
     }
 
     pub async fn put_messages(&mut self, mut msg_batch: MessageExtBatch) -> PutMessageResult {
-        msg_batch
-            .message_ext_broker_inner
-            .message_ext_inner
-            .store_timestamp = get_current_millis() as i64;
-        let tran_type =
-            MessageSysFlag::get_transaction_value(msg_batch.message_ext_broker_inner.sys_flag());
+        msg_batch.message_ext_broker_inner.message_ext_inner.store_timestamp = get_current_millis() as i64;
+        let tran_type = MessageSysFlag::get_transaction_value(msg_batch.message_ext_broker_inner.sys_flag());
         if MessageSysFlag::TRANSACTION_NOT_TYPE != tran_type {
             return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
         }
@@ -488,19 +449,12 @@ impl CommitLog {
             Err(result) => return result,
         };
         msg_batch.message_ext_broker_inner.version = MessageVersion::V1;
-        let auto_message_version_on_topic_len =
-            self.message_store_config.auto_message_version_on_topic_len;
-        if auto_message_version_on_topic_len
-            && msg_batch.message_ext_broker_inner.topic().len() > i8::MAX as usize
-        {
+        let auto_message_version_on_topic_len = self.message_store_config.auto_message_version_on_topic_len;
+        if auto_message_version_on_topic_len && msg_batch.message_ext_broker_inner.topic().len() > i8::MAX as usize {
             msg_batch.message_ext_broker_inner.version = MessageVersion::V2;
         }
         let mut put_message_context = PutMessageContext::default();
-        let encoded_buff = encode_message_ext_batch(
-            &msg_batch,
-            &mut put_message_context,
-            &self.message_store_config,
-        );
+        let encoded_buff = encode_message_ext_batch(&msg_batch, &mut put_message_context, &self.message_store_config);
 
         let topic_queue_key = generate_key(&msg_batch.message_ext_broker_inner);
         put_message_context.set_topic_queue_table_key(topic_queue_key.clone());
@@ -510,21 +464,14 @@ impl CommitLog {
         self.assign_offset(&mut msg_batch.message_ext_broker_inner);
 
         let _put_message_lock = self.put_message_lock.lock().await;
-        self.begin_time_in_lock.store(
-            time_utils::get_current_millis(),
-            std::sync::atomic::Ordering::Release,
-        );
+        self.begin_time_in_lock
+            .store(time_utils::get_current_millis(), std::sync::atomic::Ordering::Release);
         let start_time = Instant::now();
         // Here settings are stored timestamp, in order to ensure an orderly global
-        msg_batch
-            .message_ext_broker_inner
-            .message_ext_inner
-            .store_timestamp = time_utils::get_current_millis() as i64;
+        msg_batch.message_ext_broker_inner.message_ext_inner.store_timestamp = time_utils::get_current_millis() as i64;
 
         if mapped_file.is_none() || mapped_file.as_ref().unwrap().is_full() {
-            mapped_file = self
-                .mapped_file_queue
-                .get_last_mapped_file_mut_start_offset(0, true);
+            mapped_file = self.mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true);
         }
 
         if mapped_file.is_none() {
@@ -535,8 +482,7 @@ impl CommitLog {
                 msg_batch.message_ext_broker_inner.topic(),
                 msg_batch.message_ext_broker_inner.born_host()
             );
-            self.begin_time_in_lock
-                .store(0, std::sync::atomic::Ordering::Release);
+            self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
             return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
         }
 
@@ -554,23 +500,17 @@ impl CommitLog {
             AppendMessageStatus::EndOfFile => {
                 //onCommitLogAppend(msg, result, mappedFile); in java not support this version
                 unlock_mapped_file = mapped_file;
-                mapped_file = self
-                    .mapped_file_queue
-                    .get_last_mapped_file_mut_start_offset(0, true);
+                mapped_file = self.mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true);
                 if mapped_file.is_none() {
                     drop(_put_message_lock);
                     drop(_topic_queue_guard);
-                    self.begin_time_in_lock
-                        .store(0, std::sync::atomic::Ordering::Release);
+                    self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
                     error!(
                         "create mapped file error, topic: {}  clientAddr: {}",
                         msg_batch.message_ext_broker_inner.topic(),
                         msg_batch.message_ext_broker_inner.born_host()
                     );
-                    return PutMessageResult::new_append_result(
-                        PutMessageStatus::CreateMappedFileFailed,
-                        Some(result),
-                    );
+                    return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(result));
                 }
                 let result = mapped_file.as_ref().unwrap().append_messages(
                     &mut msg_batch,
@@ -581,51 +521,34 @@ impl CommitLog {
                 if AppendMessageStatus::PutOk == result.status {
                     PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
                 } else {
-                    PutMessageResult::new_append_result(
-                        PutMessageStatus::UnknownError,
-                        Some(result),
-                    )
+                    PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result))
                 }
             }
-            AppendMessageStatus::MessageSizeExceeded
-            | AppendMessageStatus::PropertiesSizeExceeded => {
+            AppendMessageStatus::MessageSizeExceeded | AppendMessageStatus::PropertiesSizeExceeded => {
                 drop(_put_message_lock);
                 drop(_topic_queue_guard);
-                self.begin_time_in_lock
-                    .store(0, std::sync::atomic::Ordering::Release);
-                return PutMessageResult::new_append_result(
-                    PutMessageStatus::MessageIllegal,
-                    Some(result),
-                );
+                self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
+                return PutMessageResult::new_append_result(PutMessageStatus::MessageIllegal, Some(result));
             }
             AppendMessageStatus::UnknownError => {
                 drop(_put_message_lock);
                 drop(_topic_queue_guard);
-                self.begin_time_in_lock
-                    .store(0, std::sync::atomic::Ordering::Release);
-                return PutMessageResult::new_append_result(
-                    PutMessageStatus::UnknownError,
-                    Some(result),
-                );
+                self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
+                return PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result));
             }
         };
         let elapsed_time_in_lock = start_time.elapsed().as_millis() as u64;
         drop(_put_message_lock);
-        self.begin_time_in_lock
-            .store(0, std::sync::atomic::Ordering::Release);
+        self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
         if elapsed_time_in_lock > 500 {
             warn!(
-                "[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} \
-                 AppendMessageResult={}",
+                "[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} AppendMessageResult={}",
                 elapsed_time_in_lock,
                 msg_batch.message_ext_broker_inner.body_len(),
                 put_message_result.append_message_result().as_ref().unwrap(),
             );
         }
-        if let (Some(unlock_mf), true) = (
-            unlock_mapped_file,
-            self.message_store_config.warm_mapped_file_enable,
-        ) {
+        if let (Some(unlock_mf), true) = (unlock_mapped_file, self.message_store_config.warm_mapped_file_enable) {
             self.local_file_message_store
                 .as_ref()
                 .unwrap()
@@ -649,8 +572,7 @@ impl CommitLog {
             // Write failed - topic_queue_lock will be released, but offset is already assigned
             drop(_topic_queue_guard);
             warn!(
-                "Failed to append batch messages to CommitLog, offset hole created for topic={} \
-                 queue={}",
+                "Failed to append batch messages to CommitLog, offset hole created for topic={} queue={}",
                 msg_batch.message_ext_broker_inner.topic(),
                 msg_batch.message_ext_broker_inner.queue_id()
             );
@@ -670,9 +592,7 @@ impl CommitLog {
         msg.with_version(MessageVersion::V1);
         let topic = msg.topic();
         // setting auto message on topic length
-        if self.message_store_config.auto_message_version_on_topic_len
-            && topic.len() > i8::MAX as usize
-        {
+        if self.message_store_config.auto_message_version_on_topic_len && topic.len() > i8::MAX as usize {
             msg.with_version(MessageVersion::V2);
         }
 
@@ -709,8 +629,7 @@ impl CommitLog {
             && self.message_store_config.broker_role != BrokerRole::Slave);
 
         // Encode message BEFORE acquiring any locks
-        let (put_message_result, encoded_buff) =
-            encode_message_ext(&msg, &self.message_store_config);
+        let (put_message_result, encoded_buff) = encode_message_ext(&msg, &self.message_store_config);
         if let Some(result) = put_message_result {
             return result;
         }
@@ -736,9 +655,7 @@ impl CommitLog {
         }
 
         if mapped_file.is_none() || mapped_file.as_ref().unwrap().is_full() {
-            mapped_file = self
-                .mapped_file_queue
-                .get_last_mapped_file_mut_start_offset(0, true);
+            mapped_file = self.mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true);
         }
 
         if mapped_file.is_none() {
@@ -749,8 +666,7 @@ impl CommitLog {
                 msg.topic(),
                 msg.born_host()
             );
-            self.begin_time_in_lock
-                .store(0, std::sync::atomic::Ordering::Release);
+            self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
             return PutMessageResult::new_default(PutMessageStatus::CreateMappedFileFailed);
         }
 
@@ -767,23 +683,17 @@ impl CommitLog {
             AppendMessageStatus::EndOfFile => {
                 //onCommitLogAppend(msg, result, mappedFile); in java not support this version
                 unlock_mapped_file = mapped_file;
-                mapped_file = self
-                    .mapped_file_queue
-                    .get_last_mapped_file_mut_start_offset(0, true);
+                mapped_file = self.mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true);
                 if mapped_file.is_none() {
                     drop(_put_message_lock);
                     drop(_topic_queue_guard); // CRITICAL FIX: Release topic_queue_lock on error
-                    self.begin_time_in_lock
-                        .store(0, std::sync::atomic::Ordering::Release);
+                    self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
                     error!(
                         "create mapped file error, topic: {}  clientAddr: {}",
                         msg.topic(),
                         msg.born_host()
                     );
-                    return PutMessageResult::new_append_result(
-                        PutMessageStatus::CreateMappedFileFailed,
-                        Some(result),
-                    );
+                    return PutMessageResult::new_append_result(PutMessageStatus::CreateMappedFileFailed, Some(result));
                 }
                 let result = mapped_file.as_ref().unwrap().append_message(
                     &mut msg,
@@ -793,52 +703,35 @@ impl CommitLog {
                 if AppendMessageStatus::PutOk == result.status {
                     PutMessageResult::new_append_result(PutMessageStatus::PutOk, Some(result))
                 } else {
-                    PutMessageResult::new_append_result(
-                        PutMessageStatus::UnknownError,
-                        Some(result),
-                    )
+                    PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result))
                 }
             }
-            AppendMessageStatus::MessageSizeExceeded
-            | AppendMessageStatus::PropertiesSizeExceeded => {
+            AppendMessageStatus::MessageSizeExceeded | AppendMessageStatus::PropertiesSizeExceeded => {
                 drop(_put_message_lock);
                 drop(_topic_queue_guard);
-                self.begin_time_in_lock
-                    .store(0, std::sync::atomic::Ordering::Release);
-                return PutMessageResult::new_append_result(
-                    PutMessageStatus::MessageIllegal,
-                    Some(result),
-                );
+                self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
+                return PutMessageResult::new_append_result(PutMessageStatus::MessageIllegal, Some(result));
             }
             AppendMessageStatus::UnknownError => {
                 drop(_put_message_lock);
                 drop(_topic_queue_guard);
-                self.begin_time_in_lock
-                    .store(0, std::sync::atomic::Ordering::Release);
-                return PutMessageResult::new_append_result(
-                    PutMessageStatus::UnknownError,
-                    Some(result),
-                );
+                self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
+                return PutMessageResult::new_append_result(PutMessageStatus::UnknownError, Some(result));
             }
         };
         let elapsed_time_in_lock = start_time.elapsed().as_millis() as u64;
         drop(_put_message_lock);
-        self.begin_time_in_lock
-            .store(0, std::sync::atomic::Ordering::Release);
+        self.begin_time_in_lock.store(0, std::sync::atomic::Ordering::Release);
         if elapsed_time_in_lock > 500 {
             warn!(
-                "[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} \
-                 AppendMessageResult={}",
+                "[NOTIFYME]putMessage in lock cost time(ms)={}, bodyLength={} AppendMessageResult={}",
                 elapsed_time_in_lock,
                 msg.body_len(),
                 put_message_result.append_message_result().as_ref().unwrap(),
             );
         }
 
-        if let (Some(unlock_mf), true) = (
-            unlock_mapped_file,
-            self.message_store_config.warm_mapped_file_enable,
-        ) {
+        if let (Some(unlock_mf), true) = (unlock_mapped_file, self.message_store_config.warm_mapped_file_enable) {
             self.local_file_message_store
                 .as_ref()
                 .unwrap()
@@ -857,8 +750,7 @@ impl CommitLog {
             // This creates a hole in ConsumeQueue that will be filled by recovery process
             drop(_topic_queue_guard);
             warn!(
-                "Failed to append message to CommitLog, offset hole created for topic={} \
-                 queue={}, will be recovered",
+                "Failed to append message to CommitLog, offset hole created for topic={} queue={}, will be recovered",
                 msg.topic(),
                 msg.queue_id()
             );
@@ -868,11 +760,8 @@ impl CommitLog {
 
     fn increase_offset(&self, msg: &MessageExtBrokerInner, message_num: i16) {
         let tran_type = MessageSysFlag::get_transaction_value(msg.sys_flag());
-        if MessageSysFlag::TRANSACTION_NOT_TYPE == tran_type
-            || MessageSysFlag::TRANSACTION_COMMIT_TYPE == tran_type
-        {
-            self.consume_queue_store
-                .increase_queue_offset(msg, message_num);
+        if MessageSysFlag::TRANSACTION_NOT_TYPE == tran_type || MessageSysFlag::TRANSACTION_COMMIT_TYPE == tran_type {
+            self.consume_queue_store.increase_queue_offset(msg, message_num);
         }
     }
 
@@ -880,9 +769,7 @@ impl CommitLog {
     fn assign_offset(&self, msg: &mut MessageExtBrokerInner) {
         let tran_type = MessageSysFlag::get_transaction_value(msg.sys_flag());
         // if the message is not transaction message or transaction commit message
-        if MessageSysFlag::TRANSACTION_NOT_TYPE == tran_type
-            || MessageSysFlag::TRANSACTION_COMMIT_TYPE == tran_type
-        {
+        if MessageSysFlag::TRANSACTION_NOT_TYPE == tran_type || MessageSysFlag::TRANSACTION_COMMIT_TYPE == tran_type {
             self.consume_queue_store.assign_queue_offset(msg);
         }
     }
@@ -892,8 +779,7 @@ impl CommitLog {
         let mut need_ack_nums = self.message_store_config.in_sync_replicas;
         if self.message_store_config.enable_auto_in_sync_replicas {
             need_ack_nums = need_ack_nums.min(in_sync_replicas);
-            need_ack_nums =
-                need_ack_nums.max(self.message_store_config.min_in_sync_replicas as i32);
+            need_ack_nums = need_ack_nums.max(self.message_store_config.min_in_sync_replicas as i32);
         }
         need_ack_nums
     }
@@ -967,11 +853,7 @@ impl CommitLog {
         put_message_result
     }
 
-    async fn handle_ha(
-        &self,
-        put_message_result: &AppendMessageResult,
-        need_ack_nums: i32,
-    ) -> PutMessageStatus {
+    async fn handle_ha(&self, put_message_result: &AppendMessageResult, need_ack_nums: i32) -> PutMessageStatus {
         if need_ack_nums <= 1 {
             return PutMessageStatus::PutOk;
         }
@@ -1049,9 +931,7 @@ impl CommitLog {
         msg_inner
             .property(MessageConst::PROPERTY_INNER_MULTI_DISPATCH)
             .is_some_and(|s| !s.is_empty())
-            && msg_inner
-                .topic()
-                .starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
+            && msg_inner.topic().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
     }
 
     /// Optimized normal recovery with batched I/O
@@ -1101,10 +981,7 @@ impl CommitLog {
             check_crc_on_recover,
             check_dup_info,
             message_store_config,
-            self.local_file_message_store
-                .as_ref()
-                .unwrap()
-                .max_delay_level(),
+            self.local_file_message_store.as_ref().unwrap().max_delay_level(),
             self.local_file_message_store
                 .as_ref()
                 .unwrap()
@@ -1125,12 +1002,11 @@ impl CommitLog {
             let mut file_processed = false;
 
             while let Some((mut msg_bytes, absolute_offset, msg_size)) = iterator.next_message() {
-                let mut dispatch_request =
-                    recovery_ctx.process_message(&mut msg_bytes, absolute_offset);
+                let mut dispatch_request = recovery_ctx.process_message(&mut msg_bytes, absolute_offset);
 
                 if dispatch_request.success && dispatch_request.msg_size > 0 {
-                    last_valid_msg_phy_offset = (process_offset + absolute_offset as u64)
-                        + dispatch_request.msg_size as u64;
+                    last_valid_msg_phy_offset =
+                        (process_offset + absolute_offset as u64) + dispatch_request.msg_size as u64;
                     self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);
                     file_processed = true;
                 } else if dispatch_request.success && dispatch_request.msg_size == 0 {
@@ -1174,12 +1050,9 @@ impl CommitLog {
             message_store.truncate_dirty_logic_files(process_offset as i64);
         }
 
-        self.mapped_file_queue
-            .set_flushed_where(process_offset as i64);
-        self.mapped_file_queue
-            .set_committed_where(process_offset as i64);
-        self.mapped_file_queue
-            .truncate_dirty_files(process_offset as i64);
+        self.mapped_file_queue.set_flushed_where(process_offset as i64);
+        self.mapped_file_queue.set_committed_where(process_offset as i64);
+        self.mapped_file_queue.truncate_dirty_files(process_offset as i64);
 
         recovery_ctx.stats.recovery_time_ms = start.elapsed().as_millis();
         recovery_ctx.stats.log_summary("Normal");
@@ -1226,14 +1099,8 @@ impl CommitLog {
                     check_dup_info,
                     true,
                     &message_store_config,
-                    self.local_file_message_store
-                        .as_ref()
-                        .unwrap()
-                        .max_delay_level(),
-                    self.local_file_message_store
-                        .as_ref()
-                        .unwrap()
-                        .delay_level_table_ref(),
+                    self.local_file_message_store.as_ref().unwrap().max_delay_level(),
+                    self.local_file_message_store.as_ref().unwrap().delay_level_table_ref(),
                 );
                 current_pos += size;
                 if dispatch_request.success && dispatch_request.msg_size > 0 {
@@ -1280,18 +1147,14 @@ impl CommitLog {
             // Clear ConsumeQueue redundant data
             if max_phy_offset_of_consume_queue as u64 >= process_offset {
                 warn!(
-                    "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic \
-                     files",
+                    "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
                     max_phy_offset_of_consume_queue, process_offset
                 );
                 message_store.truncate_dirty_logic_files(process_offset as i64)
             }
-            self.mapped_file_queue
-                .set_flushed_where(process_offset as i64);
-            self.mapped_file_queue
-                .set_committed_where(process_offset as i64);
-            self.mapped_file_queue
-                .truncate_dirty_files(process_offset as i64);
+            self.mapped_file_queue.set_flushed_where(process_offset as i64);
+            self.mapped_file_queue.set_committed_where(process_offset as i64);
+            self.mapped_file_queue.truncate_dirty_files(process_offset as i64);
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
@@ -1304,11 +1167,7 @@ impl CommitLog {
         }
     }
 
-    fn get_simple_message_bytes<MF: MappedFile>(
-        &self,
-        position: usize,
-        mapped_file: &MF,
-    ) -> (Option<Bytes>, usize) {
+    fn get_simple_message_bytes<MF: MappedFile>(&self, position: usize, mapped_file: &MF) -> (Option<Bytes>, usize) {
         let mut bytes = mapped_file.get_bytes(position, 4);
         match bytes {
             None => (None, 0),
@@ -1317,10 +1176,7 @@ impl CommitLog {
                 if size <= 0 {
                     return (None, 0);
                 }
-                (
-                    mapped_file.get_bytes(position, size as usize),
-                    size as usize,
-                )
+                (mapped_file.get_bytes(position, size as usize), size as usize)
             }
         }
     }
@@ -1374,16 +1230,9 @@ impl CommitLog {
         }
 
         // Find starting point using checkpoint (optimized)
-        let index = find_recovery_start_index(
-            &mapped_files_inner,
-            &self.message_store_config,
-            &self.store_checkpoint,
-        );
+        let index = find_recovery_start_index(&mapped_files_inner, &self.message_store_config, &self.store_checkpoint);
 
-        info!(
-            "Starting abnormal recovery from file index {} (optimized)",
-            index
-        );
+        info!("Starting abnormal recovery from file index {} (optimized)", index);
 
         let mut index = index;
         let mut last_valid_msg_phy_offset = 0u64;
@@ -1394,10 +1243,7 @@ impl CommitLog {
             check_crc_on_recover,
             check_dup_info,
             self.message_store_config.clone(),
-            self.local_file_message_store
-                .as_ref()
-                .unwrap()
-                .max_delay_level(),
+            self.local_file_message_store.as_ref().unwrap().max_delay_level(),
             self.local_file_message_store
                 .as_ref()
                 .unwrap()
@@ -1423,31 +1269,22 @@ impl CommitLog {
             let mut file_processed = false;
 
             while let Some((mut msg_bytes, absolute_offset, msg_size)) = iterator.next_message() {
-                let mut dispatch_request =
-                    recovery_ctx.process_message(&mut msg_bytes, absolute_offset);
+                let mut dispatch_request = recovery_ctx.process_message(&mut msg_bytes, absolute_offset);
 
                 if dispatch_request.success && dispatch_request.msg_size > 0 {
-                    last_valid_msg_phy_offset = (process_offset + absolute_offset as u64)
-                        + dispatch_request.msg_size as u64;
+                    last_valid_msg_phy_offset =
+                        (process_offset + absolute_offset as u64) + dispatch_request.msg_size as u64;
 
-                    let should_dispatch = if self.message_store_config.duplication_enable
-                        || broker_config.enable_controller_mode
-                    {
-                        dispatch_request.commit_log_offset + msg_size as i64
-                            <= self.get_confirm_offset()
-                    } else {
-                        true
-                    };
+                    let should_dispatch =
+                        if self.message_store_config.duplication_enable || broker_config.enable_controller_mode {
+                            dispatch_request.commit_log_offset + msg_size as i64 <= self.get_confirm_offset()
+                        } else {
+                            true
+                        };
 
                     if should_dispatch {
-                        self.on_commit_log_dispatch(
-                            &mut dispatch_request,
-                            do_dispatch,
-                            true,
-                            false,
-                        );
-                        last_confirm_valid_msg_phy_offset =
-                            dispatch_request.commit_log_offset as u64 + msg_size as u64;
+                        self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);
+                        last_confirm_valid_msg_phy_offset = dispatch_request.commit_log_offset as u64 + msg_size as u64;
                     }
 
                     file_processed = true;
@@ -1478,10 +1315,7 @@ impl CommitLog {
         let process_offset = last_valid_msg_phy_offset;
 
         if broker_config.enable_controller_mode {
-            error!(
-                "TODO: finishCommitLogDispatch: {}",
-                last_confirm_valid_msg_phy_offset
-            );
+            error!("TODO: finishCommitLogDispatch: {}", last_confirm_valid_msg_phy_offset);
             unimplemented!("Controller mode not yet supported");
         } else {
             self.set_confirm_offset(last_valid_msg_phy_offset as i64);
@@ -1496,12 +1330,9 @@ impl CommitLog {
             message_store.truncate_dirty_logic_files(process_offset as i64);
         }
 
-        self.mapped_file_queue
-            .set_flushed_where(process_offset as i64);
-        self.mapped_file_queue
-            .set_committed_where(process_offset as i64);
-        self.mapped_file_queue
-            .truncate_dirty_files(process_offset as i64);
+        self.mapped_file_queue.set_flushed_where(process_offset as i64);
+        self.mapped_file_queue.set_committed_where(process_offset as i64);
+        self.mapped_file_queue.truncate_dirty_files(process_offset as i64);
 
         recovery_ctx.stats.recovery_time_ms = start.elapsed().as_millis();
         recovery_ctx.stats.log_summary("Abnormal");
@@ -1523,11 +1354,7 @@ impl CommitLog {
             let mut index = (mapped_files_inner.len() as i32) - 1;
             while index >= 0 {
                 let mapped_file = mapped_files_inner.get(index as usize).unwrap();
-                if is_mapped_file_matched_recover(
-                    &self.message_store_config,
-                    mapped_file,
-                    &self.store_checkpoint,
-                ) {
+                if is_mapped_file_matched_recover(&self.message_store_config, mapped_file, &self.store_checkpoint) {
                     break;
                 }
                 index -= 1;
@@ -1559,42 +1386,21 @@ impl CommitLog {
                     check_dup_info,
                     true,
                     &self.message_store_config,
-                    self.local_file_message_store
-                        .as_ref()
-                        .unwrap()
-                        .max_delay_level(),
-                    self.local_file_message_store
-                        .as_ref()
-                        .unwrap()
-                        .delay_level_table_ref(),
+                    self.local_file_message_store.as_ref().unwrap().max_delay_level(),
+                    self.local_file_message_store.as_ref().unwrap().delay_level_table_ref(),
                 );
                 current_pos += size;
                 if dispatch_request.success && dispatch_request.msg_size > 0 {
                     last_valid_msg_phy_offset = process_offset + mapped_file_offset;
                     mapped_file_offset += dispatch_request.msg_size as u64;
 
-                    if self.message_store_config.duplication_enable
-                        || self.broker_config.enable_controller_mode
-                    {
-                        if dispatch_request.commit_log_offset + size as i64
-                            <= self.get_confirm_offset()
-                        {
-                            self.on_commit_log_dispatch(
-                                &mut dispatch_request,
-                                do_dispatch,
-                                true,
-                                false,
-                            );
-                            last_confirm_valid_msg_phy_offset =
-                                dispatch_request.commit_log_offset as u64 + size as u64;
+                    if self.message_store_config.duplication_enable || self.broker_config.enable_controller_mode {
+                        if dispatch_request.commit_log_offset + size as i64 <= self.get_confirm_offset() {
+                            self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);
+                            last_confirm_valid_msg_phy_offset = dispatch_request.commit_log_offset as u64 + size as u64;
                         }
                     } else {
-                        self.on_commit_log_dispatch(
-                            &mut dispatch_request,
-                            do_dispatch,
-                            true,
-                            false,
-                        );
+                        self.on_commit_log_dispatch(&mut dispatch_request, do_dispatch, true, false);
                     }
                 } else if dispatch_request.success && dispatch_request.msg_size == 0 {
                     // Come the end of the file, switch to the next file Since the
@@ -1632,10 +1438,7 @@ impl CommitLog {
 
             process_offset += mapped_file_offset;
             if broker_config.enable_controller_mode {
-                error!(
-                    "TODO: finishCommitLogDispatch:{}",
-                    last_confirm_valid_msg_phy_offset
-                );
+                error!("TODO: finishCommitLogDispatch:{}", last_confirm_valid_msg_phy_offset);
                 unimplemented!();
             } else {
                 self.set_confirm_offset(last_valid_msg_phy_offset as i64);
@@ -1644,18 +1447,14 @@ impl CommitLog {
             // Clear ConsumeQueue redundant data
             if max_phy_offset_of_consume_queue as u64 >= process_offset {
                 warn!(
-                    "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic \
-                     files",
+                    "maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files",
                     max_phy_offset_of_consume_queue, process_offset
                 );
                 message_store.truncate_dirty_logic_files(process_offset as i64)
             }
-            self.mapped_file_queue
-                .set_flushed_where(process_offset as i64);
-            self.mapped_file_queue
-                .set_committed_where(process_offset as i64);
-            self.mapped_file_queue
-                .truncate_dirty_files(process_offset as i64);
+            self.mapped_file_queue.set_flushed_where(process_offset as i64);
+            self.mapped_file_queue.set_committed_where(process_offset as i64);
+            self.mapped_file_queue.truncate_dirty_files(process_offset as i64);
         } else {
             warn!(
                 "The commitlog files are deleted, and delete the consume queue
@@ -1730,9 +1529,7 @@ impl CommitLog {
     }
 
     pub fn lock_time_mills(&self) -> i64 {
-        let begin = self
-            .begin_time_in_lock
-            .load(std::sync::atomic::Ordering::Acquire);
+        let begin = self.begin_time_in_lock.load(std::sync::atomic::Ordering::Acquire);
         if begin > 0 {
             (SystemClock::now() - (begin as u128)) as i64
         } else {
@@ -1801,19 +1598,12 @@ impl CommitLog {
             drop(lock);
             return Err(StoreError::MappedFileNotFound);
         };
-        let flag = mapped_file.append_message_offset_length(
-            data,
-            data_start as usize,
-            data_length as usize,
-        );
+        let flag = mapped_file.append_message_offset_length(data, data_start as usize, data_length as usize);
         drop(lock);
         Ok(flag)
     }
 
-    pub fn set_local_file_message_store(
-        &mut self,
-        local_file_message_store: ArcMut<LocalFileMessageStore>,
-    ) {
+    pub fn set_local_file_message_store(&mut self, local_file_message_store: ArcMut<LocalFileMessageStore>) {
         self.local_file_message_store = Some(local_file_message_store);
     }
 }
@@ -1844,10 +1634,7 @@ pub fn check_message_and_return_size(
             };
         }
         _ => {
-            warn!(
-                "found a illegal magic code 0x{}",
-                format!("{:X}", magic_code),
-            );
+            warn!("found a illegal magic code 0x{}", format!("{:X}", magic_code),);
             return DispatchRequest {
                 msg_size: -1,
                 success: false,
@@ -1911,15 +1698,13 @@ pub fn check_message_and_return_size(
     }
     let topic_len = message_version.get_topic_length(bytes);
     let topic_bytes = bytes.copy_to_bytes(topic_len);
-    let topic =
-        CheetahString::from_string(String::from_utf8_lossy(topic_bytes.as_ref()).to_string());
+    let topic = CheetahString::from_string(String::from_utf8_lossy(topic_bytes.as_ref()).to_string());
     let properties_length = bytes.get_i16();
     let (tags_code, keys, uniq_key, properties_map) = if properties_length > 0 {
         let properties = bytes.copy_to_bytes(properties_length as usize);
         let properties_content = String::from_utf8_lossy(properties.as_ref()).to_string();
         //need to optimize
-        let properties_map =
-            string_to_message_properties(Some(&CheetahString::from_string(properties_content)));
+        let properties_map = string_to_message_properties(Some(&CheetahString::from_string(properties_content)));
         let keys = properties_map.get(MessageConst::PROPERTY_KEYS).cloned();
         let uniq_key = properties_map
             .get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
@@ -1950,13 +1735,11 @@ pub fn check_message_and_return_size(
 
         {
             // Timing message processing
-            let delay_time_level = properties_map.get(&CheetahString::from_static_str(
-                MessageConst::PROPERTY_DELAY_TIME_LEVEL,
-            ));
-            if let (Some(delay_time_level_str), true) = (
-                delay_time_level,
-                TopicValidator::RMQ_SYS_SCHEDULE_TOPIC == topic,
-            ) {
+            let delay_time_level =
+                properties_map.get(&CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL));
+            if let (Some(delay_time_level_str), true) =
+                (delay_time_level, TopicValidator::RMQ_SYS_SCHEDULE_TOPIC == topic)
+            {
                 if let Ok(mut delay_level) = delay_time_level_str.parse::<i32>() {
                     if delay_level > max_delay_level {
                         delay_level = max_delay_level;
@@ -1971,12 +1754,7 @@ pub fn check_message_and_return_size(
                 }
             }
         }
-        (
-            tags_code,
-            keys.unwrap_or_default(),
-            uniq_key,
-            properties_map,
-        )
+        (tags_code, keys.unwrap_or_default(), uniq_key, properties_map)
     } else {
         (0, CheetahString::new(), None, HashMap::new())
     };
@@ -1984,9 +1762,7 @@ pub fn check_message_and_return_size(
     if check_crc && message_store_config.force_verify_prop_crc {
         let mut expected_crc = -1i32;
         if !properties_map.is_empty() {
-            let crc_32 = properties_map.get(&CheetahString::from_static_str(
-                MessageConst::PROPERTY_CRC32,
-            ));
+            let crc_32 = properties_map.get(&CheetahString::from_static_str(MessageConst::PROPERTY_CRC32));
             if let Some(crc_32) = crc_32 {
                 expected_crc = 0;
                 for ch in crc_32.chars().rev() {
@@ -2011,8 +1787,8 @@ pub fn check_message_and_return_size(
 
     if total_size != read_length {
         error!(
-            "[BUG]read total count not equals msg total size. totalSize={}, readTotalCount={}, \
-             bodyLen={}, topicLen={}, propertiesLength={}",
+            "[BUG]read total count not equals msg total size. totalSize={}, readTotalCount={}, bodyLen={}, \
+             topicLen={}, propertiesLength={}",
             total_size, read_length, body_len, topic_len, properties_length
         );
         return DispatchRequest {
@@ -2118,12 +1894,7 @@ fn is_mapped_file_matched_recover(
 }
 
 impl Swappable for CommitLog {
-    fn swap_map(
-        &self,
-        _reserve_num: i32,
-        _force_swap_interval_ms: i64,
-        _normal_swap_interval_ms: i64,
-    ) {
+    fn swap_map(&self, _reserve_num: i32, _force_swap_interval_ms: i64, _normal_swap_interval_ms: i64) {
         todo!()
     }
 

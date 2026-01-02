@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -71,10 +68,7 @@ impl ConsumeMessageConcurrentlyService {
             consumer_config,
             consumer_group,
             message_listener,
-            consume_runtime: RocketMQRuntime::new_multi(
-                consume_thread as usize,
-                consumer_group_tag.as_str(),
-            ),
+            consume_runtime: RocketMQRuntime::new_multi(consume_thread as usize, consumer_group_tag.as_str()),
         }
     }
 }
@@ -188,11 +182,7 @@ impl ConsumeMessageConcurrentlyService {
         });
     }
 
-    pub async fn send_message_back(
-        &mut self,
-        msg: &mut MessageExt,
-        context: &ConsumeConcurrentlyContext,
-    ) -> bool {
+    pub async fn send_message_back(&mut self, msg: &mut MessageExt, context: &ConsumeConcurrentlyContext) -> bool {
         let delay_level = context.delay_level_when_next_consume;
         msg.set_topic(self.client_config.with_namespace(msg.get_topic().as_str()));
 
@@ -235,8 +225,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
     ) -> ConsumeMessageDirectlyResult {
         info!("consumeMessageDirectly receive new message: {}", msg);
         msg.broker_name = broker_name.unwrap_or_default();
-        let mq =
-            MessageQueue::from_parts(msg.topic().clone(), msg.broker_name.clone(), msg.queue_id());
+        let mq = MessageQueue::from_parts(msg.topic().clone(), msg.broker_name.clone(), msg.queue_id());
         let mut msgs = vec![ArcMut::new(msg)];
         let context = ConsumeConcurrentlyContext::new(mq);
         self.default_mqpush_consumer_impl
@@ -248,10 +237,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
         let begin_timestamp = Instant::now();
 
         let status = self.message_listener.consume_message(
-            &msgs
-                .iter()
-                .map(|msg| msg.as_ref())
-                .collect::<Vec<&MessageExt>>(),
+            &msgs.iter().map(|msg| msg.as_ref()).collect::<Vec<&MessageExt>>(),
             &context,
         );
         let mut result = ConsumeMessageDirectlyResult::default();
@@ -313,11 +299,9 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
                         default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
                     };
                     let consume_message_concurrently_service = this.clone();
-                    self.consume_runtime.get_handle().spawn(async move {
-                        consume_request
-                            .run(consume_message_concurrently_service)
-                            .await
-                    });
+                    self.consume_runtime
+                        .get_handle()
+                        .spawn(async move { consume_request.run(consume_message_concurrently_service).await });
                 });
         }
     }
@@ -344,10 +328,7 @@ struct ConsumeRequest {
 }
 
 impl ConsumeRequest {
-    async fn run(
-        &mut self,
-        mut consume_message_concurrently_service: ArcMut<ConsumeMessageConcurrentlyService>,
-    ) {
+    async fn run(&mut self, mut consume_message_concurrently_service: ArcMut<ConsumeMessageConcurrentlyService>) {
         if self.process_queue.is_dropped() {
             info!(
                 "the message queue not be able to consume, because it's dropped. group={} {}",
@@ -361,15 +342,10 @@ impl ConsumeRequest {
             ack_index: i32::MAX,
         };
 
-        let mut default_mqpush_consumer_impl =
-            self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
+        let mut default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
         let consumer_group = self.consumer_group.clone();
-        DefaultMQPushConsumerImpl::try_reset_pop_retry_topic(
-            &mut self.msgs,
-            consumer_group.as_str(),
-        );
-        default_mqpush_consumer_impl
-            .reset_retry_and_namespace(&mut self.msgs, consumer_group.as_str());
+        DefaultMQPushConsumerImpl::try_reset_pop_retry_topic(&mut self.msgs, consumer_group.as_str());
+        default_mqpush_consumer_impl.reset_retry_and_namespace(&mut self.msgs, consumer_group.as_str());
 
         let mut consume_message_context = None;
 
@@ -403,11 +379,7 @@ impl ConsumeRequest {
                 });
                 default_mqpush_consumer_impl.execute_hook_before(&mut consume_message_context);
             }
-            let vec = self
-                .msgs
-                .iter()
-                .map(|msg| msg.as_ref())
-                .collect::<Vec<&MessageExt>>();
+            let vec = self.msgs.iter().map(|msg| msg.as_ref()).collect::<Vec<&MessageExt>>();
             match self.message_listener.consume_message(&vec, &context) {
                 Ok(value) => {
                     status = Some(value);
@@ -421,8 +393,7 @@ impl ConsumeRequest {
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
 
         let return_type = if let Some(s) = status {
-            if consume_rt > default_mqpush_consumer_impl.consumer_config.consume_timeout * 60 * 1000
-            {
+            if consume_rt > default_mqpush_consumer_impl.consumer_config.consume_timeout * 60 * 1000 {
                 ConsumeReturnType::TimeOut
             } else if s == ConsumeConcurrentlyStatus::ReconsumeLater {
                 ConsumeReturnType::Failed

@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::path::PathBuf;
 use std::process::exit;
@@ -44,7 +41,7 @@ const LOGO: &str = r#"
 async fn main() -> Result<()> {
     // Initialize the logger
     rocketmq_common::log::init_logger_with_level(rocketmq_common::log::Level::INFO)?;
-    info!("            {}", LOGO);
+    println!("            {}", LOGO);
     EnvUtils::put_property(
         remoting_command::REMOTING_VERSION_KEY,
         (CURRENT_VERSION as u32).to_string(),
@@ -92,19 +89,12 @@ fn parse_config_file() -> Result<(NamesrvConfig, u32, String)> {
         NamesrvConfig::default()
     };
 
-    info!(
-        "Rocketmq name server(Rust) running on: {}:{}",
-        args.ip, args.port
-    );
+    info!("Rocketmq name server(Rust) running on: {}:{}", args.ip, args.port);
     Ok((namesrv_config, args.port, args.ip))
 }
 
 #[derive(Parser, Debug)]
-#[command(
-    author = "mxsm",
-    version = "0.1.0",
-    about = "RocketMQ Name server(Rust)"
-)]
+#[command(author = "mxsm", version = "0.1.0", about = "RocketMQ Name server(Rust)")]
 struct Args {
     /// rocketmq name server port
     #[arg(
@@ -118,21 +108,10 @@ struct Args {
     port: u32,
 
     /// rocketmq name server ip
-    #[arg(
-        short,
-        long,
-        value_name = "IP",
-        default_value = "0.0.0.0",
-        required = false
-    )]
+    #[arg(short, long, value_name = "IP", default_value = "0.0.0.0", required = false)]
     ip: String,
 
     /// Name server config properties file
-    #[arg(
-        short,
-        long,
-        value_name = "CONFIG FILE",
-        default_missing_value = "None"
-    )]
+    #[arg(short, long, value_name = "CONFIG FILE", default_missing_value = "None")]
     config_file: Option<PathBuf>,
 }

@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -67,12 +64,7 @@ pub struct RemappingStaticTopicSubCommand {
     clusters: Option<String>,
 
     /// Map file
-    #[arg(
-        short = 'm',
-        long = "mapFile",
-        required = false,
-        help = "The mapping data file name"
-    )]
+    #[arg(short = 'm', long = "mapFile", required = false, help = "The mapping data file name")]
     mapping_file: Option<String>,
 
     /// Force replace
@@ -99,8 +91,7 @@ impl RemappingStaticTopicSubCommand {
         let topic = self.topic.trim();
         let map_file_name = map_file_name.trim();
         if let Ok(map_data) = file_to_string(map_file_name) {
-            if let Ok(mut wrapper) = serde_json::from_str::<TopicRemappingDetailWrapper>(&map_data)
-            {
+            if let Ok(mut wrapper) = serde_json::from_str::<TopicRemappingDetailWrapper>(&map_data) {
                 TopicQueueMappingUtils::check_name_epoch_num_consistence(
                     &CheetahString::from(topic),
                     wrapper.broker_config_map(),
@@ -140,9 +131,7 @@ impl RemappingStaticTopicSubCommand {
 impl CommandExecute for RemappingStaticTopicSubCommand {
     async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         if self.topic.trim().is_empty() {
-            return Err(RocketMQError::Internal(
-                "Topic name is required".to_string(),
-            ));
+            return Err(RocketMQError::Internal("Topic name is required".to_string()));
         }
 
         if let Some(f_name) = &self.mapping_file {
@@ -170,13 +159,9 @@ impl CommandExecute for RemappingStaticTopicSubCommand {
         let client_metadata = ClientMetadata::new();
 
         let cluster_info = default_mq_admin_ext.examine_broker_cluster_info().await?;
-        if cluster_info.cluster_addr_table.is_none()
-            || cluster_info.cluster_addr_table.as_ref().unwrap().is_empty()
-        {
+        if cluster_info.cluster_addr_table.is_none() || cluster_info.cluster_addr_table.as_ref().unwrap().is_empty() {
             default_mq_admin_ext.shutdown().await;
-            return Err(RocketMQError::Internal(
-                "The Cluster info is empty".to_string(),
-            ));
+            return Err(RocketMQError::Internal("The Cluster info is empty".to_string()));
         }
         client_metadata.refresh_cluster_info(Some(&cluster_info));
 
@@ -199,9 +184,7 @@ impl CommandExecute for RemappingStaticTopicSubCommand {
 
         if target_brokers.is_empty() {
             default_mq_admin_ext.shutdown().await;
-            return Err(RocketMQError::Internal(
-                "Find none brokers, do nothing".to_string(),
-            ));
+            return Err(RocketMQError::Internal("Find none brokers, do nothing".to_string()));
         }
 
         for broker in &target_brokers {
@@ -215,11 +198,8 @@ impl CommandExecute for RemappingStaticTopicSubCommand {
             }
         }
 
-        let mut broker_config_map = MQAdminUtils::examine_topic_config_all(
-            &CheetahString::from(topic),
-            &default_mq_admin_ext,
-        )
-        .await?;
+        let mut broker_config_map =
+            MQAdminUtils::examine_topic_config_all(&CheetahString::from(topic), &default_mq_admin_ext).await?;
 
         if broker_config_map.is_empty() {
             default_mq_admin_ext.shutdown().await;
@@ -228,10 +208,8 @@ impl CommandExecute for RemappingStaticTopicSubCommand {
             ));
         }
 
-        let max_epoch_and_num = TopicQueueMappingUtils::check_name_epoch_num_consistence(
-            &CheetahString::from(topic),
-            &broker_config_map,
-        )?;
+        let max_epoch_and_num =
+            TopicQueueMappingUtils::check_name_epoch_num_consistence(&CheetahString::from(topic), &broker_config_map)?;
 
         let old_wrapper = TopicRemappingDetailWrapper::new(
             CheetahString::from(topic),
@@ -242,25 +220,15 @@ impl CommandExecute for RemappingStaticTopicSubCommand {
             HashSet::new(),
         );
         let old_mapping_data_file = TopicQueueMappingUtils::write_to_temp(&old_wrapper, false)?;
-        println!(
-            "The old mapping data is written to file {}",
-            old_mapping_data_file
-        );
+        println!("The old mapping data is written to file {}", old_mapping_data_file);
 
-        let new_wrapper = TopicQueueMappingUtils::remapping_static_topic(
-            topic,
-            &mut broker_config_map,
-            &target_brokers,
-        )?;
+        let new_wrapper =
+            TopicQueueMappingUtils::remapping_static_topic(topic, &mut broker_config_map, &target_brokers)?;
 
         let new_mapping_data_file = TopicQueueMappingUtils::write_to_temp(&new_wrapper, true)?;
-        println!(
-            "The new mapping data is written to file {}",
-            new_mapping_data_file
-        );
+        println!("The new mapping data is written to file {}", new_mapping_data_file);
 
-        MQAdminUtils::complete_no_target_brokers(broker_config_map.clone(), &default_mq_admin_ext)
-            .await?;
+        MQAdminUtils::complete_no_target_brokers(broker_config_map.clone(), &default_mq_admin_ext).await?;
 
         let force = self.force_replace.unwrap_or(false);
         MQAdminUtils::remapping_static_topic(
@@ -285,13 +253,7 @@ mod tests {
 
     #[test]
     fn remapping_static_topic_sub_command_parse_broker_mode() {
-        let args = vec![
-            "remapping-static-topic",
-            "-t",
-            "test-topic",
-            "-b",
-            "broker-a,broker-b",
-        ];
+        let args = vec!["remapping-static-topic", "-t", "test-topic", "-b", "broker-a,broker-b"];
 
         let cmd = RemappingStaticTopicSubCommand::try_parse_from(args).unwrap();
         assert_eq!(cmd.topic, "test-topic");
@@ -300,13 +262,7 @@ mod tests {
 
     #[test]
     fn remapping_static_topic_sub_command_parse_cluster_mode() {
-        let args = vec![
-            "remapping-static-topic",
-            "-t",
-            "test-topic",
-            "-c",
-            "DefaultCluster",
-        ];
+        let args = vec!["remapping-static-topic", "-t", "test-topic", "-c", "DefaultCluster"];
 
         let cmd = RemappingStaticTopicSubCommand::try_parse_from(args).unwrap();
         assert_eq!(cmd.topic, "test-topic");
@@ -315,13 +271,7 @@ mod tests {
 
     #[test]
     fn remapping_static_topic_sub_command_parse_with_file() {
-        let args = vec![
-            "remapping-static-topic",
-            "-t",
-            "test-topic",
-            "-m",
-            "/tmp/mapping.json",
-        ];
+        let args = vec!["remapping-static-topic", "-t", "test-topic", "-m", "/tmp/mapping.json"];
 
         let cmd = RemappingStaticTopicSubCommand::try_parse_from(args).unwrap();
         assert_eq!(cmd.mapping_file, Some("/tmp/mapping.json".to_string()));

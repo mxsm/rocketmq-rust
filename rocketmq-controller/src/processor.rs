@@ -25,10 +25,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 // Re-export processors
-pub use broker_processor::{
-    BrokerHeartbeatProcessor, ElectMasterProcessor, RegisterBrokerProcessor,
-    UnregisterBrokerProcessor,
-};
+pub use broker_processor::BrokerHeartbeatProcessor;
+pub use broker_processor::ElectMasterProcessor;
+pub use broker_processor::RegisterBrokerProcessor;
+pub use broker_processor::UnregisterBrokerProcessor;
 pub use metadata_processor::GetMetadataProcessor;
 pub use request::RequestType;
 pub use request::*;
@@ -70,11 +70,7 @@ pub struct ProcessorManager {
 
 impl ProcessorManager {
     /// Create a new processor manager
-    pub fn new(
-        config: Arc<ControllerConfig>,
-        raft: Arc<RaftController>,
-        metadata: Arc<MetadataStore>,
-    ) -> Self {
+    pub fn new(config: Arc<ControllerConfig>, raft: Arc<RaftController>, metadata: Arc<MetadataStore>) -> Self {
         // Initialize processors
         let mut processors: HashMap<RequestType, Arc<dyn RequestProcessor>> = HashMap::new();
 
@@ -85,10 +81,7 @@ impl ProcessorManager {
         );
         processors.insert(
             RequestType::UnregisterBroker,
-            Arc::new(UnregisterBrokerProcessor::new(
-                metadata.clone(),
-                raft.clone(),
-            )),
+            Arc::new(UnregisterBrokerProcessor::new(metadata.clone(), raft.clone())),
         );
         processors.insert(
             RequestType::BrokerHeartbeat,
@@ -130,9 +123,10 @@ impl ProcessorManager {
     /// Process a request
     pub async fn process_request(&self, request_type: RequestType, data: &[u8]) -> Result<Vec<u8>> {
         // Find the processor
-        let processor = self.processors.get(&request_type).ok_or_else(|| {
-            ControllerError::InvalidRequest(format!("Unknown request type: {:?}", request_type))
-        })?;
+        let processor = self
+            .processors
+            .get(&request_type)
+            .ok_or_else(|| ControllerError::InvalidRequest(format!("Unknown request type: {:?}", request_type)))?;
 
         // Process the request
         processor.process(data).await
@@ -140,10 +134,7 @@ impl ProcessorManager {
 
     /// Start the processor manager
     pub async fn start(&self) -> Result<()> {
-        info!(
-            "Starting processor manager with {} processors",
-            self.processors.len()
-        );
+        info!("Starting processor manager with {} processors", self.processors.len());
         // TODO: Start network server to handle incoming requests
         Ok(())
     }

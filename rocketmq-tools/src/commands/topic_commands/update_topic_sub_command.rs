@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 
@@ -105,12 +102,7 @@ pub struct UpdateTopicSubCommand {
     order: Option<bool>,
 
     /// Whether it's a unit topic
-    #[arg(
-        short = 'u',
-        long = "unit",
-        required = false,
-        help = "is unit topic (true|false)"
-    )]
+    #[arg(short = 'u', long = "unit", required = false, help = "is unit topic (true|false)")]
     unit: Option<bool>,
 
     /// Whether there's a unit subscription group
@@ -127,9 +119,7 @@ impl CommandExecute for UpdateTopicSubCommand {
     async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         if self.broker_addr.is_none() && self.cluster_name.is_none() {
             return Err(RocketMQError::IllegalArgument(
-                "UpdateTopicSubCommand: Either brokerAddr (-b) or clusterName (-c) must be \
-                 provided"
-                    .into(),
+                "UpdateTopicSubCommand: Either brokerAddr (-b) or clusterName (-c) must be provided".into(),
             ));
         }
 
@@ -151,14 +141,9 @@ impl CommandExecute for UpdateTopicSubCommand {
                 default_mqadmin_ext.set_namesrv_addr(addr.trim());
             }
 
-            MQAdminExt::start(&mut default_mqadmin_ext)
-                .await
-                .map_err(|e| {
-                    RocketMQError::Internal(format!(
-                        "UpdateTopicSubCommand: Failed to start MQAdminExt: {}",
-                        e
-                    ))
-                })?;
+            MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
+                RocketMQError::Internal(format!("UpdateTopicSubCommand: Failed to start MQAdminExt: {}", e))
+            })?;
 
             let mut topic_config = TopicConfig {
                 topic_name: Some(self.topic.clone().into()),
@@ -168,9 +153,7 @@ impl CommandExecute for UpdateTopicSubCommand {
             };
 
             if let Some(perm) = &self.perm {
-                topic_config.perm = perm
-                    .parse::<u32>()
-                    .expect("clap validated perm to be 2, 4, or 6");
+                topic_config.perm = perm.parse::<u32>().expect("clap validated perm to be 2, 4, or 6");
             } else {
                 topic_config.perm = 6;
             }
@@ -184,22 +167,13 @@ impl CommandExecute for UpdateTopicSubCommand {
             topic_config.topic_sys_flag = topic_sys_flag;
 
             if let Some(broker_addr) = &self.broker_addr {
-                println!(
-                    "Creating/updating topic '{}' on broker: {}",
-                    self.topic, broker_addr
-                );
+                println!("Creating/updating topic '{}' on broker: {}", self.topic, broker_addr);
 
                 default_mqadmin_ext
-                    .create_and_update_topic_config(
-                        broker_addr.clone().into(),
-                        topic_config.clone(),
-                    )
+                    .create_and_update_topic_config(broker_addr.clone().into(), topic_config.clone())
                     .await
                     .map_err(|e| {
-                        RocketMQError::Internal(format!(
-                            "UpdateTopicSubCommand: Failed to create/update topic: {}",
-                            e
-                        ))
+                        RocketMQError::Internal(format!("UpdateTopicSubCommand: Failed to create/update topic: {}", e))
                     })?;
 
                 if is_order {
@@ -210,12 +184,12 @@ impl CommandExecute for UpdateTopicSubCommand {
                     // added when the underlying API is implemented.
 
                     println!(
-                        "Warning: Order message topic created, but order configuration (queue \
-                         allocation) is not yet implemented."
+                        "Warning: Order message topic created, but order configuration (queue allocation) is not yet \
+                         implemented."
                     );
                     println!(
-                        "The topic will be marked as ordered (order=true), but you may need to \
-                         manually configure queue allocation."
+                        "The topic will be marked as ordered (order=true), but you may need to manually configure \
+                         queue allocation."
                     );
 
                     // TODO: Uncomment when create_or_update_order_conf is implemented:
@@ -234,23 +208,13 @@ impl CommandExecute for UpdateTopicSubCommand {
                 println!("create topic to {} success.", broker_addr);
                 println!("{:?}", topic_config);
             } else if let Some(cluster_name) = &self.cluster_name {
-                println!(
-                    "Creating/updating topic '{}' on cluster: {}",
-                    self.topic, cluster_name
-                );
+                println!("Creating/updating topic '{}' on cluster: {}", self.topic, cluster_name);
 
-                let cluster_info = default_mqadmin_ext
-                    .examine_broker_cluster_info()
-                    .await
-                    .map_err(|e| {
-                        RocketMQError::Internal(format!(
-                            "UpdateTopicSubCommand: Failed to get cluster info: {}",
-                            e
-                        ))
-                    })?;
+                let cluster_info = default_mqadmin_ext.examine_broker_cluster_info().await.map_err(|e| {
+                    RocketMQError::Internal(format!("UpdateTopicSubCommand: Failed to get cluster info: {}", e))
+                })?;
 
-                let master_addrs =
-                    CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name)?;
+                let master_addrs = CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name)?;
 
                 if master_addrs.is_empty() {
                     return Err(RocketMQError::Internal(format!(
@@ -280,12 +244,12 @@ impl CommandExecute for UpdateTopicSubCommand {
                     // configuration will be added when the underlying API is implemented.
 
                     println!(
-                        "Warning: Order message topic created on cluster, but order configuration \
-                         (queue allocation) is not yet implemented."
+                        "Warning: Order message topic created on cluster, but order configuration (queue allocation) \
+                         is not yet implemented."
                     );
                     println!(
-                        "The topic will be marked as ordered (order=true) on all brokers, but you \
-                         may need to manually configure queue allocation."
+                        "The topic will be marked as ordered (order=true) on all brokers, but you may need to \
+                         manually configure queue allocation."
                     );
 
                     // TODO: Uncomment when create_or_update_order_conf is implemented:

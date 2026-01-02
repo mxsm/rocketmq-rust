@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::any::Any;
 use std::net::SocketAddr;
@@ -108,10 +105,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
             .broker_runtime_inner
             .topic_config_manager()
             .select_topic_config(request_header.topic.as_ref());
-        let topic_sys_flag = topic_config
-            .as_ref()
-            .map(|tc| tc.topic_sys_flag as i32)
-            .unwrap_or(0);
+        let topic_sys_flag = topic_config.as_ref().map(|tc| tc.topic_sys_flag as i32).unwrap_or(0);
         Self::compose_response_header(
             &self.broker_runtime_inner, //need optimization
             &request_header,
@@ -130,15 +124,9 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
             code,
         );
         {
-            let response_header = response
-                .read_custom_header_mut::<PullMessageResponseHeader>()
-                .unwrap();
-            let rewrite_result = rewrite_response_for_static_topic(
-                &request_header,
-                response_header,
-                &mut mapping_context,
-                code,
-            );
+            let response_header = response.read_custom_header_mut::<PullMessageResponseHeader>().unwrap();
+            let rewrite_result =
+                rewrite_response_for_static_topic(&request_header, response_header, &mut mapping_context, code);
             if rewrite_result.is_some() {
                 return rewrite_result;
             }
@@ -172,15 +160,10 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                     request_header.topic.as_str(),
                     get_message_result.buffer_total_size(),
                 );
-                broker_stats.inc_broker_get_nums(
-                    request_header.topic.as_str(),
-                    get_message_result.message_count(),
-                );
+                broker_stats.inc_broker_get_nums(request_header.topic.as_str(), get_message_result.message_count());
 
                 // Record BrokerMetrics for non-retry/dlq topics
-                if let Some(metrics) =
-                    crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global()
-                {
+                if let Some(metrics) = crate::metrics::broker_metrics_manager::BrokerMetricsManager::try_global() {
                     let topic = request_header.topic.as_str();
                     let consumer_group = request_header.consumer_group.as_str();
                     let is_retry = topic.starts_with("%RETRY%") || topic.starts_with("%DLQ%");
@@ -200,11 +183,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                     }
                 }
 
-                if self
-                    .broker_runtime_inner
-                    .broker_config()
-                    .transfer_msg_by_heap
-                {
+                if self.broker_runtime_inner.broker_config().transfer_msg_by_heap {
                     let body = self.read_get_message_result(
                         &get_message_result,
                         request_header.consumer_group.as_str(),
@@ -213,23 +192,21 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                     );
                     // Record group get latency
                     let latency = (get_current_millis() - _begin_time_mills) as i32;
-                    self.broker_runtime_inner
-                        .broker_stats_manager()
-                        .inc_group_get_latency(
-                            request_header.consumer_group.as_str(),
-                            request_header.topic.as_str(),
-                            request_header.queue_id,
-                            latency,
-                        );
+                    self.broker_runtime_inner.broker_stats_manager().inc_group_get_latency(
+                        request_header.consumer_group.as_str(),
+                        request_header.topic.as_str(),
+                        request_header.queue_id,
+                        latency,
+                    );
                     if let Some(body) = body {
                         response.set_body_mut_ref(body);
                     }
                     Some(response)
                 } else {
                     //zero copy transfer
-                    if let Some(header_bytes) = response.encode_header_with_body_length(
-                        get_message_result.buffer_total_size() as usize,
-                    ) {
+                    if let Some(header_bytes) =
+                        response.encode_header_with_body_length(get_message_result.buffer_total_size() as usize)
+                    {
                         let _ = channel.connection_mut().send_bytes(header_bytes).await;
                     }
                     for select_result in get_message_result.message_mapped_list_mut() {
@@ -242,8 +219,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                 }
             }
             ResponseCode::PullNotFound => {
-                let has_suspend_flag =
-                    PullSysFlag::has_suspend_flag(request_header.sys_flag as u32);
+                let has_suspend_flag = PullSysFlag::has_suspend_flag(request_header.sys_flag as u32);
                 let suspend_timeout_millis_long = if has_suspend_flag {
                     request_header.suspend_timeout_millis
                 } else {
@@ -251,15 +227,8 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                 };
                 if broker_allow_suspend && has_suspend_flag {
                     let mut polling_time_mills = suspend_timeout_millis_long;
-                    if !self
-                        .broker_runtime_inner
-                        .broker_config()
-                        .long_polling_enable
-                    {
-                        polling_time_mills = self
-                            .broker_runtime_inner
-                            .broker_config()
-                            .short_polling_time_mills;
+                    if !self.broker_runtime_inner.broker_config().long_polling_enable {
+                        polling_time_mills = self.broker_runtime_inner.broker_config().short_polling_time_mills;
                     }
                     let topic = request_header.topic.as_str();
                     let queue_id = request_header.queue_id;
@@ -287,22 +256,12 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
             ResponseCode::PullRetryImmediately => Some(response),
             ResponseCode::PullOffsetMoved => {
                 if self.broker_runtime_inner.message_store_config().broker_role != BrokerRole::Slave
-                    || self
-                        .broker_runtime_inner
-                        .message_store_config()
-                        .offset_check_in_slave
+                    || self.broker_runtime_inner.message_store_config().offset_check_in_slave
                 {
-                    let response_header = response
-                        .read_custom_header_mut::<PullMessageResponseHeader>()
-                        .unwrap();
+                    let response_header = response.read_custom_header_mut::<PullMessageResponseHeader>().unwrap();
                     let mut mq = MessageQueue::new();
                     mq.set_topic(request_header.topic.clone());
-                    mq.set_broker_name(
-                        self.broker_runtime_inner
-                            .broker_config()
-                            .broker_name()
-                            .clone(),
-                    );
+                    mq.set_broker_name(self.broker_runtime_inner.broker_config().broker_name().clone());
                     mq.set_queue_id(request_header.queue_id);
 
                     let offset_moved_event = OffsetMovedEvent {
@@ -312,8 +271,8 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                         offset_new: get_message_result.next_begin_offset(),
                     };
                     warn!(
-                        "PULL_OFFSET_MOVED:correction offset. topic={}, groupId={}, \
-                         requestOffset={}, newOffset={}, suggestBrokerId={}",
+                        "PULL_OFFSET_MOVED:correction offset. topic={}, groupId={}, requestOffset={}, newOffset={}, \
+                         suggestBrokerId={}",
                         request_header.topic,
                         request_header.consumer_group,
                         offset_moved_event.offset_request,
@@ -321,14 +280,12 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                         response_header.suggest_which_broker_id
                     );
                 } else {
-                    let response_header = response
-                        .read_custom_header_mut::<PullMessageResponseHeader>()
-                        .unwrap();
+                    let response_header = response.read_custom_header_mut::<PullMessageResponseHeader>().unwrap();
                     response_header.suggest_which_broker_id = subscription_group_config.broker_id();
                     response.set_code_ref(ResponseCode::PullRetryImmediately);
                     warn!(
-                        "PULL_OFFSET_MOVED:correction offset. topic={}, groupId={}, \
-                         requestOffset={}, suggestBrokerId={}",
+                        "PULL_OFFSET_MOVED:correction offset. topic={}, groupId={}, requestOffset={}, \
+                         suggestBrokerId={}",
                         request_header.topic,
                         request_header.consumer_group,
                         request_header.queue_offset,
@@ -338,10 +295,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                 Some(response)
             }
             _ => {
-                warn!(
-                    "[BUG] impossible result code of get message: {}",
-                    response.code()
-                );
+                warn!("[BUG] impossible result code of get message: {}", response.code());
                 Some(response)
             }
         }
@@ -365,8 +319,7 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
         topic: &str,
         queue_id: i32,
     ) -> Option<Bytes> {
-        let mut bytes_mut =
-            BytesMut::with_capacity(get_message_result.buffer_total_size() as usize);
+        let mut bytes_mut = BytesMut::with_capacity(get_message_result.buffer_total_size() as usize);
         let mut store_timestamp: i64 = 0;
 
         for msg in get_message_result.message_mapped_list() {
@@ -440,9 +393,8 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
             let owner_parent = ext_fields.get(BrokerStatsManager::ACCOUNT_OWNER_PARENT);
             let owner_self = ext_fields.get(BrokerStatsManager::ACCOUNT_OWNER_SELF);
 
-            let namespace = CheetahString::from_string(NamespaceUtil::get_namespace_from_resource(
-                &request_header.topic,
-            ));
+            let namespace =
+                CheetahString::from_string(NamespaceUtil::get_namespace_from_resource(&request_header.topic));
 
             let mut context = ConsumeMessageContext {
                 consumer_group: &request_header.consumer_group,
@@ -471,12 +423,8 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
 
             match response_code {
                 ResponseCode::Success => {
-                    let commercial_base_count = self
-                        .broker_runtime_inner
-                        .broker_config()
-                        .commercial_base_count;
-                    let inc_value =
-                        get_message_result.msg_count4_commercial() * commercial_base_count;
+                    let commercial_base_count = self.broker_runtime_inner.broker_config().commercial_base_count;
+                    let inc_value = get_message_result.msg_count4_commercial() * commercial_base_count;
 
                     context.commercial_rcv_stats = StatsType::RcvSuccess;
                     context.commercial_rcv_times = inc_value;
@@ -554,8 +502,8 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
                 if request_header.queue_offset != 0 {
                     response.set_code_ref(ResponseCode::PullOffsetMoved);
                     info!(
-                        "The broker stores no queue data, fix the request offset {} to {}, Topic: \
-                         {} QueueId: {} Consumer Group: {}",
+                        "The broker stores no queue data, fix the request offset {} to {}, Topic: {} QueueId: {} \
+                         Consumer Group: {}",
                         request_header.queue_offset,
                         get_message_result.next_begin_offset(),
                         request_header.topic,
@@ -572,8 +520,7 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
             GetMessageStatus::OffsetOverflowBadly => {
                 response.set_code_ref(ResponseCode::PullOffsetMoved);
                 info!(
-                    "The request offset: {} over flow badly, fix to {}, broker max offset: {}, \
-                     consumer: {}",
+                    "The request offset: {} over flow badly, fix to {}, broker max offset: {}, consumer: {}",
                     request_header.queue_offset,
                     get_message_result.next_begin_offset(),
                     get_message_result.max_offset(),
@@ -590,8 +537,8 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
             GetMessageStatus::OffsetTooSmall => {
                 response.set_code_ref(ResponseCode::PullOffsetMoved);
                 info!(
-                    "The request offset too small. group={}, topic={}, requestOffset={}, \
-                     brokerMinOffset={}, clientIp={}",
+                    "The request offset too small. group={}, topic={}, requestOffset={}, brokerMinOffset={}, \
+                     clientIp={}",
                     request_header.consumer_group,
                     request_header.topic,
                     request_header.queue_offset,
@@ -604,8 +551,7 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
         let broker_config = broker_runtime_inner.broker_config();
         if broker_config.slave_read_enable && !broker_config.is_in_broker_container {
             if get_message_result.suggest_pulling_from_slave() {
-                response_header.suggest_which_broker_id =
-                    subscription_group_config.which_broker_when_consume_slowly();
+                response_header.suggest_which_broker_id = subscription_group_config.which_broker_when_consume_slowly();
             } else {
                 response_header.suggest_which_broker_id = subscription_group_config.broker_id();
             }
@@ -618,8 +564,8 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
             && broker_runtime_inner.get_min_broker_id_in_group() == MASTER_ID
         {
             debug!(
-                "slave redirect pullRequest to master, topic: {}, queueId: {}, consumer group: \
-                 {}, next: {}, min: {}, max: {}",
+                "slave redirect pullRequest to master, topic: {}, queueId: {}, consumer group: {}, next: {}, min: {}, \
+                 max: {}",
                 request_header.topic,
                 request_header.queue_id,
                 request_header.consumer_group,
@@ -642,30 +588,25 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
         next_offset: i64,
         client_address: SocketAddr,
     ) {
-        self.broker_runtime_inner
-            .consumer_offset_manager()
-            .commit_pull_offset(
-                client_address,
+        self.broker_runtime_inner.consumer_offset_manager().commit_pull_offset(
+            client_address,
+            request_header.consumer_group.as_ref(),
+            request_header.topic.as_ref(),
+            request_header.queue_id,
+            next_offset,
+        );
+
+        let mut store_offset_enable = broker_allow_suspend;
+        let has_commit_offset_flag = PullSysFlag::has_commit_offset_flag(request_header.sys_flag as u32);
+        store_offset_enable = store_offset_enable && has_commit_offset_flag;
+        if store_offset_enable {
+            self.broker_runtime_inner.consumer_offset_manager().commit_offset(
+                client_address.to_string().into(),
                 request_header.consumer_group.as_ref(),
                 request_header.topic.as_ref(),
                 request_header.queue_id,
-                next_offset,
+                request_header.commit_offset,
             );
-
-        let mut store_offset_enable = broker_allow_suspend;
-        let has_commit_offset_flag =
-            PullSysFlag::has_commit_offset_flag(request_header.sys_flag as u32);
-        store_offset_enable = store_offset_enable && has_commit_offset_flag;
-        if store_offset_enable {
-            self.broker_runtime_inner
-                .consumer_offset_manager()
-                .commit_offset(
-                    client_address.to_string().into(),
-                    request_header.consumer_group.as_ref(),
-                    request_header.topic.as_ref(),
-                    request_header.queue_id,
-                    request_header.commit_offset,
-                );
         }
     }
 
@@ -679,16 +620,10 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
         response: Option<&mut RemotingCommand>,
         next_begin_offset: i64,
     ) {
-        if response.is_none()
-            || !self
-                .broker_runtime_inner
-                .broker_config()
-                .enable_broadcast_offset_store
-        {
+        if response.is_none() || !self.broker_runtime_inner.broker_config().enable_broadcast_offset_store {
             return;
         }
-        let proxy_pull_broadcast =
-            request_header.request_source == Some(RequestSource::ProxyForBroadcast.get_value());
+        let proxy_pull_broadcast = request_header.request_source == Some(RequestSource::ProxyForBroadcast.get_value());
         let consumer_group_info = self
             .broker_runtime_inner
             .consumer_manager()
@@ -703,14 +638,9 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
             }
 
             let client_id = if proxy_pull_broadcast {
-                request_header
-                    .proxy_forward_client_id
-                    .clone()
-                    .unwrap_or_default()
+                request_header.proxy_forward_client_id.clone().unwrap_or_default()
             } else if let Some(ref consumer_group_info) = consumer_group_info {
-                if let Some(ref client_channel_info) =
-                    consumer_group_info.find_channel_by_channel(channel)
-                {
+                if let Some(ref client_channel_info) = consumer_group_info.find_channel_by_channel(channel) {
                     client_channel_info.client_id().clone()
                 } else {
                     return;
@@ -718,16 +648,14 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
             } else {
                 return;
             };
-            self.broker_runtime_inner
-                .broadcast_offset_manager()
-                .update_offset(
-                    topic,
-                    group,
-                    queue_id,
-                    offset,
-                    client_id.as_str(),
-                    proxy_pull_broadcast,
-                );
+            self.broker_runtime_inner.broadcast_offset_manager().update_offset(
+                topic,
+                group,
+                queue_id,
+                offset,
+                client_id.as_str(),
+                proxy_pull_broadcast,
+            );
         }
     }
 }

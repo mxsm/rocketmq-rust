@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #![allow(dead_code)]
 use std::collections::HashMap;
@@ -105,9 +102,7 @@ impl DefaultMQAdminExtImpl {
             client_instance: None,
             rpc_hook,
             timeout_millis,
-            kv_namespace_to_delete_list: vec![CheetahString::from_static_str(
-                NAMESPACE_ORDER_TOPIC_CONFIG,
-            )],
+            kv_namespace_to_delete_list: vec![CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG)],
             client_config,
             admin_ext_group,
             inner: None,
@@ -128,15 +123,12 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
                 self.service_state = ServiceState::StartFailed;
                 self.client_config.change_instance_name_to_pid();
                 if "{}".eq(&self.client_config.socks_proxy_config) {
-                    self.client_config.socks_proxy_config = env::var(SOCKS_PROXY_JSON)
-                        .unwrap_or_else(|_| "{}".to_string())
-                        .into();
+                    self.client_config.socks_proxy_config =
+                        env::var(SOCKS_PROXY_JSON).unwrap_or_else(|_| "{}".to_string()).into();
                 }
                 self.client_instance = Some(
-                    MQClientManager::get_instance().get_or_create_mq_client_instance(
-                        self.client_config.as_ref().clone(),
-                        self.rpc_hook.clone(),
-                    ),
+                    MQClientManager::get_instance()
+                        .get_or_create_mq_client_instance(self.client_config.as_ref().clone(), self.rpc_hook.clone()),
                 );
 
                 let group = &self.admin_ext_group.clone();
@@ -154,18 +146,13 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
                 if !register_ok {
                     self.service_state = ServiceState::StartFailed;
                     return Err(rocketmq_error::RocketMQError::illegal_argument(format!(
-                        "The adminExt group[{}] has created already, specified another name \
-                         please.{}",
+                        "The adminExt group[{}] has created already, specified another name please.{}",
                         self.admin_ext_group,
                         FAQUrl::suggest_todo(FAQUrl::GROUP_NAME_DUPLICATE_URL)
                     )));
                 }
                 let arc_mut = self.client_instance.clone().unwrap();
-                self.client_instance
-                    .as_mut()
-                    .unwrap()
-                    .start(arc_mut)
-                    .await?;
+                self.client_instance.as_mut().unwrap().start(arc_mut).await?;
                 self.service_state = ServiceState::Running;
                 info!("the adminExt [{}] start OK", self.admin_ext_group);
                 Ok(())
@@ -178,9 +165,7 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
 
     async fn shutdown(&mut self) {
         match self.service_state {
-            ServiceState::CreateJust
-            | ServiceState::ShutdownAlready
-            | ServiceState::StartFailed => {
+            ServiceState::CreateJust | ServiceState::ShutdownAlready | ServiceState::StartFailed => {
                 // do nothing
             }
             ServiceState::Running => {
@@ -305,10 +290,7 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         todo!()
     }
 
-    async fn examine_topic_stats_concurrent(
-        &self,
-        topic: CheetahString,
-    ) -> AdminToolResult<TopicStatsTable> {
+    async fn examine_topic_stats_concurrent(&self, topic: CheetahString) -> AdminToolResult<TopicStatsTable> {
         todo!()
     }
 
@@ -316,17 +298,11 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         todo!()
     }
 
-    async fn fetch_topics_by_cluster(
-        &self,
-        cluster_name: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<TopicList> {
+    async fn fetch_topics_by_cluster(&self, cluster_name: CheetahString) -> rocketmq_error::RocketMQResult<TopicList> {
         todo!()
     }
 
-    async fn fetch_broker_runtime_stats(
-        &self,
-        broker_addr: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<KVTable> {
+    async fn fetch_broker_runtime_stats(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<KVTable> {
         todo!()
     }
 
@@ -398,11 +374,7 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
             .as_ref()
             .unwrap()
             .get_mq_client_api_impl()
-            .wipe_write_perm_of_broker(
-                namesrv_addr,
-                broker_name,
-                self.timeout_millis.as_millis() as u64,
-            )
+            .wipe_write_perm_of_broker(namesrv_addr, broker_name, self.timeout_millis.as_millis() as u64)
             .await
     }
 
@@ -415,20 +387,11 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
             .as_ref()
             .unwrap()
             .get_mq_client_api_impl()
-            .add_write_perm_of_broker(
-                namesrv_addr,
-                broker_name,
-                self.timeout_millis.as_millis() as u64,
-            )
+            .add_write_perm_of_broker(namesrv_addr, broker_name, self.timeout_millis.as_millis() as u64)
             .await
     }
 
-    async fn put_kv_config(
-        &self,
-        namespace: CheetahString,
-        key: CheetahString,
-        value: CheetahString,
-    ) {
+    async fn put_kv_config(&self, namespace: CheetahString, key: CheetahString, value: CheetahString) {
         todo!()
     }
 
@@ -440,10 +403,7 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         todo!()
     }
 
-    async fn get_kv_list_by_namespace(
-        &self,
-        namespace: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<KVTable> {
+    async fn get_kv_list_by_namespace(&self, namespace: CheetahString) -> rocketmq_error::RocketMQResult<KVTable> {
         todo!()
     }
 
@@ -491,12 +451,7 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
             .as_ref()
             .unwrap()
             .get_mq_client_api_impl()
-            .put_kvconfig_value(
-                namespace,
-                key,
-                value,
-                self.timeout_millis.as_millis() as u64,
-            )
+            .put_kvconfig_value(namespace, key, value, self.timeout_millis.as_millis() as u64)
             .await
     }
 
@@ -551,24 +506,15 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         todo!()
     }
 
-    async fn query_topic_consume_by_who(
-        &self,
-        topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<GroupList> {
+    async fn query_topic_consume_by_who(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<GroupList> {
         todo!()
     }
 
-    async fn query_topics_by_consumer(
-        &self,
-        group: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<TopicList> {
+    async fn query_topics_by_consumer(&self, group: CheetahString) -> rocketmq_error::RocketMQResult<TopicList> {
         todo!()
     }
 
-    async fn query_topics_by_consumer_concurrent(
-        &self,
-        group: CheetahString,
-    ) -> AdminToolResult<TopicList> {
+    async fn query_topics_by_consumer_concurrent(&self, group: CheetahString) -> AdminToolResult<TopicList> {
         todo!()
     }
 
@@ -645,17 +591,11 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         todo!()
     }
 
-    async fn get_cluster_list(
-        &self,
-        topic: String,
-    ) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>> {
+    async fn get_cluster_list(&self, topic: String) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>> {
         todo!()
     }
 
-    async fn get_topic_cluster_list(
-        &self,
-        topic: String,
-    ) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>> {
+    async fn get_topic_cluster_list(&self, topic: String) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>> {
         let cluster_info = self.examine_broker_cluster_info().await?;
         let topic_route_data = self.examine_topic_route_info(topic.into()).await?.unwrap();
         let broker_data = topic_route_data
@@ -711,19 +651,14 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
             .as_ref()
             .unwrap()
             .get_mq_client_api_impl()
-            .update_name_server_config(
-                properties,
-                name_servers,
-                self.timeout_millis.as_millis() as u64,
-            )
+            .update_name_server_config(properties, name_servers, self.timeout_millis.as_millis() as u64)
             .await
     }
 
     async fn get_name_server_config(
         &self,
         name_servers: Vec<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>
-    {
+    ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>> {
         Ok(self
             .client_instance
             .as_ref()
@@ -753,11 +688,7 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         pop_work_group_size: i32,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let mut mq_client_api = self
-            .client_instance
-            .as_ref()
-            .unwrap()
-            .get_mq_client_api_impl();
+        let mut mq_client_api = self.client_instance.as_ref().unwrap().get_mq_client_api_impl();
         match mq_client_api
             .set_message_request_mode(
                 &broker_addr,
@@ -815,8 +746,7 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
     async fn get_controller_config(
         &self,
         controller_servers: Vec<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>
-    {
+    ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>> {
         todo!()
     }
 

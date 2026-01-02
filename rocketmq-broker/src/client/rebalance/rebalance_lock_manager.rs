@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -75,18 +72,17 @@ impl RebalanceLockManager {
                     },
                 );
                 info!(
-                    "RebalanceLockManager#tryLock: lock a message queue which has not been locked \
-                     yet, group={}, clientId={}, mq={:?}",
+                    "RebalanceLockManager#tryLock: lock a message queue which has not been locked yet, group={}, \
+                     clientId={}, mq={:?}",
                     group, client_id, mq
                 );
                 true
             }
             Some(lock_entry) => {
                 if lock_entry.is_locked(client_id) {
-                    lock_entry.last_update_timestamp.store(
-                        get_current_millis() as i64,
-                        std::sync::atomic::Ordering::Relaxed,
-                    );
+                    lock_entry
+                        .last_update_timestamp
+                        .store(get_current_millis() as i64, std::sync::atomic::Ordering::Relaxed);
                     return true;
                 }
 
@@ -94,21 +90,20 @@ impl RebalanceLockManager {
 
                 if lock_entry.is_expired() {
                     lock_entry.client_id = client_id.to_string();
-                    lock_entry.last_update_timestamp.store(
-                        get_current_millis() as i64,
-                        std::sync::atomic::Ordering::Relaxed,
-                    );
+                    lock_entry
+                        .last_update_timestamp
+                        .store(get_current_millis() as i64, std::sync::atomic::Ordering::Relaxed);
                     warn!(
-                        "RebalanceLockManager#tryLock: try to lock a expired message queue, \
-                         group={}, mq={:?}, old client id={}, new client id={}",
+                        "RebalanceLockManager#tryLock: try to lock a expired message queue, group={}, mq={:?}, old \
+                         client id={}, new client id={}",
                         group, mq, old_client_id, client_id
                     );
                     return true;
                 }
 
                 warn!(
-                    "RebalanceLockManager#tryLock: message queue has been locked by other client, \
-                     group={}, mq={:?}, locked client id={}, current client id={}",
+                    "RebalanceLockManager#tryLock: message queue has been locked by other client, group={}, mq={:?}, \
+                     locked client id={}, current client id={}",
                     group, mq, old_client_id, client_id
                 );
                 false
@@ -116,12 +111,7 @@ impl RebalanceLockManager {
         }
     }
 
-    pub fn try_lock_batch(
-        &self,
-        group: &str,
-        mqs: &HashSet<MessageQueue>,
-        client_id: &str,
-    ) -> HashSet<MessageQueue> {
+    pub fn try_lock_batch(&self, group: &str, mqs: &HashSet<MessageQueue>, client_id: &str) -> HashSet<MessageQueue> {
         let mut lock_mqs = HashSet::with_capacity(mqs.len());
         let mut not_locked_mqs = HashSet::with_capacity(mqs.len());
         for mq in mqs.iter() {
@@ -140,8 +130,8 @@ impl RebalanceLockManager {
             for mq in not_locked_mqs {
                 let lock_entry = group_value.entry(mq.clone()).or_insert_with(|| {
                     info!(
-                        "RebalanceLockManager#tryLockBatch: lock a message which has not been \
-                         locked yet, group={}, clientId={}, mq={:?}",
+                        "RebalanceLockManager#tryLockBatch: lock a message which has not been locked yet, group={}, \
+                         clientId={}, mq={:?}",
                         group, client_id, mq
                     );
                     LockEntry {
@@ -150,31 +140,29 @@ impl RebalanceLockManager {
                     }
                 });
                 if lock_entry.is_locked(client_id) {
-                    lock_entry.last_update_timestamp.store(
-                        get_current_millis() as i64,
-                        std::sync::atomic::Ordering::Relaxed,
-                    );
+                    lock_entry
+                        .last_update_timestamp
+                        .store(get_current_millis() as i64, std::sync::atomic::Ordering::Relaxed);
                     lock_mqs.insert(mq);
                     continue;
                 }
                 let old_client_id = lock_entry.client_id.as_str().to_string();
                 if lock_entry.is_expired() {
                     lock_entry.client_id = client_id.to_string();
-                    lock_entry.last_update_timestamp.store(
-                        get_current_millis() as i64,
-                        std::sync::atomic::Ordering::Relaxed,
-                    );
+                    lock_entry
+                        .last_update_timestamp
+                        .store(get_current_millis() as i64, std::sync::atomic::Ordering::Relaxed);
                     warn!(
-                        "RebalanceLockManager#tryLockBatch: try to lock a expired message queue, \
-                         group={} mq={:?}, old client id={}, new client id={}",
+                        "RebalanceLockManager#tryLockBatch: try to lock a expired message queue, group={} mq={:?}, \
+                         old client id={}, new client id={}",
                         group, mq, old_client_id, client_id
                     );
                     lock_mqs.insert(mq);
                     continue;
                 }
                 warn!(
-                    "RebalanceLockManager#tryLockBatch: message queue has been locked by other \
-                     client, group={}, mq={:?}, locked client id={}, current client id={}",
+                    "RebalanceLockManager#tryLockBatch: message queue has been locked by other client, group={}, \
+                     mq={:?}, locked client id={}, current client id={}",
                     group, mq, old_client_id, client_id
                 );
             }
@@ -186,8 +174,7 @@ impl RebalanceLockManager {
         let mut write_guard = self.mq_lock_table.write();
         let Some(group_value) = write_guard.get_mut(group) else {
             warn!(
-                "RebalanceLockManager#unlockBatch: group not exist, group={}, clientId={}, \
-                 mqs={:?}",
+                "RebalanceLockManager#unlockBatch: group not exist, group={}, clientId={}, mqs={:?}",
                 group, client_id, mqs
             );
             return;
@@ -197,23 +184,21 @@ impl RebalanceLockManager {
             match group_value.get(mq) {
                 None => {
                     warn!(
-                        "RebalanceLockManager#unlockBatch: mq not locked, group={}, clientId={}, \
-                         mq={}",
+                        "RebalanceLockManager#unlockBatch: mq not locked, group={}, clientId={}, mq={}",
                         group, client_id, mq
                     );
                 }
                 Some(lock_entry) if lock_entry.client_id == client_id => {
                     group_value.remove(mq);
                     info!(
-                        "RebalanceLockManager#unlockBatch: unlock mq, group={}, clientId={}, \
-                         mq={:?}",
+                        "RebalanceLockManager#unlockBatch: unlock mq, group={}, clientId={}, mq={:?}",
                         group, client_id, mq
                     );
                 }
                 Some(lock_entry) => {
                     warn!(
-                        "RebalanceLockManager#unlockBatch: mq locked by other client, group={}, \
-                         locked clientId={}, current clientId={}, mq={:?}",
+                        "RebalanceLockManager#unlockBatch: mq locked by other client, group={}, locked clientId={}, \
+                         current clientId={}, mq={:?}",
                         group, lock_entry.client_id, client_id, mq
                     );
                 }
@@ -227,10 +212,9 @@ impl RebalanceLockManager {
             if let Some(lock_entry) = group_value.get(mq) {
                 let locked = lock_entry.is_locked(client_id);
                 if locked {
-                    lock_entry.last_update_timestamp.store(
-                        get_current_millis() as i64,
-                        std::sync::atomic::Ordering::Relaxed,
-                    );
+                    lock_entry
+                        .last_update_timestamp
+                        .store(get_current_millis() as i64, std::sync::atomic::Ordering::Relaxed);
                 }
                 return locked;
             }
@@ -248,9 +232,7 @@ impl LockEntry {
     #[inline]
     pub fn is_expired(&self) -> bool {
         let now = get_current_millis() as i64;
-        let last_update_timestamp = self
-            .last_update_timestamp
-            .load(std::sync::atomic::Ordering::Relaxed);
+        let last_update_timestamp = self.last_update_timestamp.load(std::sync::atomic::Ordering::Relaxed);
         (now - last_update_timestamp) > *REBALANCE_LOCK_MAX_LIVE_TIME
     }
 

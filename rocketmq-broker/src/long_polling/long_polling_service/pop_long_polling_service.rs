@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #![allow(unused_variables)]
 
@@ -61,12 +58,8 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>, notify_last: bool) -> Self {
         Self {
             // 100000 topic default,  100000 lru topic + cid + qid
-            topic_cid_map: DashMap::with_capacity(
-                broker_runtime_inner.broker_config().pop_polling_map_size,
-            ),
-            polling_map: DashMap::with_capacity(
-                broker_runtime_inner.broker_config().pop_polling_map_size,
-            ),
+            topic_cid_map: DashMap::with_capacity(broker_runtime_inner.broker_config().pop_polling_map_size),
+            polling_map: DashMap::with_capacity(broker_runtime_inner.broker_config().pop_polling_map_size),
             last_clean_time: 0,
             total_polling_num: AtomicU64::new(0),
             notify_last,
@@ -108,9 +101,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                     }
                 }
 
-                if this.last_clean_time == 0
-                    || get_current_millis() - this.last_clean_time > 5 * 60 * 1000
-                {
+                if this.last_clean_time == 0 || get_current_millis() - this.last_clean_time > 5 * 60 * 1000 {
                     this.mut_from_ref().clean_unused_resource();
                 }
             }
@@ -241,14 +232,10 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
             }
 
             if let Some(pop_request) = self.poll_remoting_commands(value_) {
-                let (message_filter, subscription_data) = (
-                    pop_request.get_message_filter(),
-                    pop_request.get_subscription_data(),
-                );
+                let (message_filter, subscription_data) =
+                    (pop_request.get_message_filter(), pop_request.get_subscription_data());
 
-                if let (Some(message_filter), Some(_subscription_data)) =
-                    (message_filter, subscription_data)
-                {
+                if let (Some(message_filter), Some(_subscription_data)) = (message_filter, subscription_data) {
                     let mut match_result = message_filter.is_matched_by_consume_queue(
                         tags_code,
                         Some(&CqExtUnit::new(
@@ -259,8 +246,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                     );
                     if match_result {
                         if let Some(props) = properties {
-                            match_result =
-                                message_filter.is_matched_by_commit_log(None, Some(props));
+                            match_result = message_filter.is_matched_by_commit_log(None, Some(props));
                         }
                     }
                     if !match_result {
@@ -283,14 +269,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
     /// * `topic` - The topic name
     /// * `queue_id` - The queue ID
     pub fn notify_message_arriving_with_retry_topic(&self, topic: &CheetahString, queue_id: i32) {
-        self.notify_message_arriving_with_retry_topic_full(
-            topic.clone(),
-            queue_id,
-            None,
-            0,
-            None,
-            None,
-        );
+        self.notify_message_arriving_with_retry_topic_full(topic.clone(), queue_id, None, 0, None, None);
     }
 
     /// Notifies that a message has arrived on a retry topic with extended information.
@@ -365,15 +344,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
             // and all queues
             if queue_id >= 0 {
                 let filter_bit_map_ = filter_bit_map.clone();
-                self.notify_message_arriving(
-                    topic,
-                    -1,
-                    cid,
-                    tags_code,
-                    msg_store_time,
-                    filter_bit_map_,
-                    properties,
-                );
+                self.notify_message_arriving(topic, -1, cid, tags_code, msg_store_time, filter_bit_map_, properties);
             }
             let filter_bit_map_ = filter_bit_map.clone();
             // Always notify for the specific queue_id provided
@@ -428,10 +399,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
         ));
 
         if self.total_polling_num.load(Ordering::SeqCst)
-            >= self
-                .broker_runtime_inner
-                .broker_config()
-                .max_pop_polling_size
+            >= self.broker_runtime_inner.broker_config().max_pop_polling_size
         {
             return PollingResult::PollingFull;
         }
@@ -470,11 +438,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                     let ctx = pop_request.get_ctx().clone();
                     let opaque = pop_request.get_remoting_command().opaque();
                     let response = processor
-                        .process_request(
-                            channel,
-                            ctx,
-                            &mut pop_request.get_remoting_command().clone(),
-                        ) // maybe can optimize
+                        .process_request(channel, ctx, &mut pop_request.get_remoting_command().clone()) // maybe can optimize
                         .await;
                     match response {
                         Ok(result) => {
@@ -494,10 +458,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
         }
     }
 
-    fn poll_remoting_commands(
-        &self,
-        remoting_commands: &SkipSet<Arc<PopRequest>>,
-    ) -> Option<Arc<PopRequest>> {
+    fn poll_remoting_commands(&self, remoting_commands: &SkipSet<Arc<PopRequest>>) -> Option<Arc<PopRequest>> {
         if remoting_commands.is_empty() {
             return None;
         }
@@ -507,13 +468,9 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
         //maybe need to optimize
         loop {
             if self.notify_last {
-                pop_request = remoting_commands
-                    .pop_back()
-                    .map(|entry| entry.value().clone());
+                pop_request = remoting_commands.pop_back().map(|entry| entry.value().clone());
             } else {
-                pop_request = remoting_commands
-                    .pop_front()
-                    .map(|entry| entry.value().clone());
+                pop_request = remoting_commands.pop_front().map(|entry| entry.value().clone());
             }
 
             self.total_polling_num.fetch_sub(1, Ordering::AcqRel);
@@ -542,10 +499,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
     /// The number of polling requests, or 0 if no polling requests exist for the key
     #[inline]
     pub fn get_polling_num(&self, key: &str) -> i32 {
-        self.polling_map
-            .get(key)
-            .map(|queue| queue.len() as i32)
-            .unwrap_or(0)
+        self.polling_map.get(key).map(|queue| queue.len() as i32).unwrap_or(0)
     }
 
     pub fn set_processor(&mut self, processor: ArcMut<RP>) {

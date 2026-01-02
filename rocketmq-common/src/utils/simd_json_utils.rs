@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #[cfg(feature = "simd")]
 use rocketmq_error::SerializationError;
@@ -93,8 +90,7 @@ impl SimdJsonUtils {
     where
         T: serde::de::DeserializeOwned,
     {
-        simd_json::from_slice(bytes)
-            .map_err(|e| SerializationError::decode_failed("SIMD-JSON", e.to_string()).into())
+        simd_json::from_slice(bytes).map_err(|e| SerializationError::decode_failed("SIMD-JSON", e.to_string()).into())
     }
 
     /// Deserialize JSON from a mutable byte slice into a Rust type.
@@ -157,8 +153,7 @@ impl SimdJsonUtils {
     where
         T: serde::Serialize,
     {
-        simd_json::to_string(value)
-            .map_err(|e| SerializationError::encode_failed("SIMD-JSON", e.to_string()).into())
+        simd_json::to_string(value).map_err(|e| SerializationError::encode_failed("SIMD-JSON", e.to_string()).into())
     }
 
     /// Serialize a Rust type into a JSON string (pretty-printed format).
@@ -203,8 +198,7 @@ impl SimdJsonUtils {
     where
         T: serde::Serialize,
     {
-        simd_json::to_vec(value)
-            .map_err(|e| SerializationError::encode_failed("SIMD-JSON", e.to_string()).into())
+        simd_json::to_vec(value).map_err(|e| SerializationError::encode_failed("SIMD-JSON", e.to_string()).into())
     }
 
     /// Serialize a Rust type into a JSON byte vector (pretty-printed format).
@@ -241,10 +235,7 @@ impl SimdJsonUtils {
     ///
     /// Returns Ok(()) on success or an error if serialization fails.
     #[inline]
-    pub fn serialize_json_to_writer<T>(
-        writer: &mut Vec<u8>,
-        value: &T,
-    ) -> rocketmq_error::RocketMQResult<()>
+    pub fn serialize_json_to_writer<T>(writer: &mut Vec<u8>, value: &T) -> rocketmq_error::RocketMQResult<()>
     where
         T: serde::Serialize,
     {
@@ -282,8 +273,7 @@ mod tests {
     #[test]
     fn test_from_json_str_error() {
         let json_str = r#"{"name":"Alice","age":"thirty"}"#;
-        let result: rocketmq_error::RocketMQResult<TestStruct> =
-            SimdJsonUtils::from_json_str(json_str);
+        let result: rocketmq_error::RocketMQResult<TestStruct> = SimdJsonUtils::from_json_str(json_str);
         assert!(result.is_err());
     }
 
@@ -301,8 +291,7 @@ mod tests {
     #[test]
     fn test_from_json_bytes_error() {
         let mut json_data = br#"{"name":"Bob","age":"twenty-five"}"#.to_vec();
-        let result: rocketmq_error::RocketMQResult<TestStruct> =
-            SimdJsonUtils::from_json_bytes(&mut json_data);
+        let result: rocketmq_error::RocketMQResult<TestStruct> = SimdJsonUtils::from_json_bytes(&mut json_data);
         assert!(result.is_err());
     }
 

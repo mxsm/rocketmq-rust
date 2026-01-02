@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -73,8 +70,8 @@ mod customized_retry_policy_tests {
     fn default_creates_expected_sequence() {
         let policy = CustomizedRetryPolicy::default();
         let expected_sequence = vec![
-            1_000, 5_000, 10_000, 30_000, 60_000, 120_000, 180_000, 240_000, 300_000, 360_000,
-            420_000, 480_000, 540_000, 600_000, 1_200_000, 1_800_000, 3_600_000, 7_200_000,
+            1_000, 5_000, 10_000, 30_000, 60_000, 120_000, 180_000, 240_000, 300_000, 360_000, 420_000, 480_000,
+            540_000, 600_000, 1_200_000, 1_800_000, 3_600_000, 7_200_000,
         ];
         assert_eq!(policy.next, expected_sequence);
     }
@@ -86,11 +83,7 @@ mod customized_retry_policy_tests {
 
         for (reconsume_times, expected_delay) in test_cases {
             let delay = policy.next_delay_duration(reconsume_times);
-            assert_eq!(
-                delay, expected_delay,
-                "Failed for reconsume_times: {}",
-                reconsume_times
-            );
+            assert_eq!(delay, expected_delay, "Failed for reconsume_times: {}", reconsume_times);
         }
     }
 
@@ -109,9 +102,6 @@ mod customized_retry_policy_tests {
         let policy = CustomizedRetryPolicy::default();
         let first_delay = policy.next_delay_duration(0);
         let second_delay = policy.next_delay_duration(1);
-        assert!(
-            second_delay > first_delay,
-            "Delay should increase with reconsume times"
-        );
+        assert!(second_delay > first_delay, "Delay should increase with reconsume times");
     }
 }

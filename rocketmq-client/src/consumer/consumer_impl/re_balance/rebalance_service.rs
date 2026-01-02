@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,18 +30,14 @@ static WAIT_INTERVAL: Lazy<Duration> = Lazy::new(|| {
     std::env::var("rocketmq.client.rebalance.waitInterval")
         .unwrap_or_else(|_| "20000".into())
         .parse::<u64>()
-        .map_or(Duration::from_millis(20000), |value| {
-            Duration::from_millis(value)
-        })
+        .map_or(Duration::from_millis(20000), Duration::from_millis)
 });
 
 static MIN_INTERVAL: Lazy<Duration> = Lazy::new(|| {
     std::env::var("rocketmq.client.rebalance.minInterval")
         .unwrap_or_else(|_| "1000".into())
         .parse::<u64>()
-        .map_or(Duration::from_millis(1000), |value| {
-            Duration::from_millis(value)
-        })
+        .map_or(Duration::from_millis(1000), Duration::from_millis)
 });
 
 ///`RebalanceService` is a crucial struct in Apache RocketMQ-Rust, responsible for coordinating
@@ -114,11 +107,7 @@ impl RebalanceService {
                 } else {
                     // Rebalance operation, the core of RebalanceService
                     let balanced = instance.do_rebalance().await;
-                    real_wait_interval = if balanced {
-                        *WAIT_INTERVAL
-                    } else {
-                        min_interval
-                    };
+                    real_wait_interval = if balanced { *WAIT_INTERVAL } else { min_interval };
                     last_rebalance_timestamp = Instant::now();
                 }
             }
@@ -132,10 +121,7 @@ impl RebalanceService {
     pub fn shutdown(&self) {
         if let Some(tx_shutdown) = &self.tx_shutdown {
             if let Err(e) = tx_shutdown.send(()) {
-                warn!(
-                    "Failed to send shutdown signal to RebalanceService, error: {:?}",
-                    e
-                );
+                warn!("Failed to send shutdown signal to RebalanceService, error: {:?}", e);
             }
         } else {
             warn!("Shutdown called before start; no shutdown signal sent");

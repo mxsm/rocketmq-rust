@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -185,70 +182,42 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
         }
     }
 
-    fn decode_fast(
-        &mut self,
-        fields: &HashMap<CheetahString, CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    fn decode_fast(&mut self, fields: &HashMap<CheetahString, CheetahString>) -> rocketmq_error::RocketMQResult<()> {
         // Use static keys to avoid repeated allocations
 
         self.a = self.get_and_check_not_none(fields, &KEY_A)?; //producerGroup
         self.b = self.get_and_check_not_none(fields, &KEY_B)?; //topic
         self.c = self.get_and_check_not_none(fields, &KEY_C)?; //defaultTopic
-        self.d = self
-            .get_and_check_not_none(fields, &KEY_D)?
-            .parse()
-            .map_err(|_| {
-                rocketmq_error::RocketMQError::Serialization(
-                    rocketmq_error::SerializationError::DecodeFailed {
-                        format: "header",
-                        message: "Parse field d error".to_string(),
-                    },
-                )
-            })?; //defaultTopicQueueNums
-        self.e = self
-            .get_and_check_not_none(fields, &KEY_E)?
-            .parse()
-            .map_err(|_| {
-                rocketmq_error::RocketMQError::Serialization(
-                    rocketmq_error::SerializationError::DecodeFailed {
-                        format: "header",
-                        message: "Parse field e error".to_string(),
-                    },
-                )
-            })?; //queueId
-        self.f = self
-            .get_and_check_not_none(fields, &KEY_F)?
-            .parse()
-            .map_err(|_| {
-                rocketmq_error::RocketMQError::Serialization(
-                    rocketmq_error::SerializationError::DecodeFailed {
-                        format: "header",
-                        message: "Parse field f error".to_string(),
-                    },
-                )
-            })?; //sysFlag
-        self.g = self
-            .get_and_check_not_none(fields, &KEY_G)?
-            .parse()
-            .map_err(|_| {
-                rocketmq_error::RocketMQError::Serialization(
-                    rocketmq_error::SerializationError::DecodeFailed {
-                        format: "header",
-                        message: "Parse field g error".to_string(),
-                    },
-                )
-            })?; //bornTimestamp
-        self.h = self
-            .get_and_check_not_none(fields, &KEY_H)?
-            .parse()
-            .map_err(|_| {
-                rocketmq_error::RocketMQError::Serialization(
-                    rocketmq_error::SerializationError::DecodeFailed {
-                        format: "header",
-                        message: "Parse field h error".to_string(),
-                    },
-                )
-            })?; //flag
+        self.d = self.get_and_check_not_none(fields, &KEY_D)?.parse().map_err(|_| {
+            rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+                format: "header",
+                message: "Parse field d error".to_string(),
+            })
+        })?; //defaultTopicQueueNums
+        self.e = self.get_and_check_not_none(fields, &KEY_E)?.parse().map_err(|_| {
+            rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+                format: "header",
+                message: "Parse field e error".to_string(),
+            })
+        })?; //queueId
+        self.f = self.get_and_check_not_none(fields, &KEY_F)?.parse().map_err(|_| {
+            rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+                format: "header",
+                message: "Parse field f error".to_string(),
+            })
+        })?; //sysFlag
+        self.g = self.get_and_check_not_none(fields, &KEY_G)?.parse().map_err(|_| {
+            rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+                format: "header",
+                message: "Parse field g error".to_string(),
+            })
+        })?; //bornTimestamp
+        self.h = self.get_and_check_not_none(fields, &KEY_H)?.parse().map_err(|_| {
+            rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+                format: "header",
+                message: "Parse field h error".to_string(),
+            })
+        })?; //flag
 
         if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_I)) {
             self.i = Some(v.clone());
@@ -260,34 +229,28 @@ impl CommandCustomHeader for SendMessageRequestHeaderV2 {
 
         if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_K)) {
             self.k = Some(v.parse().map_err(|_| {
-                rocketmq_error::RocketMQError::Serialization(
-                    rocketmq_error::SerializationError::DecodeFailed {
-                        format: "header",
-                        message: "Parse field k error".to_string(),
-                    },
-                )
+                rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+                    format: "header",
+                    message: "Parse field k error".to_string(),
+                })
             })?);
         }
 
         if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_L)) {
             self.l = Some(v.parse().map_err(|_| {
-                rocketmq_error::RocketMQError::Serialization(
-                    rocketmq_error::SerializationError::DecodeFailed {
-                        format: "header",
-                        message: "Parse field l error".to_string(),
-                    },
-                )
+                rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+                    format: "header",
+                    message: "Parse field l error".to_string(),
+                })
             })?);
         }
 
         if let Some(v) = fields.get(&CheetahString::from_static_str(FIELD_M)) {
             self.m = Some(v.parse().map_err(|_| {
-                rocketmq_error::RocketMQError::Serialization(
-                    rocketmq_error::SerializationError::DecodeFailed {
-                        format: "header",
-                        message: "Parse field m error".to_string(),
-                    },
-                )
+                rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+                    format: "header",
+                    message: "Parse field m error".to_string(),
+                })
             })?);
         }
 
@@ -315,12 +278,10 @@ impl FromMap for SendMessageRequestHeaderV2 {
             field: &'static str,
         ) -> Result<&'a CheetahString, rocketmq_error::RocketMQError> {
             map.get(key).ok_or_else(|| {
-                rocketmq_error::RocketMQError::Serialization(
-                    rocketmq_error::SerializationError::DecodeFailed {
-                        format: "header",
-                        message: format!("Missing field: {}", field),
-                    },
-                )
+                rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+                    format: "header",
+                    message: format!("Missing field: {}", field),
+                })
             })
         }
 
@@ -330,24 +291,16 @@ impl FromMap for SendMessageRequestHeaderV2 {
             key: &CheetahString,
             field: &'static str,
         ) -> Result<T, rocketmq_error::RocketMQError> {
-            get_required(map, key, field)?
-                .as_str()
-                .parse::<T>()
-                .map_err(|_| {
-                    rocketmq_error::RocketMQError::Serialization(
-                        rocketmq_error::SerializationError::DecodeFailed {
-                            format: "header",
-                            message: format!("Parse {} field error", field),
-                        },
-                    )
+            get_required(map, key, field)?.as_str().parse::<T>().map_err(|_| {
+                rocketmq_error::RocketMQError::Serialization(rocketmq_error::SerializationError::DecodeFailed {
+                    format: "header",
+                    message: format!("Parse {} field error", field),
                 })
+            })
         }
 
         #[inline(always)]
-        fn optional_parse<T: FromStr>(
-            map: &HashMap<CheetahString, CheetahString>,
-            key: &CheetahString,
-        ) -> Option<T> {
+        fn optional_parse<T: FromStr>(map: &HashMap<CheetahString, CheetahString>, key: &CheetahString) -> Option<T> {
             map.get(key)?.as_str().parse::<T>().ok()
         }
 
@@ -393,9 +346,7 @@ impl SendMessageRequestHeaderV2 {
         }
     }
 
-    pub fn create_send_message_request_header_v2(
-        v1: &SendMessageRequestHeader,
-    ) -> SendMessageRequestHeaderV2 {
+    pub fn create_send_message_request_header_v2(v1: &SendMessageRequestHeader) -> SendMessageRequestHeaderV2 {
         SendMessageRequestHeaderV2 {
             a: v1.producer_group.clone(),
             b: v1.topic.clone(),
@@ -418,9 +369,7 @@ impl SendMessageRequestHeaderV2 {
         }
     }
 
-    pub fn create_send_message_request_header_v2_with_move(
-        v1: SendMessageRequestHeader,
-    ) -> SendMessageRequestHeaderV2 {
+    pub fn create_send_message_request_header_v2_with_move(v1: SendMessageRequestHeader) -> SendMessageRequestHeaderV2 {
         SendMessageRequestHeaderV2 {
             a: v1.producer_group,
             b: v1.topic,
@@ -574,10 +523,7 @@ mod tests {
             map.get(&CheetahString::from_static_str("a")).unwrap(),
             "test_producer_group"
         );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("b")).unwrap(),
-            "test_topic"
-        );
+        assert_eq!(map.get(&CheetahString::from_static_str("b")).unwrap(), "test_topic");
         assert_eq!(
             map.get(&CheetahString::from_static_str("c")).unwrap(),
             "test_default_topic"
@@ -585,25 +531,16 @@ mod tests {
         assert_eq!(map.get(&CheetahString::from_static_str("d")).unwrap(), "8");
         assert_eq!(map.get(&CheetahString::from_static_str("e")).unwrap(), "1");
         assert_eq!(map.get(&CheetahString::from_static_str("f")).unwrap(), "0");
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("g")).unwrap(),
-            "1622547800000"
-        );
+        assert_eq!(map.get(&CheetahString::from_static_str("g")).unwrap(), "1622547800000");
         assert_eq!(map.get(&CheetahString::from_static_str("h")).unwrap(), "0");
         assert_eq!(
             map.get(&CheetahString::from_static_str("i")).unwrap(),
             "test_properties"
         );
         assert_eq!(map.get(&CheetahString::from_static_str("j")).unwrap(), "3");
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("k")).unwrap(),
-            "true"
-        );
+        assert_eq!(map.get(&CheetahString::from_static_str("k")).unwrap(), "true");
         assert_eq!(map.get(&CheetahString::from_static_str("l")).unwrap(), "5");
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("m")).unwrap(),
-            "false"
-        );
+        assert_eq!(map.get(&CheetahString::from_static_str("m")).unwrap(), "false");
         assert_eq!(
             map.get(&CheetahString::from_static_str("n")).unwrap(),
             "test_broker_name"
@@ -625,42 +562,24 @@ mod tests {
             CheetahString::from_static_str("c"),
             CheetahString::from_static_str("test_default_topic"),
         );
-        map.insert(
-            CheetahString::from_static_str("d"),
-            CheetahString::from_static_str("8"),
-        );
-        map.insert(
-            CheetahString::from_static_str("e"),
-            CheetahString::from_static_str("1"),
-        );
-        map.insert(
-            CheetahString::from_static_str("f"),
-            CheetahString::from_static_str("0"),
-        );
+        map.insert(CheetahString::from_static_str("d"), CheetahString::from_static_str("8"));
+        map.insert(CheetahString::from_static_str("e"), CheetahString::from_static_str("1"));
+        map.insert(CheetahString::from_static_str("f"), CheetahString::from_static_str("0"));
         map.insert(
             CheetahString::from_static_str("g"),
             CheetahString::from_static_str("1622547800000"),
         );
-        map.insert(
-            CheetahString::from_static_str("h"),
-            CheetahString::from_static_str("0"),
-        );
+        map.insert(CheetahString::from_static_str("h"), CheetahString::from_static_str("0"));
         map.insert(
             CheetahString::from_static_str("i"),
             CheetahString::from_static_str("test_properties"),
         );
-        map.insert(
-            CheetahString::from_static_str("j"),
-            CheetahString::from_static_str("3"),
-        );
+        map.insert(CheetahString::from_static_str("j"), CheetahString::from_static_str("3"));
         map.insert(
             CheetahString::from_static_str("k"),
             CheetahString::from_static_str("true"),
         );
-        map.insert(
-            CheetahString::from_static_str("l"),
-            CheetahString::from_static_str("5"),
-        );
+        map.insert(CheetahString::from_static_str("l"), CheetahString::from_static_str("5"));
         map.insert(
             CheetahString::from_static_str("m"),
             CheetahString::from_static_str("false"),
@@ -702,26 +621,14 @@ mod tests {
             CheetahString::from_static_str("c"),
             CheetahString::from_static_str("test_default_topic"),
         );
-        map.insert(
-            CheetahString::from_static_str("d"),
-            CheetahString::from_static_str("8"),
-        );
-        map.insert(
-            CheetahString::from_static_str("e"),
-            CheetahString::from_static_str("1"),
-        );
-        map.insert(
-            CheetahString::from_static_str("f"),
-            CheetahString::from_static_str("0"),
-        );
+        map.insert(CheetahString::from_static_str("d"), CheetahString::from_static_str("8"));
+        map.insert(CheetahString::from_static_str("e"), CheetahString::from_static_str("1"));
+        map.insert(CheetahString::from_static_str("f"), CheetahString::from_static_str("0"));
         map.insert(
             CheetahString::from_static_str("g"),
             CheetahString::from_static_str("1622547800000"),
         );
-        map.insert(
-            CheetahString::from_static_str("h"),
-            CheetahString::from_static_str("0"),
-        );
+        map.insert(CheetahString::from_static_str("h"), CheetahString::from_static_str("0"));
 
         let header = <SendMessageRequestHeaderV2 as FromMap>::from(&map).unwrap();
         assert_eq!(header.a, "test_producer_group");

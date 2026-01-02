@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::io::prelude::*;
 
@@ -126,8 +123,7 @@ impl RegisterBrokerBody {
         }
 
         // Serialize filter server list to JSON (align with Java)
-        let filter_server_list_json = match SerdeJsonUtils::serialize_json(&self.filter_server_list)
-        {
+        let filter_server_list_json = match SerdeJsonUtils::serialize_json(&self.filter_server_list) {
             Ok(json) => json,
             Err(e) => {
                 error!("Failed to serialize filter server list: {:?}", e);
@@ -142,9 +138,7 @@ impl RegisterBrokerBody {
         bytes_mut.put(filter_server_list_bytes);
 
         // Write topic queue mapping info (align with Java: handle null case)
-        let topic_queue_mapping_info_map = &self
-            .topic_config_serialize_wrapper
-            .topic_queue_mapping_info_map;
+        let topic_queue_mapping_info_map = &self.topic_config_serialize_wrapper.topic_queue_mapping_info_map;
 
         bytes_mut.put_i32(topic_queue_mapping_info_map.len() as i32);
 
@@ -166,10 +160,7 @@ impl RegisterBrokerBody {
         let uncompressed_data = bytes_mut.freeze();
 
         // Compress data using Deflate with best compression
-        let mut encoder = DeflateEncoder::new(
-            Vec::with_capacity(uncompressed_data.len() / 2),
-            Compression::best(),
-        );
+        let mut encoder = DeflateEncoder::new(Vec::with_capacity(uncompressed_data.len() / 2), Compression::best());
 
         match encoder.write_all(uncompressed_data.as_ref()) {
             Ok(_) => {}
@@ -213,15 +204,13 @@ impl RegisterBrokerBody {
 
         // Fast path: non-compressed data
         if !compressed {
-            return SerdeJsonUtils::from_json_bytes::<RegisterBrokerBody>(bytes.as_ref()).map_err(
-                |e| {
-                    error!("Failed to decode RegisterBrokerBody: {:?}", e);
-                    rocketmq_error::RocketMQError::request_body_invalid(
-                        "decode",
-                        format!("Failed to decode RegisterBrokerBody: {:?}", e),
-                    )
-                },
-            );
+            return SerdeJsonUtils::from_json_bytes::<RegisterBrokerBody>(bytes.as_ref()).map_err(|e| {
+                error!("Failed to decode RegisterBrokerBody: {:?}", e);
+                rocketmq_error::RocketMQError::request_body_invalid(
+                    "decode",
+                    format!("Failed to decode RegisterBrokerBody: {:?}", e),
+                )
+            });
         }
 
         let start = Instant::now();
@@ -258,9 +247,7 @@ impl RegisterBrokerBody {
                 buf.remaining()
             );
             error!("{}", msg);
-            return Err(rocketmq_error::RocketMQError::request_body_invalid(
-                "decode", msg,
-            ));
+            return Err(rocketmq_error::RocketMQError::request_body_invalid("decode", msg));
         }
 
         let data_version_bytes = buf.split_to(data_version_length);
@@ -272,9 +259,7 @@ impl RegisterBrokerBody {
             )
         })?;
 
-        register_broker_body
-            .topic_config_serialize_wrapper
-            .mapping_data_version = data_version.clone();
+        register_broker_body.topic_config_serialize_wrapper.mapping_data_version = data_version.clone();
         // set in topic_config_serialize_wrapper
         register_broker_body
             .topic_config_serialize_wrapper
@@ -357,15 +342,11 @@ impl RegisterBrokerBody {
                 buf.remaining()
             );
             error!("{}", msg);
-            return Err(rocketmq_error::RocketMQError::request_body_invalid(
-                "decode", msg,
-            ));
+            return Err(rocketmq_error::RocketMQError::request_body_invalid("decode", msg));
         }
 
         let filter_server_list_json = buf.split_to(filter_server_list_json_length);
-        match SerdeJsonUtils::from_json_slice::<Vec<CheetahString>>(
-            filter_server_list_json.as_ref(),
-        ) {
+        match SerdeJsonUtils::from_json_slice::<Vec<CheetahString>>(filter_server_list_json.as_ref()) {
             Ok(list) => register_broker_body.filter_server_list = list,
             Err(e) => {
                 error!(
@@ -461,9 +442,8 @@ mod tests {
         let filter_list = vec!["filter1".into(), "filter2".into()];
         let body = RegisterBrokerBody::new(wrapper, filter_list);
         let encoded = body.encode(false);
-        let decoded =
-            RegisterBrokerBody::decode(&Bytes::from(encoded), false, RocketMqVersion::V5_0_0)
-                .expect("decode should succeed");
+        let decoded = RegisterBrokerBody::decode(&Bytes::from(encoded), false, RocketMqVersion::V5_0_0)
+            .expect("decode should succeed");
         assert_eq!(decoded.filter_server_list, body.filter_server_list);
     }
 
@@ -482,9 +462,8 @@ mod tests {
             .topic_config_serialize_wrapper
             .topic_config_table = topic_config_table;
         let compare_encode = register_broker_body.encode(true);
-        let compare_decode =
-            RegisterBrokerBody::decode(&Bytes::from(compare_encode), true, RocketMqVersion::V5_0_0)
-                .expect("decode should succeed");
+        let compare_decode = RegisterBrokerBody::decode(&Bytes::from(compare_encode), true, RocketMqVersion::V5_0_0)
+            .expect("decode should succeed");
         assert_eq!(
             register_broker_body
                 .topic_config_serialize_wrapper
@@ -518,13 +497,11 @@ mod tests {
             .topic_config_table = topic_config_table;
 
         // Add filter servers
-        register_broker_body.filter_server_list =
-            vec!["filter1".into(), "filter2".into(), "filter3".into()];
+        register_broker_body.filter_server_list = vec!["filter1".into(), "filter2".into(), "filter3".into()];
 
         let encoded = register_broker_body.encode(true);
-        let decoded =
-            RegisterBrokerBody::decode(&Bytes::from(encoded), true, RocketMqVersion::V5_0_0)
-                .expect("decode should succeed");
+        let decoded = RegisterBrokerBody::decode(&Bytes::from(encoded), true, RocketMqVersion::V5_0_0)
+            .expect("decode should succeed");
 
         assert_eq!(
             decoded
@@ -542,9 +519,8 @@ mod tests {
         // Test edge case: empty compressed data
         let body = RegisterBrokerBody::default();
         let encoded = body.encode(true);
-        let decoded =
-            RegisterBrokerBody::decode(&Bytes::from(encoded), true, RocketMqVersion::V5_0_0)
-                .expect("decode should succeed");
+        let decoded = RegisterBrokerBody::decode(&Bytes::from(encoded), true, RocketMqVersion::V5_0_0)
+            .expect("decode should succeed");
         assert!(decoded
             .topic_config_serialize_wrapper
             .topic_config_serialize_wrapper
@@ -557,21 +533,16 @@ mod tests {
         // Test V3 version (no TopicQueueMappingInfo)
         let body = RegisterBrokerBody::default();
         let encoded = body.encode(true);
-        let decoded = RegisterBrokerBody::decode(
-            &Bytes::from(encoded.clone()),
-            true,
-            RocketMqVersion::V3_0_11,
-        )
-        .expect("decode should succeed");
+        let decoded = RegisterBrokerBody::decode(&Bytes::from(encoded.clone()), true, RocketMqVersion::V3_0_11)
+            .expect("decode should succeed");
         assert!(decoded
             .topic_config_serialize_wrapper
             .topic_queue_mapping_info_map
             .is_empty());
 
         // Test V5 version (with TopicQueueMappingInfo)
-        let decoded_v5 =
-            RegisterBrokerBody::decode(&Bytes::from(encoded), true, RocketMqVersion::V5_0_0)
-                .expect("decode should succeed");
+        let decoded_v5 = RegisterBrokerBody::decode(&Bytes::from(encoded), true, RocketMqVersion::V5_0_0)
+            .expect("decode should succeed");
         // Should not panic
         assert!(decoded_v5
             .topic_config_serialize_wrapper
@@ -583,8 +554,7 @@ mod tests {
     fn test_decode_invalid_compressed_data() {
         // Test with invalid compressed data
         let invalid_data = vec![1, 2, 3, 4, 5];
-        let result =
-            RegisterBrokerBody::decode(&Bytes::from(invalid_data), true, RocketMqVersion::V5_0_0);
+        let result = RegisterBrokerBody::decode(&Bytes::from(invalid_data), true, RocketMqVersion::V5_0_0);
         assert!(result.is_err(), "Should fail with invalid compressed data");
     }
 
@@ -596,8 +566,7 @@ mod tests {
         // Truncate to create invalid data
         encoded.truncate(5);
 
-        let result =
-            RegisterBrokerBody::decode(&Bytes::from(encoded), true, RocketMqVersion::V5_0_0);
+        let result = RegisterBrokerBody::decode(&Bytes::from(encoded), true, RocketMqVersion::V5_0_0);
         assert!(result.is_err(), "Should fail with insufficient data");
     }
 
@@ -605,11 +574,7 @@ mod tests {
     fn test_decode_invalid_json() {
         // Test with invalid JSON in non-compressed mode
         let invalid_json = b"{ invalid json }";
-        let result = RegisterBrokerBody::decode(
-            &Bytes::from(invalid_json.to_vec()),
-            false,
-            RocketMqVersion::V5_0_0,
-        );
+        let result = RegisterBrokerBody::decode(&Bytes::from(invalid_json.to_vec()), false, RocketMqVersion::V5_0_0);
         assert!(result.is_err(), "Should fail with invalid JSON");
     }
 
@@ -675,16 +640,14 @@ mod tests {
             .topic_config_serialize_wrapper
             .topic_config_table = topic_config_table;
 
-        register_broker_body.filter_server_list =
-            vec!["192.168.1.1:8080".into(), "192.168.1.2:8080".into()];
+        register_broker_body.filter_server_list = vec!["192.168.1.1:8080".into(), "192.168.1.2:8080".into()];
 
         // Encode with compression
         let encoded = register_broker_body.encode(true);
 
         // Decode
-        let decoded =
-            RegisterBrokerBody::decode(&Bytes::from(encoded), true, RocketMqVersion::V5_0_0)
-                .expect("decode should succeed");
+        let decoded = RegisterBrokerBody::decode(&Bytes::from(encoded), true, RocketMqVersion::V5_0_0)
+            .expect("decode should succeed");
 
         // Verify data integrity
         assert_eq!(

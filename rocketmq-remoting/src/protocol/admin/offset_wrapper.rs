@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -66,5 +63,58 @@ impl OffsetWrapper {
 
     pub fn set_last_timestamp(&mut self, last_timestamp: i64) {
         self.last_timestamp = last_timestamp;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_offset_wrapper_default_and_new() {
+        let wrapper = OffsetWrapper::default();
+        assert_eq!(wrapper.get_broker_offset(), 0);
+        assert_eq!(wrapper.get_consumer_offset(), 0);
+        assert_eq!(wrapper.get_pull_offset(), 0);
+        assert_eq!(wrapper.get_last_timestamp(), 0);
+
+        let wrapper = OffsetWrapper::new();
+        assert_eq!(wrapper.get_broker_offset(), 0);
+        assert_eq!(wrapper.get_consumer_offset(), 0);
+        assert_eq!(wrapper.get_pull_offset(), 0);
+        assert_eq!(wrapper.get_last_timestamp(), 0);
+    }
+
+    #[test]
+    fn test_offset_wrapper_setters_and_getters() {
+        let mut wrapper = OffsetWrapper::new();
+        wrapper.set_broker_offset(100);
+        wrapper.set_consumer_offset(200);
+        wrapper.set_pull_offset(300);
+        wrapper.set_last_timestamp(400);
+
+        assert_eq!(wrapper.get_broker_offset(), 100);
+        assert_eq!(wrapper.get_consumer_offset(), 200);
+        assert_eq!(wrapper.get_pull_offset(), 300);
+        assert_eq!(wrapper.get_last_timestamp(), 400);
+    }
+
+    #[test]
+    fn test_offset_wrapper_serialization_and_deserialization() {
+        let mut wrapper = OffsetWrapper::new();
+        wrapper.set_broker_offset(-100);
+        wrapper.set_consumer_offset(-200);
+        wrapper.set_pull_offset(-300);
+        wrapper.set_last_timestamp(-400);
+
+        let serialized = serde_json::to_string(&wrapper).unwrap();
+        let expected = r#"{"broker_offset":-100,"consumer_offset":-200,"pull_offset":-300,"last_timestamp":-400}"#;
+        assert_eq!(serialized, expected);
+
+        let deserialized: OffsetWrapper = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.get_broker_offset(), -100);
+        assert_eq!(deserialized.get_consumer_offset(), -200);
+        assert_eq!(deserialized.get_pull_offset(), -300);
+        assert_eq!(deserialized.get_last_timestamp(), -400);
     }
 }

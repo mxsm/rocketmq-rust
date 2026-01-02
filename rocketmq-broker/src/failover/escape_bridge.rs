@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::ops::Deref;
 
@@ -97,18 +94,12 @@ impl<MS: MessageStore> EscapeBridge<MS> {
         let inner_producer_group_name = CheetahString::from_string(format!(
             "InnerProducerGroup_{}_{}",
             broker_runtime_inner.broker_config().broker_name(),
-            broker_runtime_inner
-                .broker_config()
-                .broker_identity
-                .broker_id
+            broker_runtime_inner.broker_config().broker_identity.broker_id
         ));
         let inner_consumer_group_name = CheetahString::from_string(format!(
             "InnerConsumerGroup_{}_{}",
             broker_runtime_inner.broker_config().broker_name(),
-            broker_runtime_inner
-                .broker_config()
-                .broker_identity
-                .broker_id
+            broker_runtime_inner.broker_config().broker_identity.broker_id
         ));
 
         Self {
@@ -119,14 +110,8 @@ impl<MS: MessageStore> EscapeBridge<MS> {
     }
 
     pub fn start(&mut self /* message_store: Option<ArcMut<MS>> */) {
-        if self
-            .broker_runtime_inner
-            .broker_config()
-            .enable_slave_acting_master
-            && self
-                .broker_runtime_inner
-                .broker_config()
-                .enable_remote_escape
+        if self.broker_runtime_inner.broker_config().enable_slave_acting_master
+            && self.broker_runtime_inner.broker_config().enable_remote_escape
         {
 
             //self.message_store = message_store;
@@ -142,31 +127,16 @@ impl<MS> EscapeBridge<MS>
 where
     MS: MessageStore,
 {
-    pub async fn put_message(
-        &mut self,
-        mut message_ext: MessageExtBrokerInner,
-    ) -> PutMessageResult {
-        if self
-            .broker_runtime_inner
-            .broker_config()
-            .broker_identity
-            .broker_id
-            == mix_all::MASTER_ID
-        {
+    pub async fn put_message(&mut self, mut message_ext: MessageExtBrokerInner) -> PutMessageResult {
+        if self.broker_runtime_inner.broker_config().broker_identity.broker_id == mix_all::MASTER_ID {
             self.broker_runtime_inner
                 .message_store_mut()
                 .as_mut()
                 .unwrap()
                 .put_message(message_ext)
                 .await
-        } else if self
-            .broker_runtime_inner
-            .broker_config()
-            .enable_slave_acting_master
-            && self
-                .broker_runtime_inner
-                .broker_config()
-                .enable_remote_escape
+        } else if self.broker_runtime_inner.broker_config().enable_slave_acting_master
+            && self.broker_runtime_inner.broker_config().enable_remote_escape
         {
             message_ext.set_wait_store_msg_ok(false);
             match self.put_message_to_remote_broker(message_ext, None).await {
@@ -179,12 +149,8 @@ where
         } else {
             warn!(
                 "Put message failed, enableSlaveActingMaster={}, enableRemoteEscape={}.",
-                self.broker_runtime_inner
-                    .broker_config()
-                    .enable_slave_acting_master,
-                self.broker_runtime_inner
-                    .broker_config()
-                    .enable_remote_escape
+                self.broker_runtime_inner.broker_config().enable_slave_acting_master,
+                self.broker_runtime_inner.broker_config().enable_remote_escape
             );
             PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable)
         }
@@ -201,21 +167,13 @@ where
             .broker_identity
             .broker_name
             .as_str();
-        if broker_name.is_empty()
-            || broker_name
-                == broker_name_to_send
-                    .as_ref()
-                    .map_or("", |value| value.as_str())
-        {
+        if broker_name.is_empty() || broker_name == broker_name_to_send.as_ref().map_or("", |value| value.as_str()) {
             // not remote broker
             return Ok(None);
         }
-        let is_trans_half_message =
-            TransactionalMessageUtil::build_half_topic() == message_ext.get_topic();
+        let is_trans_half_message = TransactionalMessageUtil::build_half_topic() == message_ext.get_topic();
         let mut message_to_put = if is_trans_half_message {
-            TransactionalMessageUtil::build_transactional_message_from_half_message(
-                &message_ext.message_ext_inner,
-            )
+            TransactionalMessageUtil::build_transactional_message_from_half_message(&message_ext.message_ext_inner)
         } else {
             message_ext
         };
@@ -226,18 +184,14 @@ where
             .await;
         if !topic_publish_info.as_ref().is_some_and(|value| value.ok()) {
             warn!(
-                "putMessageToRemoteBroker: no route info of topic {} when escaping message, \
-                 msgId={}",
+                "putMessageToRemoteBroker: no route info of topic {} when escaping message, msgId={}",
                 message_to_put.get_topic(),
                 message_to_put.message_ext_inner.msg_id
             );
             return Ok(None);
         }
         let topic_publish_info = topic_publish_info.unwrap();
-        let _mq_selected = if broker_name_to_send
-            .as_ref()
-            .is_none_or(|value| !value.is_empty())
-        {
+        let _mq_selected = if broker_name_to_send.as_ref().is_none_or(|value| !value.is_empty()) {
             let mq = topic_publish_info
                 .select_one_message_queue_by_broker(broker_name_to_send.as_ref())
                 .unwrap();
@@ -252,8 +206,7 @@ where
                 == mq.get_broker_name().as_str()
             {
                 warn!(
-                    "putMessageToRemoteBroker failed, remote broker not found. Topic: {}, MsgId: \
-                     {}, Broker: {}",
+                    "putMessageToRemoteBroker failed, remote broker not found. Topic: {}, MsgId: {}, Broker: {}",
                     message_to_put.get_topic(),
                     message_to_put.message_ext_inner.msg_id,
                     mq.get_broker_name()
@@ -274,8 +227,7 @@ where
             .find_broker_address_in_publish(broker_name_to_send.as_ref());
         if broker_addr_to_send.is_none() {
             warn!(
-                "putMessageToRemoteBroker failed, remote broker not found. Topic: {}, MsgId:  {}, \
-                 Broker: {}",
+                "putMessageToRemoteBroker failed, remote broker not found. Topic: {}, MsgId:  {}, Broker: {}",
                 message_to_put.get_topic(),
                 message_to_put.message_ext_inner.msg_id,
                 broker_name_to_send.as_ref().unwrap()
@@ -301,40 +253,24 @@ where
     }
 
     fn get_producer_group(&self, message_ext: &MessageExtBrokerInner) -> CheetahString {
-        let producer_group = message_ext.get_property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_PRODUCER_GROUP,
-        ));
+        let producer_group =
+            message_ext.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP));
         match producer_group {
             None => self.inner_producer_group_name.clone(),
             Some(value) => value,
         }
     }
 
-    pub async fn async_put_message(
-        &mut self,
-        mut message_ext: MessageExtBrokerInner,
-    ) -> PutMessageResult {
-        if self
-            .broker_runtime_inner
-            .broker_config()
-            .broker_identity
-            .broker_id
-            == mix_all::MASTER_ID
-        {
+    pub async fn async_put_message(&mut self, mut message_ext: MessageExtBrokerInner) -> PutMessageResult {
+        if self.broker_runtime_inner.broker_config().broker_identity.broker_id == mix_all::MASTER_ID {
             self.broker_runtime_inner
                 .message_store_mut()
                 .as_mut()
                 .unwrap()
                 .put_message(message_ext)
                 .await
-        } else if self
-            .broker_runtime_inner
-            .broker_config()
-            .enable_slave_acting_master
-            && self
-                .broker_runtime_inner
-                .broker_config()
-                .enable_remote_escape
+        } else if self.broker_runtime_inner.broker_config().enable_slave_acting_master
+            && self.broker_runtime_inner.broker_config().enable_remote_escape
         {
             message_ext.set_wait_store_msg_ok(false);
             let topic_publish_info = self
@@ -375,31 +311,16 @@ where
         }
     }
 
-    pub async fn put_message_to_specific_queue(
-        &mut self,
-        mut message_ext: MessageExtBrokerInner,
-    ) -> PutMessageResult {
-        if self
-            .broker_runtime_inner
-            .broker_config()
-            .broker_identity
-            .broker_id
-            == mix_all::MASTER_ID
-        {
+    pub async fn put_message_to_specific_queue(&mut self, mut message_ext: MessageExtBrokerInner) -> PutMessageResult {
+        if self.broker_runtime_inner.broker_config().broker_identity.broker_id == mix_all::MASTER_ID {
             self.broker_runtime_inner
                 .message_store_mut()
                 .as_mut()
                 .unwrap()
                 .put_message(message_ext)
                 .await
-        } else if self
-            .broker_runtime_inner
-            .broker_config()
-            .enable_slave_acting_master
-            && self
-                .broker_runtime_inner
-                .broker_config()
-                .enable_remote_escape
+        } else if self.broker_runtime_inner.broker_config().enable_slave_acting_master
+            && self.broker_runtime_inner.broker_config().enable_remote_escape
         {
             message_ext.set_wait_store_msg_ok(false);
             let topic_publish_info = self
@@ -452,12 +373,8 @@ where
         } else {
             warn!(
                 "Put message failed, enableSlaveActingMaster={}, enableRemoteEscape={}.",
-                self.broker_runtime_inner
-                    .broker_config()
-                    .enable_slave_acting_master,
-                self.broker_runtime_inner
-                    .broker_config()
-                    .enable_remote_escape
+                self.broker_runtime_inner.broker_config().enable_slave_acting_master,
+                self.broker_runtime_inner.broker_config().enable_remote_escape
             );
             PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable)
         }
@@ -476,13 +393,7 @@ where
         let topic = topic.clone();
         let broker_name = broker_name.clone();
 
-        if self
-            .broker_runtime_inner
-            .broker_config()
-            .broker_identity
-            .broker_name
-            == broker_name
-        {
+        if self.broker_runtime_inner.broker_config().broker_identity.broker_name == broker_name {
             async move {
                 let result = message_store
                     .get_message(
@@ -497,8 +408,7 @@ where
                     .await;
                 if result.is_none() {
                     warn!(
-                        "getMessageResult is null, innerConsumerGroupName {}, topic {}, offset \
-                         {}, queueId {}",
+                        "getMessageResult is null, innerConsumerGroupName {}, topic {}, offset {}, queueId {}",
                         inner_consumer_group_name, topic, offset, queue_id
                     );
                     return (None, "getMessageResult is null".to_string(), false);
@@ -556,10 +466,7 @@ where
                     .find_broker_address_in_subscribe(Some(&broker_name), 0, false);
 
                 if broker_addr.is_none() {
-                    warn!(
-                        "can't find broker address for topic {}, {}",
-                        topic, broker_name
-                    );
+                    warn!("can't find broker address for topic {}, {}", topic, broker_name);
                     return (None, "brokerAddress not found".to_string(), true);
                 }
             }
@@ -582,18 +489,10 @@ where
                 Ok(pull_result) => {
                     if let Some(result) = pull_result.0 {
                         if *result.pull_status() == PullStatus::Found
-                            && result
-                                .msg_found_list()
-                                .as_ref()
-                                .is_some_and(|value| !value.is_empty())
+                            && result.msg_found_list().as_ref().is_some_and(|value| !value.is_empty())
                         {
                             return (
-                                Some(
-                                    result.msg_found_list().clone().unwrap()[0]
-                                        .clone()
-                                        .deref()
-                                        .clone(),
-                                ),
+                                Some(result.msg_found_list().clone().unwrap()[0].clone().deref().clone()),
                                 "".to_string(),
                                 false,
                             );
@@ -609,17 +508,13 @@ where
     }
 }
 
-fn decode_msg_list(
-    get_message_result: GetMessageResult,
-    de_compress_body: bool,
-) -> Vec<MessageExt> {
+fn decode_msg_list(get_message_result: GetMessageResult, de_compress_body: bool) -> Vec<MessageExt> {
     let mut found_list = Vec::new();
     for bb in get_message_result.message_mapped_list() {
         let data = &bb.mapped_file.as_ref().unwrap().get_mapped_file()
             [bb.start_offset as usize..(bb.start_offset + bb.size as u64) as usize];
         let mut bytes = Bytes::copy_from_slice(data);
-        let msg_ext =
-            message_decoder::decode(&mut bytes, true, de_compress_body, false, false, false);
+        let msg_ext = message_decoder::decode(&mut bytes, true, de_compress_body, false, false, false);
         if let Some(msg_ext) = msg_ext {
             found_list.push(msg_ext);
         }
@@ -633,15 +528,9 @@ fn transform_send_result2put_result(send_result: Option<SendResult>) -> PutMessa
         None => PutMessageResult::new(PutMessageStatus::PutToRemoteBrokerFail, None, true),
         Some(result) => match result.send_status {
             SendStatus::SendOk => PutMessageResult::new(PutMessageStatus::PutOk, None, true),
-            SendStatus::FlushDiskTimeout => {
-                PutMessageResult::new(PutMessageStatus::FlushDiskTimeout, None, true)
-            }
-            SendStatus::FlushSlaveTimeout => {
-                PutMessageResult::new(PutMessageStatus::FlushSlaveTimeout, None, true)
-            }
-            SendStatus::SlaveNotAvailable => {
-                PutMessageResult::new(PutMessageStatus::SlaveNotAvailable, None, true)
-            }
+            SendStatus::FlushDiskTimeout => PutMessageResult::new(PutMessageStatus::FlushDiskTimeout, None, true),
+            SendStatus::FlushSlaveTimeout => PutMessageResult::new(PutMessageStatus::FlushSlaveTimeout, None, true),
+            SendStatus::SlaveNotAvailable => PutMessageResult::new(PutMessageStatus::SlaveNotAvailable, None, true),
         },
     }
 }
@@ -656,10 +545,7 @@ mod tests {
     #[test]
     fn transform_send_result2put_result_handles_none() {
         let result = transform_send_result2put_result(None);
-        assert_eq!(
-            result.put_message_status(),
-            PutMessageStatus::PutToRemoteBrokerFail
-        );
+        assert_eq!(result.put_message_status(), PutMessageStatus::PutToRemoteBrokerFail);
     }
 
     #[test]
@@ -679,10 +565,7 @@ mod tests {
             ..Default::default()
         };
         let result = transform_send_result2put_result(Some(send_result));
-        assert_eq!(
-            result.put_message_status(),
-            PutMessageStatus::FlushDiskTimeout
-        );
+        assert_eq!(result.put_message_status(), PutMessageStatus::FlushDiskTimeout);
     }
 
     #[test]
@@ -692,10 +575,7 @@ mod tests {
             ..Default::default()
         };
         let result = transform_send_result2put_result(Some(send_result));
-        assert_eq!(
-            result.put_message_status(),
-            PutMessageStatus::FlushSlaveTimeout
-        );
+        assert_eq!(result.put_message_status(), PutMessageStatus::FlushSlaveTimeout);
     }
 
     #[test]
@@ -705,9 +585,6 @@ mod tests {
             ..Default::default()
         };
         let result = transform_send_result2put_result(Some(send_result));
-        assert_eq!(
-            result.put_message_status(),
-            PutMessageStatus::SlaveNotAvailable
-        );
+        assert_eq!(result.put_message_status(), PutMessageStatus::SlaveNotAvailable);
     }
 }

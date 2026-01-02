@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 pub mod consume_init_mode;
 
@@ -92,10 +89,7 @@ impl PermName {
 
     #[inline]
     pub fn is_valid_str(perm: &str) -> bool {
-        perm.parse::<u32>()
-            .ok()
-            .map(Self::is_valid)
-            .unwrap_or(false)
+        perm.parse::<u32>().ok().map(Self::is_valid).unwrap_or(false)
     }
 }
 
@@ -106,19 +100,14 @@ mod tests {
     #[test]
     fn test_perm_2_string() {
         assert_eq!(PermName::perm_to_string(0).as_str(), "---");
-        assert_eq!(
-            PermName::perm_to_string(PermName::PERM_READ).as_str(),
-            "R--"
-        );
+        assert_eq!(PermName::perm_to_string(PermName::PERM_READ).as_str(), "R--");
         assert_eq!(
             PermName::perm_to_string(PermName::PERM_READ | PermName::PERM_WRITE).as_str(),
             "RW-"
         );
 
         assert_eq!(
-            PermName::perm_to_string(
-                PermName::PERM_READ | PermName::PERM_WRITE | PermName::PERM_INHERIT
-            ),
+            PermName::perm_to_string(PermName::PERM_READ | PermName::PERM_WRITE | PermName::PERM_INHERIT),
             "RWX"
         );
     }
@@ -127,17 +116,12 @@ mod tests {
     fn test_is_readable() {
         assert!(!PermName::is_readable(0));
         assert!(PermName::is_readable(PermName::PERM_READ));
-        assert!(PermName::is_readable(
-            PermName::PERM_READ | PermName::PERM_WRITE
-        ));
+        assert!(PermName::is_readable(PermName::PERM_READ | PermName::PERM_WRITE));
         assert!(PermName::is_readable(
             PermName::PERM_READ | PermName::PERM_WRITE | PermName::PERM_PRIORITY
         ));
         assert!(PermName::is_readable(
-            PermName::PERM_READ
-                | PermName::PERM_WRITE
-                | PermName::PERM_PRIORITY
-                | PermName::PERM_INHERIT
+            PermName::PERM_READ | PermName::PERM_WRITE | PermName::PERM_PRIORITY | PermName::PERM_INHERIT
         ));
     }
 
@@ -145,17 +129,12 @@ mod tests {
     fn test_is_writable() {
         assert!(!PermName::is_writeable(0));
         assert!(PermName::is_writeable(PermName::PERM_WRITE));
-        assert!(PermName::is_writeable(
-            PermName::PERM_READ | PermName::PERM_WRITE
-        ));
+        assert!(PermName::is_writeable(PermName::PERM_READ | PermName::PERM_WRITE));
         assert!(PermName::is_writeable(
             PermName::PERM_READ | PermName::PERM_WRITE | PermName::PERM_PRIORITY
         ));
         assert!(PermName::is_writeable(
-            PermName::PERM_READ
-                | PermName::PERM_WRITE
-                | PermName::PERM_PRIORITY
-                | PermName::PERM_INHERIT
+            PermName::PERM_READ | PermName::PERM_WRITE | PermName::PERM_PRIORITY | PermName::PERM_INHERIT
         ));
     }
 
@@ -163,17 +142,12 @@ mod tests {
     fn test_is_priority() {
         assert!(!PermName::is_priority(0));
         assert!(PermName::is_priority(PermName::PERM_PRIORITY));
-        assert!(!PermName::is_priority(
-            PermName::PERM_READ | PermName::PERM_WRITE
-        ));
+        assert!(!PermName::is_priority(PermName::PERM_READ | PermName::PERM_WRITE));
         assert!(PermName::is_priority(
             PermName::PERM_READ | PermName::PERM_WRITE | PermName::PERM_PRIORITY
         ));
         assert!(PermName::is_priority(
-            PermName::PERM_READ
-                | PermName::PERM_WRITE
-                | PermName::PERM_PRIORITY
-                | PermName::PERM_INHERIT
+            PermName::PERM_READ | PermName::PERM_WRITE | PermName::PERM_PRIORITY | PermName::PERM_INHERIT
         ));
     }
 
@@ -181,17 +155,12 @@ mod tests {
     fn test_is_inherit() {
         assert!(!PermName::is_inherited(0));
         assert!(PermName::is_inherited(PermName::PERM_INHERIT));
-        assert!(!PermName::is_inherited(
-            PermName::PERM_READ | PermName::PERM_WRITE
-        ));
+        assert!(!PermName::is_inherited(PermName::PERM_READ | PermName::PERM_WRITE));
         assert!(!PermName::is_inherited(
             PermName::PERM_READ | PermName::PERM_WRITE | PermName::PERM_PRIORITY
         ));
         assert!(PermName::is_inherited(
-            PermName::PERM_READ
-                | PermName::PERM_WRITE
-                | PermName::PERM_PRIORITY
-                | PermName::PERM_INHERIT
+            PermName::PERM_READ | PermName::PERM_WRITE | PermName::PERM_PRIORITY | PermName::PERM_INHERIT
         ));
     }
 

@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -33,15 +30,13 @@ use crate::common::topic::TopicValidator;
 
 const DEFAULT_CLUSTER_NAME: &str = "DefaultCluster";
 
-pub static LOCAL_HOST_NAME: std::sync::LazyLock<Option<String>> =
-    std::sync::LazyLock::new(|| match hostname::get() {
-        Ok(hostname) => Some(hostname.to_string_lossy().to_string()),
-        Err(_) => None,
-    });
-
-pub static NAMESRV_ADDR: std::sync::LazyLock<Option<String>> = std::sync::LazyLock::new(|| {
-    std::env::var(NAMESRV_ADDR_PROPERTY).map_or(Some("127.0.0.1:9876".to_string()), Some)
+pub static LOCAL_HOST_NAME: std::sync::LazyLock<Option<String>> = std::sync::LazyLock::new(|| match hostname::get() {
+    Ok(hostname) => Some(hostname.to_string_lossy().to_string()),
+    Err(_) => None,
 });
+
+pub static NAMESRV_ADDR: std::sync::LazyLock<Option<String>> =
+    std::sync::LazyLock::new(|| std::env::var(NAMESRV_ADDR_PROPERTY).map_or(Some("127.0.0.1:9876".to_string()), Some));
 
 /// Default value functions for Serde deserialization
 mod defaults {
@@ -445,10 +440,7 @@ impl BrokerIdentity {
         match self.is_broker_container {
             true => "BrokerContainer".to_string(),
             false => {
-                format!(
-                    "{}_{}_{}",
-                    self.broker_cluster_name, self.broker_name, self.broker_id
-                )
+                format!("{}_{}_{}", self.broker_cluster_name, self.broker_name, self.broker_id)
             }
         }
     }
@@ -781,9 +773,7 @@ impl Default for BrokerConfig {
             broker_ip2,
             listen_port,
             trace_topic_enable: false,
-            msg_trace_topic_name: CheetahString::from_static_str(
-                TopicValidator::RMQ_SYS_TRACE_TOPIC,
-            ),
+            msg_trace_topic_name: CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRACE_TOPIC),
             enable_controller_mode: false,
             region_id: CheetahString::from_static_str(mix_all::DEFAULT_TRACE_REGION_ID),
             trace_on: true,
@@ -930,75 +920,42 @@ impl BrokerConfig {
 
     pub fn get_properties(&self) -> HashMap<CheetahString, CheetahString> {
         let mut properties = HashMap::new();
-        properties.insert(
-            "brokerName".into(),
-            self.broker_identity.broker_name.clone(),
-        );
+        properties.insert("brokerName".into(), self.broker_identity.broker_name.clone());
         properties.insert(
             "brokerClusterName".into(),
             self.broker_identity.broker_cluster_name.clone(),
         );
-        properties.insert(
-            "brokerId".into(),
-            self.broker_identity.broker_id.to_string().into(),
-        );
+        properties.insert("brokerId".into(), self.broker_identity.broker_id.to_string().into());
         properties.insert(
             "isBrokerContainer".into(),
             self.broker_identity.is_broker_container.to_string().into(),
         );
         properties.insert(
             "defaultTopicQueueNums".into(),
-            self.topic_queue_config
-                .default_topic_queue_nums
-                .to_string()
-                .into(),
+            self.topic_queue_config.default_topic_queue_nums.to_string().into(),
         );
         properties.insert(
             "timerWheelEnable".into(),
-            self.timer_wheel_config
-                .timer_wheel_enable
-                .to_string()
-                .into(),
+            self.timer_wheel_config.timer_wheel_enable.to_string().into(),
         );
         properties.insert(
             "bindAddress".into(),
             self.broker_server_config.bind_address.clone().into(),
         );
-        properties.insert(
-            "brokerIp1".into(),
-            self.broker_ip1.clone().to_string().into(),
-        );
-        properties.insert(
-            "brokerIp2".into(),
-            self.broker_ip2.clone().unwrap_or_default(),
-        );
+        properties.insert("brokerIp1".into(), self.broker_ip1.clone().to_string().into());
+        properties.insert("brokerIp2".into(), self.broker_ip2.clone().unwrap_or_default());
         properties.insert("listenPort".into(), self.listen_port.to_string().into());
-        properties.insert(
-            "traceTopicEnable".into(),
-            self.trace_topic_enable.to_string().into(),
-        );
-        properties.insert(
-            "msgTraceTopicName".into(),
-            self.msg_trace_topic_name.clone(),
-        );
+        properties.insert("traceTopicEnable".into(), self.trace_topic_enable.to_string().into());
+        properties.insert("msgTraceTopicName".into(), self.msg_trace_topic_name.clone());
         properties.insert(
             "enableControllerMode".into(),
             self.enable_controller_mode.to_string().into(),
         );
         properties.insert("regionId".into(), self.region_id.clone());
-        properties.insert(
-            "brokerName".into(),
-            self.broker_identity.broker_name.clone(),
-        );
+        properties.insert("brokerName".into(), self.broker_identity.broker_name.clone());
         properties.insert("traceOn".into(), self.trace_on.to_string().into());
-        properties.insert(
-            "brokerPermission".into(),
-            self.broker_permission.to_string().into(),
-        );
-        properties.insert(
-            "asyncSendEnable".into(),
-            self.async_send_enable.to_string().into(),
-        );
+        properties.insert("brokerPermission".into(), self.broker_permission.to_string().into());
+        properties.insert("asyncSendEnable".into(), self.async_send_enable.to_string().into());
         properties.insert("storePathRootDir".into(), self.store_path_root_dir.clone());
         properties.insert(
             "enableSplitRegistration".into(),
@@ -1024,10 +981,7 @@ impl BrokerConfig {
             "recoverConcurrently".into(),
             self.recover_concurrently.to_string().into(),
         );
-        properties.insert(
-            "duplicationEnable".into(),
-            self.duplication_enable.to_string().into(),
-        );
+        properties.insert("duplicationEnable".into(), self.duplication_enable.to_string().into());
         properties.insert(
             "startAcceptSendRequestTimeStamp".into(),
             self.start_accept_send_request_time_stamp.to_string().into(),
@@ -1040,18 +994,12 @@ impl BrokerConfig {
             "enableSingleTopicRegister".into(),
             self.enable_single_topic_register.to_string().into(),
         );
-        properties.insert(
-            "brokerTopicEnable".into(),
-            self.broker_topic_enable.to_string().into(),
-        );
+        properties.insert("brokerTopicEnable".into(), self.broker_topic_enable.to_string().into());
         properties.insert(
             "clusterTopicEnable".into(),
             self.cluster_topic_enable.to_string().into(),
         );
-        properties.insert(
-            "reviveQueueNum".into(),
-            self.revive_queue_num.to_string().into(),
-        );
+        properties.insert("reviveQueueNum".into(), self.revive_queue_num.to_string().into());
         properties.insert(
             "enableSlaveActingMaster".into(),
             self.enable_slave_acting_master.to_string().into(),
@@ -1060,30 +1008,18 @@ impl BrokerConfig {
             "rejectTransactionMessage".into(),
             self.reject_transaction_message.to_string().into(),
         );
-        properties.insert(
-            "enableDetailStat".into(),
-            self.enable_detail_stat.to_string().into(),
-        );
+        properties.insert("enableDetailStat".into(), self.enable_detail_stat.to_string().into());
         properties.insert(
             "flushConsumerOffsetInterval".into(),
             self.flush_consumer_offset_interval.to_string().into(),
         );
-        properties.insert(
-            "forceRegister".into(),
-            self.force_register.to_string().into(),
-        );
+        properties.insert("forceRegister".into(), self.force_register.to_string().into());
         properties.insert(
             "registerNameServerPeriod".into(),
             self.register_name_server_period.to_string().into(),
         );
-        properties.insert(
-            "skipPreOnline".into(),
-            self.skip_pre_online.to_string().into(),
-        );
-        properties.insert(
-            "namesrvAddr".into(),
-            self.namesrv_addr.clone().unwrap_or_default(),
-        );
+        properties.insert("skipPreOnline".into(), self.skip_pre_online.to_string().into());
+        properties.insert("namesrvAddr".into(), self.namesrv_addr.clone().unwrap_or_default());
         properties.insert(
             "fetchNameSrvAddrByDnsLookup".into(),
             self.fetch_name_srv_addr_by_dns_lookup.to_string().into(),
@@ -1116,10 +1052,7 @@ impl BrokerConfig {
             "useServerSideResetOffset".into(),
             self.use_server_side_reset_offset.to_string().into(),
         );
-        properties.insert(
-            "slaveReadEnable".into(),
-            self.slave_read_enable.to_string().into(),
-        );
+        properties.insert("slaveReadEnable".into(), self.slave_read_enable.to_string().into());
         properties.insert(
             "commercialBaseCount".into(),
             self.commercial_base_count.to_string().into(),
@@ -1136,18 +1069,12 @@ impl BrokerConfig {
             "enableBroadcastOffsetStore".into(),
             self.enable_broadcast_offset_store.to_string().into(),
         );
-        properties.insert(
-            "transferMsgByHeap".into(),
-            self.transfer_msg_by_heap.to_string().into(),
-        );
+        properties.insert("transferMsgByHeap".into(), self.transfer_msg_by_heap.to_string().into());
         properties.insert(
             "shortPollingTimeMills".into(),
             self.short_polling_time_mills.to_string().into(),
         );
-        properties.insert(
-            "longPollingEnable".into(),
-            self.long_polling_enable.to_string().into(),
-        );
+        properties.insert("longPollingEnable".into(), self.long_polling_enable.to_string().into());
         properties.insert(
             "maxErrorRateOfBloomFilter".into(),
             self.max_error_rate_of_bloom_filter.to_string().into(),
@@ -1162,9 +1089,7 @@ impl BrokerConfig {
         );
         properties.insert(
             "validateSystemTopicWhenUpdateTopic".into(),
-            self.validate_system_topic_when_update_topic
-                .to_string()
-                .into(),
+            self.validate_system_topic_when_update_topic.to_string().into(),
         );
         properties.insert(
             "enableMixedMessageType".into(),
@@ -1174,18 +1099,13 @@ impl BrokerConfig {
             "autoDeleteUnusedStats".into(),
             self.auto_delete_unused_stats.to_string().into(),
         );
-        properties.insert(
-            "forwardTimeout".into(),
-            self.forward_timeout.to_string().into(),
-        );
+        properties.insert("forwardTimeout".into(), self.forward_timeout.to_string().into());
         properties
     }
 }
 
 pub fn default_broker_name() -> String {
-    LOCAL_HOST_NAME
-        .clone()
-        .unwrap_or_else(|| "DEFAULT_BROKER".to_string())
+    LOCAL_HOST_NAME.clone().unwrap_or_else(|| "DEFAULT_BROKER".to_string())
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -105,10 +102,7 @@ impl<RP> Drop for ConnectionHandler<RP> {
     fn drop(&mut self) {
         if let Some(ref sender) = self.conn_disconnect_notify {
             let socket_addr = self.connection_handler_context.remote_address();
-            warn!(
-                "connection[{}] disconnected, Send notify message.",
-                socket_addr
-            );
+            warn!("connection[{}] disconnected, Send notify message.", socket_addr);
             let _ = sender.send(socket_addr);
         }
     }
@@ -449,10 +443,7 @@ impl<RP: RequestProcessor + Sync + 'static + Clone> ConnectionListener<RP> {
                 Err(err) => {
                     if backoff > MAX_BACKOFF {
                         // Exceeded retry limit - fatal error
-                        error!(
-                            "Accept failed after {} retries, last error: {}",
-                            MAX_BACKOFF, err
-                        );
+                        error!("Accept failed after {} retries, last error: {}", MAX_BACKOFF, err);
                         return Err(err.into());
                     }
 
@@ -493,11 +484,7 @@ impl<RP> RocketMQServer<RP> {
 }
 
 impl<RP: RequestProcessor + Sync + 'static + Clone> RocketMQServer<RP> {
-    pub async fn run(
-        &mut self,
-        request_processor: RP,
-        channel_event_listener: Option<Arc<dyn ChannelEventListener>>,
-    ) {
+    pub async fn run(&mut self, request_processor: RP, channel_event_listener: Option<Arc<dyn ChannelEventListener>>) {
         let addr = format!("{}:{}", self.config.bind_address, self.config.listen_port);
         let listener = TcpListener::bind(&addr).await.unwrap();
         let rpc_hooks = self.rpc_hooks.take().unwrap_or_default();

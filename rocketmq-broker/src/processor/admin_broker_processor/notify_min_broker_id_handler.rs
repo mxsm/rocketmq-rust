@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::ops::Deref;
 use std::sync::Arc;
@@ -79,9 +76,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
 
         let broker_config = self.broker_runtime_inner.broker_config();
 
-        let latest_broker_id = change_header
-            .min_broker_id
-            .expect("min broker id not must be present");
+        let latest_broker_id = change_header.min_broker_id.expect("min broker id not must be present");
 
         warn!(
             "min broker id changed, prev {}, new {}",
@@ -97,15 +92,8 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
     async fn update_min_broker(&mut self, change_header: NotifyMinBrokerIdChangeRequestHeader) {
         let broker_config = self.broker_runtime_inner.broker_config();
 
-        if broker_config.enable_slave_acting_master
-            && broker_config.broker_identity.broker_id != MASTER_ID
-        {
-            if self
-                .lock
-                .try_write_timeout(Duration::from_millis(3000))
-                .await
-                .is_some()
-            {
+        if broker_config.enable_slave_acting_master && broker_config.broker_identity.broker_id != MASTER_ID {
+            if self.lock.try_write_timeout(Duration::from_millis(3000)).await.is_some() {
                 if let Some(min_broker_id) = change_header.min_broker_id {
                     if min_broker_id != self.broker_runtime_inner.get_min_broker_id_in_group() {
                         // on min broker change
@@ -163,8 +151,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
 
         //master online
         if min_broker_id == MASTER_ID && !min_broker_addr.is_empty() {
-            self.on_master_on_line(min_broker_addr, master_ha_addr)
-                .await;
+            self.on_master_on_line(min_broker_addr, master_ha_addr).await;
         }
 
         if self.lock.read().await.min_broker_id_in_group.unwrap() == MASTER_ID {
@@ -191,9 +178,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
             if let Some(master_addr) = slave_synchronize.master_addr() {
                 let vip_channel = mix_all::broker_vip_channel(true, master_addr);
                 let addr_list = vec![master_addr.to_string(), vip_channel.to_string()];
-                self.broker_runtime_inner
-                    .broker_outer_api()
-                    .close_channel(addr_list);
+                self.broker_runtime_inner.broker_outer_api().close_channel(addr_list);
             }
         }
 
@@ -204,16 +189,15 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
     }
 
     async fn on_master_on_line(&self, master_addr: &str, master_ha_addr: &Option<CheetahString>) {
-        let need_sync_master_flush_offset =
-            if let Some(message_store) = self.broker_runtime_inner.message_store() {
-                message_store.get_master_flushed_offset() == 0x0000
-                    && self
-                        .broker_runtime_inner
-                        .message_store_config()
-                        .sync_master_flush_offset_when_startup
-            } else {
-                false
-            };
+        let need_sync_master_flush_offset = if let Some(message_store) = self.broker_runtime_inner.message_store() {
+            message_store.get_master_flushed_offset() == 0x0000
+                && self
+                    .broker_runtime_inner
+                    .message_store_config()
+                    .sync_master_flush_offset_when_startup
+        } else {
+            false
+        };
 
         if master_ha_addr.is_none() || need_sync_master_flush_offset {
             let broker_sync_info = self
@@ -230,15 +214,12 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
                                 "Set master flush offset in slave to {}",
                                 broker_sync_info.master_flush_offset
                             );
-                            message_store
-                                .set_master_flushed_offset(broker_sync_info.master_flush_offset);
+                            message_store.set_master_flushed_offset(broker_sync_info.master_flush_offset);
                         }
 
                         if master_ha_addr.is_none() {
                             if let Some(master_hs_address) = broker_sync_info.master_ha_address {
-                                message_store
-                                    .update_ha_master_address(master_hs_address.as_str())
-                                    .await;
+                                message_store.update_ha_master_address(master_hs_address.as_str()).await;
                             }
                             if let Some(master_address) = broker_sync_info.master_address {
                                 message_store.update_master_address(&master_address);
@@ -257,9 +238,7 @@ impl<MS: MessageStore> NotifyMinBrokerChangeIdHandler<MS> {
         if let Some(message_store) = self.broker_runtime_inner.message_store() {
             if master_ha_addr.is_some() {
                 if let Some(master_ha_addr) = master_ha_addr {
-                    message_store
-                        .update_ha_master_address(master_ha_addr.as_str())
-                        .await;
+                    message_store.update_ha_master_address(master_ha_addr.as_str()).await;
                 }
             }
             message_store.wakeup_ha_client();

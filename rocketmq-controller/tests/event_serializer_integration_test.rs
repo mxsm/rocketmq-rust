@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Integration tests for EventSerializer
 //!
@@ -56,10 +53,7 @@ fn test_serialize_deserialize_alter_sync_state_set_event() {
     // Verify
     if let Event::AlterSyncStateSet(deserialized_event) = deserialized {
         assert_eq!(deserialized_event.broker_name(), event.broker_name());
-        assert_eq!(
-            deserialized_event.new_sync_state_set(),
-            event.new_sync_state_set()
-        );
+        assert_eq!(deserialized_event.new_sync_state_set(), event.new_sync_state_set());
     } else {
         panic!("Expected AlterSyncStateSetEvent");
     }
@@ -92,10 +86,7 @@ fn test_serialize_deserialize_apply_broker_id_event() {
         assert_eq!(deserialized_event.broker_name(), event.broker_name());
         assert_eq!(deserialized_event.broker_address(), event.broker_address());
         assert_eq!(deserialized_event.new_broker_id(), event.new_broker_id());
-        assert_eq!(
-            deserialized_event.register_check_code(),
-            event.register_check_code()
-        );
+        assert_eq!(deserialized_event.register_check_code(), event.register_check_code());
     } else {
         panic!("Expected ApplyBrokerIdEvent");
     }
@@ -118,10 +109,7 @@ fn test_serialize_deserialize_elect_master_event_with_new_master() {
     // Verify
     if let Event::ElectMaster(deserialized_event) = deserialized {
         assert_eq!(deserialized_event.broker_name(), event.broker_name());
-        assert_eq!(
-            deserialized_event.new_master_broker_id(),
-            event.new_master_broker_id()
-        );
+        assert_eq!(deserialized_event.new_master_broker_id(), event.new_master_broker_id());
         assert!(deserialized_event.new_master_elected());
     } else {
         panic!("Expected ElectMasterEvent");
@@ -141,10 +129,7 @@ fn test_serialize_deserialize_elect_master_event_without_new_master() {
     // Verify
     if let Event::ElectMaster(deserialized_event) = deserialized {
         assert_eq!(deserialized_event.broker_name(), event.broker_name());
-        assert_eq!(
-            deserialized_event.new_master_broker_id(),
-            event.new_master_broker_id()
-        );
+        assert_eq!(deserialized_event.new_master_broker_id(), event.new_master_broker_id());
         assert!(!deserialized_event.new_master_elected());
     } else {
         panic!("Expected ElectMasterEvent");
@@ -187,8 +172,7 @@ fn test_serialize_deserialize_clean_broker_data_event() {
 fn test_serialize_deserialize_update_broker_address_event_with_id() {
     let serializer = EventSerializer::new();
 
-    let event =
-        UpdateBrokerAddressEvent::new("test-cluster", "test-broker", "192.168.1.200:10911", 99);
+    let event = UpdateBrokerAddressEvent::new("test-cluster", "test-broker", "192.168.1.200:10911", 99);
     let bytes = serializer.serialize_event(event.clone()).unwrap().unwrap();
 
     // Verify event type
@@ -213,8 +197,7 @@ fn test_serialize_deserialize_update_broker_address_event_with_id() {
 fn test_serialize_deserialize_update_broker_address_event_without_id() {
     let serializer = EventSerializer::new();
 
-    let event =
-        UpdateBrokerAddressEvent::new("test-cluster", "test-broker", "192.168.1.200:10911", 0);
+    let event = UpdateBrokerAddressEvent::new("test-cluster", "test-broker", "192.168.1.200:10911", 0);
     let bytes = serializer.serialize_event(event.clone()).unwrap().unwrap();
 
     // Deserialize
@@ -338,9 +321,7 @@ fn test_event_type_extraction() {
     let elect_event = Event::ElectMaster(ElectMasterEvent::with_new_master("broker", 1));
     assert_eq!(elect_event.event_type(), EventType::ElectMaster);
 
-    let apply_event = Event::ApplyBrokerId(ApplyBrokerIdEvent::new(
-        "cluster", "broker", "addr", 1, "code",
-    ));
+    let apply_event = Event::ApplyBrokerId(ApplyBrokerIdEvent::new("cluster", "broker", "addr", 1, "code"));
     assert_eq!(apply_event.event_type(), EventType::ApplyBrokerId);
 }
 
@@ -355,10 +336,7 @@ fn test_typed_deserialization() {
     let deserialized: ElectMasterEvent = serializer.deserialize_typed(&bytes).unwrap().unwrap();
 
     assert_eq!(deserialized.broker_name(), event.broker_name());
-    assert_eq!(
-        deserialized.new_master_broker_id(),
-        event.new_master_broker_id()
-    );
+    assert_eq!(deserialized.new_master_broker_id(), event.new_master_broker_id());
 }
 
 #[test]

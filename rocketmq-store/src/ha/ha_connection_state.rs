@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 /// Connection states for High Availability service
 ///
@@ -58,18 +55,12 @@ impl HAConnectionState {
 
     /// Check if the connection state is inactive (cannot perform operations)
     pub fn is_inactive(&self) -> bool {
-        matches!(
-            self,
-            HAConnectionState::Suspend | HAConnectionState::Shutdown
-        )
+        matches!(self, HAConnectionState::Suspend | HAConnectionState::Shutdown)
     }
 
     /// Check if the connection is in a transitional state
     pub fn is_transitional(&self) -> bool {
-        matches!(
-            self,
-            HAConnectionState::Ready | HAConnectionState::Handshake
-        )
+        matches!(self, HAConnectionState::Ready | HAConnectionState::Handshake)
     }
 
     /// Check if the connection is terminated
@@ -225,10 +216,7 @@ pub enum HAConnectionStateError {
     InvalidValue(i32),
 
     #[error("Cannot perform operation in state {state:?}: {reason}")]
-    OperationNotAllowed {
-        state: HAConnectionState,
-        reason: String,
-    },
+    OperationNotAllowed { state: HAConnectionState, reason: String },
 }
 
 /// State machine for managing HA connection state transitions
@@ -274,10 +262,7 @@ impl HAConnectionStateMachine {
     }
 
     /// Attempt to transition to a new state
-    pub fn transition_to(
-        &mut self,
-        new_state: HAConnectionState,
-    ) -> Result<(), HAConnectionStateError> {
+    pub fn transition_to(&mut self, new_state: HAConnectionState) -> Result<(), HAConnectionStateError> {
         if !self.current_state.can_transition_to(new_state) {
             return Err(HAConnectionStateError::InvalidTransition {
                 from: self.current_state,
@@ -358,10 +343,7 @@ pub mod ha_connection_utils {
     /// Check if a state transition represents regression
     pub fn is_regression_transition(from: HAConnectionState, to: HAConnectionState) -> bool {
         use HAConnectionState::*;
-        matches!(
-            (from, to),
-            (Transfer, Suspend) | (Transfer, Shutdown) | (_, Shutdown)
-        )
+        matches!((from, to), (Transfer, Suspend) | (Transfer, Shutdown) | (_, Shutdown))
     }
 }
 
@@ -409,14 +391,8 @@ mod tests {
         assert_eq!(state.as_upper_str(), "TRANSFER");
         assert_eq!(state.to_string(), "TRANSFER");
 
-        assert_eq!(
-            HAConnectionState::from("TRANSFER"),
-            HAConnectionState::Transfer
-        );
-        assert_eq!(
-            HAConnectionState::from("transfer"),
-            HAConnectionState::Transfer
-        );
+        assert_eq!(HAConnectionState::from("TRANSFER"), HAConnectionState::Transfer);
+        assert_eq!(HAConnectionState::from("transfer"), HAConnectionState::Transfer);
         assert_eq!(HAConnectionState::from("invalid"), HAConnectionState::Ready);
     }
 
@@ -488,14 +464,8 @@ mod tests {
 
     #[test]
     fn test_descriptions() {
-        assert_eq!(
-            HAConnectionState::Transfer.description(),
-            "Synchronizing data"
-        );
-        assert_eq!(
-            HAConnectionState::Shutdown.description(),
-            "Connection shutdown"
-        );
+        assert_eq!(HAConnectionState::Transfer.description(), "Synchronizing data");
+        assert_eq!(HAConnectionState::Shutdown.description(), "Connection shutdown");
     }
 
     #[test]

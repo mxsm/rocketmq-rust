@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 // smart_encode_buffer.rs
 //
@@ -322,10 +319,7 @@ mod tests {
         // write bigger than initial capacity
         let big = vec![0u8; initial_cap * 4 + 10];
         eb.append(&big);
-        assert!(
-            eb.capacity() >= big.len(),
-            "capacity did not expand as expected"
-        );
+        assert!(eb.capacity() >= big.len(), "capacity did not expand as expected");
         let _ = eb.take_bytes();
         assert_eq!(eb.len(), 0);
     }
@@ -352,10 +346,7 @@ mod tests {
         }
 
         let stats_after_increase = eb.stats();
-        println!(
-            "After increasing writes - EMA: {:.1}",
-            stats_after_increase.ema_size
-        );
+        println!("After increasing writes - EMA: {:.1}", stats_after_increase.ema_size);
 
         // EMA should be somewhere in the middle range
         assert!(
@@ -412,11 +403,7 @@ mod tests {
             let _ = eb.take_bytes();
         }
         let stats = eb.stats();
-        println!(
-            "After 10 writes - capacity: {}, ema: {}",
-            eb.capacity(),
-            stats.ema_size
-        );
+        println!("After 10 writes - capacity: {}, ema: {}", eb.capacity(), stats.ema_size);
 
         // EMA should converge towards 32 (approx)
         assert!(
@@ -424,20 +411,11 @@ mod tests {
             "EMA should be reasonable"
         );
         // Capacity should remain stable and not shrink below min_capacity
-        assert!(
-            eb.capacity() >= min_cap,
-            "Capacity should not go below min_capacity"
-        );
+        assert!(eb.capacity() >= min_cap, "Capacity should not go below min_capacity");
         // With stable moderate load, capacity should be stable
-        assert!(
-            eb.capacity() <= initial_cap * 2,
-            "Capacity should not grow excessively"
-        );
+        assert!(eb.capacity() <= initial_cap * 2, "Capacity should not grow excessively");
         // Should not have shrunk with stable load
-        assert_eq!(
-            stats.shrink_count, 0,
-            "Should not shrink with stable moderate load"
-        );
+        assert_eq!(stats.shrink_count, 0, "Should not shrink with stable moderate load");
     }
 
     /// Jitter test: ensure frequent tiny spikes do not cause frequent shrinks.

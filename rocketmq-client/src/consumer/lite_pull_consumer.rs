@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -65,11 +62,7 @@ pub trait LitePullConsumerLocal: Sync {
     /// # Returns
     ///
     /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
-    async fn subscribe_with_expression(
-        &self,
-        topic: &str,
-        sub_expression: &str,
-    ) -> rocketmq_error::RocketMQResult<()>;
+    async fn subscribe_with_expression(&self, topic: &str, sub_expression: &str) -> rocketmq_error::RocketMQResult<()>;
 
     /// Subscribes to a topic with a subscription expression and a message queue listener.
     ///
@@ -164,11 +157,7 @@ pub trait LitePullConsumerLocal: Sync {
     /// # Returns
     ///
     /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
-    async fn seek(
-        &self,
-        message_queue: &MessageQueue,
-        offset: i64,
-    ) -> rocketmq_error::RocketMQResult<()>;
+    async fn seek(&self, message_queue: &MessageQueue, offset: i64) -> rocketmq_error::RocketMQResult<()>;
 
     /// Pauses message consumption for the specified message queues.
     ///
@@ -208,10 +197,7 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// * `rocketmq_error::RocketMQResult<Vec<MessageQueue>>` - A vector of message queues or an
     ///   error.
-    async fn fetch_message_queues(
-        &self,
-        topic: &str,
-    ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>>;
+    async fn fetch_message_queues(&self, topic: &str) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>>;
     /// Retrieves the offset for a given timestamp in a message queue.
     ///
     /// # Arguments
@@ -304,10 +290,7 @@ pub trait LitePullConsumerLocal: Sync {
     /// # Returns
     ///
     /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
-    async fn seek_to_begin(
-        &self,
-        message_queue: &MessageQueue,
-    ) -> rocketmq_error::RocketMQResult<()>;
+    async fn seek_to_begin(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<()>;
 
     /// Seeks to the end of a message queue.
     ///
@@ -318,6 +301,5 @@ pub trait LitePullConsumerLocal: Sync {
     /// # Returns
     ///
     /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
-    async fn seek_to_end(&self, message_queue: &MessageQueue)
-        -> rocketmq_error::RocketMQResult<()>;
+    async fn seek_to_end(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<()>;
 }

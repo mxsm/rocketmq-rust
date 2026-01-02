@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Raft state machine implementation
 //!
@@ -296,9 +293,7 @@ impl RaftSnapshotBuilder<TypeConfig> for StateMachine {
 impl RaftStateMachine<TypeConfig> for StateMachine {
     type SnapshotBuilder = Self;
 
-    async fn applied_state(
-        &mut self,
-    ) -> Result<(Option<LogId>, StoredMembership<TypeConfig>), std::io::Error> {
+    async fn applied_state(&mut self) -> Result<(Option<LogId>, StoredMembership<TypeConfig>), std::io::Error> {
         let last_applied = *self.last_applied.read().await;
         let last_membership = self.last_membership.read().await.clone();
         Ok((last_applied, last_membership))
@@ -307,9 +302,8 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
     #[tracing::instrument(level = "trace", skip(self, entries))]
     async fn apply<Strm>(&mut self, entries: Strm) -> Result<(), std::io::Error>
     where
-        Strm: futures::Stream<
-                Item = Result<openraft::storage::EntryResponder<TypeConfig>, std::io::Error>,
-            > + Unpin
+        Strm: futures::Stream<Item = Result<openraft::storage::EntryResponder<TypeConfig>, std::io::Error>>
+            + Unpin
             + OptionalSend,
     {
         use futures::StreamExt;
@@ -327,8 +321,7 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
                 EntryPayload::Blank => ControllerResponse::Success,
                 EntryPayload::Normal(ref request) => self.apply_request(request),
                 EntryPayload::Membership(ref membership) => {
-                    *self.last_membership.write().await =
-                        StoredMembership::new(Some(log_id), membership.clone());
+                    *self.last_membership.write().await = StoredMembership::new(Some(log_id), membership.clone());
                     ControllerResponse::Success
                 }
             };
@@ -351,9 +344,7 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
         }
     }
 
-    async fn begin_receiving_snapshot(
-        &mut self,
-    ) -> Result<std::io::Cursor<Vec<u8>>, std::io::Error> {
+    async fn begin_receiving_snapshot(&mut self) -> Result<std::io::Cursor<Vec<u8>>, std::io::Error> {
         Ok(std::io::Cursor::new(Vec::new()))
     }
 
@@ -362,13 +353,12 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
         meta: &openraft::SnapshotMeta<TypeConfig>,
         snapshot: std::io::Cursor<Vec<u8>>,
     ) -> Result<(), std::io::Error> {
-        let snapshot_data: SnapshotData =
-            serde_json::from_slice(snapshot.get_ref()).map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Failed to deserialize snapshot: {}", e),
-                )
-            })?;
+        let snapshot_data: SnapshotData = serde_json::from_slice(snapshot.get_ref()).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Failed to deserialize snapshot: {}", e),
+            )
+        })?;
 
         self.install_snapshot_data(snapshot_data).await;
 
@@ -376,9 +366,7 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
         Ok(())
     }
 
-    async fn get_current_snapshot(
-        &mut self,
-    ) -> Result<Option<Snapshot<TypeConfig>>, std::io::Error> {
+    async fn get_current_snapshot(&mut self) -> Result<Option<Snapshot<TypeConfig>>, std::io::Error> {
         // For simplicity, we don't keep snapshots in memory
         // In production, you might want to cache the last snapshot
         Ok(None)

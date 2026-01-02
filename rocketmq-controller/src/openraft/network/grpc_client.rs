@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! gRPC client implementation for OpenRaft network communication
 
@@ -79,18 +76,13 @@ impl GrpcNetworkClient {
 
         let endpoint = format!("http://{}", self.target_addr);
         let channel = Channel::from_shared(endpoint)
-            .map_err(|e| {
-                NetworkError::new(&std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
-            })?
+            .map_err(|e| NetworkError::new(&std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))?
             .timeout(self.timeout)
             .connect()
             .await
             .map_err(|e| {
                 error!("Failed to connect to {}: {}", self.target_addr, e);
-                NetworkError::new(&std::io::Error::new(
-                    std::io::ErrorKind::ConnectionRefused,
-                    e,
-                ))
+                NetworkError::new(&std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e))
             })?;
 
         self.client = Some(OpenRaftServiceClient::new(channel));
@@ -115,8 +107,7 @@ impl RaftNetwork<TypeConfig> for GrpcNetworkClient {
         &mut self,
         req: AppendEntriesRequest<TypeConfig>,
         _option: RPCOption,
-    ) -> Result<AppendEntriesResponse<TypeConfig>, RPCError<TypeConfig, RaftError<TypeConfig>>>
-    {
+    ) -> Result<AppendEntriesResponse<TypeConfig>, RPCError<TypeConfig, RaftError<TypeConfig>>> {
         debug!(
             "Sending append_entries to node {}: prev_log_id={:?}, entries={}",
             self.target,
@@ -131,12 +122,10 @@ impl RaftNetwork<TypeConfig> for GrpcNetworkClient {
                 node_id: req.vote.leader_id.node_id,
                 committed: req.vote.committed,
             }),
-            prev_log_id: req
-                .prev_log_id
-                .map(|id| crate::protobuf::openraft::OpenRaftLogId {
-                    leader_id: id.leader_id.node_id,
-                    index: id.index,
-                }),
+            prev_log_id: req.prev_log_id.map(|id| crate::protobuf::openraft::OpenRaftLogId {
+                leader_id: id.leader_id.node_id,
+                index: id.index,
+            }),
             entries: req
                 .entries
                 .iter()
@@ -148,22 +137,17 @@ impl RaftNetwork<TypeConfig> for GrpcNetworkClient {
                     payload: serde_json::to_vec(&e.payload).unwrap_or_default(),
                 })
                 .collect(),
-            leader_commit: req
-                .leader_commit
-                .map(|id| crate::protobuf::openraft::OpenRaftLogId {
-                    leader_id: id.leader_id.node_id,
-                    index: id.index,
-                }),
+            leader_commit: req.leader_commit.map(|id| crate::protobuf::openraft::OpenRaftLogId {
+                leader_id: id.leader_id.node_id,
+                index: id.index,
+            }),
         };
 
         let client = self.get_client().await.map_err(RPCError::Network)?;
-        let response = client
-            .append_entries(Request::new(proto_req))
-            .await
-            .map_err(|e| {
-                error!("AppendEntries RPC failed: {}", e);
-                RPCError::Network(NetworkError::new(&std::io::Error::other(e.to_string())))
-            })?;
+        let response = client.append_entries(Request::new(proto_req)).await.map_err(|e| {
+            error!("AppendEntries RPC failed: {}", e);
+            RPCError::Network(NetworkError::new(&std::io::Error::other(e.to_string())))
+        })?;
 
         let proto_resp = response.into_inner();
 
@@ -179,10 +163,8 @@ impl RaftNetwork<TypeConfig> for GrpcNetworkClient {
         &mut self,
         req: InstallSnapshotRequest<TypeConfig>,
         _option: RPCOption,
-    ) -> Result<
-        InstallSnapshotResponse<TypeConfig>,
-        RPCError<TypeConfig, RaftError<TypeConfig, InstallSnapshotError>>,
-    > {
+    ) -> Result<InstallSnapshotResponse<TypeConfig>, RPCError<TypeConfig, RaftError<TypeConfig, InstallSnapshotError>>>
+    {
         debug!(
             "Sending install_snapshot to node {}: vote={:?}, meta={:?}",
             self.target, req.vote, req.meta
@@ -207,11 +189,9 @@ impl RaftNetwork<TypeConfig> for GrpcNetworkClient {
                 committed: req.vote.committed,
             }),
             meta: Some(crate::protobuf::openraft::OpenRaftSnapshotMeta {
-                last_log_id: req.meta.last_log_id.map(|id| {
-                    crate::protobuf::openraft::OpenRaftLogId {
-                        leader_id: id.leader_id.node_id,
-                        index: id.index,
-                    }
+                last_log_id: req.meta.last_log_id.map(|id| crate::protobuf::openraft::OpenRaftLogId {
+                    leader_id: id.leader_id.node_id,
+                    index: id.index,
                 }),
                 snapshot_id: req.meta.snapshot_id.clone(),
                 last_membership: last_membership.clone(),
@@ -224,13 +204,10 @@ impl RaftNetwork<TypeConfig> for GrpcNetworkClient {
         let stream = tokio_stream::iter(vec![request]);
 
         // Send streaming request
-        let response = client
-            .install_snapshot(Request::new(stream))
-            .await
-            .map_err(|e| {
-                error!("InstallSnapshot RPC failed: {}", e);
-                RPCError::Network(NetworkError::new(&std::io::Error::other(e.to_string())))
-            })?;
+        let response = client.install_snapshot(Request::new(stream)).await.map_err(|e| {
+            error!("InstallSnapshot RPC failed: {}", e);
+            RPCError::Network(NetworkError::new(&std::io::Error::other(e.to_string())))
+        })?;
 
         let proto_resp = response.into_inner();
 
@@ -259,12 +236,10 @@ impl RaftNetwork<TypeConfig> for GrpcNetworkClient {
                 node_id: req.vote.leader_id.node_id,
                 committed: req.vote.committed,
             }),
-            last_log_id: req
-                .last_log_id
-                .map(|id| crate::protobuf::openraft::OpenRaftLogId {
-                    leader_id: id.leader_id.node_id,
-                    index: id.index,
-                }),
+            last_log_id: req.last_log_id.map(|id| crate::protobuf::openraft::OpenRaftLogId {
+                leader_id: id.leader_id.node_id,
+                index: id.index,
+            }),
         };
 
         let client = self.get_client().await.map_err(RPCError::Network)?;

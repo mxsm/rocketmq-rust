@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -71,10 +68,8 @@ impl BrokerStatsManager {
     pub const ACCOUNT_STAT_INVERTAL: u64 = 60 * 1000;
     pub const BROKER_ACK_NUMS: &'static str = "BROKER_ACK_NUMS";
     pub const BROKER_CK_NUMS: &'static str = "BROKER_CK_NUMS";
-    pub const BROKER_GET_NUMS_WITHOUT_SYSTEM_TOPIC: &'static str =
-        "BROKER_GET_NUMS_WITHOUT_SYSTEM_TOPIC";
-    pub const BROKER_PUT_NUMS_WITHOUT_SYSTEM_TOPIC: &'static str =
-        "BROKER_PUT_NUMS_WITHOUT_SYSTEM_TOPIC";
+    pub const BROKER_GET_NUMS_WITHOUT_SYSTEM_TOPIC: &'static str = "BROKER_GET_NUMS_WITHOUT_SYSTEM_TOPIC";
+    pub const BROKER_PUT_NUMS_WITHOUT_SYSTEM_TOPIC: &'static str = "BROKER_PUT_NUMS_WITHOUT_SYSTEM_TOPIC";
     pub const CHANNEL_ACTIVITY: &'static str = "CHANNEL_ACTIVITY";
     pub const CHANNEL_ACTIVITY_CLOSE: &'static str = "CLOSE";
     pub const CHANNEL_ACTIVITY_CONNECT: &'static str = "CONNECT";
@@ -125,51 +120,43 @@ impl BrokerStatsManager {
     fn start_sampling_tasks(&self, scheduler: &Arc<ScheduledTaskManager>) {
         // Task 1: Sample every 10 seconds for minute-level statistics
         let stats_table = Arc::clone(&self.stats_table);
-        let task_id = scheduler.add_fixed_rate_task(
-            Duration::from_secs(10),
-            Duration::from_secs(10),
-            move |_cancel| {
-                let stats_table = Arc::clone(&stats_table);
-                async move {
-                    for entry in stats_table.iter() {
-                        entry.value().sampling_in_minutes();
-                    }
-                    Ok(())
+        let task_id = scheduler.add_fixed_rate_task(Duration::from_secs(10), Duration::from_secs(10), move |_cancel| {
+            let stats_table = Arc::clone(&stats_table);
+            async move {
+                for entry in stats_table.iter() {
+                    entry.value().sampling_in_minutes();
                 }
-            },
-        );
+                Ok(())
+            }
+        });
         self.task_ids.lock().push(task_id);
 
         // Task 2: Sample every minute (aligned to minute boundary)
         let stats_table = Arc::clone(&self.stats_table);
         let initial_delay = Self::compute_initial_delay_to_next_minute();
-        let task_id =
-            scheduler.add_fixed_rate_task(initial_delay, Duration::from_secs(60), move |_cancel| {
-                let stats_table = Arc::clone(&stats_table);
-                async move {
-                    info!("Executing minute-level sampling for all stats");
-                    for entry in stats_table.iter() {
-                        entry.value().sampling_in_minutes();
-                    }
-                    Ok(())
+        let task_id = scheduler.add_fixed_rate_task(initial_delay, Duration::from_secs(60), move |_cancel| {
+            let stats_table = Arc::clone(&stats_table);
+            async move {
+                info!("Executing minute-level sampling for all stats");
+                for entry in stats_table.iter() {
+                    entry.value().sampling_in_minutes();
                 }
-            });
+                Ok(())
+            }
+        });
         self.task_ids.lock().push(task_id);
 
         // Task 3: Clean up expired stats every 10 minutes
         let stats_table = Arc::clone(&self.stats_table);
-        let task_id = scheduler.add_fixed_rate_task(
-            Duration::from_secs(600),
-            Duration::from_secs(600),
-            move |_cancel| {
+        let task_id =
+            scheduler.add_fixed_rate_task(Duration::from_secs(600), Duration::from_secs(600), move |_cancel| {
                 let stats_table = Arc::clone(&stats_table);
                 async move {
                     info!("Cleaning expired statistics items");
                     // TODO: Implement cleanup logic based on last access time
                     Ok(())
                 }
-            },
-        );
+            });
         self.task_ids.lock().push(task_id);
 
         info!(
@@ -180,10 +167,7 @@ impl BrokerStatsManager {
 
     /// Compute delay to next minute boundary
     fn compute_initial_delay_to_next_minute() -> Duration {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
 
         let next_minute = ((now / 60000) + 1) * 60000;
         let delay_ms = next_minute - now;
@@ -197,16 +181,10 @@ impl BrokerStatsManager {
     }
 
     #[inline]
-    pub fn new_with_scheduler(
-        broker_config: Arc<BrokerConfig>,
-        scheduler: Option<Arc<ScheduledTaskManager>>,
-    ) -> Self {
+    pub fn new_with_scheduler(broker_config: Arc<BrokerConfig>, scheduler: Option<Arc<ScheduledTaskManager>>) -> Self {
         let stats_table = Arc::new(DashMap::new());
         let enable_queue_stat = broker_config.enable_detail_stat;
-        let cluster_name = broker_config
-            .broker_identity
-            .broker_cluster_name
-            .to_string();
+        let cluster_name = broker_config.broker_identity.broker_cluster_name.to_string();
         let mut broker_stats_manager = BrokerStatsManager {
             stats_table,
             cluster_name,
@@ -225,11 +203,7 @@ impl BrokerStatsManager {
     }
 
     #[inline]
-    pub fn new_with_name(
-        broker_config: Arc<BrokerConfig>,
-        cluster_name: String,
-        enable_queue_stat: bool,
-    ) -> Self {
+    pub fn new_with_name(broker_config: Arc<BrokerConfig>, cluster_name: String, enable_queue_stat: bool) -> Self {
         let stats_table = Arc::new(DashMap::new());
         let mut broker_stats_manager = BrokerStatsManager {
             stats_table,
@@ -407,10 +381,7 @@ impl BrokerStatsManager {
         let formatter = StatisticsItemFormatter;
 
         self.account_stat_manager.set_brief_meta(vec![
-            (
-                Self::RT.to_string(),
-                vec![vec![50, 50], vec![100, 10], vec![1000, 10]],
-            ),
+            (Self::RT.to_string(), vec![vec![50, 50], vec![100, 10], vec![1000, 10]]),
             (
                 Self::INNER_RT.to_string(),
                 vec![vec![50, 50], vec![100, 10], vec![1000, 10]],
@@ -437,9 +408,7 @@ impl BrokerStatsManager {
                 item_names.clone(),
                 &formatter,
                 Self::ACCOUNT_STAT_INVERTAL,
-                self.broker_config
-                    .as_ref()
-                    .expect("Broker config must be initialized"),
+                self.broker_config.as_ref().expect("Broker config must be initialized"),
             ));
         self.account_stat_manager
             .add_statistics_kind_meta(create_statistics_kind_meta(
@@ -447,9 +416,7 @@ impl BrokerStatsManager {
                 item_names.clone(),
                 &formatter,
                 Self::ACCOUNT_STAT_INVERTAL,
-                self.broker_config
-                    .as_ref()
-                    .expect("Broker config must be initialized"),
+                self.broker_config.as_ref().expect("Broker config must be initialized"),
             ));
         self.account_stat_manager
             .add_statistics_kind_meta(create_statistics_kind_meta(
@@ -457,9 +424,7 @@ impl BrokerStatsManager {
                 item_names.clone(),
                 &formatter,
                 Self::ACCOUNT_STAT_INVERTAL,
-                self.broker_config
-                    .as_ref()
-                    .expect("Broker config must be initialized"),
+                self.broker_config.as_ref().expect("Broker config must be initialized"),
             ));
         self.account_stat_manager
             .add_statistics_kind_meta(create_statistics_kind_meta(
@@ -467,9 +432,7 @@ impl BrokerStatsManager {
                 item_names.clone(),
                 &formatter,
                 Self::ACCOUNT_STAT_INVERTAL,
-                self.broker_config
-                    .as_ref()
-                    .expect("Broker config must be initialized"),
+                self.broker_config.as_ref().expect("Broker config must be initialized"),
             ));
         self.account_stat_manager
             .add_statistics_kind_meta(create_statistics_kind_meta(
@@ -477,9 +440,7 @@ impl BrokerStatsManager {
                 item_names.clone(),
                 &formatter,
                 Self::ACCOUNT_STAT_INVERTAL,
-                self.broker_config
-                    .as_ref()
-                    .expect("Broker config must be initialized"),
+                self.broker_config.as_ref().expect("Broker config must be initialized"),
             ));
         self.account_stat_manager
             .add_statistics_kind_meta(create_statistics_kind_meta(
@@ -487,9 +448,7 @@ impl BrokerStatsManager {
                 item_names.clone(),
                 &formatter,
                 Self::ACCOUNT_STAT_INVERTAL,
-                self.broker_config
-                    .as_ref()
-                    .expect("Broker config must be initialized"),
+                self.broker_config.as_ref().expect("Broker config must be initialized"),
             ));
 
         struct DefaultStatisticsItemStateGetter {
@@ -507,24 +466,20 @@ impl BrokerStatsManager {
                 let topic = CheetahString::from_slice(vec[2]);
                 let group = CheetahString::from_slice(vec[3]);
                 let kind = item.stat_kind();
-                if BrokerStatsManager::ACCOUNT_SEND == kind
-                    || BrokerStatsManager::ACCOUNT_SEND_REJ == kind
-                {
-                    self.producer_state_getter.as_ref().unwrap().online(
-                        &instance_id,
-                        &group,
-                        &topic,
-                    );
+                if BrokerStatsManager::ACCOUNT_SEND == kind || BrokerStatsManager::ACCOUNT_SEND_REJ == kind {
+                    self.producer_state_getter
+                        .as_ref()
+                        .unwrap()
+                        .online(&instance_id, &group, &topic);
                 } else if BrokerStatsManager::ACCOUNT_RCV == kind
                     || BrokerStatsManager::ACCOUNT_SEND_BACK == kind
                     || BrokerStatsManager::ACCOUNT_SEND_BACK_TO_DLQ == kind
                     || BrokerStatsManager::ACCOUNT_REV_REJ == kind
                 {
-                    self.consumer_state_getter.as_ref().unwrap().online(
-                        &instance_id,
-                        &group,
-                        &topic,
-                    );
+                    self.consumer_state_getter
+                        .as_ref()
+                        .unwrap()
+                        .online(&instance_id, &group, &topic);
                 }
 
                 false
@@ -575,10 +530,7 @@ impl BrokerStatsManager {
 
     #[inline]
     pub fn get_broker_puts_num_without_system_topic(&self) -> u64 {
-        if let Some(stats) = self
-            .stats_table
-            .get(Self::BROKER_PUT_NUMS_WITHOUT_SYSTEM_TOPIC)
-        {
+        if let Some(stats) = self.stats_table.get(Self::BROKER_PUT_NUMS_WITHOUT_SYSTEM_TOPIC) {
             stats.get_stats_data_in_minute(&self.cluster_name).get_sum()
         } else {
             0
@@ -587,10 +539,7 @@ impl BrokerStatsManager {
 
     #[inline]
     pub fn get_broker_gets_num_without_system_topic(&self) -> u64 {
-        if let Some(stats) = self
-            .stats_table
-            .get(Self::BROKER_GET_NUMS_WITHOUT_SYSTEM_TOPIC)
-        {
+        if let Some(stats) = self.stats_table.get(Self::BROKER_GET_NUMS_WITHOUT_SYSTEM_TOPIC) {
             stats.get_stats_data_in_minute(&self.cluster_name).get_sum()
         } else {
             0
@@ -623,13 +572,7 @@ impl BrokerStatsManager {
     }
 
     #[inline]
-    pub fn record_disk_fall_behind_size(
-        &self,
-        group: &str,
-        topic: &str,
-        queue_id: i32,
-        fall_behind: i64,
-    ) {
+    pub fn record_disk_fall_behind_size(&self, group: &str, topic: &str, queue_id: i32, fall_behind: i64) {
         if let Some(fall_size_set) = &self.moment_stats_item_set_fall_size {
             let stats_key = format!("{}@{}@{}", queue_id, topic, group);
             let item = fall_size_set.get_and_create_stats_item(stats_key);
@@ -707,10 +650,7 @@ impl BrokerStatsManager {
         }
 
         if !TopicValidator::is_system_topic(topic) {
-            if let Some(stats) = self
-                .stats_table
-                .get(Self::BROKER_GET_NUMS_WITHOUT_SYSTEM_TOPIC)
-            {
+            if let Some(stats) = self.stats_table.get(Self::BROKER_GET_NUMS_WITHOUT_SYSTEM_TOPIC) {
                 stats.add_value(&self.cluster_name, inc_value, 1);
             }
         }
@@ -723,10 +663,7 @@ impl BrokerStatsManager {
         }
 
         if !TopicValidator::is_system_topic(topic) {
-            if let Some(stats) = self
-                .stats_table
-                .get(Self::BROKER_PUT_NUMS_WITHOUT_SYSTEM_TOPIC)
-            {
+            if let Some(stats) = self.stats_table.get(Self::BROKER_PUT_NUMS_WITHOUT_SYSTEM_TOPIC) {
                 stats.add_value(&self.cluster_name, inc_value, 1);
             }
         }
@@ -880,13 +817,7 @@ impl BrokerStatsManager {
     }
 
     #[inline]
-    pub fn record_disk_fall_behind_time(
-        &self,
-        group: &str,
-        topic: &str,
-        queue_id: i32,
-        fall_behind: i64,
-    ) {
+    pub fn record_disk_fall_behind_time(&self, group: &str, topic: &str, queue_id: i32, fall_behind: i64) {
         if let Some(fall_time_set) = &self.moment_stats_item_set_fall_time {
             let stats_key = format!("{}@{}@{}", queue_id, topic, group);
             let item = fall_time_set.get_and_create_stats_item(stats_key);
@@ -934,15 +865,7 @@ impl BrokerStatsManager {
     }
 
     #[inline]
-    pub fn inc_dlq_stat_value(
-        &self,
-        key: &str,
-        owner: &str,
-        group: &str,
-        topic: &str,
-        msg_type: &str,
-        inc_value: i32,
-    ) {
+    pub fn inc_dlq_stat_value(&self, key: &str, owner: &str, group: &str, topic: &str, msg_type: &str, inc_value: i32) {
         let stats_key = build_commercial_stats_key(owner, topic, group, msg_type);
         if let Some(stats) = self.stats_table.get(key) {
             stats.add_value(&stats_key, inc_value, 1);
@@ -1126,19 +1049,12 @@ pub fn build_account_stats_key_with_flowlimit(
     flow_limit_threshold: &str,
 ) -> String {
     format!(
-        "{account_owner_parent}@{account_owner_self}@{instance_id}@{topic}@{group}@{msg_type}@\
-         {flow_limit_threshold}"
+        "{account_owner_parent}@{account_owner_self}@{instance_id}@{topic}@{group}@{msg_type}@{flow_limit_threshold}"
     )
 }
 
 #[inline]
-pub fn build_account_stat_key(
-    owner: &str,
-    instance_id: &str,
-    topic: &str,
-    group: &str,
-    msg_type: &str,
-) -> String {
+pub fn build_account_stat_key(owner: &str, instance_id: &str, topic: &str, group: &str, msg_type: &str) -> String {
     format!("{owner}|{instance_id}|{topic}|{group}|{msg_type}")
 }
 
@@ -1177,9 +1093,8 @@ mod tests {
 
     #[test]
     fn build_account_stats_key_with_flowlimit_creates_correct_key() {
-        let key = build_account_stats_key_with_flowlimit(
-            "parent1", "self1", "id1", "topic1", "group1", "type1", "limit1",
-        );
+        let key =
+            build_account_stats_key_with_flowlimit("parent1", "self1", "id1", "topic1", "group1", "type1", "limit1");
         assert_eq!(key, "parent1@self1@id1@topic1@group1@type1@limit1");
     }
 
@@ -1191,9 +1106,7 @@ mod tests {
 
     #[test]
     fn build_account_stat_key_with_flowlimit_creates_correct_key() {
-        let key = build_account_stat_key_with_flowlimit(
-            "owner1", "id1", "topic1", "group1", "type1", "limit1",
-        );
+        let key = build_account_stat_key_with_flowlimit("owner1", "id1", "topic1", "group1", "type1", "limit1");
         assert_eq!(key, "owner1|id1|topic1|group1|type1|limit1");
     }
 
@@ -1300,10 +1213,7 @@ mod tests {
         );
 
         let stats_key = build_commercial_stats_key("owner1", "topic1", "group1", "SEND");
-        if let Some(stats) = manager
-            .stats_table
-            .get(BrokerStatsManager::COMMERCIAL_MSG_NUM)
-        {
+        if let Some(stats) = manager.stats_table.get(BrokerStatsManager::COMMERCIAL_MSG_NUM) {
             let snapshot = stats.get_stats_data_in_minute(&stats_key);
             assert_eq!(snapshot.get_sum(), 1000);
         };
@@ -1375,19 +1285,13 @@ mod tests {
         manager.inc_producer_register_time(100);
         manager.inc_consumer_register_time(200);
 
-        if let Some(stats) = manager
-            .stats_table
-            .get(BrokerStatsManager::PRODUCER_REGISTER_TIME)
-        {
+        if let Some(stats) = manager.stats_table.get(BrokerStatsManager::PRODUCER_REGISTER_TIME) {
             if let Some(item) = stats.get_stats_item(&manager.cluster_name) {
                 assert_eq!(item.get_value(), 100);
             }
         }
 
-        if let Some(stats) = manager
-            .stats_table
-            .get(BrokerStatsManager::CONSUMER_REGISTER_TIME)
-        {
+        if let Some(stats) = manager.stats_table.get(BrokerStatsManager::CONSUMER_REGISTER_TIME) {
             if let Some(item) = stats.get_stats_item(&manager.cluster_name) {
                 assert_eq!(item.get_value(), 200);
             }
@@ -1492,15 +1396,11 @@ mod tests {
         manager.inc_topic_put_size("DeletedTopic", 1024);
         manager.inc_group_get_nums("TestGroup", "DeletedTopic", 50);
 
-        assert!(manager
-            .get_stats_item(Stats::TOPIC_PUT_NUMS, "DeletedTopic")
-            .is_some());
+        assert!(manager.get_stats_item(Stats::TOPIC_PUT_NUMS, "DeletedTopic").is_some());
 
         manager.on_topic_deleted(&CheetahString::from("DeletedTopic"));
 
-        assert!(manager
-            .get_stats_item(Stats::TOPIC_PUT_NUMS, "DeletedTopic")
-            .is_none());
+        assert!(manager.get_stats_item(Stats::TOPIC_PUT_NUMS, "DeletedTopic").is_none());
     }
 
     #[tokio::test]
@@ -1512,14 +1412,10 @@ mod tests {
         manager.inc_group_get_size("DeletedGroup", "TestTopic", 1024);
 
         let stats_key = build_stats_key(Some("TestTopic"), Some("DeletedGroup"));
-        assert!(manager
-            .get_stats_item(Stats::GROUP_GET_NUMS, &stats_key)
-            .is_some());
+        assert!(manager.get_stats_item(Stats::GROUP_GET_NUMS, &stats_key).is_some());
 
         manager.on_group_deleted(&CheetahString::from("DeletedGroup"));
 
-        assert!(manager
-            .get_stats_item(Stats::GROUP_GET_NUMS, &stats_key)
-            .is_none());
+        assert!(manager.get_stats_item(Stats::GROUP_GET_NUMS, &stats_key).is_none());
     }
 }

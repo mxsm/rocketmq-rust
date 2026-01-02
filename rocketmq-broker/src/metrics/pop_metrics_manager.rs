@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! # PopMetricsManager
 //!
@@ -91,14 +88,8 @@ impl BrokerAttributesSupplier {
 impl AttributesBuilderSupplier for BrokerAttributesSupplier {
     fn get(&self) -> Vec<KeyValue> {
         vec![
-            KeyValue::new(
-                BrokerMetricsConstant::LABEL_CLUSTER_NAME,
-                self.cluster_name.clone(),
-            ),
-            KeyValue::new(
-                BrokerMetricsConstant::LABEL_NODE_ID,
-                self.broker_id.to_string(),
-            ),
+            KeyValue::new(BrokerMetricsConstant::LABEL_CLUSTER_NAME, self.cluster_name.clone()),
+            KeyValue::new(BrokerMetricsConstant::LABEL_NODE_ID, self.broker_id.to_string()),
             KeyValue::new(
                 BrokerMetricsConstant::LABEL_NODE_TYPE,
                 BrokerMetricsConstant::NODE_TYPE_BROKER,
@@ -273,10 +264,7 @@ impl PopMetricsManager {
             .with_callback(move |observer| {
                 for (queue_id, lag, _latency) in revive_services_fn_clone() {
                     let mut attrs = attrs_supplier3.get();
-                    attrs.push(KeyValue::new(
-                        PopMetricsConstant::LABEL_QUEUE_ID,
-                        queue_id.to_string(),
-                    ));
+                    attrs.push(KeyValue::new(PopMetricsConstant::LABEL_QUEUE_ID, queue_id.to_string()));
                     observer.observe(lag, &attrs);
                 }
             })
@@ -290,10 +278,7 @@ impl PopMetricsManager {
             .with_callback(move |observer| {
                 for (queue_id, _lag, latency) in revive_services_fn() {
                     let mut attrs = attrs_supplier4.get();
-                    attrs.push(KeyValue::new(
-                        PopMetricsConstant::LABEL_QUEUE_ID,
-                        queue_id.to_string(),
-                    ));
+                    attrs.push(KeyValue::new(PopMetricsConstant::LABEL_QUEUE_ID, queue_id.to_string()));
                     observer.observe(latency, &attrs);
                 }
             })
@@ -339,11 +324,7 @@ impl PopMetricsManager {
     /// Increment revive checkpoint put count
     /// Called when a checkpoint is put to revive topic
     #[inline]
-    pub fn inc_pop_revive_ck_put_count(
-        &self,
-        check_point: &PopCheckPoint,
-        status: PutMessageStatus,
-    ) {
+    pub fn inc_pop_revive_ck_put_count(&self, check_point: &PopCheckPoint, status: PutMessageStatus) {
         self.inc_pop_revive_put_count(
             check_point.cid.as_str(),
             check_point.topic.as_str(),
@@ -364,15 +345,9 @@ impl PopMetricsManager {
     ) {
         let mut attrs = self.base_attributes();
         attrs.extend([
-            KeyValue::new(
-                BrokerMetricsConstant::LABEL_CONSUMER_GROUP,
-                group.to_owned(),
-            ),
+            KeyValue::new(BrokerMetricsConstant::LABEL_CONSUMER_GROUP, group.to_owned()),
             KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, topic.to_owned()),
-            KeyValue::new(
-                PopMetricsConstant::LABEL_REVIVE_MESSAGE_TYPE,
-                message_type.as_str(),
-            ),
+            KeyValue::new(PopMetricsConstant::LABEL_REVIVE_MESSAGE_TYPE, message_type.as_str()),
             KeyValue::new(PopMetricsConstant::LABEL_PUT_STATUS, status.to_string()),
         ]);
 
@@ -420,16 +395,10 @@ impl PopMetricsManager {
     ) {
         let mut attrs = self.base_attributes();
         attrs.extend([
-            KeyValue::new(
-                BrokerMetricsConstant::LABEL_CONSUMER_GROUP,
-                group.to_owned(),
-            ),
+            KeyValue::new(BrokerMetricsConstant::LABEL_CONSUMER_GROUP, group.to_owned()),
             KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, topic.to_owned()),
             KeyValue::new(PopMetricsConstant::LABEL_QUEUE_ID, queue_id.to_string()),
-            KeyValue::new(
-                PopMetricsConstant::LABEL_REVIVE_MESSAGE_TYPE,
-                message_type.as_str(),
-            ),
+            KeyValue::new(PopMetricsConstant::LABEL_REVIVE_MESSAGE_TYPE, message_type.as_str()),
         ]);
 
         self.pop_revive_get_total.add(num, &attrs);
@@ -441,21 +410,11 @@ impl PopMetricsManager {
 
     /// Increment retry message count
     /// Called when a message is put to pop retry topic
-    pub fn inc_pop_revive_retry_message_count(
-        &self,
-        check_point: &PopCheckPoint,
-        status: PutMessageStatus,
-    ) {
+    pub fn inc_pop_revive_retry_message_count(&self, check_point: &PopCheckPoint, status: PutMessageStatus) {
         let mut attrs = self.base_attributes();
         attrs.extend([
-            KeyValue::new(
-                BrokerMetricsConstant::LABEL_CONSUMER_GROUP,
-                check_point.cid.to_string(),
-            ),
-            KeyValue::new(
-                BrokerMetricsConstant::LABEL_TOPIC,
-                check_point.topic.to_string(),
-            ),
+            KeyValue::new(BrokerMetricsConstant::LABEL_CONSUMER_GROUP, check_point.cid.to_string()),
+            KeyValue::new(BrokerMetricsConstant::LABEL_TOPIC, check_point.topic.to_string()),
             KeyValue::new(PopMetricsConstant::LABEL_PUT_STATUS, status.to_string()),
         ]);
 
@@ -528,13 +487,7 @@ pub fn inc_pop_revive_ck_get_count(check_point: &PopCheckPoint, queue_id: i32) {
 
 /// Static function to increment revive get count with full parameters
 #[inline]
-pub fn inc_pop_revive_get_count(
-    group: &str,
-    topic: &str,
-    message_type: PopReviveMessageType,
-    queue_id: i32,
-    num: u64,
-) {
+pub fn inc_pop_revive_get_count(group: &str, topic: &str, message_type: PopReviveMessageType, queue_id: i32, num: u64) {
     if let Some(manager) = PopMetricsManager::try_global() {
         manager.inc_pop_revive_get_count(group, topic, message_type, queue_id, num);
     }
@@ -605,19 +558,12 @@ mod tests {
         let meter = provider.meter("test-meter");
         let manager = PopMetricsManager::new(&meter, Arc::new(NoopAttributesSupplier));
 
-        manager.inc_pop_revive_get_count(
-            "test-group",
-            "test-topic",
-            PopReviveMessageType::Ck,
-            0,
-            10,
-        );
+        manager.inc_pop_revive_get_count("test-group", "test-topic", PopReviveMessageType::Ck, 0, 10);
     }
 
     #[test]
     fn test_broker_attributes_supplier() {
-        let supplier =
-            BrokerAttributesSupplier::new("test-cluster".to_string(), "broker-0".to_string(), 0);
+        let supplier = BrokerAttributesSupplier::new("test-cluster".to_string(), "broker-0".to_string(), 0);
 
         let attrs = supplier.get();
         assert_eq!(attrs.len(), 3);
@@ -639,13 +585,7 @@ mod tests {
     #[test]
     fn test_static_functions_no_panic_when_uninitialized() {
         // These should not panic even when global manager is not initialized
-        inc_pop_revive_put_count(
-            "group",
-            "topic",
-            PopReviveMessageType::Ack,
-            PutMessageStatus::PutOk,
-            1,
-        );
+        inc_pop_revive_put_count("group", "topic", PopReviveMessageType::Ack, PutMessageStatus::PutOk, 1);
         inc_pop_revive_get_count("group", "topic", PopReviveMessageType::Ck, 0, 1);
         record_pop_buffer_scan_time_consume(100);
     }

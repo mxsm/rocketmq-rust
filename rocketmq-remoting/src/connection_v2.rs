@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Refactored Connection based on FramedRead + FramedWrite
 //!
@@ -47,10 +44,7 @@ use crate::protocol::remoting_command::RemotingCommand;
 /// Helper function to write all data using vectored I/O
 ///
 /// Ensures all data in IoSlice is written by looping until complete
-async fn write_all_vectored(
-    writer: &mut OwnedWriteHalf,
-    mut slices: &mut [IoSlice<'_>],
-) -> RocketMQResult<()> {
+async fn write_all_vectored(writer: &mut OwnedWriteHalf, mut slices: &mut [IoSlice<'_>]) -> RocketMQResult<()> {
     while !slices.is_empty() {
         let written = writer.write_vectored(slices).await.map_err(|e| {
             RocketMQError::Network(rocketmq_error::NetworkError::connection_failed(
@@ -60,12 +54,10 @@ async fn write_all_vectored(
         })?;
 
         if written == 0 {
-            return Err(RocketMQError::Network(
-                rocketmq_error::NetworkError::connection_failed(
-                    "write_vectored",
-                    "Write returned 0 bytes",
-                ),
-            ));
+            return Err(RocketMQError::Network(rocketmq_error::NetworkError::connection_failed(
+                "write_vectored",
+                "Write returned 0 bytes",
+            )));
         }
 
         // Advance slices past the written data
@@ -95,11 +87,7 @@ pub(crate) enum WriteCommand {
     /// Zero-copy send with vectored I/O
     SendZeroCopy(Vec<Bytes>, oneshot::Sender<RocketMQResult<()>>),
     /// Hybrid mode: header + bodies
-    SendHybrid(
-        RemotingCommand,
-        Vec<Bytes>,
-        oneshot::Sender<RocketMQResult<()>>,
-    ),
+    SendHybrid(RemotingCommand, Vec<Bytes>, oneshot::Sender<RocketMQResult<()>>),
     /// Hybrid vectored mode
     SendHybridVectored(Bytes, Vec<Bytes>, oneshot::Sender<RocketMQResult<()>>),
     /// Close connection
@@ -306,10 +294,7 @@ impl RefactoredConnection {
     ///
     /// Reuses internal encode_buffer to avoid allocating new BytesMut each time.
     /// split() empties buffer but preserves capacity, achieving zero-allocation reuse.
-    pub async fn send_commands_batch(
-        &mut self,
-        commands: Vec<RemotingCommand>,
-    ) -> RocketMQResult<()> {
+    pub async fn send_commands_batch(&mut self, commands: Vec<RemotingCommand>) -> RocketMQResult<()> {
         // Feed all commands (queued, not sent yet)
         for mut command in commands {
             // Encode to reused buffer (split() empties buffer but preserves capacity)
@@ -579,10 +564,7 @@ impl ConcurrentConnection {
             write_tx,
             state_rx,
             writer_handle,
-            connection_id: CheetahString::from_string(format!(
-                "concurrent-{}",
-                uuid::Uuid::new_v4()
-            )),
+            connection_id: CheetahString::from_string(format!("concurrent-{}", uuid::Uuid::new_v4())),
         }
     }
 
@@ -597,12 +579,7 @@ impl ConcurrentConnection {
         while let Some(cmd) = write_rx.recv().await {
             match cmd {
                 WriteCommand::SendCommand(remote_cmd, response_tx) => {
-                    let result = Self::handle_send_command(
-                        &mut framed_writer,
-                        &mut encode_buffer,
-                        remote_cmd,
-                    )
-                    .await;
+                    let result = Self::handle_send_command(&mut framed_writer, &mut encode_buffer, remote_cmd).await;
                     let _ = response_tx.send(result);
                 }
                 WriteCommand::SendBytes(bytes, response_tx) => {
@@ -610,12 +587,8 @@ impl ConcurrentConnection {
                     let _ = response_tx.send(result);
                 }
                 WriteCommand::SendCommandsBatch(commands, response_tx) => {
-                    let result = Self::handle_send_commands_batch(
-                        &mut framed_writer,
-                        &mut encode_buffer,
-                        commands,
-                    )
-                    .await;
+                    let result =
+                        Self::handle_send_commands_batch(&mut framed_writer, &mut encode_buffer, commands).await;
                     let _ = response_tx.send(result);
                 }
                 WriteCommand::SendBytesBatch(bytes_vec, response_tx) => {
@@ -627,19 +600,12 @@ impl ConcurrentConnection {
                     let _ = response_tx.send(result);
                 }
                 WriteCommand::SendHybrid(remote_cmd, bodies, response_tx) => {
-                    let result = Self::handle_send_hybrid(
-                        &mut framed_writer,
-                        &mut encode_buffer,
-                        remote_cmd,
-                        bodies,
-                    )
-                    .await;
+                    let result =
+                        Self::handle_send_hybrid(&mut framed_writer, &mut encode_buffer, remote_cmd, bodies).await;
                     let _ = response_tx.send(result);
                 }
                 WriteCommand::SendHybridVectored(header_bytes, bodies, response_tx) => {
-                    let result =
-                        Self::handle_send_hybrid_vectored(&mut framed_writer, header_bytes, bodies)
-                            .await;
+                    let result = Self::handle_send_hybrid_vectored(&mut framed_writer, header_bytes, bodies).await;
                     let _ = response_tx.send(result);
                 }
                 WriteCommand::Close(response_tx) => {
@@ -713,8 +679,7 @@ impl ConcurrentConnection {
         framed_writer: &mut FramedWrite<OwnedWriteHalf, CompositeCodec>,
         bytes_vec: Vec<Bytes>,
     ) -> RocketMQResult<()> {
-        let mut io_slices: Vec<IoSlice> =
-            bytes_vec.iter().map(|b| IoSlice::new(b.as_ref())).collect();
+        let mut io_slices: Vec<IoSlice> = bytes_vec.iter().map(|b| IoSlice::new(b.as_ref())).collect();
         write_all_vectored(framed_writer.get_mut(), &mut io_slices).await?;
         framed_writer.flush().await?;
         Ok(())
@@ -751,8 +716,7 @@ impl ConcurrentConnection {
         let mut all_bytes = vec![header_bytes];
         all_bytes.extend(bodies);
 
-        let mut io_slices: Vec<IoSlice> =
-            all_bytes.iter().map(|b| IoSlice::new(b.as_ref())).collect();
+        let mut io_slices: Vec<IoSlice> = all_bytes.iter().map(|b| IoSlice::new(b.as_ref())).collect();
         write_all_vectored(framed_writer.get_mut(), &mut io_slices).await?;
         framed_writer.flush().await?;
         Ok(())
@@ -859,11 +823,7 @@ impl ConcurrentConnection {
     }
 
     /// Hybrid mode send (concurrent-safe)
-    pub async fn send_response_hybrid(
-        &self,
-        response: RemotingCommand,
-        bodies: Vec<Bytes>,
-    ) -> RocketMQResult<()> {
+    pub async fn send_response_hybrid(&self, response: RemotingCommand, bodies: Vec<Bytes>) -> RocketMQResult<()> {
         let (tx, rx) = oneshot::channel();
         self.write_tx
             .send(WriteCommand::SendHybrid(response, bodies, tx))
@@ -883,11 +843,7 @@ impl ConcurrentConnection {
     }
 
     /// Hybrid vectored mode send (concurrent-safe)
-    pub async fn send_response_hybrid_vectored(
-        &self,
-        header_bytes: Bytes,
-        bodies: Vec<Bytes>,
-    ) -> RocketMQResult<()> {
+    pub async fn send_response_hybrid_vectored(&self, header_bytes: Bytes, bodies: Vec<Bytes>) -> RocketMQResult<()> {
         let (tx, rx) = oneshot::channel();
         self.write_tx
             .send(WriteCommand::SendHybridVectored(header_bytes, bodies, tx))
@@ -934,15 +890,12 @@ impl ConcurrentConnection {
     /// Graceful shutdown
     pub async fn close(self) -> RocketMQResult<()> {
         let (tx, rx) = oneshot::channel();
-        self.write_tx
-            .send(WriteCommand::Close(tx))
-            .await
-            .map_err(|_| {
-                RocketMQError::Network(rocketmq_error::NetworkError::connection_failed(
-                    "connection",
-                    "Writer task closed",
-                ))
-            })?;
+        self.write_tx.send(WriteCommand::Close(tx)).await.map_err(|_| {
+            RocketMQError::Network(rocketmq_error::NetworkError::connection_failed(
+                "connection",
+                "Writer task closed",
+            ))
+        })?;
         rx.await.map_err(|_| {
             RocketMQError::Network(rocketmq_error::NetworkError::connection_failed(
                 "connection",
@@ -1008,8 +961,7 @@ mod tests {
             let mut conn = RefactoredConnection::new(stream);
 
             // Create test command
-            let cmd = RemotingCommand::create_request_command(100, EmptyHeader {})
-                .set_body(Bytes::from("test data"));
+            let cmd = RemotingCommand::create_request_command(100, EmptyHeader {}).set_body(Bytes::from("test data"));
 
             conn.send_command(cmd).await.unwrap();
 
@@ -1076,11 +1028,7 @@ mod tests {
             let stream = TcpStream::connect(addr).await.unwrap();
             let mut conn = RefactoredConnection::new(stream);
 
-            let chunks = vec![
-                Bytes::from("Part1"),
-                Bytes::from("Part2"),
-                Bytes::from("Part3"),
-            ];
+            let chunks = vec![Bytes::from("Part1"), Bytes::from("Part2"), Bytes::from("Part3")];
 
             conn.send_bytes_zero_copy(chunks).await.unwrap();
         });
@@ -1109,9 +1057,7 @@ mod tests {
             let header = Bytes::from("HEADER:");
             let bodies = vec![Bytes::from("Body1"), Bytes::from("|"), Bytes::from("Body2")];
 
-            conn.send_response_hybrid_vectored(header, bodies)
-                .await
-                .unwrap();
+            conn.send_response_hybrid_vectored(header, bodies).await.unwrap();
         });
 
         let (socket, _) = listener.accept().await.unwrap();
@@ -1244,8 +1190,7 @@ mod concurrent_tests {
             let stream = TcpStream::connect(addr).await.unwrap();
             let conn = ConcurrentConnection::new(stream);
 
-            let cmd =
-                RemotingCommand::create_request_command(100, PullMessageResponseHeader::default());
+            let cmd = RemotingCommand::create_request_command(100, PullMessageResponseHeader::default());
             conn.send_command(cmd).await.unwrap();
         });
 
@@ -1274,15 +1219,9 @@ mod concurrent_tests {
             for i in 0..3 {
                 let conn_clone = conn.clone_sender();
                 let handle = tokio::spawn(async move {
-                    let cmd = RemotingCommand::create_request_command(
-                        100 + i,
-                        PullMessageResponseHeader::default(),
-                    );
+                    let cmd = RemotingCommand::create_request_command(100 + i, PullMessageResponseHeader::default());
                     let (tx, rx) = oneshot::channel();
-                    conn_clone
-                        .send(WriteCommand::SendCommand(cmd, tx))
-                        .await
-                        .unwrap();
+                    conn_clone.send(WriteCommand::SendCommand(cmd, tx)).await.unwrap();
                     rx.await.unwrap().unwrap();
                 });
                 handles.push(handle);
@@ -1351,11 +1290,7 @@ mod concurrent_tests {
             let stream = TcpStream::connect(addr).await.unwrap();
             let conn = ConcurrentConnection::new(stream);
 
-            let chunks = vec![
-                Bytes::from("Zero"),
-                Bytes::from("Copy"),
-                Bytes::from("Test"),
-            ];
+            let chunks = vec![Bytes::from("Zero"), Bytes::from("Copy"), Bytes::from("Test")];
 
             conn.send_bytes_zero_copy(chunks).await.unwrap();
         });
@@ -1409,8 +1344,7 @@ mod concurrent_tests {
 
             assert_eq!(conn.state(), ConnectionState::Healthy);
 
-            let cmd =
-                RemotingCommand::create_request_command(100, PullMessageResponseHeader::default());
+            let cmd = RemotingCommand::create_request_command(100, PullMessageResponseHeader::default());
             conn.send_command(cmd).await.unwrap();
 
             conn.close().await.unwrap();

@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Broker address table with concurrent access
 //!
@@ -52,9 +49,7 @@ pub struct BrokerAddrTable {
 impl BrokerAddrTable {
     /// Create a new broker address table
     pub fn new() -> Self {
-        Self {
-            inner: DashMap::new(),
-        }
+        Self { inner: DashMap::new() }
     }
 
     /// Create with estimated capacity
@@ -75,11 +70,7 @@ impl BrokerAddrTable {
     ///
     /// # Returns
     /// Previous broker data if existed
-    pub fn insert(
-        &self,
-        broker_name: BrokerName,
-        broker_data: BrokerData,
-    ) -> Option<Arc<BrokerData>> {
+    pub fn insert(&self, broker_name: BrokerName, broker_data: BrokerData) -> Option<Arc<BrokerData>> {
         self.inner.insert(broker_name, Arc::new(broker_data))
     }
 
@@ -91,9 +82,7 @@ impl BrokerAddrTable {
     /// # Returns
     /// Cloned Arc to broker data if exists
     pub fn get(&self, broker_name: &str) -> Option<Arc<BrokerData>> {
-        self.inner
-            .get(broker_name)
-            .map(|entry| Arc::clone(entry.value()))
+        self.inner.get(broker_name).map(|entry| Arc::clone(entry.value()))
     }
 
     /// Remove broker by name
@@ -179,9 +168,7 @@ impl BrokerAddrTable {
         if let Some(mut entry) = self.inner.get_mut(broker_name) {
             // Clone the BrokerData, update it, and replace
             let mut new_data = (**entry.value()).clone();
-            new_data
-                .broker_addrs_mut()
-                .insert(broker_id, address.into());
+            new_data.broker_addrs_mut().insert(broker_id, address.into());
             *entry.value_mut() = Arc::new(new_data);
             true
         } else {
@@ -304,10 +291,7 @@ mod tests {
 
         // Verify update
         let broker = table.get("broker-a").unwrap();
-        assert_eq!(
-            broker.broker_addrs().get(&1).unwrap().as_str(),
-            "slave1:10911"
-        );
+        assert_eq!(broker.broker_addrs().get(&1).unwrap().as_str(), "slave1:10911");
     }
 
     #[test]
@@ -315,9 +299,7 @@ mod tests {
         let table = BrokerAddrTable::new();
         let broker_name: BrokerName = CheetahString::from_string("broker-a".to_string());
         let mut broker_data = create_test_broker_data("DefaultCluster", "broker-a");
-        broker_data
-            .broker_addrs_mut()
-            .insert(1, "slave1:10911".into());
+        broker_data.broker_addrs_mut().insert(1, "slave1:10911".into());
 
         table.insert(broker_name.clone(), broker_data);
 

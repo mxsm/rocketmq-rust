@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::mem;
 use std::sync::Arc;
@@ -113,8 +110,7 @@ impl IndexFile {
         end_phy_offset: i64,
         end_timestamp: i64,
     ) -> IndexFile {
-        let file_total_size =
-            INDEX_HEADER_SIZE + (hash_slot_num * HASH_SLOT_SIZE) + (index_num * INDEX_SIZE);
+        let file_total_size = INDEX_HEADER_SIZE + (hash_slot_num * HASH_SLOT_SIZE) + (index_num * INDEX_SIZE);
         let mapped_file = Arc::new(DefaultMappedFile::new(
             CheetahString::from_slice(file_name),
             file_total_size as u64,
@@ -167,10 +163,7 @@ impl IndexFile {
             self.index_header.update_byte_buffer();
             self.mapped_file.flush(0);
             self.mapped_file.release();
-            info!(
-                "flush index file elapsed time(ms) {}",
-                begin_time.elapsed().as_millis()
-            );
+            info!("flush index file elapsed time(ms) {}", begin_time.elapsed().as_millis());
         }
     }
 
@@ -193,10 +186,7 @@ impl IndexFile {
 
             let mapped_file = self.mapped_file.get_mapped_file_mut();
 
-            let mut slot_value = mapped_file
-                .get(abs_slot_pos..abs_slot_pos + 4)
-                .unwrap()
-                .get_i32();
+            let mut slot_value = mapped_file.get(abs_slot_pos..abs_slot_pos + 4).unwrap().get_i32();
 
             if slot_value <= INVALID_INDEX || slot_value > self.index_header.get_index_count() {
                 slot_value = INVALID_INDEX;
@@ -216,12 +206,8 @@ impl IndexFile {
                 + self.hash_slot_num * HASH_SLOT_SIZE
                 + self.index_header.get_index_count() as usize * INDEX_SIZE;
 
-            self.mapped_file.write_bytes_segment(
-                &hash_code.to_be_bytes(),
-                abs_index_pos,
-                0,
-                mem::size_of::<i32>(),
-            );
+            self.mapped_file
+                .write_bytes_segment(&hash_code.to_be_bytes(), abs_index_pos, 0, mem::size_of::<i32>());
             self.mapped_file.write_bytes_segment(
                 &phy_offset.to_be_bytes(),
                 abs_index_pos + 4,
@@ -301,14 +287,7 @@ impl IndexFile {
             || end >= begin_timestamp && end <= end_timestamp
     }
 
-    pub fn select_phy_offset(
-        &self,
-        phy_offsets: &mut Vec<i64>,
-        key: &str,
-        max_num: usize,
-        begin: i64,
-        end: i64,
-    ) {
+    pub fn select_phy_offset(&self, phy_offsets: &mut Vec<i64>, key: &str, max_num: usize, begin: i64, end: i64) {
         // CRITICAL: Must hold and release mapped_file to prevent resource leak
         if !self.mapped_file.hold() {
             return;
@@ -335,14 +314,10 @@ impl IndexFile {
 
             let mut next_index_to_read = slot_value;
             while phy_offsets.len() < max_num {
-                let abs_index_pos = INDEX_HEADER_SIZE
-                    + self.hash_slot_num * HASH_SLOT_SIZE
-                    + next_index_to_read as usize * INDEX_SIZE;
+                let abs_index_pos =
+                    INDEX_HEADER_SIZE + self.hash_slot_num * HASH_SLOT_SIZE + next_index_to_read as usize * INDEX_SIZE;
 
-                let buffer = match self
-                    .mapped_file
-                    .get_slice(abs_index_pos, abs_index_pos + INDEX_SIZE)
-                {
+                let buffer = match self.mapped_file.get_slice(abs_index_pos, abs_index_pos + INDEX_SIZE) {
                     None => break,
                     Some(buf) => buf,
                 };
@@ -443,11 +418,7 @@ mod tests {
 
         // Fill up the file
         for i in 0..4 {
-            file.put_key(
-                &format!("key{}", i),
-                i as i64 * 1000,
-                1000000000000 + i as i64 * 1000,
-            );
+            file.put_key(&format!("key{}", i), i as i64 * 1000, 1000000000000 + i as i64 * 1000);
         }
 
         assert!(file.is_write_full());
@@ -496,13 +467,7 @@ mod tests {
         file.put_key("other_key", 99999, begin_time + 2000);
 
         let mut results = Vec::new();
-        file.select_phy_offset(
-            &mut results,
-            "search_key",
-            10,
-            begin_time - 1000,
-            begin_time + 3000,
-        );
+        file.select_phy_offset(&mut results, "search_key", 10, begin_time - 1000, begin_time + 3000);
 
         // Should find 2 entries for "search_key"
         assert_eq!(results.len(), 2);
@@ -540,13 +505,7 @@ mod tests {
 
         let mut results = Vec::new();
         // Limit to 5 results
-        file.select_phy_offset(
-            &mut results,
-            "same_key",
-            5,
-            base_time - 1000,
-            base_time + 20000,
-        );
+        file.select_phy_offset(&mut results, "same_key", 5, base_time - 1000, base_time + 20000);
 
         assert_eq!(results.len(), 5, "Should respect max_num limit");
     }

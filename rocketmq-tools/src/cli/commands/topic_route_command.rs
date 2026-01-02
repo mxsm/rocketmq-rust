@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Topic route command - CLI layer
 //!
@@ -97,9 +94,9 @@ impl CommandExecute for TopicRouteCommand {
         let format = OutputFormat::from(self.format.as_str());
         match format {
             OutputFormat::Json => {
-                let json = route_data.serialize_json().map_err(|e| {
-                    crate::core::ToolsError::internal(format!("Failed to serialize JSON: {e}"))
-                })?;
+                let json = route_data
+                    .serialize_json()
+                    .map_err(|e| crate::core::ToolsError::internal(format!("Failed to serialize JSON: {e}")))?;
                 println!("{json}");
             }
             OutputFormat::Yaml => {
@@ -142,16 +139,8 @@ impl CommandExecute for TopicRouteCommand {
                     table.with(Style::rounded());
                     println!("{table}");
 
-                    let total_read: i32 = route_data
-                        .queue_datas
-                        .iter()
-                        .map(|q| q.read_queue_nums() as i32)
-                        .sum();
-                    let total_write: i32 = route_data
-                        .queue_datas
-                        .iter()
-                        .map(|q| q.write_queue_nums() as i32)
-                        .sum();
+                    let total_read: i32 = route_data.queue_datas.iter().map(|q| q.read_queue_nums() as i32).sum();
+                    let total_write: i32 = route_data.queue_datas.iter().map(|q| q.write_queue_nums() as i32).sum();
 
                     println!(
                         "\nTotal: {} brokers, {} read queues, {} write queues",
@@ -173,13 +162,7 @@ mod tests {
 
     #[test]
     fn test_command_parsing() {
-        let cmd = TopicRouteCommand::try_parse_from([
-            "topicRoute",
-            "-t",
-            "TestTopic",
-            "-n",
-            "127.0.0.1:9876",
-        ]);
+        let cmd = TopicRouteCommand::try_parse_from(["topicRoute", "-t", "TestTopic", "-n", "127.0.0.1:9876"]);
         assert!(cmd.is_ok());
         let cmd = cmd.unwrap();
         assert_eq!(cmd.topic, "TestTopic");
@@ -187,8 +170,7 @@ mod tests {
 
     #[test]
     fn test_command_with_format() {
-        let cmd =
-            TopicRouteCommand::try_parse_from(["topicRoute", "-t", "TestTopic", "-f", "json"]);
+        let cmd = TopicRouteCommand::try_parse_from(["topicRoute", "-t", "TestTopic", "-f", "json"]);
         assert!(cmd.is_ok());
         let cmd = cmd.unwrap();
         assert_eq!(cmd.format, "json");

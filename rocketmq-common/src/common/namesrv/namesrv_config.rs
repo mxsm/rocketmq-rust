@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::env;
@@ -32,8 +29,7 @@ mod defaults {
     use super::*;
 
     pub fn rocketmq_home() -> String {
-        env::var(ROCKETMQ_HOME_PROPERTY)
-            .unwrap_or_else(|_| env::var(ROCKETMQ_HOME_ENV).unwrap_or_default())
+        env::var(ROCKETMQ_HOME_PROPERTY).unwrap_or_else(|_| env::var(ROCKETMQ_HOME_ENV).unwrap_or_default())
     }
 
     pub fn kv_config_path() -> String {
@@ -136,10 +132,7 @@ pub struct NamesrvConfig {
     )]
     pub client_request_thread_pool_nums: i32,
 
-    #[serde(
-        alias = "defaultThreadPoolNums",
-        default = "defaults::default_thread_pool_nums"
-    )]
+    #[serde(alias = "defaultThreadPoolNums", default = "defaults::default_thread_pool_nums")]
     pub default_thread_pool_nums: i32,
 
     #[serde(
@@ -169,10 +162,7 @@ pub struct NamesrvConfig {
     #[serde(alias = "supportActingMaster", default)]
     pub support_acting_master: bool,
 
-    #[serde(
-        alias = "enableAllTopicList",
-        default = "defaults::enable_all_topic_list"
-    )]
+    #[serde(alias = "enableAllTopicList", default = "defaults::enable_all_topic_list")]
     pub enable_all_topic_list: bool,
 
     #[serde(alias = "enableTopicList", default = "defaults::enable_topic_list")]
@@ -187,10 +177,7 @@ pub struct NamesrvConfig {
     #[serde(alias = "needWaitForService", default)]
     pub need_wait_for_service: bool,
 
-    #[serde(
-        alias = "waitSecondsForService",
-        default = "defaults::wait_seconds_for_service"
-    )]
+    #[serde(alias = "waitSecondsForService", default = "defaults::wait_seconds_for_service")]
     pub wait_seconds_for_service: i32,
 
     #[serde(alias = "deleteTopicWithBrokerRegistration", default)]
@@ -246,14 +233,8 @@ impl NamesrvConfig {
     /// Compatible with Java version
     pub fn get_all_configs_format_string(&self) -> Result<String, String> {
         let mut json_map = HashMap::new();
-        json_map.insert(
-            "rocketmqHome".to_string(),
-            Value::String(self.rocketmq_home.clone()),
-        );
-        json_map.insert(
-            "kvConfigPath".to_string(),
-            Value::String(self.kv_config_path.clone()),
-        );
+        json_map.insert("rocketmqHome".to_string(), Value::String(self.rocketmq_home.clone()));
+        json_map.insert("kvConfigPath".to_string(), Value::String(self.kv_config_path.clone()));
         json_map.insert(
             "configStorePath".to_string(),
             Value::String(self.config_store_path.clone()),
@@ -262,10 +243,7 @@ impl NamesrvConfig {
             "productEnvName".to_string(),
             Value::String(self.product_env_name.clone()),
         );
-        json_map.insert(
-            "clusterTest".to_string(),
-            Value::String(self.cluster_test.to_string()),
-        );
+        json_map.insert("clusterTest".to_string(), Value::String(self.cluster_test.to_string()));
         json_map.insert(
             "orderMessageEnable".to_string(),
             Value::String(self.order_message_enable.to_string()),
@@ -350,10 +328,7 @@ impl NamesrvConfig {
             .collect()
     }
 
-    pub fn update(
-        &mut self,
-        properties: HashMap<CheetahString, CheetahString>,
-    ) -> Result<(), String> {
+    pub fn update(&mut self, properties: HashMap<CheetahString, CheetahString>) -> Result<(), String> {
         for (key, value) in properties {
             match key.as_str() {
                 "rocketmqHome" => self.rocketmq_home = value.to_string(),
@@ -391,9 +366,8 @@ impl NamesrvConfig {
                         .map_err(|_| format!("Invalid integer value for key '{key}'"))?
                 }
                 "scanNotActiveBrokerInterval" => {
-                    self.scan_not_active_broker_interval = value
-                        .parse()
-                        .map_err(|_| format!("Invalid value for key '{key}'"))?
+                    self.scan_not_active_broker_interval =
+                        value.parse().map_err(|_| format!("Invalid value for key '{key}'"))?
                 }
                 "unRegisterBrokerQueueCapacity" => {
                     self.unregister_broker_queue_capacity = value
@@ -469,8 +443,7 @@ mod tests {
 
         assert_eq!(
             config.rocketmq_home,
-            env::var(ROCKETMQ_HOME_PROPERTY)
-                .unwrap_or_else(|_| env::var(ROCKETMQ_HOME_ENV).unwrap_or_default())
+            env::var(ROCKETMQ_HOME_PROPERTY).unwrap_or_else(|_| env::var(ROCKETMQ_HOME_ENV).unwrap_or_default())
         );
         assert_eq!(
             config.kv_config_path,
@@ -519,10 +492,7 @@ mod tests {
         let mut config = NamesrvConfig::new();
 
         let mut properties = HashMap::new();
-        properties.insert(
-            CheetahString::from("rocketmqHome"),
-            CheetahString::from("/new/path"),
-        );
+        properties.insert(CheetahString::from("rocketmqHome"), CheetahString::from("/new/path"));
         properties.insert(
             CheetahString::from("kvConfigPath"),
             CheetahString::from("/new/kvConfigPath"),
@@ -531,26 +501,14 @@ mod tests {
             CheetahString::from("configStorePath"),
             CheetahString::from("/new/configStorePath"),
         );
-        properties.insert(
-            CheetahString::from("productEnvName"),
-            CheetahString::from("new_env"),
-        );
-        properties.insert(
-            CheetahString::from("clusterTest"),
-            CheetahString::from("true"),
-        );
-        properties.insert(
-            CheetahString::from("orderMessageEnable"),
-            CheetahString::from("true"),
-        );
+        properties.insert(CheetahString::from("productEnvName"), CheetahString::from("new_env"));
+        properties.insert(CheetahString::from("clusterTest"), CheetahString::from("true"));
+        properties.insert(CheetahString::from("orderMessageEnable"), CheetahString::from("true"));
         properties.insert(
             CheetahString::from("clientRequestThreadPoolNums"),
             CheetahString::from("10"),
         );
-        properties.insert(
-            CheetahString::from("defaultThreadPoolNums"),
-            CheetahString::from("20"),
-        );
+        properties.insert(CheetahString::from("defaultThreadPoolNums"), CheetahString::from("20"));
         properties.insert(
             CheetahString::from("clientRequestThreadPoolQueueCapacity"),
             CheetahString::from("10000"),
@@ -567,18 +525,9 @@ mod tests {
             CheetahString::from("unRegisterBrokerQueueCapacity"),
             CheetahString::from("4000"),
         );
-        properties.insert(
-            CheetahString::from("supportActingMaster"),
-            CheetahString::from("true"),
-        );
-        properties.insert(
-            CheetahString::from("enableAllTopicList"),
-            CheetahString::from("false"),
-        );
-        properties.insert(
-            CheetahString::from("enableTopicList"),
-            CheetahString::from("false"),
-        );
+        properties.insert(CheetahString::from("supportActingMaster"), CheetahString::from("true"));
+        properties.insert(CheetahString::from("enableAllTopicList"), CheetahString::from("false"));
+        properties.insert(CheetahString::from("enableTopicList"), CheetahString::from("false"));
         properties.insert(
             CheetahString::from("notifyMinBrokerIdChanged"),
             CheetahString::from("true"),
@@ -587,14 +536,8 @@ mod tests {
             CheetahString::from("enableControllerInNamesrv"),
             CheetahString::from("true"),
         );
-        properties.insert(
-            CheetahString::from("needWaitForService"),
-            CheetahString::from("true"),
-        );
-        properties.insert(
-            CheetahString::from("waitSecondsForService"),
-            CheetahString::from("30"),
-        );
+        properties.insert(CheetahString::from("needWaitForService"), CheetahString::from("true"));
+        properties.insert(CheetahString::from("waitSecondsForService"), CheetahString::from("30"));
         properties.insert(
             CheetahString::from("deleteTopicWithBrokerRegistration"),
             CheetahString::from("true"),
@@ -638,17 +581,13 @@ mod tests {
 
         assert!(!json_output.is_empty(), "JSON output should not be empty");
 
-        let parsed: serde_json::Value =
-            serde_json::from_str(&json_output).expect("Output should be valid JSON");
+        let parsed: serde_json::Value = serde_json::from_str(&json_output).expect("Output should be valid JSON");
 
         assert_eq!(parsed["rocketmqHome"], config.rocketmq_home);
         assert_eq!(parsed["kvConfigPath"], config.kv_config_path);
         assert_eq!(parsed["configStorePath"], config.config_store_path);
         assert_eq!(parsed["productEnvName"], config.product_env_name);
-        assert_eq!(
-            parsed["clusterTest"].as_str().unwrap(),
-            config.cluster_test.to_string()
-        );
+        assert_eq!(parsed["clusterTest"].as_str().unwrap(), config.cluster_test.to_string());
         assert_eq!(
             parsed["orderMessageEnable"].as_str().unwrap(),
             config.order_message_enable.to_string()
@@ -666,9 +605,7 @@ mod tests {
             config.default_thread_pool_nums.to_string()
         );
         assert_eq!(
-            parsed["clientRequestThreadPoolQueueCapacity"]
-                .as_str()
-                .unwrap(),
+            parsed["clientRequestThreadPoolQueueCapacity"].as_str().unwrap(),
             config.client_request_thread_pool_queue_capacity.to_string()
         );
         assert_eq!(
@@ -712,9 +649,7 @@ mod tests {
             config.wait_seconds_for_service.to_string()
         );
         assert_eq!(
-            parsed["deleteTopicWithBrokerRegistration"]
-                .as_str()
-                .unwrap(),
+            parsed["deleteTopicWithBrokerRegistration"].as_str().unwrap(),
             config.delete_topic_with_broker_registration.to_string()
         );
         assert_eq!(parsed["configBlackList"], config.config_black_list);

@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -75,8 +72,7 @@ where
     MS: MessageStore,
 {
     pub(crate) fn fetch_consume_offset(&self, mq: &MessageQueue) -> i64 {
-        let group =
-            CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group());
+        let group = CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group());
         let topic = mq.get_topic_cs();
         let queue_id = mq.get_queue_id();
         let mut offset = self
@@ -107,23 +103,16 @@ where
     }
 
     pub fn update_consume_offset(&self, mq: &MessageQueue, offset: i64) {
-        self.broker_runtime_inner
-            .consumer_offset_manager()
-            .commit_offset(
-                self.store_host.to_string().into(),
-                &CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group()),
-                mq.get_topic_cs(),
-                mq.get_queue_id(),
-                offset,
-            );
+        self.broker_runtime_inner.consumer_offset_manager().commit_offset(
+            self.store_host.to_string().into(),
+            &CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group()),
+            mq.get_topic_cs(),
+            mq.get_queue_id(),
+            offset,
+        );
     }
 
-    pub async fn get_half_message(
-        &self,
-        queue_id: i32,
-        offset: i64,
-        nums: i32,
-    ) -> Option<PullResult> {
+    pub async fn get_half_message(&self, queue_id: i32, offset: i64, nums: i32) -> Option<PullResult> {
         self.get_message(
             &CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group()),
             &CheetahString::from_static_str(TransactionalMessageUtil::build_half_topic()),
@@ -135,12 +124,7 @@ where
         .await
     }
 
-    pub async fn get_op_message(
-        &self,
-        queue_id: i32,
-        offset: i64,
-        nums: i32,
-    ) -> Option<PullResult> {
+    pub async fn get_op_message(&self, queue_id: i32, offset: i64, nums: i32) -> Option<PullResult> {
         self.get_message(
             &CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group()),
             &CheetahString::from_static_str(TransactionalMessageUtil::build_op_topic()),
@@ -195,8 +179,7 @@ where
                 get_message_result.next_begin_offset() as u64,
                 get_message_result.min_offset() as u64,
                 get_message_result.max_offset() as u64,
-                msg_found_list
-                    .map(|msg_found_list| msg_found_list.into_iter().map(ArcMut::new).collect()),
+                msg_found_list.map(|msg_found_list| msg_found_list.into_iter().map(ArcMut::new).collect()),
             ))
         } else {
             error!(
@@ -221,10 +204,7 @@ where
         found_list
     }
 
-    pub async fn select_topic_config(
-        &mut self,
-        topic: &CheetahString,
-    ) -> Option<ArcMut<TopicConfig>> {
+    pub async fn select_topic_config(&mut self, topic: &CheetahString) -> Option<ArcMut<TopicConfig>> {
         let mut topic_config = self
             .broker_runtime_inner
             .topic_config_manager()
@@ -245,10 +225,7 @@ where
         topic_config
     }
 
-    pub async fn put_half_message(
-        &mut self,
-        mut message: MessageExtBrokerInner,
-    ) -> PutMessageResult {
+    pub async fn put_half_message(&mut self, mut message: MessageExtBrokerInner) -> PutMessageResult {
         Self::parse_half_message_inner(&mut message);
         self.broker_runtime_inner
             .message_store_unchecked_mut()
@@ -309,8 +286,7 @@ where
         //TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC topic is a special topic for half messages
         // write queue number is always 1, read queue number is always 1
         message.message_ext_inner.queue_id = 0;
-        let properties_to_string =
-            message_decoder::message_properties_to_string(message.get_properties());
+        let properties_to_string = message_decoder::message_properties_to_string(message.get_properties());
         message.properties_string = properties_to_string;
     }
 
@@ -322,22 +298,17 @@ where
         if let Some(queue_offset_from_prepare) = queue_offset_from_prepare {
             MessageAccessor::put_property(
                 &mut message_inner,
-                CheetahString::from_static_str(
-                    MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET,
-                ),
+                CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET),
                 queue_offset_from_prepare,
             );
         } else {
             MessageAccessor::put_property(
                 &mut message_inner,
-                CheetahString::from_static_str(
-                    MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET,
-                ),
+                CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET),
                 CheetahString::from_string(msg_ext.queue_offset.to_string()),
             );
         }
-        let properties_to_string =
-            message_decoder::message_properties_to_string(message_inner.get_properties());
+        let properties_to_string = message_decoder::message_properties_to_string(message_inner.get_properties());
         message_inner.properties_string = properties_to_string;
         message_inner
     }
@@ -346,12 +317,8 @@ where
     pub fn renew_half_message_inner(msg_ext: &MessageExt) -> MessageExtBrokerInner {
         let mut inner = MessageExtBrokerInner {
             message_ext_inner: msg_ext.clone(),
-            properties_string: message_decoder::message_properties_to_string(
-                msg_ext.get_properties(),
-            ),
-            tags_code: MessageExtBrokerInner::tags_string_to_tags_code(
-                msg_ext.get_tags().unwrap_or_default().as_str(),
-            ),
+            properties_string: message_decoder::message_properties_to_string(msg_ext.get_properties()),
+            tags_code: MessageExtBrokerInner::tags_string_to_tags_code(msg_ext.get_tags().unwrap_or_default().as_str()),
             encoded_buff: None,
             encode_completed: false,
             version: Default::default(),
@@ -361,24 +328,18 @@ where
         inner
     }
 
-    fn make_op_message_inner(
-        &self,
-        message: Message,
-        message_queue: &MessageQueue,
-    ) -> MessageExtBrokerInner {
+    fn make_op_message_inner(&self, message: Message, message_queue: &MessageQueue) -> MessageExtBrokerInner {
         let mut msg_inner = MessageExtBrokerInner::default();
         msg_inner.message_ext_inner.message = message;
         //msg_inner.set_topic(message.get_topic().to_owned());
         //msg_inner.set_body(message.get_body().expect("message body is empty").clone());
         msg_inner.message_ext_inner.queue_id = message_queue.get_queue_id();
         //msg_inner.set_tags(message.get_tags().unwrap_or_default());
-        msg_inner.tags_code = MessageExtBrokerInner::tags_string_to_tags_code(
-            msg_inner.get_tags().unwrap_or_default().as_str(),
-        );
+        msg_inner.tags_code =
+            MessageExtBrokerInner::tags_string_to_tags_code(msg_inner.get_tags().unwrap_or_default().as_str());
         msg_inner.message_ext_inner.sys_flag = 0;
         //MessageAccessor::set_properties(&mut msg_inner, message.get_properties().clone());
-        msg_inner.properties_string =
-            MessageDecoder::message_properties_to_string(msg_inner.get_properties());
+        msg_inner.properties_string = MessageDecoder::message_properties_to_string(msg_inner.get_properties());
 
         msg_inner.message_ext_inner.born_timestamp = get_current_millis() as i64;
         msg_inner.message_ext_inner.born_host = self.store_host;
@@ -400,10 +361,7 @@ where
         let op_queue = op_queue_map.entry(queue_id).or_insert_with(|| {
             get_op_queue_by_half(
                 queue_id,
-                self.broker_runtime_inner
-                    .broker_config()
-                    .broker_name()
-                    .clone(),
+                self.broker_runtime_inner.broker_config().broker_name().clone(),
             )
         });
         let inner = self.make_op_message_inner(message, op_queue);
@@ -411,10 +369,7 @@ where
         result.put_message_status() == PutMessageStatus::PutOk
     }
 
-    pub async fn put_message_return_result(
-        &self,
-        message_inner: MessageExtBrokerInner,
-    ) -> PutMessageResult {
+    pub async fn put_message_return_result(&self, message_inner: MessageExtBrokerInner) -> PutMessageResult {
         let result = self
             .broker_runtime_inner
             .mut_from_ref()
@@ -446,9 +401,5 @@ where
 
 #[inline]
 fn get_op_queue_by_half(queue_id: i32, broker_name: CheetahString) -> MessageQueue {
-    MessageQueue::from_parts(
-        TransactionalMessageUtil::build_op_topic(),
-        broker_name,
-        queue_id,
-    )
+    MessageQueue::from_parts(TransactionalMessageUtil::build_op_topic(), broker_name, queue_id)
 }

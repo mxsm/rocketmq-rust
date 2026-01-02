@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::fmt::Display;
 
@@ -38,9 +35,8 @@ impl Display for PlainAccessConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "PlainAccessConfig {{ access_key: {:?}, secret_key: {:?}, white_remote_address: {:?}, \
-             admin: {}, default_topic_perm: {:?}, default_group_perm: {:?}, topic_perms: {:?}, \
-             group_perms: {:?} }}",
+            "PlainAccessConfig {{ access_key: {:?}, secret_key: {:?}, white_remote_address: {:?}, admin: {}, \
+             default_topic_perm: {:?}, default_group_perm: {:?}, topic_perms: {:?}, group_perms: {:?} }}",
             self.access_key,
             self.secret_key,
             self.white_remote_address,
@@ -159,31 +155,13 @@ mod tests {
         let json = r#"{"accessKey":"key1","secretKey":"secret1","whiteRemoteAddress":"address1","admin":true,"defaultTopicPerm":"perm1","defaultGroupPerm":"perm2","topicPerms":["topic1"],"groupPerms":["group1"]}"#;
         let deserialized: PlainAccessConfig = serde_json::from_str(json).unwrap();
         assert_eq!(deserialized.access_key, Some(CheetahString::from("key1")));
-        assert_eq!(
-            deserialized.secret_key,
-            Some(CheetahString::from("secret1"))
-        );
-        assert_eq!(
-            deserialized.white_remote_address,
-            Some(CheetahString::from("address1"))
-        );
+        assert_eq!(deserialized.secret_key, Some(CheetahString::from("secret1")));
+        assert_eq!(deserialized.white_remote_address, Some(CheetahString::from("address1")));
         assert!(deserialized.admin);
-        assert_eq!(
-            deserialized.default_topic_perm,
-            Some(CheetahString::from("perm1"))
-        );
-        assert_eq!(
-            deserialized.default_group_perm,
-            Some(CheetahString::from("perm2"))
-        );
-        assert_eq!(
-            deserialized.topic_perms,
-            vec![CheetahString::from("topic1")]
-        );
-        assert_eq!(
-            deserialized.group_perms,
-            vec![CheetahString::from("group1")]
-        );
+        assert_eq!(deserialized.default_topic_perm, Some(CheetahString::from("perm1")));
+        assert_eq!(deserialized.default_group_perm, Some(CheetahString::from("perm2")));
+        assert_eq!(deserialized.topic_perms, vec![CheetahString::from("topic1")]);
+        assert_eq!(deserialized.group_perms, vec![CheetahString::from("group1")]);
     }
 
     #[test]

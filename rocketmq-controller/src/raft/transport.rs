@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -85,8 +82,8 @@ impl MessageCodec {
             .map_err(|e| ControllerError::NetworkError(e.to_string()))?;
 
         // Deserialize using protobuf 2.x
-        let msg = eraftpb::Message::parse_from_bytes(&buf)
-            .map_err(|e| ControllerError::SerializationError(e.to_string()))?;
+        let msg =
+            eraftpb::Message::parse_from_bytes(&buf).map_err(|e| ControllerError::SerializationError(e.to_string()))?;
 
         Ok(msg)
     }
@@ -130,18 +127,12 @@ impl PeerConnection {
 
         match TcpStream::connect(self.addr).await {
             Ok(stream) => {
-                info!(
-                    "Successfully connected to peer {} at {}",
-                    self.peer_id, self.addr
-                );
+                info!("Successfully connected to peer {} at {}", self.peer_id, self.addr);
                 self.stream = Some(stream);
                 Ok(())
             }
             Err(e) => {
-                warn!(
-                    "Failed to connect to peer {} at {}: {}",
-                    self.peer_id, self.addr, e
-                );
+                warn!("Failed to connect to peer {} at {}: {}", self.peer_id, self.addr, e);
                 Err(ControllerError::NetworkError(e.to_string()))
             }
         }
@@ -169,11 +160,7 @@ impl PeerConnection {
             ControllerError::NetworkError(e.to_string())
         })?;
 
-        debug!(
-            "Sent message to peer {}, type: {:?}",
-            self.peer_id,
-            msg.get_msg_type()
-        );
+        debug!("Sent message to peer {}, type: {:?}", self.peer_id, msg.get_msg_type());
         Ok(())
     }
 
@@ -217,11 +204,7 @@ impl RaftTransport {
         node_id: u64,
         listen_addr: SocketAddr,
         peer_addrs: HashMap<u64, SocketAddr>,
-    ) -> (
-        Self,
-        mpsc::UnboundedReceiver<Message>,
-        mpsc::UnboundedReceiver<Message>,
-    ) {
+    ) -> (Self, mpsc::UnboundedReceiver<Message>, mpsc::UnboundedReceiver<Message>) {
         let (message_tx, message_rx) = mpsc::unbounded_channel();
         let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
 
@@ -286,11 +269,7 @@ impl RaftTransport {
                         loop {
                             match MessageCodec::decode(&mut stream).await {
                                 Ok(msg) => {
-                                    debug!(
-                                        "Received message from {}: {:?}",
-                                        addr,
-                                        msg.get_msg_type()
-                                    );
+                                    debug!("Received message from {}: {:?}", addr, msg.get_msg_type());
                                     if incoming_tx.send(msg).is_err() {
                                         warn!("Failed to forward incoming message");
                                         break;

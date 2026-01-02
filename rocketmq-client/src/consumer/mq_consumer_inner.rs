@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashSet;
 
@@ -112,15 +109,11 @@ pub struct MQConsumerInnerImpl {
 
 impl MQConsumerInnerImpl {
     pub(crate) async fn pop_message(&mut self, pop_request: PopRequest) {
-        self.default_mqpush_consumer_impl
-            .pop_message(pop_request)
-            .await;
+        self.default_mqpush_consumer_impl.pop_message(pop_request).await;
     }
 
     pub(crate) async fn pull_message(&mut self, pull_request: PullRequest) {
-        self.default_mqpush_consumer_impl
-            .pull_message(pull_request)
-            .await;
+        self.default_mqpush_consumer_impl.pull_message(pull_request).await;
     }
 
     pub(crate) async fn consume_message_directly(
@@ -176,26 +169,14 @@ impl MQConsumerInner for MQConsumerInnerImpl {
     }
 
     #[inline]
-    async fn update_topic_subscribe_info(
-        &self,
-        topic: CheetahString,
-        info: &HashSet<MessageQueue>,
-    ) {
-        MQConsumerInner::update_topic_subscribe_info(
-            self.default_mqpush_consumer_impl.mut_from_ref(),
-            topic,
-            info,
-        )
-        .await
+    async fn update_topic_subscribe_info(&self, topic: CheetahString, info: &HashSet<MessageQueue>) {
+        MQConsumerInner::update_topic_subscribe_info(self.default_mqpush_consumer_impl.mut_from_ref(), topic, info)
+            .await
     }
 
     #[inline]
     async fn is_subscribe_topic_need_update(&self, topic: &str) -> bool {
-        MQConsumerInner::is_subscribe_topic_need_update(
-            self.default_mqpush_consumer_impl.as_ref(),
-            topic,
-        )
-        .await
+        MQConsumerInner::is_subscribe_topic_need_update(self.default_mqpush_consumer_impl.as_ref(), topic).await
     }
 
     #[inline]

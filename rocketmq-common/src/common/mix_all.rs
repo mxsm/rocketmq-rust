@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::env;
@@ -115,10 +112,9 @@ pub fn is_lmq(lmq_meta_data: Option<&str>) -> bool {
 }
 
 pub fn get_ws_addr() -> String {
-    let ws_domain_name = env::var("rocketmq.namesrv.domain")
-        .unwrap_or_else(|_| DEFAULT_NAMESRV_ADDR_LOOKUP.to_string());
-    let ws_domain_subgroup =
-        env::var("rocketmq.namesrv.domain.subgroup").unwrap_or_else(|_| "nsaddr".to_string());
+    let ws_domain_name =
+        env::var("rocketmq.namesrv.domain").unwrap_or_else(|_| DEFAULT_NAMESRV_ADDR_LOOKUP.to_string());
+    let ws_domain_subgroup = env::var("rocketmq.namesrv.domain.subgroup").unwrap_or_else(|_| "nsaddr".to_string());
     let mut ws_addr = format!("http://{ws_domain_name}:8080/rocketmq/{ws_domain_subgroup}");
 
     if ws_domain_name.contains(':') {
@@ -149,11 +145,7 @@ pub fn human_readable_byte_count(bytes: i64, si: bool) -> String {
     }
     let exp = (bytes.ln() / unit.ln()).floor() as i32;
     let pre = ['K', 'M', 'G', 'T', 'P', 'E'][(exp - 1) as usize];
-    let pre = if si {
-        pre.to_string()
-    } else {
-        format!("{pre}i")
-    };
+    let pre = if si { pre.to_string() } else { format!("{pre}i") };
     format!("{:.1} {}B", bytes / unit.powi(exp), pre)
 }
 
@@ -201,45 +193,19 @@ mod tests {
 
     #[test]
     fn identifies_sys_consumer_group_for_no_cold_read_limit() {
-        assert!(is_sys_consumer_group_for_no_cold_read_limit(
-            "DEFAULT_CONSUMER"
-        ));
-        assert!(is_sys_consumer_group_for_no_cold_read_limit(
-            "TOOLS_CONSUMER"
-        ));
-        assert!(is_sys_consumer_group_for_no_cold_read_limit(
-            "SCHEDULE_CONSUMER"
-        ));
-        assert!(is_sys_consumer_group_for_no_cold_read_limit(
-            "FILTERSRV_CONSUMER"
-        ));
-        assert!(!is_sys_consumer_group_for_no_cold_read_limit(
-            "MONITOR_CONSUMER"
-        ));
-        assert!(!is_sys_consumer_group_for_no_cold_read_limit(
-            "SELF_TEST_CONSUMER"
-        ));
-        assert!(!is_sys_consumer_group_for_no_cold_read_limit(
-            "ONS_HTTP_PROXY_GROUP"
-        ));
-        assert!(is_sys_consumer_group_for_no_cold_read_limit(
-            "CID_ONSAPI_PERMISSION"
-        ));
-        assert!(is_sys_consumer_group_for_no_cold_read_limit(
-            "CID_ONSAPI_OWNER"
-        ));
-        assert!(is_sys_consumer_group_for_no_cold_read_limit(
-            "CID_ONSAPI_PULL"
-        ));
-        assert!(is_sys_consumer_group_for_no_cold_read_limit(
-            "CID_RMQ_SYS_TRANS"
-        ));
-        assert!(is_sys_consumer_group_for_no_cold_read_limit(
-            "CID_RMQ_SYS_SOME_GROUP"
-        ));
-        assert!(!is_sys_consumer_group_for_no_cold_read_limit(
-            "NON_SYS_GROUP"
-        ));
+        assert!(is_sys_consumer_group_for_no_cold_read_limit("DEFAULT_CONSUMER"));
+        assert!(is_sys_consumer_group_for_no_cold_read_limit("TOOLS_CONSUMER"));
+        assert!(is_sys_consumer_group_for_no_cold_read_limit("SCHEDULE_CONSUMER"));
+        assert!(is_sys_consumer_group_for_no_cold_read_limit("FILTERSRV_CONSUMER"));
+        assert!(!is_sys_consumer_group_for_no_cold_read_limit("MONITOR_CONSUMER"));
+        assert!(!is_sys_consumer_group_for_no_cold_read_limit("SELF_TEST_CONSUMER"));
+        assert!(!is_sys_consumer_group_for_no_cold_read_limit("ONS_HTTP_PROXY_GROUP"));
+        assert!(is_sys_consumer_group_for_no_cold_read_limit("CID_ONSAPI_PERMISSION"));
+        assert!(is_sys_consumer_group_for_no_cold_read_limit("CID_ONSAPI_OWNER"));
+        assert!(is_sys_consumer_group_for_no_cold_read_limit("CID_ONSAPI_PULL"));
+        assert!(is_sys_consumer_group_for_no_cold_read_limit("CID_RMQ_SYS_TRANS"));
+        assert!(is_sys_consumer_group_for_no_cold_read_limit("CID_RMQ_SYS_SOME_GROUP"));
+        assert!(!is_sys_consumer_group_for_no_cold_read_limit("NON_SYS_GROUP"));
     }
 
     #[test]

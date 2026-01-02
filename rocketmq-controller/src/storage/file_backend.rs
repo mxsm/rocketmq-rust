@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -61,14 +58,14 @@ impl FileBackend {
         info!("Opening file-based storage at {:?}", path);
 
         // Create directories
-        fs::create_dir_all(&path).await.map_err(|e| {
-            ControllerError::StorageError(format!("Failed to create directory: {}", e))
-        })?;
+        fs::create_dir_all(&path)
+            .await
+            .map_err(|e| ControllerError::StorageError(format!("Failed to create directory: {}", e)))?;
 
         let data_dir = path.join("data");
-        fs::create_dir_all(&data_dir).await.map_err(|e| {
-            ControllerError::StorageError(format!("Failed to create data directory: {}", e))
-        })?;
+        fs::create_dir_all(&data_dir)
+            .await
+            .map_err(|e| ControllerError::StorageError(format!("Failed to create data directory: {}", e)))?;
 
         let backend = Self {
             path,
@@ -97,14 +94,12 @@ impl FileBackend {
             return Ok(());
         }
 
-        let content = fs::read(&metadata_path).await.map_err(|e| {
-            ControllerError::StorageError(format!("Failed to read metadata: {}", e))
-        })?;
+        let content = fs::read(&metadata_path)
+            .await
+            .map_err(|e| ControllerError::StorageError(format!("Failed to read metadata: {}", e)))?;
 
-        let loaded_index: HashMap<String, PathBuf> =
-            serde_json::from_slice(&content).map_err(|e| {
-                ControllerError::SerializationError(format!("Failed to parse metadata: {}", e))
-            })?;
+        let loaded_index: HashMap<String, PathBuf> = serde_json::from_slice(&content)
+            .map_err(|e| ControllerError::SerializationError(format!("Failed to parse metadata: {}", e)))?;
 
         *self.index.write() = loaded_index;
 
@@ -118,13 +113,12 @@ impl FileBackend {
         let metadata_path = self.path.join("metadata.json");
 
         let index = self.index.read().clone();
-        let content = serde_json::to_vec_pretty(&index).map_err(|e| {
-            ControllerError::SerializationError(format!("Failed to serialize metadata: {}", e))
-        })?;
+        let content = serde_json::to_vec_pretty(&index)
+            .map_err(|e| ControllerError::SerializationError(format!("Failed to serialize metadata: {}", e)))?;
 
-        fs::write(&metadata_path, content).await.map_err(|e| {
-            ControllerError::StorageError(format!("Failed to write metadata: {}", e))
-        })?;
+        fs::write(&metadata_path, content)
+            .await
+            .map_err(|e| ControllerError::StorageError(format!("Failed to write metadata: {}", e)))?;
 
         Ok(())
     }
@@ -139,10 +133,7 @@ impl FileBackend {
     /// Hash a key to generate a filename
     fn hash_key(key: &str) -> String {
         // Simple hash function - use the key itself if safe, otherwise hash it
-        if key
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
-        {
+        if key.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
             key.to_string()
         } else {
             // Use a simple hash for keys with special characters
@@ -229,9 +220,9 @@ impl StorageBackend for FileBackend {
 
         // Delete file
         if file_path.exists() {
-            fs::remove_file(&file_path).await.map_err(|e| {
-                ControllerError::StorageError(format!("Failed to delete file: {}", e))
-            })?;
+            fs::remove_file(&file_path)
+                .await
+                .map_err(|e| ControllerError::StorageError(format!("Failed to delete file: {}", e)))?;
         }
 
         // Save index
@@ -288,13 +279,13 @@ impl StorageBackend for FileBackend {
         // Delete all files
         let data_dir = self.path.join("data");
         if data_dir.exists() {
-            fs::remove_dir_all(&data_dir).await.map_err(|e| {
-                ControllerError::StorageError(format!("Failed to clear data: {}", e))
-            })?;
+            fs::remove_dir_all(&data_dir)
+                .await
+                .map_err(|e| ControllerError::StorageError(format!("Failed to clear data: {}", e)))?;
 
-            fs::create_dir_all(&data_dir).await.map_err(|e| {
-                ControllerError::StorageError(format!("Failed to recreate data directory: {}", e))
-            })?;
+            fs::create_dir_all(&data_dir)
+                .await
+                .map_err(|e| ControllerError::StorageError(format!("Failed to recreate data directory: {}", e)))?;
         }
 
         // Clear index

@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Get NameServer configuration command
 
@@ -66,11 +63,7 @@ impl GetNamesrvConfigCommand {
         // Flatten the map for display (assuming only one nameserver or merging all configs)
         let config: std::collections::HashMap<String, String> = config_map
             .into_iter()
-            .flat_map(|(_, configs)| {
-                configs
-                    .into_iter()
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-            })
+            .flat_map(|(_, configs)| configs.into_iter().map(|(k, v)| (k.to_string(), v.to_string())))
             .collect();
 
         // Format and display output
@@ -94,32 +87,23 @@ impl GetNamesrvConfigCommand {
     }
 
     /// Print configuration based on format
-    fn print_config(
-        &self,
-        config: &std::collections::HashMap<String, String>,
-    ) -> RocketMQResult<()> {
+    fn print_config(&self, config: &std::collections::HashMap<String, String>) -> RocketMQResult<()> {
         match self.format.as_str() {
             "json" => {
-                let json = serde_json::to_string_pretty(&config).map_err(|e| {
-                    crate::core::ToolsError::internal(format!("Failed to serialize to JSON: {e}"))
-                })?;
+                let json = serde_json::to_string_pretty(&config)
+                    .map_err(|e| crate::core::ToolsError::internal(format!("Failed to serialize to JSON: {e}")))?;
                 println!("{json}");
             }
             "yaml" => {
-                let yaml = serde_yaml::to_string(&config).map_err(|e| {
-                    crate::core::ToolsError::internal(format!("Failed to serialize to YAML: {e}"))
-                })?;
+                let yaml = serde_yaml::to_string(&config)
+                    .map_err(|e| crate::core::ToolsError::internal(format!("Failed to serialize to YAML: {e}")))?;
                 println!("{yaml}");
             }
             "table" => {
                 self.print_table(config);
             }
             _ => {
-                return Err(crate::core::ToolsError::validation_error(
-                    "format",
-                    "Invalid format specified",
-                )
-                .into());
+                return Err(crate::core::ToolsError::validation_error("format", "Invalid format specified").into());
             }
         }
 

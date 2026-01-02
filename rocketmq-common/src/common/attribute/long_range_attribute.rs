@@ -1,36 +1,30 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashSet;
 
@@ -65,13 +59,7 @@ impl LongRangeAttribute {
     /// # Returns
     ///
     /// A new EnumAttribute instance, or an error if the default value is not in the universe
-    pub fn new(
-        name: CheetahString,
-        changeable: bool,
-        min: i64,
-        max: i64,
-        default_value: i64,
-    ) -> Self {
+    pub fn new(name: CheetahString, changeable: bool, min: i64, max: i64, default_value: i64) -> Self {
         Self {
             attribute: AttributeBase::new(name, changeable),
             min,
@@ -98,9 +86,7 @@ impl LongRangeAttribute {
 
     /// Parse a string to a long integer
     pub fn parse_long(value: &str) -> Result<i64, String> {
-        value
-            .parse::<i64>()
-            .map_err(|e| format!("Invalid integer format: {e}"))
+        value.parse::<i64>().map_err(|e| format!("Invalid integer format: {e}"))
     }
 }
 
@@ -165,26 +151,14 @@ mod tests {
 
     #[test]
     fn verify_value_in_range() {
-        let attribute = LongRangeAttribute::new(
-            CheetahString::from_static_str("test_attribute"),
-            true,
-            0,
-            100,
-            50,
-        );
+        let attribute = LongRangeAttribute::new(CheetahString::from_static_str("test_attribute"), true, 0, 100, 50);
         let result = attribute.verify("42");
         assert!(result.is_ok());
     }
 
     #[test]
     fn verify_value_below_range() {
-        let attribute = LongRangeAttribute::new(
-            CheetahString::from_static_str("test_attribute"),
-            true,
-            0,
-            100,
-            50,
-        );
+        let attribute = LongRangeAttribute::new(CheetahString::from_static_str("test_attribute"), true, 0, 100, 50);
         let result = attribute.verify("-1");
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Value -1 is not in range [0, 100]");
@@ -192,13 +166,7 @@ mod tests {
 
     #[test]
     fn verify_value_above_range() {
-        let attribute = LongRangeAttribute::new(
-            CheetahString::from_static_str("test_attribute"),
-            true,
-            0,
-            100,
-            50,
-        );
+        let attribute = LongRangeAttribute::new(CheetahString::from_static_str("test_attribute"), true, 0, 100, 50);
         let result = attribute.verify("101");
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Value 101 is not in range [0, 100]");

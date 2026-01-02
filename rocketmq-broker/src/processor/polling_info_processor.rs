@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::key_builder::KeyBuilder;
@@ -45,9 +42,7 @@ impl<MS: MessageStore> PollingInfoProcessor<MS> {
     /// * `broker_runtime_inner` - The broker runtime containing all necessary managers and
     ///   configurations
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self {
-            broker_runtime_inner,
-        }
+        Self { broker_runtime_inner }
     }
 }
 
@@ -87,12 +82,10 @@ impl<MS: MessageStore> PollingInfoProcessor<MS> {
 
         let broker_permission = self.broker_runtime_inner.broker_config().broker_permission;
         if !PermName::is_readable(broker_permission) {
-            let response = response
-                .set_code(ResponseCode::NoPermission)
-                .set_remark(format!(
-                    "the broker[{}] peeking message is forbidden",
-                    self.broker_runtime_inner.broker_config().broker_ip1
-                ));
+            let response = response.set_code(ResponseCode::NoPermission).set_remark(format!(
+                "the broker[{}] peeking message is forbidden",
+                self.broker_runtime_inner.broker_config().broker_ip1
+            ));
             return Ok(Some(response));
         }
 
@@ -107,24 +100,20 @@ impl<MS: MessageStore> PollingInfoProcessor<MS> {
                 request_header.topic,
                 channel.remote_address()
             );
-            let response = response
-                .set_code(ResponseCode::TopicNotExist)
-                .set_remark(format!(
-                    "topic[{}] not exist, apply first please! {}",
-                    request_header.topic, "https://rocketmq.apache.org/docs/bestPractice/06FAQ"
-                ));
+            let response = response.set_code(ResponseCode::TopicNotExist).set_remark(format!(
+                "topic[{}] not exist, apply first please! {}",
+                request_header.topic, "https://rocketmq.apache.org/docs/bestPractice/06FAQ"
+            ));
             return Ok(Some(response));
         }
 
         let topic_config = topic_config.unwrap();
 
         if !PermName::is_readable(topic_config.perm) {
-            let response = response
-                .set_code(ResponseCode::NoPermission)
-                .set_remark(format!(
-                    "the topic[{}] peeking message is forbidden",
-                    request_header.topic
-                ));
+            let response = response.set_code(ResponseCode::NoPermission).set_remark(format!(
+                "the topic[{}] peeking message is forbidden",
+                request_header.topic
+            ));
             return Ok(Some(response));
         }
 
@@ -137,9 +126,7 @@ impl<MS: MessageStore> PollingInfoProcessor<MS> {
                 channel.remote_address()
             );
             warn!("{}", error_info);
-            let response = response
-                .set_code(ResponseCode::SystemError)
-                .set_remark(error_info);
+            let response = response.set_code(ResponseCode::SystemError).set_remark(error_info);
             return Ok(Some(response));
         }
 
@@ -163,12 +150,10 @@ impl<MS: MessageStore> PollingInfoProcessor<MS> {
         let subscription_group_config = subscription_group_config.unwrap();
 
         if !subscription_group_config.consume_enable() {
-            let response = response
-                .set_code(ResponseCode::NoPermission)
-                .set_remark(format!(
-                    "subscription group no permission, {}",
-                    request_header.consumer_group
-                ));
+            let response = response.set_code(ResponseCode::NoPermission).set_remark(format!(
+                "subscription group no permission, {}",
+                request_header.consumer_group
+            ));
             return Ok(Some(response));
         }
 
@@ -203,8 +188,7 @@ impl<MS: MessageStore> PollingInfoProcessor<MS> {
 
         // Get the pop_long_polling_service if available
         if let Some(pop_message_processor) = self.broker_runtime_inner.pop_message_processor() {
-            if let Some(pop_long_polling_service) = pop_message_processor.pop_long_polling_service()
-            {
+            if let Some(pop_long_polling_service) = pop_message_processor.pop_long_polling_service() {
                 return pop_long_polling_service.get_polling_num(key);
             }
         }

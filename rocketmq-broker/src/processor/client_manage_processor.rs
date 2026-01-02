@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -43,11 +40,8 @@ use crate::broker_runtime::BrokerRuntimeInner;
 use crate::client::client_channel_info::ClientChannelInfo;
 
 pub struct ClientManageProcessor<MS: MessageStore> {
-    consumer_group_heartbeat_table: Arc<
-        parking_lot::RwLock<
-            HashMap<CheetahString /* ConsumerGroup */, i32 /* HeartbeatFingerprint */>,
-        >,
-    >,
+    consumer_group_heartbeat_table:
+        Arc<parking_lot::RwLock<HashMap<CheetahString /* ConsumerGroup */, i32 /* HeartbeatFingerprint */>>>,
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
@@ -62,16 +56,10 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
-        info!(
-            "ClientManageProcessor received request code: {:?}",
-            request_code
-        );
+        info!("ClientManageProcessor received request code: {:?}", request_code);
         match request_code {
-            RequestCode::HeartBeat
-            | RequestCode::UnregisterClient
-            | RequestCode::CheckClientConfig => {
-                self.process_request_inner(channel, ctx, request_code, request)
-                    .await
+            RequestCode::HeartBeat | RequestCode::UnregisterClient | RequestCode::CheckClientConfig => {
+                self.process_request_inner(channel, ctx, request_code, request).await
             }
             _ => {
                 warn!(
@@ -80,10 +68,7 @@ where
                 );
                 let response = RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::RequestCodeNotSupported,
-                    format!(
-                        "ClientManageProcessor request code {} not supported",
-                        request.code()
-                    ),
+                    format!("ClientManageProcessor request code {} not supported", request.code()),
                 );
                 Ok(Some(response.set_opaque(request.opaque())))
             }
@@ -132,8 +117,7 @@ where
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_header =
-            request.decode_command_custom_header::<UnregisterClientRequestHeader>()?;
+        let request_header = request.decode_command_custom_header::<UnregisterClientRequestHeader>()?;
 
         let client_channel_info = ClientChannelInfo::new(
             channel,
@@ -159,13 +143,11 @@ where
                 } else {
                     true
                 };
-            self.broker_runtime_inner
-                .consumer_manager()
-                .unregister_consumer(
-                    group,
-                    &client_channel_info,
-                    is_notify_consumer_ids_changed_enable,
-                );
+            self.broker_runtime_inner.consumer_manager().unregister_consumer(
+                group,
+                &client_channel_info,
+                is_notify_consumer_ids_changed_enable,
+            );
         }
 
         Ok(Some(RemotingCommand::create_response_command()))
@@ -177,10 +159,9 @@ where
         ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let heartbeat_data = SerdeJsonUtils::from_json_bytes::<HeartbeatData>(
-            request.body().as_ref().map(|v| v.as_ref()).unwrap(),
-        )
-        .unwrap();
+        let heartbeat_data =
+            SerdeJsonUtils::from_json_bytes::<HeartbeatData>(request.body().as_ref().map(|v| v.as_ref()).unwrap())
+                .unwrap();
         let client_channel_info = ClientChannelInfo::new(
             channel.clone(),
             heartbeat_data.client_id.clone(),
@@ -193,18 +174,14 @@ where
 
         //do consumer data handle
         for consumer_data in heartbeat_data.consumer_data_set.iter() {
-            if self
-                .broker_runtime_inner
-                .broker_config()
-                .reject_pull_consumer_enable
+            if self.broker_runtime_inner.broker_config().reject_pull_consumer_enable
                 && ConsumeType::ConsumeActively == consumer_data.consume_type
             {
                 continue;
             }
-            self.consumer_group_heartbeat_table.write().insert(
-                consumer_data.group_name.clone(),
-                heartbeat_data.heartbeat_fingerprint,
-            );
+            self.consumer_group_heartbeat_table
+                .write()
+                .insert(consumer_data.group_name.clone(), heartbeat_data.heartbeat_fingerprint);
             let mut has_order_topic_sub = false;
             for subscription_data in consumer_data.subscription_data_set.iter() {
                 if self
@@ -224,16 +201,13 @@ where
                 continue;
             }
             let subscription_group_config = subscription_group_config.unwrap();
-            let is_notify_consumer_ids_changed_enable =
-                subscription_group_config.notify_consumer_ids_changed_enable();
+            let is_notify_consumer_ids_changed_enable = subscription_group_config.notify_consumer_ids_changed_enable();
             let topic_sys_flag = if consumer_data.unit_mode {
                 topic_sys_flag::build_sys_flag(false, true)
             } else {
                 0
             };
-            let new_topic = CheetahString::from_string(mix_all::get_retry_topic(
-                consumer_data.group_name.as_str(),
-            ));
+            let new_topic = CheetahString::from_string(mix_all::get_retry_topic(consumer_data.group_name.as_str()));
             self.broker_runtime_inner
                 .topic_config_manager_mut()
                 .create_topic_in_send_message_back_method(
@@ -244,22 +218,18 @@ where
                     topic_sys_flag,
                 )
                 .await;
-            let changed = self
-                .broker_runtime_inner
-                .consumer_manager()
-                .register_consumer(
-                    consumer_data.group_name.as_ref(),
-                    client_channel_info.clone(),
-                    consumer_data.consume_type,
-                    consumer_data.message_model,
-                    consumer_data.consume_from_where,
-                    consumer_data.subscription_data_set.clone(),
-                    is_notify_consumer_ids_changed_enable,
-                );
+            let changed = self.broker_runtime_inner.consumer_manager().register_consumer(
+                consumer_data.group_name.as_ref(),
+                client_channel_info.clone(),
+                consumer_data.consume_type,
+                consumer_data.message_model,
+                consumer_data.consume_from_where,
+                consumer_data.subscription_data_set.clone(),
+                is_notify_consumer_ids_changed_enable,
+            );
             if changed {
                 info!(
-                    "ClientManageProcessor: registerConsumer info changed, SDK address={}, \
-                     consumerData={:?}",
+                    "ClientManageProcessor: registerConsumer info changed, SDK address={}, consumerData={:?}",
                     channel.remote_address(),
                     consumer_data
                 )

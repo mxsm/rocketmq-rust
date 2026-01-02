@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 
@@ -117,16 +114,12 @@ impl ControllerManager {
         let metadata = Arc::new(MetadataStore::new(config.clone()).await?);
 
         // Initialize heartbeat manager
-        let heartbeat_manager = Arc::new(tokio::sync::Mutex::new(
-            DefaultBrokerHeartbeatManager::new(config.clone()),
-        ));
+        let heartbeat_manager = Arc::new(tokio::sync::Mutex::new(DefaultBrokerHeartbeatManager::new(
+            config.clone(),
+        )));
 
         // Initialize processor manager
-        let processor = Arc::new(ProcessorManager::new(
-            config.clone(),
-            raft.clone(),
-            metadata.clone(),
-        ));
+        let processor = Arc::new(ProcessorManager::new(config.clone(), raft.clone(), metadata.clone()));
 
         // Initialize metrics manager if feature is enabled
         #[cfg(feature = "metrics")]
@@ -381,12 +374,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_lifecycle() {
-        let config = ControllerConfig::default()
-            .with_node_info(1, "127.0.0.1:9878".parse::<SocketAddr>().unwrap());
+        let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9878".parse::<SocketAddr>().unwrap());
 
-        let manager = ControllerManager::new(config)
-            .await
-            .expect("Failed to create manager");
+        let manager = ControllerManager::new(config).await.expect("Failed to create manager");
 
         // Test initialization
         assert!(!manager.is_initialized().await);
@@ -402,12 +392,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_shutdown() {
-        let config = ControllerConfig::default()
-            .with_node_info(1, "127.0.0.1:9879".parse::<SocketAddr>().unwrap());
+        let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9879".parse::<SocketAddr>().unwrap());
 
-        let manager = ControllerManager::new(config)
-            .await
-            .expect("Failed to create manager");
+        let manager = ControllerManager::new(config).await.expect("Failed to create manager");
 
         // Initialize first
         manager.initialize().await.expect("Failed to initialize");

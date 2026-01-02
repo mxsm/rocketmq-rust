@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::cell::RefCell;
 use std::sync::atomic::AtomicBool;
@@ -36,8 +33,7 @@ thread_local! {
 }
 
 pub struct MQFaultStrategy {
-    latency_fault_tolerance:
-        ArcMut<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
+    latency_fault_tolerance: ArcMut<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
     send_latency_fault_enable: AtomicBool,
     start_detector_enable: AtomicBool,
     latency_max: &'static [u64],
@@ -75,8 +71,7 @@ impl MQFaultStrategy {
     }
 
     pub fn set_service_detector(&mut self, service_detector: DefaultServiceDetector) {
-        self.latency_fault_tolerance
-            .set_service_detector(service_detector);
+        self.latency_fault_tolerance.set_service_detector(service_detector);
     }
 
     pub fn is_start_detector_enable(&self) -> bool {
@@ -133,11 +128,7 @@ impl MQFaultStrategy {
         reachable: bool,
     ) {
         if self.send_latency_fault_enable.load(Ordering::Relaxed) {
-            let duration = self.compute_not_available_duration(if isolation {
-                10000
-            } else {
-                current_latency
-            });
+            let duration = self.compute_not_available_duration(if isolation { 10000 } else { current_latency });
             self.latency_fault_tolerance
                 .mut_from_ref()
                 .update_fault_item(broker_name, current_latency, duration, reachable)
@@ -177,8 +168,7 @@ impl QueueFilter for BrokerFilter {
 }
 
 struct ReachableFilter {
-    latency_fault_tolerance:
-        ArcMut<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
+    latency_fault_tolerance: ArcMut<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
 }
 
 impl QueueFilter for ReachableFilter {
@@ -189,8 +179,7 @@ impl QueueFilter for ReachableFilter {
 }
 
 struct AvailableFilter {
-    latency_fault_tolerance:
-        ArcMut<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
+    latency_fault_tolerance: ArcMut<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
 }
 
 impl QueueFilter for AvailableFilter {

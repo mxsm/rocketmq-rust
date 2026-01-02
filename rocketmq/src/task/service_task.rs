@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -40,11 +37,7 @@ pub struct ServiceContext {
 }
 
 impl ServiceContext {
-    pub fn new(
-        wait_point: Arc<Notify>,
-        has_notified: Arc<AtomicBool>,
-        stopped: Arc<AtomicBool>,
-    ) -> Self {
+    pub fn new(wait_point: Arc<Notify>, has_notified: Arc<AtomicBool>, stopped: Arc<AtomicBool>) -> Self {
         Self {
             wait_point,
             has_notified,
@@ -284,8 +277,7 @@ impl<T: ServiceTask + 'static> ServiceManager<T> {
             *state_guard = ServiceLifecycle::Running;
         }
         // Create context for the service
-        let context =
-            ServiceContext::new(wait_point.clone(), has_notified.clone(), stopped.clone());
+        let context = ServiceContext::new(wait_point.clone(), has_notified.clone(), stopped.clone());
         // Run the service
         service.run(&context).await;
 
@@ -504,10 +496,7 @@ mod tests {
             self.perform_transaction_check().await;
 
             let elapsed = begin.elapsed();
-            info!(
-                "End to check prepare message, consumed time: {}ms",
-                elapsed.as_millis()
-            );
+            info!("End to check prepare message, consumed time: {}ms", elapsed.as_millis());
         }
     }
 
@@ -542,10 +531,7 @@ mod tests {
 
     impl TestService {
         fn new(name: String, work_duration: Duration) -> Self {
-            Self {
-                name,
-                work_duration,
-            }
+            Self { name, work_duration }
         }
     }
 
@@ -555,11 +541,7 @@ mod tests {
         }
 
         async fn run(&self, context: &ServiceContext) {
-            println!(
-                "TestService {} starting {}",
-                self.name,
-                context.is_stopped()
-            );
+            println!("TestService {} starting {}", self.name, context.is_stopped());
 
             let mut counter = 0;
 
@@ -569,10 +551,7 @@ mod tests {
                 counter += 1;
             }
 
-            println!(
-                "TestService {} finished after {} iterations",
-                self.name, counter
-            );
+            println!("TestService {} finished after {} iterations", self.name, counter);
         }
 
         async fn on_wait_end(&self) {
@@ -590,19 +569,13 @@ mod tests {
         let service_thread = service.create_service_task();
 
         // Test initial state
-        assert_eq!(
-            service_thread.get_lifecycle_state().await,
-            ServiceLifecycle::NotStarted
-        );
+        assert_eq!(service_thread.get_lifecycle_state().await, ServiceLifecycle::NotStarted);
         assert!(!service_thread.is_started());
         assert!(!service_thread.is_stopped());
 
         // Test start
         service_thread.start().await.unwrap();
-        assert_eq!(
-            service_thread.get_lifecycle_state().await,
-            ServiceLifecycle::Running
-        );
+        assert_eq!(service_thread.get_lifecycle_state().await, ServiceLifecycle::Running);
         assert!(service_thread.is_started());
         assert!(!service_thread.is_stopped());
 
@@ -615,10 +588,7 @@ mod tests {
 
         // Test shutdown
         service_thread.shutdown().await.unwrap();
-        assert_eq!(
-            service_thread.get_lifecycle_state().await,
-            ServiceLifecycle::Stopped
-        );
+        assert_eq!(service_thread.get_lifecycle_state().await, ServiceLifecycle::Stopped);
         assert!(!service_thread.is_started());
         assert!(service_thread.is_stopped());
     }
@@ -640,8 +610,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_multiple_start_attempts() {
-        let service =
-            TestService::new("multi-start-service".to_string(), Duration::from_millis(10));
+        let service = TestService::new("multi-start-service".to_string(), Duration::from_millis(10));
         let service_thread = service.create_service_task();
 
         // First start should succeed
@@ -675,10 +644,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_example_transaction_service() {
-        let service = ExampleTransactionCheckService::new(
-            Duration::from_millis(100),
-            Duration::from_millis(1000),
-        );
+        let service = ExampleTransactionCheckService::new(Duration::from_millis(100), Duration::from_millis(1000));
         let service_thread = service.create_service_task();
 
         service_thread.start().await.unwrap();
