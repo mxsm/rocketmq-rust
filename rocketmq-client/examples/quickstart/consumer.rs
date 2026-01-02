@@ -23,7 +23,7 @@ use rocketmq_rust::rocketmq;
 use tracing::info;
 
 pub const MESSAGE_COUNT: usize = 1;
-pub const CONSUMER_GROUP: &str = "please_rename_unique_group_name";
+pub const CONSUMER_GROUP: &str = "please_rename_unique_group_name_4";
 pub const DEFAULT_NAMESRVADDR: &str = "127.0.0.1:9876";
 pub const TOPIC: &str = "TopicTest";
 pub const TAG: &str = "*";
