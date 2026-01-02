@@ -2,14 +2,17 @@ name: Sync Issue Labels to PR
 
 on:
   pull_request_target:
-    types: [ opened, synchronize, edited ] # Trigger when a PR is created, updated, or edited
+    types: [ opened ] # Trigger only when a PR is first created
 
 jobs:
   sync-labels:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      issues: write
+    permissions:
+
+      contents: read
+
+      issues: write
+
 
     steps:
       # Checkout the repository
