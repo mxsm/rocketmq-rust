@@ -1557,8 +1557,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn pull_request_hold_service_mut(&mut self) -> &mut Option<PullRequestHoldService<MS>> {
-        &mut self.pull_request_hold_service
+    pub fn pull_request_hold_service_mut(&mut self) -> Option<&mut PullRequestHoldService<MS>> {
+        self.pull_request_hold_service.as_mut()
     }
 
     #[inline]
