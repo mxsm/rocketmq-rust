@@ -96,7 +96,7 @@ use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
-use tokio::sync::Mutex;
+
 // Note: These types need to be implemented in their respective modules
 // Placeholder imports that need actual implementation:
 // - SyncStateSet in rocketmq-remoting::protocol::body
@@ -120,8 +120,8 @@ pub struct ControllerRequestProcessor {
     /// Reference to the controller manager
     controller_manager: ArcMut<ControllerManager>,
 
-    /// Reference to the heartbeat manager (wrapped in Mutex)
-    heartbeat_manager: Arc<Mutex<DefaultBrokerHeartbeatManager>>,
+    /// Reference to the heartbeat manager
+    heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
 
     /// Configuration blacklist - configs that cannot be dynamically updated
     config_blacklist: Arc<HashSet<String>>,
