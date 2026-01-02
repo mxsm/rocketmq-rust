@@ -131,8 +131,6 @@ pub(crate) struct BrokerRuntime {
     shutdown_hook: Option<BrokerShutdownHook>,
     consumer_ids_change_listener: Arc<Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>>,
     topic_queue_mapping_clean_service: TopicQueueMappingCleanService,
-    // receiver for shutdown signal
-    pub(crate) shutdown_rx: Option<tokio::sync::broadcast::Receiver<()>>,
     scheduled_task_manager: ScheduledTaskManager,
 }
 
@@ -261,7 +259,6 @@ impl BrokerRuntime {
             shutdown_hook: None,
             consumer_ids_change_listener,
             topic_queue_mapping_clean_service: TopicQueueMappingCleanService,
-            shutdown_rx: None,
             scheduled_task_manager: Default::default(),
         }
     }
@@ -1131,18 +1128,6 @@ impl BrokerRuntime {
             "RocketMQ Broker({}) started successfully",
             self.inner.broker_config.broker_identity.broker_name
         );
-    }
-
-    /// Wait for shutdown signal. This method blocks until a shutdown signal is received.
-    /// Should be called after start() to keep the broker running.
-    pub async fn run(&mut self) {
-        self.shutdown_rx
-            .as_mut()
-            .expect("shutdown_rx not initialized - must be set before calling run()")
-            .recv()
-            .await
-            .ok();
-        info!("Broker shutdown signal received");
     }
 
     pub(crate) fn schedule_send_heartbeat(&mut self) {
