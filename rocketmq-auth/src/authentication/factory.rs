@@ -24,16 +24,6 @@
 //! - **SPI-like Design**: Configurable strategies and providers via AuthConfig
 //! - **Caching**: Singleton instances cached by config name for efficiency
 //! - **Thread-safe**: All factory methods are safe for concurrent use
-//!
-//! # Java Alignment
-//!
-//! This implementation aligns with Java's `AuthenticationFactory`:
-//! - `getProvider()` → `get_provider()`
-//! - `getMetadataProvider()` → `get_metadata_provider()`
-//! - `getMetadataManager()` → `get_metadata_manager()`
-//! - `getEvaluator()` → `get_evaluator()`
-//! - `getStrategy()` → `get_strategy()`
-//! - `newContext()` → `new_context_from_metadata()` / `new_context_from_command()`
 
 pub mod authentication_factory;
 
