@@ -36,7 +36,7 @@ parking_lot.workspace = true
 dashmap = { version = "6.1.0", features = ["serde"] }
 hashbrown = "0.16"
 
-clap = { version = "4.5.53", features = ["derive"] }
+clap = { version = "4.5.54", features = ["derive"] }
 cheetah-string = { workspace = true }
 thiserror = { workspace = true }
 
