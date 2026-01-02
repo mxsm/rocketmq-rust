@@ -86,8 +86,6 @@ mod remoting_error;
 #[deprecated(since = "0.7.0", note = "Use unified error system instead")]
 mod store_error;
 #[deprecated(since = "0.7.0", note = "Use unified error system instead")]
-mod tools_error;
-#[deprecated(since = "0.7.0", note = "Use unified error system instead")]
 mod tui_error;
 
 use std::io;
