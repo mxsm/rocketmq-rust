@@ -1285,7 +1285,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             this.broker_config.broker_ip1, this.broker_config.broker_server_config.listen_port
         ));
         let broker_id = this.broker_config.broker_identity.broker_id;
-        //let weak = Arc::downgrade(&self.broker_out_api);
         let result = this
             .broker_outer_api
             .register_broker_all(
@@ -1336,10 +1335,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 }
 
-/*struct ProducerStateGetter {
-    topic_config_manager: TopicConfigManager,
-    producer_manager: Arc<ProducerManager>,
-}*/
 struct ProducerStateGetter<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
@@ -1360,10 +1355,6 @@ impl<MS: MessageStore> StateGetter for ProducerStateGetter<MS> {
     }
 }
 
-/*struct ConsumerStateGetter {
-    topic_config_manager: TopicConfigManager,
-    consumer_manager: Arc<ConsumerManager>,
-}*/
 struct ConsumerStateGetter<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
@@ -1552,7 +1543,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn broker_stats_manager_mut(&mut self) -> &mut BrokerStatsManager {
-        /* &mut self.broker_stats_manager */
         unimplemented!("broker_stats_manager_mut")
     }
 
@@ -1565,16 +1555,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     pub fn update_master_haserver_addr_periodically_mut(&mut self) -> &mut bool {
         &mut self.update_master_haserver_addr_periodically
     }
-
-    /*    #[inline]
-    pub fn should_start_time_mut(&mut self) -> &mut AtomicU64 {
-        &mut self.should_start_time
-    }*/
-
-    /*    #[inline]
-    pub fn is_isolated_mut(&mut self) -> &mut AtomicBool {
-        &mut self.is_isolated
-    }*/
 
     #[inline]
     pub fn pull_request_hold_service_mut(&mut self) -> &mut Option<PullRequestHoldService<MS>> {
@@ -1930,11 +1910,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         self.message_store_config = Arc::new(message_store_config);
     }
 
-    /*    #[inline]
-    pub fn set_server_config(&mut self, server_config: ServerConfig) {
-        self.server_config = Arc::new(server_config);
-    }*/
-
     #[inline]
     pub fn set_topic_config_manager(&mut self, topic_config_manager: TopicConfigManager<MS>) {
         self.topic_config_manager = Some(topic_config_manager);
@@ -2047,14 +2022,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     pub fn set_broker_member_group(&mut self, broker_member_group: BrokerMemberGroup) {
         self.broker_member_group = broker_member_group;
     }
-
-    /*    #[inline]
-    pub fn set_transactional_message_service(
-        &mut self,
-        transactional_message_service: DefaultTransactionalMessageService<MS>,
-    ) {
-        self.transactional_message_service = Some(transactional_message_service);
-    }*/
 
     pub fn get_min_broker_id_in_group(&self) -> u64 {
         self.broker_config.broker_identity.broker_id
@@ -2210,7 +2177,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             this.broker_config.broker_ip1, this.broker_config.broker_server_config.listen_port
         ));
         let broker_id = this.broker_config.broker_identity.broker_id;
-        //  let weak = Arc::downgrade(&self.inner.broker_outer_api);
         let this_ = this.clone();
         this.broker_outer_api
             .register_broker_all(
