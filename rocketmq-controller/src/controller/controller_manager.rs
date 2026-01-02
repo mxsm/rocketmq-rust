@@ -271,41 +271,6 @@ impl ControllerManager {
     }
 
     /// Register request processors to the remoting server
-    ///
-    ///     RemotingServer controllerRemotingServer = this.controller.getRemotingServer();
-    ///     controllerRemotingServer.registerProcessor(RequestCode.CONTROLLER_ALTER_SYNC_STATE_SET,
-    /// ...);     controllerRemotingServer.registerProcessor(RequestCode.
-    /// CONTROLLER_ELECT_MASTER, ...);     // ... more registrations
-    /// }
-    /// ```
-    /// 
-    /// This method registers all controller request processors including:
-    /// - CONTROLLER_ALTER_SYNC_STATE_SET
-    /// - CONTROLLER_ELECT_MASTER
-    /// - CONTROLLER_REGISTER_BROKER
-    /// - CONTROLLER_GET_REPLICA_INFO
-    /// - CONTROLLER_GET_METADATA_INFO
-    /// - CONTROLLER_GET_SYNC_STATE_DATA
-    /// - BROKER_HEARTBEAT
-    /// - UPDATE_CONTROLLER_CONFIG
-    /// - GET_CONTROLLER_CONFIG
-    /// - CLEAN_BROKER_DATA
-    /// - CONTROLLER_GET_NEXT_BROKER_ID
-    /// - CONTROLLER_APPLY_BROKER_ID
-    ///
-    /// # Note
-    ///
-    /// The remoting server uses a single RequestProcessor that handles all request codes.
-    ///
-    /// TODO: Once remoting_server supports processor registration API,
-    /// implement actual registration logic:
-    /// ```rust
-    /// if let Some(server) = &self.remoting_server {
-    ///     server.register_processor(RequestCode::ControllerAlterSyncStateSet, ...);
-    ///     server.register_processor(RequestCode::ControllerElectMaster, ...);
-    ///     // etc.
-    /// }
-    /// ```
     fn register_processor(&self) {
         // Current implementation note:
         // The remoting_server is started with a DefaultRemotingRequestProcessor in start().
