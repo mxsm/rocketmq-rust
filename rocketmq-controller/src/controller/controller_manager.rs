@@ -25,7 +25,6 @@ use rocketmq_remoting::request_processor::default_request_processor::DefaultRemo
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
-use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -97,13 +96,13 @@ pub struct ControllerManager {
 
     /// Heartbeat manager for broker liveness detection
     /// Uses Mutex instead of RwLock as it's always exclusively accessed
-    heartbeat_manager: Arc<Mutex<DefaultBrokerHeartbeatManager>>,
+    heartbeat_manager: ArcMut<DefaultBrokerHeartbeatManager>,
 
     /// Request processor manager
     processor: Arc<ProcessorManager>,
 
     /// Remoting server for inbound RPC requests
-    remoting_server: Arc<Mutex<Option<RocketMQServer<ControllerRequestProcessor>>>>,
+    remoting_server: Option<RocketMQServer<ControllerRequestProcessor>>,
 
     /// Remoting client for outbound RPC calls
     remoting_client: ArcMut<RocketmqDefaultClient>,
@@ -158,7 +157,7 @@ impl ControllerManager {
         );
 
         // Initialize heartbeat manager
-        let heartbeat_manager = Arc::new(Mutex::new(DefaultBrokerHeartbeatManager::new(config.clone())));
+        let heartbeat_manager = ArcMut::new(DefaultBrokerHeartbeatManager::new(config.clone()));
 
         // Initialize processor manager (needs Arc<RaftController>)
         let processor = Arc::new(ProcessorManager::new(
@@ -174,7 +173,7 @@ impl ControllerManager {
             listen_port,
             ..Default::default()
         };
-        let remoting_server = Arc::new(Mutex::new(Some(RocketMQServer::new(Arc::new(server_config)))));
+        let remoting_server = Some(RocketMQServer::new(Arc::new(server_config)));
         info!("Remoting server created on port {}", listen_port);
 
         // Initialize remoting client for outbound RPC
@@ -246,8 +245,7 @@ impl ControllerManager {
 
         // Initialize heartbeat manager
         {
-            let mut hb_manager = self.heartbeat_manager.lock().await;
-            BrokerHeartbeatManager::initialize(&mut *hb_manager);
+            self.heartbeat_manager.initialize();
             info!("Heartbeat manager initialized");
         }
 
@@ -340,7 +338,7 @@ impl ControllerManager {
     /// # Thread Safety
     ///
     /// This method is idempotent - calling it multiple times is safe
-    pub async fn start(self: ArcMut<Self>) -> Result<()> {
+    pub async fn start(mut self: ArcMut<Self>) -> Result<()> {
         // Check if already running using atomic operation
         if self
             .running
@@ -374,8 +372,7 @@ impl ControllerManager {
 
         // Start heartbeat manager (for broker monitoring)
         {
-            let mut hb_manager = self.heartbeat_manager.lock().await;
-            BrokerHeartbeatManager::start(&mut *hb_manager);
+            self.heartbeat_manager.start();
             info!("Heartbeat manager started");
         }
 
@@ -401,7 +398,7 @@ impl ControllerManager {
 
         // Start remoting server (for inbound RPC requests)
         // Reference: NameServerRuntime.start() - register processors then start server
-        if let Some(mut server) = self.remoting_server.lock().await.take() {
+        if let Some(mut server) = self.remoting_server.take() {
             // Create ControllerRequestProcessor using init_processors()
             let request_processor = Self::init_processors(self.clone());
 
@@ -465,8 +462,7 @@ impl ControllerManager {
 
         // Shutdown heartbeat manager
         {
-            let mut hb_manager = self.heartbeat_manager.lock().await;
-            BrokerHeartbeatManager::shutdown(&mut *hb_manager);
+            self.heartbeat_manager.mut_from_ref().shutdown();
             info!("Heartbeat manager shut down");
         }
 
@@ -593,7 +589,7 @@ impl ControllerManager {
     /// A reference to the heartbeat manager (wrapped in Arc<Mutex>)
     ///
     /// Note: Caller must lock the mutex to access the manager
-    pub fn heartbeat_manager(&self) -> &Arc<Mutex<DefaultBrokerHeartbeatManager>> {
+    pub fn heartbeat_manager(&self) -> &ArcMut<DefaultBrokerHeartbeatManager> {
         &self.heartbeat_manager
     }
 
@@ -621,7 +617,7 @@ impl Drop for ControllerManager {
             // We use try_lock to avoid blocking the drop
             let running = self.running.clone();
             let processor = self.processor.clone();
-            let heartbeat_manager = self.heartbeat_manager.clone();
+            let mut heartbeat_manager = self.heartbeat_manager.clone();
             let metadata = self.metadata.clone();
 
             // Clone remoting_client for emergency shutdown
@@ -635,9 +631,7 @@ impl Drop for ControllerManager {
                 // Try to shutdown components
                 let _ = processor.shutdown().await;
 
-                if let Ok(mut hb_manager) = heartbeat_manager.try_lock() {
-                    BrokerHeartbeatManager::shutdown(&mut *hb_manager);
-                }
+                BrokerHeartbeatManager::shutdown(heartbeat_manager.as_mut());
 
                 let _ = metadata.shutdown().await;
 
