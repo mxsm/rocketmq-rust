@@ -48,13 +48,13 @@ impl MQFaultStrategy {
         tolerance_impl.set_start_detector_enable(client_config.start_detector_enable);
         let latency_fault_tolerance = ArcMut::new(tolerance_impl);
         Self {
-            latency_fault_tolerance: latency_fault_tolerance.clone(),
+            latency_fault_tolerance: ArcMut::clone(&latency_fault_tolerance),
             send_latency_fault_enable: AtomicBool::new(client_config.send_latency_enable),
             start_detector_enable: AtomicBool::new(client_config.start_detector_enable),
             latency_max: &[50, 100, 550, 1800, 3000, 5000, 15000],
             not_available_duration: &[0, 0, 2000, 5000, 6000, 10000, 30000],
             reachable_filter: Box::new(ReachableFilter {
-                latency_fault_tolerance: latency_fault_tolerance.clone(),
+                latency_fault_tolerance: ArcMut::clone(&latency_fault_tolerance),
             }),
             available_filter: Box::new(AvailableFilter {
                 latency_fault_tolerance,
