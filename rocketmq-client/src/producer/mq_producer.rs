@@ -63,9 +63,8 @@ pub trait MQProducer {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<SendResult>` - A result containing the send result or an
-    ///   error.
-    async fn send<M>(&mut self, msg: M) -> rocketmq_error::RocketMQResult<SendResult>
+    /// * `rocketmq_error::RocketMQResult<Option<SendResult>>` - A result containing an optional send result or an error.
+    async fn send<M>(&mut self, msg: M) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync;
 
@@ -78,8 +77,7 @@ pub trait MQProducer {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<SendResult>` - A result containing the send result or an
-    ///   error.
+    /// * `rocketmq_error::RocketMQResult<Option<SendResult>>` - A result containing an optional send result or an error.
     async fn send_with_timeout<M>(
         &mut self,
         msg: M,

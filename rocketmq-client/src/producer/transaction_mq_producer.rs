@@ -109,7 +109,7 @@ impl MQProducer for TransactionMQProducer {
             .await
     }
 
-    async fn send<M>(&mut self, msg: M) -> rocketmq_error::RocketMQResult<SendResult>
+    async fn send<M>(&mut self, msg: M) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
