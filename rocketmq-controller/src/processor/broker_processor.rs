@@ -19,6 +19,8 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 
+use crate::controller::raft_controller::RaftController;
+use crate::controller::Controller;
 use crate::error::ControllerError;
 use crate::error::Result;
 use crate::metadata::BrokerInfo;
@@ -32,7 +34,6 @@ use crate::processor::request::RegisterBrokerResponse;
 use crate::processor::request::UnregisterBrokerRequest;
 use crate::processor::request::UnregisterBrokerResponse;
 use crate::processor::RequestProcessor;
-use crate::raft::RaftController;
 
 /// Register broker processor
 pub struct RegisterBrokerProcessor {
@@ -54,12 +55,11 @@ impl RegisterBrokerProcessor {
         info!("Processing register broker request: {}", request.broker_name);
 
         // Check if we are the leader
-        if !self.raft.is_leader().await {
-            let leader = self.raft.get_leader().await;
-            error!("Not leader, current leader: {:?}", leader);
+        if !self.raft.is_leader() {
+            error!("Not leader");
             return Ok(RegisterBrokerResponse {
                 success: false,
-                error: Some(format!("Not leader, current leader: {:?}", leader)),
+                error: Some("Not leader".to_string()),
                 broker_id: None,
             });
         }
@@ -133,11 +133,10 @@ impl UnregisterBrokerProcessor {
         info!("Processing unregister broker request: {}", request.broker_name);
 
         // Check if we are the leader
-        if !self.raft.is_leader().await {
-            let leader = self.raft.get_leader().await;
+        if !self.raft.is_leader() {
             return Ok(UnregisterBrokerResponse {
                 success: false,
-                error: Some(format!("Not leader, current leader: {:?}", leader)),
+                error: Some("Not leader".to_string()),
             });
         }
 
@@ -244,11 +243,10 @@ impl ElectMasterProcessor {
         );
 
         // Check if we are the leader
-        if !self.raft.is_leader().await {
-            let leader = self.raft.get_leader().await;
+        if !self.raft.is_leader() {
             return Ok(ElectMasterResponse {
                 success: false,
-                error: Some(format!("Not leader, current leader: {:?}", leader)),
+                error: Some("Not leader".to_string()),
                 master_broker: None,
                 master_addr: None,
             });

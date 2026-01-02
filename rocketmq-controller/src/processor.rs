@@ -38,10 +38,10 @@ pub use topic_processor::UpdateTopicProcessor;
 use tracing::info;
 
 use crate::config::ControllerConfig;
+use crate::controller::raft_controller::RaftController;
 use crate::error::ControllerError;
 use crate::error::Result;
 use crate::metadata::MetadataStore;
-use crate::raft::RaftController;
 
 /// Request processor trait
 #[async_trait::async_trait]

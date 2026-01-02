@@ -90,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create Raft node
     println!("Creating Raft node...");
     let node = RaftNodeManager::new(config).await?;
-    println!("✓ Node created");
+    println!(" Node created");
     println!();
 
     // If this is node 1 and --init flag is set, initialize the cluster
@@ -109,7 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         node.initialize_cluster(nodes).await?;
-        println!("✓ Cluster initialized");
+        println!(" Cluster initialized");
         println!();
     } else if args.node_id != 1 {
         // Non-leader nodes: add as learner and wait to join
@@ -147,7 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         match node.client_write(register_request).await {
             Ok(response) => {
-                println!("✓ Broker registered: {:?}", response.data);
+                println!(" Broker registered: {:?}", response.data);
             }
             Err(e) => {
                 println!("✗ Write failed: {}", e);
@@ -175,7 +175,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\nShutting down...");
     node.shutdown().await?;
-    println!("✓ Node shut down gracefully");
+    println!(" Node shut down gracefully");
 
     Ok(())
 }

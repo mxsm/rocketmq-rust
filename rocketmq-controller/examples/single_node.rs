@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Step 2: Create Raft node
     println!("2. Creating Raft node...");
     let node = RaftNodeManager::new(config).await?;
-    println!("   ✓ Node created successfully");
+    println!("    Node created successfully");
     println!();
 
     // Step 3: Initialize single-node cluster
@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     node.initialize_cluster(nodes).await?;
-    println!("   ✓ Cluster initialized");
+    println!("    Cluster initialized");
     println!();
 
     // Step 4: Wait for leader election
@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   Is Leader: {}", is_leader);
 
     if is_leader {
-        println!("   ✓ This node is now the leader");
+        println!("    This node is now the leader");
     } else {
         println!("   ✗ Leader election did not complete");
     }
@@ -103,7 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   Writing: Register broker 'broker-a'");
     match node.client_write(register_request).await {
         Ok(response) => {
-            println!("   ✓ Write succeeded: {:?}", response.data);
+            println!("    Write succeeded: {:?}", response.data);
         }
         Err(e) => {
             println!("   ✗ Write failed: {}", e);
@@ -122,7 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   Writing: Create topic 'test-topic'");
     match node.client_write(create_topic).await {
         Ok(response) => {
-            println!("   ✓ Write succeeded: {:?}", response.data);
+            println!("    Write succeeded: {:?}", response.data);
         }
         Err(e) => {
             println!("   ✗ Write failed: {}", e);
@@ -150,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Step 7: Shutdown
     println!("7. Shutting down...");
     node.shutdown().await?;
-    println!("   ✓ Node shut down gracefully");
+    println!("    Node shut down gracefully");
     println!();
 
     println!("=== Example Complete ===");
