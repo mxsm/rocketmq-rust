@@ -57,7 +57,8 @@ pub trait MQProducer {
     ///
     /// # Returns
     ///
-    /// * `rocketmq_error::RocketMQResult<Option<SendResult>>` - A result containing an optional send result or an error.
+    /// * `rocketmq_error::RocketMQResult<Option<SendResult>>` - A result containing an optional
+    ///   send result or an error.
     async fn send<M>(&mut self, msg: M) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync;
