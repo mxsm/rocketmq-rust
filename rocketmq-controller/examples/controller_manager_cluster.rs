@@ -102,7 +102,7 @@ async fn start_cluster() -> Result<Vec<ArcMut<ControllerManager>>> {
 
         // Wrap in Arc and start
         let manager = ArcMut::new(manager);
-        manager.start(manager.clone()).await?;
+        manager.clone().start().await?;
         info!("✓ Node {} started successfully", node_id);
 
         managers.push(manager);

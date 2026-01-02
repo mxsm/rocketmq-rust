@@ -272,6 +272,13 @@ impl ControllerManager {
 
     /// Register request processors to the remoting server
     ///
+    ///     RemotingServer controllerRemotingServer = this.controller.getRemotingServer();
+    ///     controllerRemotingServer.registerProcessor(RequestCode.CONTROLLER_ALTER_SYNC_STATE_SET,
+    /// ...);     controllerRemotingServer.registerProcessor(RequestCode.
+    /// CONTROLLER_ELECT_MASTER, ...);     // ... more registrations
+    /// }
+    /// ```
+    /// 
     /// This method registers all controller request processors including:
     /// - CONTROLLER_ALTER_SYNC_STATE_SET
     /// - CONTROLLER_ELECT_MASTER
@@ -368,7 +375,7 @@ impl ControllerManager {
     /// # Thread Safety
     ///
     /// This method is idempotent - calling it multiple times is safe
-    pub async fn start(&self, self_arc: ArcMut<Self>) -> Result<()> {
+    pub async fn start(self: ArcMut<Self>) -> Result<()> {
         // Check if already running using atomic operation
         if self
             .running
@@ -431,7 +438,7 @@ impl ControllerManager {
         // Reference: NameServerRuntime.start() - register processors then start server
         if let Some(mut server) = self.remoting_server.lock().await.take() {
             // Create ControllerRequestProcessor using init_processors()
-            let request_processor = Self::init_processors(self_arc.clone());
+            let request_processor = Self::init_processors(self.clone());
 
             tokio::spawn(async move {
                 server.run(request_processor, None).await;
@@ -703,6 +710,9 @@ mod tests {
 
         // Test running state (should use non-async is_running now)
         assert!(!manager.is_running());
+
+        // Prevent dropping runtime in async context
+        std::mem::forget(manager);
     }
 
     #[tokio::test]
@@ -716,6 +726,9 @@ mod tests {
 
         // Test shutdown without starting (should succeed)
         manager.shutdown().await.expect("Failed to shutdown");
+
+        // Prevent dropping runtime in async context
+        std::mem::forget(manager);
     }
 
     #[tokio::test]
@@ -726,9 +739,12 @@ mod tests {
         let manager_arc = ArcMut::new(manager);
 
         // Try to start without initializing (should fail)
-        let result = manager_arc.start(manager_arc.clone()).await;
+        let result = manager_arc.clone().start().await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), ControllerError::NotInitialized(_)));
+
+        // Prevent dropping runtime in async context
+        std::mem::forget(manager_arc);
     }
 
     #[tokio::test]
@@ -744,5 +760,8 @@ mod tests {
         // These should compile and run successfully
         assert!(!manager.is_initialized());
         assert!(!manager.is_running());
+
+        // Prevent dropping runtime in async context
+        std::mem::forget(manager);
     }
 }

@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
 
     // Start the manager
     info!("Starting ControllerManager...");
-    manager.start(manager.clone()).await?;
+    manager.clone().start().await?;
     info!(" Controller started successfully");
 
     // Query controller state
