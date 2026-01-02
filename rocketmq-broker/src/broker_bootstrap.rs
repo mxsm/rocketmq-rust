@@ -84,10 +84,7 @@ impl Builder {
     #[inline]
     pub fn build(self) -> BrokerBootstrap {
         BrokerBootstrap {
-            broker_runtime: BrokerRuntime::new(
-                Arc::new(self.broker_config),
-                Arc::new(self.message_store_config),
-            ),
+            broker_runtime: BrokerRuntime::new(Arc::new(self.broker_config), Arc::new(self.message_store_config)),
         }
     }
 }
