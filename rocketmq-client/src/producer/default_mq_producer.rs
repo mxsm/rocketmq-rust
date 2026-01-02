@@ -704,7 +704,11 @@ impl MQProducer for DefaultMQProducer {
         M: MessageTrait + Send + Sync,
     {
         msg.set_topic(self.with_namespace(msg.get_topic()));
-        self.default_mqproducer_impl.as_mut().unwrap().send_oneway(msg).await?;
+        self.default_mqproducer_impl
+            .as_mut()
+            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .send_oneway(msg)
+            .await?;
         Ok(())
     }
 
