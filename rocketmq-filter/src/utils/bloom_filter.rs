@@ -16,6 +16,7 @@ use std::hash::Hasher;
 
 use ahash::AHasher;
 use rocketmq_error::FilterError;
+use rocketmq_error::RocketMQResult;
 
 use crate::utils::bits_array::BitsArray;
 use crate::utils::bloom_filter_data::BloomFilterData;
@@ -64,12 +65,12 @@ impl BloomFilter {
     /// - k = ceil(ln(0.5) / ln(error_rate))
     /// - m = ceil(n * ln(1/error_rate) / (ln(2)^2))
     /// - m adjusted to be multiple of 8
-    pub fn create_by_fn(f: i32, n: i32) -> Result<Self, FilterError> {
+    pub fn create_by_fn(f: i32, n: i32) -> RocketMQResult<Self> {
         if !(1..100).contains(&f) {
-            return Err(FilterError::invalid_bit_length());
+            return Err(FilterError::invalid_bit_length().into());
         }
         if n < 1 {
-            return Err(FilterError::invalid_bit_length());
+            return Err(FilterError::invalid_bit_length().into());
         }
 
         let error_rate = f as f64 / 100.0;
@@ -79,7 +80,7 @@ impl BloomFilter {
         let k = (Self::log_mn(0.5, error_rate)).ceil() as i32;
 
         if k < 1 {
-            return Err(FilterError::invalid_bit_length());
+            return Err(FilterError::invalid_bit_length().into());
         }
 
         // Calculate m: m = n * ln(1/error_rate) / (ln(2))^2
@@ -128,13 +129,13 @@ impl BloomFilter {
     }
 
     /// Hash a string to bit array (by string).
-    pub fn hash_to_str(&self, s: &str, bits: &mut BitsArray) -> Result<(), FilterError> {
+    pub fn hash_to_str(&self, s: &str, bits: &mut BitsArray) -> RocketMQResult<()> {
         let bit_positions = self.calc_bit_positions(s);
         self.hash_to_positions(&bit_positions, bits)
     }
 
     /// Hash to bit array using pre-calculated positions.
-    pub fn hash_to_positions(&self, bit_positions: &[i32], bits: &mut BitsArray) -> Result<(), FilterError> {
+    pub fn hash_to_positions(&self, bit_positions: &[i32], bits: &mut BitsArray) -> RocketMQResult<()> {
         self.check(bits)?;
 
         for &pos in bit_positions {
@@ -145,22 +146,22 @@ impl BloomFilter {
     }
 
     /// Hash to bit array using BloomFilterData.
-    pub fn hash_to(&self, filter_data: &BloomFilterData, bits: &mut BitsArray) -> Result<(), FilterError> {
+    pub fn hash_to(&self, filter_data: &BloomFilterData, bits: &mut BitsArray) -> RocketMQResult<()> {
         if !self.is_valid(Some(filter_data)) {
-            return Err(FilterError::bit_length_too_small());
+            return Err(FilterError::bit_length_too_small().into());
         }
 
         self.hash_to_positions(filter_data.bit_pos(), bits)
     }
 
     /// Check if a string might be in the set (by string).
-    pub fn is_hit_str(&self, s: &str, bits: &BitsArray) -> Result<bool, FilterError> {
+    pub fn is_hit_str(&self, s: &str, bits: &BitsArray) -> RocketMQResult<bool> {
         let bit_positions = self.calc_bit_positions(s);
         self.is_hit_positions(&bit_positions, bits)
     }
 
     /// Check if all bit positions are set.
-    pub fn is_hit_positions(&self, bit_positions: &[i32], bits: &BitsArray) -> Result<bool, FilterError> {
+    pub fn is_hit_positions(&self, bit_positions: &[i32], bits: &BitsArray) -> RocketMQResult<bool> {
         self.check(bits)?;
 
         // Check first position
@@ -175,9 +176,9 @@ impl BloomFilter {
     }
 
     /// Check if BloomFilterData might be in the set.
-    pub fn is_hit(&self, filter_data: &BloomFilterData, bits: &BitsArray) -> Result<bool, FilterError> {
+    pub fn is_hit(&self, filter_data: &BloomFilterData, bits: &BitsArray) -> RocketMQResult<bool> {
         if !self.is_valid(Some(filter_data)) {
-            return Err(FilterError::bit_length_too_small());
+            return Err(FilterError::bit_length_too_small().into());
         }
 
         self.is_hit_positions(filter_data.bit_pos(), bits)
@@ -186,7 +187,7 @@ impl BloomFilter {
     /// Check if positions would result in a false positive.
     ///
     /// Returns true if all positions are already occupied.
-    pub fn check_false_hit(&self, bit_positions: &[i32], bits: &BitsArray) -> Result<bool, FilterError> {
+    pub fn check_false_hit(&self, bit_positions: &[i32], bits: &BitsArray) -> RocketMQResult<bool> {
         for &pos in bit_positions {
             if !bits.get_bit(pos as usize)? {
                 return Ok(false);
@@ -197,9 +198,9 @@ impl BloomFilter {
 
     /// Validate bit array length matches filter configuration.
     #[inline]
-    fn check(&self, bits: &BitsArray) -> Result<(), FilterError> {
+    fn check(&self, bits: &BitsArray) -> RocketMQResult<()> {
         if bits.bit_length() != self.m as usize {
-            return Err(FilterError::bit_length_too_small());
+            return Err(FilterError::bit_length_too_small().into());
         }
         Ok(())
     }
