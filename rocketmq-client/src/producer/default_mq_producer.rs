@@ -817,7 +817,7 @@ impl MQProducer for DefaultMQProducer {
         let mq = self
             .default_mqproducer_impl
             .as_mut()
-            .unwrap()
+            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .invoke_message_queue_selector(
                 &msg,
                 Arc::new(selector),
