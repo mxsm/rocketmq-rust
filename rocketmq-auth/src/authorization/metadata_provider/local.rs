@@ -495,7 +495,10 @@ impl AuthorizationMetadataProvider for LocalAuthorizationMetadataProvider {
         Ok(())
     }
 
-    fn get_acl<S: Subject + Send + Sync>(&self, subject: &S) -> impl std::future::Future<Output = MetadataResult<Option<Acl>>> + Send {
+    fn get_acl<S: Subject + Send + Sync>(
+        &self,
+        subject: &S,
+    ) -> impl std::future::Future<Output = MetadataResult<Option<Acl>>> + Send {
         let initialized = *self.initialized.read().unwrap();
         let subject_key = subject.subject_key().to_string();
         let cache = self.cache.clone();

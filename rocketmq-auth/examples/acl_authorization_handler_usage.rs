@@ -21,11 +21,12 @@ use std::sync::Arc;
 
 use rocketmq_auth::authentication::enums::subject_type::SubjectType;
 use rocketmq_auth::authentication::model::user::User;
-use rocketmq_auth::authorization::chain::{AclAuthorizationHandler, AuthorizationHandlerChain};
+use rocketmq_auth::authorization::chain::AclAuthorizationHandler;
+use rocketmq_auth::authorization::chain::AuthorizationHandlerChain;
 use rocketmq_auth::authorization::context::default_authorization_context::DefaultAuthorizationContext;
 use rocketmq_auth::authorization::enums::decision::Decision;
-use rocketmq_auth::authorization::metadata_provider::AuthorizationMetadataProvider;
 use rocketmq_auth::authorization::metadata_provider::local::LocalAuthorizationMetadataProvider;
+use rocketmq_auth::authorization::metadata_provider::AuthorizationMetadataProvider;
 use rocketmq_auth::authorization::model::acl::Acl;
 use rocketmq_auth::authorization::model::policy::Policy;
 use rocketmq_auth::authorization::model::resource::Resource;
@@ -50,12 +51,7 @@ async fn main() -> Result<()> {
     // Alice: Allow publishing to topic "orders"
     let alice = User::of("alice");
     let alice_resource = Resource::of_topic("orders");
-    let alice_policy = Policy::of(
-        vec![alice_resource.clone()],
-        vec![Action::Pub],
-        None,
-        Decision::Allow,
-    );
+    let alice_policy = Policy::of(vec![alice_resource.clone()], vec![Action::Pub], None, Decision::Allow);
     let alice_acl = Acl::of_subject_and_policy(&alice, alice_policy);
     provider.create_acl(alice_acl).await?;
     println!("   ✓ Created ACL for Alice: ALLOW Pub on topic 'orders'");
@@ -63,12 +59,7 @@ async fn main() -> Result<()> {
     // Bob: Deny all actions on topic "secrets"
     let bob = User::of("bob");
     let bob_resource = Resource::of_topic("secrets");
-    let bob_policy = Policy::of(
-        vec![bob_resource.clone()],
-        vec![Action::All],
-        None,
-        Decision::Deny,
-    );
+    let bob_policy = Policy::of(vec![bob_resource.clone()], vec![Action::All], None, Decision::Deny);
     let bob_acl = Acl::of_subject_and_policy(&bob, bob_policy);
     provider.create_acl(bob_acl).await?;
     println!("   ✓ Created ACL for Bob: DENY All on topic 'secrets'");
@@ -76,12 +67,7 @@ async fn main() -> Result<()> {
     // Charlie: Allow subscribing to topic "notifications"
     let charlie = User::of("charlie");
     let charlie_resource = Resource::of_topic("notifications");
-    let charlie_policy = Policy::of(
-        vec![charlie_resource.clone()],
-        vec![Action::Sub],
-        None,
-        Decision::Allow,
-    );
+    let charlie_policy = Policy::of(vec![charlie_resource.clone()], vec![Action::Sub], None, Decision::Allow);
     let charlie_acl = Acl::of_subject_and_policy(&charlie, charlie_policy);
     provider.create_acl(charlie_acl).await?;
     println!("   ✓ Created ACL for Charlie: ALLOW Sub on topic 'notifications'\n");
@@ -127,13 +113,8 @@ async fn main() -> Result<()> {
 
     // Scenario 3: Bob accesses "secrets" - Should FAIL (DENY policy)
     println!("   Scenario 3: Bob accessing 'secrets' (DENY policy)");
-    let context3 = DefaultAuthorizationContext::of(
-        "bob",
-        SubjectType::User,
-        bob_resource.clone(),
-        Action::Pub,
-        "10.0.0.50",
-    );
+    let context3 =
+        DefaultAuthorizationContext::of("bob", SubjectType::User, bob_resource.clone(), Action::Pub, "10.0.0.50");
     match chain.handle(&context3).await {
         Ok(()) => println!("      ✅ Authorization GRANTED\n"),
         Err(e) => println!("      ❌ Authorization DENIED: {}\n", e),

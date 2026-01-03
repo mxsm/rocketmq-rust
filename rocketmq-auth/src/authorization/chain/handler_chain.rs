@@ -50,9 +50,7 @@ pub struct AuthorizationHandlerChain {
 impl AuthorizationHandlerChain {
     /// Create an empty handler chain.
     pub fn new() -> Self {
-        Self {
-            handlers: Vec::new(),
-        }
+        Self { handlers: Vec::new() }
     }
 
     /// Add a handler to the end of the chain.
@@ -89,9 +87,8 @@ impl AuthorizationHandlerChain {
         }
 
         // All handlers failed
-        Err(last_error.unwrap_or_else(|| {
-            RocketMQError::authentication_failed("All authorization handlers denied access")
-        }))
+        Err(last_error
+            .unwrap_or_else(|| RocketMQError::authentication_failed("All authorization handlers denied access")))
     }
 
     /// Get the number of handlers in the chain.
@@ -115,7 +112,8 @@ impl Default for AuthorizationHandlerChain {
 mod tests {
     use std::future::Future;
     use std::pin::Pin;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
     use rocketmq_common::common::action::Action;
@@ -151,11 +149,7 @@ mod tests {
             _context: &'a DefaultAuthorizationContext,
         ) -> Pin<Box<dyn Future<Output = Result<(), RocketMQError>> + Send + 'a>> {
             self.call_count.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                Err(RocketMQError::authentication_failed(
-                    "Access denied",
-                ))
-            })
+            Box::pin(async move { Err(RocketMQError::authentication_failed("Access denied")) })
         }
     }
 

@@ -192,7 +192,7 @@ impl<P: AuthorizationMetadataProvider> AclAuthorizationHandler<P> {
         // Step 2: Compare resource patterns
         if r1.resource_pattern != r2.resource_pattern {
             return match (r1.resource_pattern, r2.resource_pattern) {
-                (ResourcePattern::Literal, _) => Ordering::Less,   // LITERAL has highest priority
+                (ResourcePattern::Literal, _) => Ordering::Less, // LITERAL has highest priority
                 (_, ResourcePattern::Literal) => Ordering::Greater,
                 (ResourcePattern::Prefixed, ResourcePattern::Any) => Ordering::Less,
                 (ResourcePattern::Any, ResourcePattern::Prefixed) => Ordering::Greater,
@@ -226,11 +226,7 @@ impl<P: AuthorizationMetadataProvider> AclAuthorizationHandler<P> {
 
     /// Create an authorization error with context details.
     fn create_error(&self, context: &DefaultAuthorizationContext, detail: &str) -> RocketMQError {
-        let subject_key = context
-            .subject()
-            .as_ref()
-            .map(|s| s.subject_key())
-            .unwrap_or("unknown");
+        let subject_key = context.subject().as_ref().map(|s| s.subject_key()).unwrap_or("unknown");
         let resource_key = context
             .resource()
             .as_ref()
@@ -254,9 +250,9 @@ impl<P: AuthorizationMetadataProvider + 'static> AuthorizationHandler for AclAut
         Box::pin(async move {
             // Step 1: Extract subject from context
             let subject_binding = context.subject();
-            let subject_wrapper = subject_binding.as_ref().ok_or_else(|| {
-                RocketMQError::authentication_failed("Subject not found in authorization context")
-            })?;
+            let subject_wrapper = subject_binding
+                .as_ref()
+                .ok_or_else(|| RocketMQError::authentication_failed("Subject not found in authorization context"))?;
 
             // Create a User subject for ACL lookup (required by metadata provider trait)
             let subject = User::of(subject_wrapper.subject_key());
@@ -266,9 +262,7 @@ impl<P: AuthorizationMetadataProvider + 'static> AuthorizationHandler for AclAut
                 .metadata_provider
                 .get_acl(&subject)
                 .await
-                .map_err(|e| {
-                    RocketMQError::Internal(format!("Failed to fetch ACL: {}", e))
-                })?
+                .map_err(|e| RocketMQError::Internal(format!("Failed to fetch ACL: {}", e)))?
                 .ok_or_else(|| self.create_error(context, "no matched policies"))?;
 
             // Step 3: Match policy entries
@@ -325,13 +319,7 @@ mod tests {
         let handler = AclAuthorizationHandler::new(provider);
 
         // Create authorization context
-        let context = DefaultAuthorizationContext::of(
-            "alice",
-            SubjectType::User,
-            resource,
-            Action::Pub,
-            "127.0.0.1",
-        );
+        let context = DefaultAuthorizationContext::of("alice", SubjectType::User, resource, Action::Pub, "127.0.0.1");
 
         // Test authorization - should succeed
         let result = handler.handle(&context).await;
@@ -354,13 +342,7 @@ mod tests {
 
         let handler = AclAuthorizationHandler::new(provider);
 
-        let context = DefaultAuthorizationContext::of(
-            "bob",
-            SubjectType::User,
-            resource,
-            Action::Pub,
-            "192.168.1.1",
-        );
+        let context = DefaultAuthorizationContext::of("bob", SubjectType::User, resource, Action::Pub, "192.168.1.1");
 
         // Test authorization - should fail with DENY
         let result = handler.handle(&context).await;
@@ -375,13 +357,7 @@ mod tests {
         let handler = AclAuthorizationHandler::new(provider);
 
         let resource = Resource::of_topic("test-topic");
-        let context = DefaultAuthorizationContext::of(
-            "charlie",
-            SubjectType::User,
-            resource,
-            Action::Pub,
-            "10.0.0.1",
-        );
+        let context = DefaultAuthorizationContext::of("charlie", SubjectType::User, resource, Action::Pub, "10.0.0.1");
 
         // No ACL exists for "charlie" - should fail
         let result = handler.handle(&context).await;
@@ -405,13 +381,8 @@ mod tests {
         let handler = AclAuthorizationHandler::new(provider);
 
         let requested_resource = Resource::of_topic("topic-b");
-        let context = DefaultAuthorizationContext::of(
-            "dave",
-            SubjectType::User,
-            requested_resource,
-            Action::Pub,
-            "172.16.0.1",
-        );
+        let context =
+            DefaultAuthorizationContext::of("dave", SubjectType::User, requested_resource, Action::Pub, "172.16.0.1");
 
         // Should fail - no matching policy
         let result = handler.handle(&context).await;
@@ -438,10 +409,7 @@ mod tests {
         );
 
         // Topic should have higher priority than ANY
-        assert_eq!(
-            handler.compare_policy_entries(&topic_entry, &any_entry),
-            Ordering::Less
-        );
+        assert_eq!(handler.compare_policy_entries(&topic_entry, &any_entry), Ordering::Less);
         assert_eq!(
             handler.compare_policy_entries(&any_entry, &topic_entry),
             Ordering::Greater
@@ -468,10 +436,7 @@ mod tests {
         );
 
         // LITERAL > PREFIXED
-        assert_eq!(
-            handler.compare_policy_entries(&literal, &prefixed),
-            Ordering::Less
-        );
+        assert_eq!(handler.compare_policy_entries(&literal, &prefixed), Ordering::Less);
     }
 
     #[test]
@@ -494,9 +459,6 @@ mod tests {
         );
 
         // DENY > ALLOW
-        assert_eq!(
-            handler.compare_policy_entries(&deny, &allow),
-            Ordering::Less
-        );
+        assert_eq!(handler.compare_policy_entries(&deny, &allow), Ordering::Less);
     }
 }

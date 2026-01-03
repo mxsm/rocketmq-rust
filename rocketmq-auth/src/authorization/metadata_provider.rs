@@ -230,7 +230,10 @@ pub trait AuthorizationMetadataProvider: Send + Sync {
     ///     println!("ACL found: {:?}", acl);
     /// }
     /// ```
-    fn get_acl<S: Subject + Send + Sync>(&self, subject: &S) -> impl std::future::Future<Output = MetadataResult<Option<Acl>>> + Send;
+    fn get_acl<S: Subject + Send + Sync>(
+        &self,
+        subject: &S,
+    ) -> impl std::future::Future<Output = MetadataResult<Option<Acl>>> + Send;
 
     /// List ACLs with optional filtering.
     ///
