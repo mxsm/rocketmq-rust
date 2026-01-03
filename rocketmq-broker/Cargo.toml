@@ -48,14 +48,13 @@ rand = { workspace = true }
 dirs.workspace = true
 dns-lookup     = "3.0"
 
-cfg-if                = { workspace = true }
-lazy_static.workspace = true
-num_cpus              = { workspace = true }
-sysinfo               = { workspace = true }
-thiserror             = { workspace = true }
-trait-variant         = { workspace = true }
-cheetah-string        = { workspace = true }
-dashmap               = { workspace = true }
+cfg-if         = { workspace = true }
+num_cpus       = { workspace = true }
+sysinfo        = { workspace = true }
+thiserror      = { workspace = true }
+trait-variant  = { workspace = true }
+cheetah-string = { workspace = true }
+dashmap        = { workspace = true }
 
 crossbeam-skiplist = "0.1"
 

@@ -3463,7 +3463,6 @@ dependencies = [
  "dirs",
  "dns-lookup",
  "futures",
- "lazy_static",
  "mockall",
  "num_cpus",
  "opentelemetry",
