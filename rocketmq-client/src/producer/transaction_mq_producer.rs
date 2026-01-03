@@ -149,7 +149,7 @@ impl MQProducer for TransactionMQProducer {
         msg: M,
         mq: MessageQueue,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<SendResult>
+    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
