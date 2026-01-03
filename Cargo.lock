@@ -3634,6 +3634,7 @@ name = "rocketmq-filter"
 version = "0.8.0"
 dependencies = [
  "cheetah-string",
+ "rocketmq-error",
  "serde",
 ]
 

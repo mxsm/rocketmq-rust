@@ -12,102 +12,140 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[derive(Clone, Debug)]
+use std::fmt;
+
+use rocketmq_error::FilterError;
+
+/// Wrapper of bytes arrays, in order to operate single bit easily.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BitsArray {
     bytes: Vec<u8>,
     bit_length: usize,
 }
 
 impl BitsArray {
+    /// Create a new BitsArray with the specified bit length
+    #[must_use]
     pub fn create(bit_length: usize) -> Self {
-        let bytes = vec![0u8; bit_length.div_ceil(8)];
-        BitsArray { bytes, bit_length }
-    }
-
-    pub fn from_bytes(bytes: &[u8], bit_length: Option<usize>) -> Self {
-        if bytes.is_empty() {
-            panic!("Bytes is empty!");
-        }
-        let bit_length = bit_length.unwrap_or(bytes.len() * 8);
-        if bit_length < 1 {
-            panic!("Bit is less than 1.");
-        }
-        if bit_length < bytes.len() * 8 {
-            panic!("BitLength is less than bytes.len() * 8");
-        }
+        let byte_length = bit_length.div_ceil(8);
         BitsArray {
-            bytes: bytes.to_vec(),
+            bytes: vec![0u8; byte_length],
             bit_length,
         }
     }
 
+    /// Create a BitsArray from bytes with specified bit length
+    pub fn from_bytes_with_length(bytes: &[u8], bit_length: usize) -> Result<Self, FilterError> {
+        if bytes.is_empty() {
+            return Err(FilterError::empty_bytes());
+        }
+        if bit_length < 1 {
+            return Err(FilterError::invalid_bit_length());
+        }
+        if bit_length < bytes.len() * 8 {
+            return Err(FilterError::bit_length_too_small());
+        }
+        Ok(BitsArray {
+            bytes: bytes.to_vec(),
+            bit_length,
+        })
+    }
+
+    /// Create a BitsArray from bytes, using bytes.len() * 8 as bit length
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, FilterError> {
+        if bytes.is_empty() {
+            return Err(FilterError::empty_bytes());
+        }
+        let bit_length = bytes.len() * 8;
+        Ok(BitsArray {
+            bytes: bytes.to_vec(),
+            bit_length,
+        })
+    }
+
+    #[inline]
     pub fn bit_length(&self) -> usize {
         self.bit_length
     }
 
+    #[inline]
     pub fn byte_length(&self) -> usize {
         self.bytes.len()
     }
 
+    #[inline]
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
 
-    pub fn xor(&mut self, other: &BitsArray) {
-        self.check_initialized();
-        other.check_initialized();
+    /// XOR operation with another BitsArray
+    pub fn xor(&mut self, other: &BitsArray) -> Result<(), FilterError> {
+        self.check_initialized()?;
+        other.check_initialized()?;
         let min_len = self.byte_length().min(other.byte_length());
         for i in 0..min_len {
-            self.bytes[i] ^= other.get_byte(i);
+            self.bytes[i] ^= other.bytes[i];
         }
+        Ok(())
     }
 
-    pub fn xor_bit(&mut self, bit_pos: usize, set: bool) {
-        self.check_bit_position(bit_pos);
-        let value = self.get_bit(bit_pos);
-        self.set_bit(bit_pos, value ^ set);
+    /// XOR operation on a single bit
+    pub fn xor_bit(&mut self, bit_pos: usize, set: bool) -> Result<(), FilterError> {
+        self.check_bit_position(bit_pos)?;
+        let value = self.get_bit(bit_pos)?;
+        self.set_bit(bit_pos, value ^ set)
     }
 
-    pub fn or(&mut self, other: &BitsArray) {
-        self.check_initialized();
-        other.check_initialized();
+    /// OR operation with another BitsArray
+    pub fn or(&mut self, other: &BitsArray) -> Result<(), FilterError> {
+        self.check_initialized()?;
+        other.check_initialized()?;
         let min_len = self.byte_length().min(other.byte_length());
         for i in 0..min_len {
-            self.bytes[i] |= other.get_byte(i);
+            self.bytes[i] |= other.bytes[i];
         }
+        Ok(())
     }
 
-    pub fn or_bit(&mut self, bit_pos: usize, set: bool) {
-        self.check_bit_position(bit_pos);
+    /// OR operation on a single bit
+    pub fn or_bit(&mut self, bit_pos: usize, set: bool) -> Result<(), FilterError> {
+        self.check_bit_position(bit_pos)?;
         if set {
-            self.set_bit(bit_pos, true);
+            self.set_bit(bit_pos, true)?;
         }
+        Ok(())
     }
 
-    pub fn and(&mut self, other: &BitsArray) {
-        self.check_initialized();
-        other.check_initialized();
+    /// AND operation with another BitsArray
+    pub fn and(&mut self, other: &BitsArray) -> Result<(), FilterError> {
+        self.check_initialized()?;
+        other.check_initialized()?;
         let min_len = self.byte_length().min(other.byte_length());
         for i in 0..min_len {
-            self.bytes[i] &= other.get_byte(i);
+            self.bytes[i] &= other.bytes[i];
         }
+        Ok(())
     }
 
-    pub fn and_bit(&mut self, bit_pos: usize, set: bool) {
-        self.check_bit_position(bit_pos);
+    /// AND operation on a single bit
+    pub fn and_bit(&mut self, bit_pos: usize, set: bool) -> Result<(), FilterError> {
+        self.check_bit_position(bit_pos)?;
         if !set {
-            self.set_bit(bit_pos, false);
+            self.set_bit(bit_pos, false)?;
         }
+        Ok(())
     }
 
-    pub fn not(&mut self, bit_pos: usize) {
-        self.check_bit_position(bit_pos);
-        let value = self.get_bit(bit_pos);
-        self.set_bit(bit_pos, !value);
+    /// NOT operation on a single bit
+    pub fn not(&mut self, bit_pos: usize) -> Result<(), FilterError> {
+        self.check_bit_position(bit_pos)?;
+        let value = self.get_bit(bit_pos)?;
+        self.set_bit(bit_pos, !value)
     }
 
-    pub fn set_bit(&mut self, bit_pos: usize, set: bool) {
-        self.check_bit_position(bit_pos);
+    /// Set a bit at the specified position
+    pub fn set_bit(&mut self, bit_pos: usize, set: bool) -> Result<(), FilterError> {
+        self.check_bit_position(bit_pos)?;
         let sub = self.subscript(bit_pos);
         let pos = self.position(bit_pos);
         if set {
@@ -115,61 +153,64 @@ impl BitsArray {
         } else {
             self.bytes[sub] &= !pos;
         }
+        Ok(())
     }
 
-    pub fn set_byte(&mut self, byte_pos: usize, set: u8) {
-        self.check_byte_position(byte_pos);
+    /// Set a byte at the specified position
+    pub fn set_byte(&mut self, byte_pos: usize, set: u8) -> Result<(), FilterError> {
+        self.check_byte_position(byte_pos)?;
         self.bytes[byte_pos] = set;
+        Ok(())
     }
 
-    pub fn get_bit(&self, bit_pos: usize) -> bool {
-        self.check_bit_position(bit_pos);
-        (self.bytes[self.subscript(bit_pos)] & self.position(bit_pos)) != 0
+    /// Get a bit at the specified position
+    pub fn get_bit(&self, bit_pos: usize) -> Result<bool, FilterError> {
+        self.check_bit_position(bit_pos)?;
+        Ok((self.bytes[self.subscript(bit_pos)] & self.position(bit_pos)) != 0)
     }
 
-    pub fn get_byte(&self, byte_pos: usize) -> u8 {
-        self.check_byte_position(byte_pos);
-        self.bytes[byte_pos]
+    /// Get a byte at the specified position
+    pub fn get_byte(&self, byte_pos: usize) -> Result<u8, FilterError> {
+        self.check_byte_position(byte_pos)?;
+        Ok(self.bytes[byte_pos])
     }
 
+    #[inline]
     fn subscript(&self, bit_pos: usize) -> usize {
         bit_pos / 8
     }
 
+    #[inline]
     fn position(&self, bit_pos: usize) -> u8 {
         1 << (bit_pos % 8)
     }
 
-    fn check_byte_position(&self, byte_pos: usize) {
-        self.check_initialized();
+    fn check_byte_position(&self, byte_pos: usize) -> Result<(), FilterError> {
+        self.check_initialized()?;
         if byte_pos >= self.byte_length() {
-            panic!("BytePos is greater than {}", self.bytes.len());
+            return Err(FilterError::byte_position_out_of_bounds(byte_pos, self.bytes.len()));
         }
+        Ok(())
     }
 
-    fn check_bit_position(&self, bit_pos: usize) {
-        self.check_initialized();
+    fn check_bit_position(&self, bit_pos: usize) -> Result<(), FilterError> {
+        self.check_initialized()?;
         if bit_pos >= self.bit_length() {
-            panic!("BitPos is greater than {}", self.bit_length);
+            return Err(FilterError::bit_position_out_of_bounds(bit_pos, self.bit_length));
         }
+        Ok(())
     }
 
-    fn check_initialized(&self) {
+    fn check_initialized(&self) -> Result<(), FilterError> {
         if self.bytes.is_empty() {
-            panic!("Not initialized!");
+            return Err(FilterError::uninitialized());
         }
-    }
-
-    pub fn clone_bits(&self) -> BitsArray {
-        BitsArray {
-            bytes: self.bytes.clone(),
-            bit_length: self.bit_length,
-        }
+        Ok(())
     }
 }
 
-impl std::fmt::Display for BitsArray {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for BitsArray {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.bytes.is_empty() {
             return write!(f, "null");
         }
@@ -192,5 +233,11 @@ impl std::fmt::Display for BitsArray {
             }
         }
         write!(f, "{s}")
+    }
+}
+
+impl AsRef<[u8]> for BitsArray {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
     }
 }

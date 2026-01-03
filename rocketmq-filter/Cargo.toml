@@ -18,4 +18,5 @@ rust-version.workspace = true
 #json spupport
 serde.workspace = true
 cheetah-string = { workspace = true }
+rocketmq-error = { workspace = true }
 
