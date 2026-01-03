@@ -1629,8 +1629,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn replicas_manager(&self) -> &Option<ReplicasManager> {
-        &self.replicas_manager
+    pub fn replicas_manager(&self) -> Option<&ReplicasManager> {
+        self.replicas_manager.as_ref()
     }
 
     #[inline]
