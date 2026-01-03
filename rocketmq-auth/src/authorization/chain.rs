@@ -12,12 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod chain;
-pub mod context;
-pub mod enums;
-pub mod evaluator;
-pub mod manager;
-pub mod metadata_provider;
-pub mod model;
-pub mod provider;
-pub mod strategy;
+//! Authorization handler chain module.
+//!
+//! This module provides Chain of Responsibility pattern implementations for authorization.
+//! Handlers process authorization contexts in sequence, allowing modular and pluggable
+//! authorization logic.
+
+pub mod acl_authorization_handler;
+pub mod handler;
+pub mod handler_chain;
+
+pub use acl_authorization_handler::AclAuthorizationHandler;
+pub use handler::AuthorizationHandler;
+pub use handler_chain::AuthorizationHandlerChain;
