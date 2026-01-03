@@ -888,7 +888,7 @@ impl MQClientAPIImpl {
 
         if let (Some(msgs), true) = (msgs, response_header.batch_uniq_id().is_none()) {
             let mut sb = String::new();
-            for msg in msgs.messages.as_ref().unwrap().iter() {
+            for msg in &msgs.messages {
                 sb.push_str(if sb.is_empty() { "" } else { "," });
                 sb.push_str(MessageClientIDSetter::get_uniq_id(msg).unwrap().as_str());
             }

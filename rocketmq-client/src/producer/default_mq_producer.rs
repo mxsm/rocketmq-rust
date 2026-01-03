@@ -22,6 +22,7 @@ use rocketmq_common::common::compression::compressor_factory::CompressorFactory;
 use rocketmq_common::common::message::message_batch::MessageBatch;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
@@ -452,8 +453,8 @@ impl DefaultMQProducer {
     {
         match MessageBatch::generate_from_vec(messages) {
             Ok(mut msg_batch) => {
-                for message in msg_batch.messages.as_mut().unwrap() {
-                    Validators::check_message(Some(message), &self.producer_config)?;
+                for message in &mut msg_batch.messages {
+                    Validators::check_message::<Message>(Some(message), &self.producer_config)?;
                     MessageClientIDSetter::set_uniq_id(message);
                     message.set_topic(self.with_namespace(message.get_topic()));
                 }
