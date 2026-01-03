@@ -92,16 +92,18 @@ async fn start_cluster() -> Result<Vec<ArcMut<ControllerManager>>> {
         let config = create_cluster_config(node_id, port, peers.clone())?;
 
         // Create manager
-        let mut manager = ControllerManager::new(config).await?;
+        let manager = ControllerManager::new(config).await?;
+
+        // Wrap in ArcMut for initialization and start
+        let manager = ArcMut::new(manager);
 
         // Initialize
-        if !manager.initialize().await? {
+        if !manager.clone().initialize().await? {
             error!("Failed to initialize node {}", node_id);
             return Err(rocketmq_controller::error::ControllerError::InitializationFailed);
         }
 
-        // Wrap in Arc and start
-        let manager = ArcMut::new(manager);
+        // Start
         manager.clone().start().await?;
         info!("✓ Node {} started successfully", node_id);
 

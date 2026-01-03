@@ -12,10 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::ControllerManager;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::net::channel::Channel;
+use rocketmq_rust::ArcMut;
 
-pub struct BrokerHousekeepingService;
+pub struct BrokerHousekeepingService {
+    controller_manager: Option<ArcMut<ControllerManager>>,
+}
+
+impl Default for BrokerHousekeepingService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BrokerHousekeepingService {
+    pub fn new() -> Self {
+        BrokerHousekeepingService {
+            controller_manager: None,
+        }
+    }
+
+    pub fn new_with_controller_manager(controller_manager: ArcMut<ControllerManager>) -> Self {
+        BrokerHousekeepingService {
+            controller_manager: Some(controller_manager),
+        }
+    }
+
+    pub fn set_controller_manager(&mut self, controller_manager: ArcMut<ControllerManager>) {
+        self.controller_manager = Some(controller_manager);
+    }
+}
 
 impl ChannelEventListener for BrokerHousekeepingService {
     fn on_channel_connect(&self, __remote_addr: &str, _channel: &Channel) {
