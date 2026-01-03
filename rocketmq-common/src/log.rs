@@ -27,7 +27,6 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
 
 use chrono_tz::Tz;
-use futures::SinkExt;
 use time::UtcOffset;
 use tracing_subscriber::fmt::time::OffsetTime;
 
@@ -181,18 +180,24 @@ pub fn init_logger_with_file(
 ///
 /// Returns 'OffsetTime'
 pub fn get_timer_from_env() -> OffsetTime<time::format_description::well_known::Rfc3339> {
-
     let tz_str = std::env::var("LOG_TIMEZONE").unwrap_or_else(|_| "UTC".to_string());
 
-    let tz: Tz = tz_str
-        .parse()
-        .unwrap_or_else(|_| panic!("Invalid timezone '{}'", tz_str));
+    let tz: Tz = tz_str.parse().unwrap_or_else(|e| {
+        eprintln!("Warning: Invalid timezone '{}': {}. Falling back to UTC.", tz_str, e);
+        chrono_tz::UTC
+    });
 
     let now = chrono::Utc::now().with_timezone(&tz);
 
     let offset_seconds = now.offset().fix().local_minus_utc();
 
-    let offset = UtcOffset::from_whole_seconds(offset_seconds).expect("Invalid offset for timezone");
+    let offset = UtcOffset::from_whole_seconds(offset_seconds).unwrap_or_else(|e| {
+        eprintln!(
+            "Warning: Invalid offset {} seconds: {}. Falling back to UTC.",
+            offset_seconds, e
+        );
+        UtcOffset::UTC
+    });
 
     OffsetTime::new(offset, time::format_description::well_known::Rfc3339)
 }
