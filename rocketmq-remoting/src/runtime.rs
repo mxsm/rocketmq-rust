@@ -19,6 +19,7 @@ use crate::protocol::remoting_command::RemotingCommand;
 pub mod config;
 pub mod connection_handler_context;
 pub mod processor;
+pub mod processor_v2;
 
 /// Trait defining hooks for RPC (Remote Procedure Call) interactions.
 ///
