@@ -16,8 +16,21 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use super::raft_controller::RaftController;
+use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
+use crate::controller::broker_housekeeping_service::BrokerHousekeepingService;
+use crate::controller::Controller;
+use crate::error::ControllerError;
+use crate::error::Result;
+use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
+use crate::metadata::MetadataStore;
+#[cfg(feature = "metrics")]
+use crate::metrics::ControllerMetricsManager;
+use crate::processor::controller_request_processor::ControllerRequestProcessor;
+use crate::processor::ProcessorManager;
 use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_common::common::server::config::ServerConfig;
+use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
 use rocketmq_remoting::remoting::RemotingService;
 use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
@@ -28,19 +41,6 @@ use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
-
-use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
-use crate::controller::Controller;
-use crate::error::ControllerError;
-use crate::error::Result;
-use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
-use crate::metadata::MetadataStore;
-#[cfg(feature = "metrics")]
-use crate::metrics::ControllerMetricsManager;
-use crate::processor::controller_request_processor::ControllerRequestProcessor;
-use crate::processor::ProcessorManager;
-
-use super::raft_controller::RaftController;
 
 /// Main controller manager
 ///
@@ -116,6 +116,8 @@ pub struct ControllerManager {
 
     /// Initialization state - uses AtomicBool for lock-free reads
     initialized: Arc<AtomicBool>,
+
+    broker_housekeeping_service: Option<Arc<BrokerHousekeepingService>>,
 }
 
 impl ControllerManager {
@@ -205,6 +207,7 @@ impl ControllerManager {
             metrics_manager,
             running: Arc::new(AtomicBool::new(false)),
             initialized: Arc::new(AtomicBool::new(false)),
+            broker_housekeeping_service: None,
         })
     }
 
@@ -230,7 +233,7 @@ impl ControllerManager {
     /// # Thread Safety
     ///
     /// This method is idempotent - calling it multiple times is safe
-    pub async fn initialize(&mut self) -> Result<bool> {
+    pub async fn initialize(mut self: ArcMut<Self>) -> Result<bool> {
         // Check if already initialized using atomic operation
         if self
             .initialized
@@ -252,6 +255,16 @@ impl ControllerManager {
         // Register broker lifecycle listeners
         // TODO: Implement broker inactive handler and register it
         // self.heartbeat_manager.lock().await.register_broker_lifecycle_listener(Arc::new(...));
+
+        // Initialize broker housekeeping service
+        {
+            let housekeeping_service = Arc::new(BrokerHousekeepingService::new_with_controller_manager(ArcMut::clone(
+                &self,
+            )));
+            self.broker_housekeeping_service = Some(housekeeping_service);
+
+            info!("Broker housekeeping service initialized");
+        }
 
         // Initialize processor manager (processors are already registered in new())
         info!("Processor manager initialized with built-in processors");
@@ -401,9 +414,12 @@ impl ControllerManager {
         if let Some(mut server) = self.remoting_server.take() {
             // Create ControllerRequestProcessor using init_processors()
             let request_processor = Self::init_processors(self.clone());
-
+            let broker_housekeeping_service = self
+                .broker_housekeeping_service
+                .take()
+                .map(|service| service as Arc<dyn ChannelEventListener>);
             tokio::spawn(async move {
-                server.run(request_processor, None).await;
+                server.run(request_processor, broker_housekeeping_service).await;
             });
             info!("Remoting server started with ControllerRequestProcessor");
         }
@@ -657,37 +673,43 @@ mod tests {
     async fn test_manager_lifecycle() {
         let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9878".parse::<SocketAddr>().unwrap());
 
-        let mut manager = ControllerManager::new(config).await.expect("Failed to create manager");
+        let manager = ControllerManager::new(config).await.expect("Failed to create manager");
+        let manager_arc = ArcMut::new(manager);
 
         // Test initialization state (should use non-async is_initialized now)
-        assert!(!manager.is_initialized());
-        assert!(manager.initialize().await.expect("Failed to initialize"));
-        assert!(manager.is_initialized());
+        assert!(!manager_arc.is_initialized());
+        assert!(manager_arc.clone().initialize().await.expect("Failed to initialize"));
+        assert!(manager_arc.is_initialized());
 
         // Test double initialization (should return Ok(false))
-        assert!(!manager.initialize().await.expect("Double initialization failed"));
+        assert!(!manager_arc
+            .clone()
+            .initialize()
+            .await
+            .expect("Double initialization failed"));
 
         // Test running state (should use non-async is_running now)
-        assert!(!manager.is_running());
+        assert!(!manager_arc.is_running());
 
         // Prevent dropping runtime in async context
-        std::mem::forget(manager);
+        std::mem::forget(manager_arc);
     }
 
     #[tokio::test]
     async fn test_manager_shutdown() {
         let config = ControllerConfig::default().with_node_info(1, "127.0.0.1:9879".parse::<SocketAddr>().unwrap());
 
-        let mut manager = ControllerManager::new(config).await.expect("Failed to create manager");
+        let manager = ControllerManager::new(config).await.expect("Failed to create manager");
+        let manager_arc = ArcMut::new(manager);
 
         // Initialize first
-        manager.initialize().await.expect("Failed to initialize");
+        manager_arc.clone().initialize().await.expect("Failed to initialize");
 
         // Test shutdown without starting (should succeed)
-        manager.shutdown().await.expect("Failed to shutdown");
+        manager_arc.shutdown().await.expect("Failed to shutdown");
 
         // Prevent dropping runtime in async context
-        std::mem::forget(manager);
+        std::mem::forget(manager_arc);
     }
 
     #[tokio::test]

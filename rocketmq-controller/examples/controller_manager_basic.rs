@@ -49,18 +49,18 @@ async fn main() -> Result<()> {
 
     // Create the controller manager
     info!("Creating ControllerManager...");
-    let mut manager = ControllerManager::new(config).await?;
+    let manager = ControllerManager::new(config).await?;
+
+    // Wrap in ArcMut for initialization and start
+    let manager = ArcMut::new(manager);
 
     // Initialize the manager
     info!("Initializing ControllerManager...");
-    if !manager.initialize().await? {
+    if !manager.clone().initialize().await? {
         error!("Failed to initialize ControllerManager");
         return Err(rocketmq_controller::error::ControllerError::InitializationFailed);
     }
     info!(" Controller initialized successfully");
-
-    // Wrap in Arc for start
-    let manager = ArcMut::new(manager);
 
     // Start the manager
     info!("Starting ControllerManager...");

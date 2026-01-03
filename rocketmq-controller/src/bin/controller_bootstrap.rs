@@ -81,19 +81,19 @@ pub async fn main() -> Result<()> {
 
     // Create controller manager
     info!("Creating Controller Manager...");
-    let mut controller_manager = ControllerManager::new(config).await?;
-
+    let controller_manager = ControllerManager::new(config).await?;
+    let controller_manager = ArcMut::new(controller_manager);
     // Initialize controller
     info!("Initializing Controller...");
-    let init_result = controller_manager.initialize().await?;
+
+    let init_result = ControllerManager::initialize(ArcMut::clone(&controller_manager)).await?;
     if !init_result {
         eprintln!("Controller initialization failed!");
         controller_manager.shutdown().await?;
         std::process::exit(-3);
     }
 
-    // Wrap in Arc for sharing with start method
-    let controller_manager = ArcMut::new(controller_manager);
+    ControllerManager::start(ArcMut::clone(&controller_manager)).await?;
 
     info!("Controller started successfully!");
     info!("  Node ID: {}", controller_manager.controller_config().node_id);
