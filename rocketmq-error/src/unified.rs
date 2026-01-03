@@ -26,6 +26,9 @@ mod tools;
 
 use std::io;
 
+// Re-export filter error
+pub use crate::filter_error::FilterError;
+
 pub use network::NetworkError;
 pub use protocol::ProtocolError;
 pub use rpc::RpcClientError;
@@ -271,6 +274,13 @@ pub enum RocketMQError {
     /// Tools and admin operation errors
     #[error(transparent)]
     Tools(#[from] ToolsError),
+
+    // ============================================================================
+    // Filter Errors
+    // ============================================================================
+    /// Bloom filter and bit array operation errors
+    #[error(transparent)]
+    Filter(#[from] FilterError),
 
     // ============================================================================
     // Storage Errors
@@ -588,6 +598,46 @@ impl RocketMQError {
     #[inline]
     pub fn controller_shutdown() -> Self {
         Self::Controller(ControllerError::Shutdown)
+    }
+
+    // ============================================================================
+    // Filter Error Constructors
+    // ============================================================================
+
+    /// Create an empty bytes error
+    #[inline]
+    pub fn filter_empty_bytes() -> Self {
+        Self::Filter(FilterError::empty_bytes())
+    }
+
+    /// Create an invalid bit length error
+    #[inline]
+    pub fn filter_invalid_bit_length() -> Self {
+        Self::Filter(FilterError::invalid_bit_length())
+    }
+
+    /// Create a bit length too small error
+    #[inline]
+    pub fn filter_bit_length_too_small() -> Self {
+        Self::Filter(FilterError::bit_length_too_small())
+    }
+
+    /// Create a bit position out of bounds error
+    #[inline]
+    pub fn filter_bit_position_out_of_bounds(pos: usize, max: usize) -> Self {
+        Self::Filter(FilterError::bit_position_out_of_bounds(pos, max))
+    }
+
+    /// Create a byte position out of bounds error
+    #[inline]
+    pub fn filter_byte_position_out_of_bounds(pos: usize, max: usize) -> Self {
+        Self::Filter(FilterError::byte_position_out_of_bounds(pos, max))
+    }
+
+    /// Create an uninitialized error
+    #[inline]
+    pub fn filter_uninitialized() -> Self {
+        Self::Filter(FilterError::uninitialized())
     }
 }
 
