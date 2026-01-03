@@ -1,15 +1,15 @@
 [package]
-name = "rocketmq-filter"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-homepage.workspace = true
-repository.workspace = true
-license.workspace = true
-keywords = ["filter", "rocketmq", "tag", "sql"]
-categories = ["development-tools", "network-programming", "asynchronous"]
-readme.workspace = true
-description = "A filter for RocketMQ messages"
+name                   = "rocketmq-filter"
+version.workspace      = true
+authors.workspace      = true
+edition.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+license.workspace      = true
+keywords               = ["filter", "rocketmq", "tag", "sql"]
+categories             = ["development-tools", "network-programming", "asynchronous"]
+readme.workspace       = true
+description            = "A filter for RocketMQ messages"
 rust-version.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
