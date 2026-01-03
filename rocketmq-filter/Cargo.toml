@@ -17,5 +17,7 @@ rust-version.workspace = true
 [dependencies]
 #json spupport
 serde.workspace = true
-cheetah-string  = { workspace = true }
-rocketmq-error  = { workspace = true }
+cheetah-string = { workspace = true }
+rocketmq-error = { workspace = true }
+ahash = "0.8"
+
