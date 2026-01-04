@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod expression_type;
-pub mod filter_context;
-pub mod filter_type;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterType {
+    Null,
+    Operand,
+    Operator,
+    Parenthesis,
+    Separator,
+}
