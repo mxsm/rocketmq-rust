@@ -383,6 +383,9 @@ pub enum RocketMQError {
 
     #[error("Not initialized: {0}")]
     NotInitialized(String),
+
+    #[error("Message is missing required property: {property}")]
+    MissingRequiredMessageProperty { property: &'static str },
 }
 
 // ============================================================================
