@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod binary_expression;
 pub mod boolean_expression;
 pub mod evaluation_context;
 
