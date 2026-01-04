@@ -1182,7 +1182,7 @@ impl MQProducer for DefaultMQProducer {
         msg.set_topic(self.with_namespace(msg.get_topic()));
         self.default_mqproducer_impl
             .as_mut()
-            .unwrap()
+            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .request_to_queue_with_callback(msg, mq, Arc::new(request_callback), timeout)
             .await
     }
