@@ -191,22 +191,117 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_topic_not_found() {
+    fn test_topic_management_errors() {
         let err = ToolsError::topic_not_found("TestTopic");
         assert_eq!(err.to_string(), "Topic 'TestTopic' not found");
+
+        let err = ToolsError::topic_already_exists("TestTopic");
+        assert_eq!(err.to_string(), "Topic 'TestTopic' already exists");
+
+        let err = ToolsError::TopicInvalid {
+            reason: "invalid partitions".to_string(),
+        };
+        assert_eq!(err.to_string(), "Invalid topic configuration: invalid partitions");
     }
 
     #[test]
-    fn test_validation_error() {
-        let err = ToolsError::validation_error("topic_name", "name too long");
-        assert_eq!(err.to_string(), "Validation failed for 'topic_name': name too long");
+    fn test_cluster_management_errors() {
+        let err = ToolsError::cluster_not_found("TestCluster");
+        assert_eq!(err.to_string(), "Cluster 'TestCluster' not found");
+
+        let err = ToolsError::ClusterInvalid {
+            reason: "missing brokers".to_string(),
+        };
+        assert_eq!(err.to_string(), "Invalid cluster configuration: missing brokers");
     }
 
     #[test]
-    fn test_broker_offline() {
+    fn test_broker_management_errors() {
+        let err = ToolsError::broker_not_found("broker-a");
+        assert_eq!(err.to_string(), "Broker 'broker-a' not found");
+
         let err = ToolsError::BrokerOffline {
             broker: "broker-a".to_string(),
         };
         assert_eq!(err.to_string(), "Broker 'broker-a' is offline");
+    }
+
+    #[test]
+    fn test_consumer_management_errors() {
+        let err = ToolsError::ConsumerGroupNotFound {
+            group: "test-group".to_string(),
+        };
+        assert_eq!(err.to_string(), "Consumer group 'test-group' not found");
+
+        let err = ToolsError::ConsumerOffline {
+            consumer: "consumer-1".to_string(),
+        };
+        assert_eq!(err.to_string(), "Consumer 'consumer-1' is offline");
+    }
+
+    #[test]
+    fn test_nameserver_management_errors() {
+        let err = ToolsError::nameserver_unreachable("127.0.0.1:9876");
+        assert_eq!(err.to_string(), "NameServer '127.0.0.1:9876' is unreachable");
+
+        let err = ToolsError::nameserver_config_invalid("missing nameserver");
+        assert_eq!(err.to_string(), "Invalid NameServer configuration: missing nameserver");
+    }
+
+    #[test]
+    fn test_configuration_errors() {
+        let err = ToolsError::InvalidConfiguration {
+            field: "name_server".to_string(),
+            reason: "missing nameserver".to_string(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "Invalid configuration for 'name_server': missing nameserver"
+        );
+
+        let err = ToolsError::MissingRequiredField {
+            field: "topic".to_string(),
+        };
+        assert_eq!(err.to_string(), "Missing required field: 'topic'");
+    }
+
+    #[test]
+    fn test_validation_errors() {
+        let err = ToolsError::validation_error("topic_name", "name too long");
+        assert_eq!(err.to_string(), "Validation failed for 'topic_name': name too long");
+
+        let err = ToolsError::ValidationFailed {
+            message: "generic validation error".to_string(),
+        };
+        assert_eq!(err.to_string(), "Validation error: generic validation error");
+    }
+
+    #[test]
+    fn test_permission_errors() {
+        let err = ToolsError::PermissionDenied {
+            operation: "createTopic".to_string(),
+        };
+        assert_eq!(err.to_string(), "Permission denied for operation: createTopic");
+
+        let err = ToolsError::InvalidPermission {
+            value: 1,
+            allowed: vec![2, 4, 6],
+        };
+        assert!(err.to_string().contains("Invalid permission value: 1"));
+        assert!(err.to_string().contains("2, 4, 6"));
+    }
+
+    #[test]
+    fn test_operation_errors() {
+        let err = ToolsError::OperationTimeout {
+            operation: "createTopic".to_string(),
+            duration_ms: 5000,
+        };
+        assert!(err
+            .to_string()
+            .contains("Operation 'createTopic' timed out after 5000ms"));
+
+        let err = ToolsError::internal("unexpected error");
+        assert!(err.to_string().contains("Internal error: unexpected error"));
     }
 }
