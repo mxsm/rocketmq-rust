@@ -21,3 +21,5 @@ cheetah-string = { workspace = true }
 rocketmq-error = { workspace = true }
 ahash = "0.8"
 
+[dev-dependencies]
+serde_json.workspace = true

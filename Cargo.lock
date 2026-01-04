@@ -3680,6 +3680,7 @@ dependencies = [
  "cheetah-string",
  "rocketmq-error",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
