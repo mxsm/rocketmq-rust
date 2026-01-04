@@ -43,4 +43,26 @@ mod tests {
         let operand = Operand::new("+");
         assert_eq!(operand.symbol(), "+");
     }
+
+    #[test]
+    fn create_operand_with_different_symbols() {
+        let symbols = vec!["+", "-", "*", "/", "==", "!=", ">", "<"];
+        for sym in symbols {
+            let operand = Operand::new(sym);
+            assert_eq!(operand.symbol(), sym);
+        }
+    }
+
+    #[test]
+    fn create_operand_with_empty_string() {
+        let operand = Operand::new("");
+        assert_eq!(operand.symbol(), "");
+    }
+
+    #[test]
+    fn operand_clone_works() {
+        let operand = Operand::new("+");
+        let cloned = operand.clone();
+        assert_eq!(cloned.symbol(), "+");
+    }
 }
