@@ -289,7 +289,9 @@ impl MQProducer for TransactionMQProducer {
         self.default_producer
             .default_mqproducer_impl
             .as_mut()
-            .unwrap()
+            .ok_or(rocketmq_error::RocketMQError::not_initialized(
+                "DefaultMQProducerImpl is not initialized",
+            ))?
             .send_message_in_transaction(msg, arg.map(|x| Box::new(x) as Box<dyn Any + Sync + Send>))
             .await
     }
