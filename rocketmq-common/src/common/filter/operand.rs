@@ -1,17 +1,14 @@
-use crate::common::filter::op::{Op, OpBase};
+use crate::common::filter::op::Op;
+use crate::common::filter::op::OpBase;
 
 #[derive(Debug, Clone)]
 pub struct Operand {
-    op : OpBase
+    op: OpBase,
 }
 
 impl Operand {
-    pub fn new(name : &str) -> Self {
-
-        Self {
-            op : OpBase::new(name)
-        }
-
+    pub fn new(name: &str) -> Self {
+        Self { op: OpBase::new(name) }
     }
 }
 
@@ -20,7 +17,6 @@ impl Op for Operand {
         self.op.symbol()
     }
 }
-
 
 #[cfg(test)]
 mod tests {

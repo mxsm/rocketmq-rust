@@ -11,9 +11,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-pub trait Op : Send + Sync {
+pub trait Op: Send + Sync {
     fn symbol(&self) -> &str;
-
 }
 
 #[derive(Debug, Clone)]
@@ -23,13 +22,12 @@ pub struct OpBase {
 
 impl OpBase {
     pub fn new(symbol: impl Into<String>) -> Self {
-        Self {
-            symbol: symbol.into(),
-        }
+        Self { symbol: symbol.into() }
     }
-    pub fn symbol(&self) -> &str { &self.symbol }
+    pub fn symbol(&self) -> &str {
+        &self.symbol
+    }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -38,6 +36,6 @@ mod tests {
     #[test]
     fn create_new_attribute_base() {
         let op = OpBase::new("+");
-        assert_eq!(op.symbol(),"+");
+        assert_eq!(op.symbol(), "+");
     }
 }
