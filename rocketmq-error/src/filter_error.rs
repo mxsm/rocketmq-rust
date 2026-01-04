@@ -59,3 +59,29 @@ impl FilterError {
         FilterError::Uninitialized
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_filter_error() {
+        let err = FilterError::empty_bytes();
+        assert_eq!(err.to_string(), "Bytes is empty!");
+
+        let err = FilterError::invalid_bit_length();
+        assert_eq!(err.to_string(), "Bit is less than 1.");
+
+        let err = FilterError::bit_length_too_small();
+        assert_eq!(err.to_string(), "BitLength is less than bytes.length * 8");
+
+        let err = FilterError::bit_position_out_of_bounds(10, 5);
+        assert_eq!(err.to_string(), "BitPos 10 is greater than 5");
+
+        let err = FilterError::byte_position_out_of_bounds(8, 4);
+        assert_eq!(err.to_string(), "BytePos 8 is greater than 4");
+
+        let err = FilterError::uninitialized();
+        assert_eq!(err.to_string(), "Not initialized!");
+    }
+}
