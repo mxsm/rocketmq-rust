@@ -86,12 +86,33 @@ mod tests {
     fn test_protocol_error() {
         let err = ProtocolError::invalid_command(999);
         assert_eq!(err.to_string(), "Invalid command code: 999");
-    }
 
-    #[test]
-    fn test_checksum_mismatch() {
+        let err = ProtocolError::UnsupportedVersion { version: 1 };
+        assert_eq!(err.to_string(), "Unsupported protocol version: 1");
+
+        let err = ProtocolError::header_missing("topic");
+        assert_eq!(err.to_string(), "Missing required header field: topic");
+
+        let err = ProtocolError::BodyMissing;
+        assert_eq!(err.to_string(), "Missing required message body");
+
         let err = ProtocolError::checksum_mismatch(0xABCD, 0x1234);
         assert!(err.to_string().contains("abcd"));
         assert!(err.to_string().contains("1234"));
+
+        let err = ProtocolError::invalid_message("too long");
+        assert_eq!(err.to_string(), "Invalid message format: too long");
+
+        let err = ProtocolError::DecodeError {
+            ext_fields_len: 10,
+            header_len: 20,
+        };
+        assert_eq!(
+            err.to_string(),
+            "Protocol decode error: ext_fields_length=10, header_length=20"
+        );
+
+        let err = ProtocolError::UnsupportedSerializationType { serialize_type: 2 };
+        assert_eq!(err.to_string(), "Unsupported serialization type: 2");
     }
 }
