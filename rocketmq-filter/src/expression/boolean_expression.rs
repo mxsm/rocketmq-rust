@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt;
+
 use crate::expression::evaluation_context::EvaluationContext;
 use crate::expression::Expression;
 
@@ -161,6 +163,12 @@ impl Expression for AlwaysTrueExpression {
     }
 }
 
+impl fmt::Display for AlwaysTrueExpression {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "TRUE")
+    }
+}
+
 /// Always returns `false` regardless of context.
 ///
 /// This is a trivial implementation useful for testing, debugging,
@@ -193,6 +201,12 @@ impl Expression for AlwaysFalseExpression {
     ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>, Box<dyn std::error::Error + Send + Sync + 'static>>
     {
         Ok(Box::new(false))
+    }
+}
+
+impl fmt::Display for AlwaysFalseExpression {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "FALSE")
     }
 }
 
@@ -273,6 +287,12 @@ impl Expression for PropertyEqualsExpression {
     }
 }
 
+impl fmt::Display for PropertyEqualsExpression {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "({} = '{}')", self.property_name, self.expected_value)
+    }
+}
+
 /// Logical AND expression that returns `true` only if both operands evaluate to `true`.
 ///
 /// # Short-circuit Evaluation
@@ -321,6 +341,12 @@ impl Expression for AndExpression {
     ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>, Box<dyn std::error::Error + Send + Sync + 'static>>
     {
         Ok(Box::new(self.matches(context)))
+    }
+}
+
+impl fmt::Display for AndExpression {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "({} AND {})", self.left, self.right)
     }
 }
 
@@ -375,6 +401,12 @@ impl Expression for OrExpression {
     }
 }
 
+impl fmt::Display for OrExpression {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "({} OR {})", self.left, self.right)
+    }
+}
+
 /// Logical NOT expression that inverts the result of its operand.
 ///
 /// # Example
@@ -415,6 +447,12 @@ impl Expression for NotExpression {
     ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>, Box<dyn std::error::Error + Send + Sync + 'static>>
     {
         Ok(Box::new(self.matches(context)))
+    }
+}
+
+impl fmt::Display for NotExpression {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "NOT {}", self.operand)
     }
 }
 
