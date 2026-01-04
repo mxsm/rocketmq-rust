@@ -12,10 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod boolean_expression;
 pub mod evaluation_context;
 
 use std::error::Error;
 
+pub use boolean_expression::AlwaysFalseExpression;
+pub use boolean_expression::AlwaysTrueExpression;
+pub use boolean_expression::AndExpression;
+pub use boolean_expression::BooleanExpression;
+pub use boolean_expression::NotExpression;
+pub use boolean_expression::OrExpression;
+pub use boolean_expression::PropertyEqualsExpression;
 pub use evaluation_context::EvaluationContext;
 pub use evaluation_context::MessageEvaluationContext;
 
