@@ -108,17 +108,6 @@ mod tests {
     }
 
     #[test]
-    fn test_sql_filter_compile_not_implemented() {
-        let filter = SqlFilter::new();
-        let result = filter.compile("age > 18");
-        assert!(result.is_err());
-
-        if let Err(e) = result {
-            assert!(e.message().contains("not yet implemented"));
-        }
-    }
-
-    #[test]
     fn test_sql_filter_default() {
         let filter = SqlFilter;
         assert_eq!(filter.of_type(), "SQL92");
