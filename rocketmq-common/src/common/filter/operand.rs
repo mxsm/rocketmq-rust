@@ -21,7 +21,9 @@ pub struct Operand {
 
 impl Operand {
     pub fn new(symbol: &str) -> Self {
-        Self { op: OpBase::new(symbol) }
+        Self {
+            op: OpBase::new(symbol),
+        }
     }
 }
 
