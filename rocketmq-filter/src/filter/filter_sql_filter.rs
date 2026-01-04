@@ -88,7 +88,7 @@ impl SqlFilter {
 }
 
 impl Filter for SqlFilter {
-    fn compile(&self, expr: &str) -> Result<Box<dyn Expression>, FilterError> {
+    fn compile(&self, _expr: &str) -> Result<Box<dyn Expression>, FilterError> {
         unimplemented!("SQL-92 expression compilation is not yet implemented");
     }
 
