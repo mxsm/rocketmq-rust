@@ -12,19 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use chrono::Offset;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
 use std::fmt;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::OnceLock;
-
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
+
+use chrono_tz::Tz;
+use time::UtcOffset;
+use tracing_subscriber::fmt::time::OffsetTime;
 
 /// Static storage for the worker guard to prevent premature log flushing.
 /// This ensures logs are properly written before the program exits.
@@ -46,6 +50,7 @@ pub fn init_logger() -> RocketMQResult<()> {
         .map_err(|_| RocketMQError::illegal_argument(format!("Invalid log level: {}", info_level)))?;
 
     tracing_subscriber::fmt()
+        .with_timer(get_timer_from_env())
         .with_thread_names(true)
         .with_level(true)
         .with_line_number(true)
@@ -74,6 +79,7 @@ pub fn init_logger_with_level(level: Level) -> RocketMQResult<()> {
     let tracing_level = level.to_tracing_level()?;
 
     tracing_subscriber::fmt()
+        .with_timer(get_timer_from_env())
         .with_thread_names(true)
         .with_level(true)
         .with_line_number(true)
@@ -120,6 +126,7 @@ pub fn init_logger_with_file(
 
     // console layer (colorful output)
     let console_layer = tracing_subscriber::fmt::layer()
+        .with_timer(get_timer_from_env())
         .with_writer(std::io::stdout)
         .with_thread_names(true)
         .with_thread_ids(true)
@@ -130,6 +137,7 @@ pub fn init_logger_with_file(
 
     // file layer (non-color output)
     let file_layer = tracing_subscriber::fmt::layer()
+        .with_timer(get_timer_from_env())
         .with_writer(file_writer)
         .with_thread_names(true)
         .with_thread_ids(true)
@@ -152,6 +160,46 @@ pub fn init_logger_with_file(
         .map_err(|_| RocketMQError::Internal("Logger already initialized".to_string()))?;
 
     Ok(())
+}
+
+/// decides the time zone of the logs
+///
+/// this function gets the LOG_TIMEZONE from environment variables
+/// defaults to UTC if nothing is provided
+/// the IANA timezone has to be provided in the env file
+/// ex LOG_TIMEZONE=Asia/Kolkata
+/// ex LOG_TIMEZONE=Europe/Berlin
+/// we use the IANA timezone instead of just the abbreviations
+/// because the abbreviations can refer to different countries
+/// for ex IST can refer to Indian Standard Time or Irish Standard Time or Israel Standard Time
+/// added to this we also have the benefit of taking DST into consideration with IANA timezones
+/// the usage of LocalTime provided by tracing subscriber is not recommended
+/// hence going with OffsetTime
+///
+/// # Returns
+///
+/// Returns 'OffsetTime'
+pub fn get_timer_from_env() -> OffsetTime<time::format_description::well_known::Rfc3339> {
+    let tz_str = std::env::var("LOG_TIMEZONE").unwrap_or_else(|_| "UTC".to_string());
+
+    let tz: Tz = tz_str.parse().unwrap_or_else(|e| {
+        eprintln!("Warning: Invalid timezone '{}': {}. Falling back to UTC.", tz_str, e);
+        chrono_tz::UTC
+    });
+
+    let now = chrono::Utc::now().with_timezone(&tz);
+
+    let offset_seconds = now.offset().fix().local_minus_utc();
+
+    let offset = UtcOffset::from_whole_seconds(offset_seconds).unwrap_or_else(|e| {
+        eprintln!(
+            "Warning: Invalid offset {} seconds: {}. Falling back to UTC.",
+            offset_seconds, e
+        );
+        UtcOffset::UTC
+    });
+
+    OffsetTime::new(offset, time::format_description::well_known::Rfc3339)
 }
 
 /// Custom log level type that wraps a static string.
