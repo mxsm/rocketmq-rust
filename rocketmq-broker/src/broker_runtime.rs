@@ -1634,8 +1634,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn replicas_manager_mut(&mut self) -> &mut Option<ReplicasManager> {
-        &mut self.replicas_manager
+    pub fn replicas_manager_mut(&mut self) -> Option<&mut ReplicasManager> {
+        self.replicas_manager.as_mut()
     }
 
     #[inline]
