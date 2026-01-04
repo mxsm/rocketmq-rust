@@ -34,7 +34,7 @@ mod tests {
     use crate::common::filter::op::OpBase;
 
     #[test]
-    fn create_new_attribute_base() {
+    fn create_new_op_base() {
         let op = OpBase::new("+");
         assert_eq!(op.symbol(), "+");
     }
