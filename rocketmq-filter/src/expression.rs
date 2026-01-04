@@ -14,6 +14,7 @@
 
 pub mod binary_expression;
 pub mod boolean_expression;
+pub mod empty_evaluation_context;
 pub mod evaluation_context;
 
 use std::error::Error;
@@ -27,6 +28,7 @@ pub use boolean_expression::BooleanExpression;
 pub use boolean_expression::NotExpression;
 pub use boolean_expression::OrExpression;
 pub use boolean_expression::PropertyEqualsExpression;
+pub use empty_evaluation_context::EmptyEvaluationContext;
 pub use evaluation_context::EvaluationContext;
 pub use evaluation_context::MessageEvaluationContext;
 
