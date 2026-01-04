@@ -79,11 +79,12 @@
 //! - The factory uses `DashMap` for lock-free concurrent access
 //! - Filters are typically wrapped in `Arc` for shared ownership
 
+mod filter_factory;
 mod filter_spi;
 mod filter_sql_filter;
 
+pub use filter_factory::FilterFactory;
 pub use filter_spi::Filter;
 pub use filter_spi::FilterError;
 pub use filter_spi::FilterSpi;
-
 pub use filter_sql_filter::SqlFilter;

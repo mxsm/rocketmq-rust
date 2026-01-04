@@ -3678,6 +3678,7 @@ version = "0.8.0"
 dependencies = [
  "ahash 0.8.12",
  "cheetah-string",
+ "dashmap",
  "rocketmq-error",
  "serde",
  "serde_json",
