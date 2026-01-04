@@ -16,7 +16,8 @@ pub mod evaluation_context;
 
 use std::error::Error;
 
-use crate::expression::evaluation_context::EvaluationContext;
+pub use evaluation_context::EvaluationContext;
+pub use evaluation_context::MessageEvaluationContext;
 
 pub trait Expression {
     /// Calculate expression result with context
