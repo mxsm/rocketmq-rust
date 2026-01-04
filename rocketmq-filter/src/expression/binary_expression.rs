@@ -75,17 +75,15 @@
 //! }
 //! ```
 //!
-//! # Java Compatibility
-//!
-//! This trait corresponds to the `BinaryExpression` interface in the original Java
-//! implementation of Apache RocketMQ. The Rust version maintains the same semantics
-//! while adapting to Rust's type system and ownership model.
-//!
 //! # See Also
 //!
 //! - [`Expression`]: Base trait for all expressions
 //! - [`BooleanExpression`]: Trait for boolean-valued expressions
 //! - [`EvaluationContext`]: Context for variable lookup during evaluation
+
+use std::fmt;
+use std::hash::Hash;
+use std::hash::Hasher;
 
 use crate::expression::Expression;
 use cheetah_string::CheetahString;
@@ -135,7 +133,6 @@ use cheetah_string::CheetahString;
 ///
 /// All implementations must be `Send + Sync` to support concurrent message filtering
 /// in multi-threaded RocketMQ broker environments.
-#[allow(dead_code)]
 pub trait BinaryExpression: Expression + Send + Sync {
     /// Returns a reference to the left operand expression.
     ///
@@ -201,4 +198,281 @@ pub trait BinaryExpression: Expression + Send + Sync {
     /// Some binary expressions might not have a meaningful symbol representation,
     /// in which case implementations should return `None`.
     fn get_expression_symbol(&self) -> Option<&CheetahString>;
+
+    /// Sets the left operand expression.
+    ///
+    /// # Arguments
+    ///
+    /// * `expression` - The new left operand expression
+    fn set_left(&mut self, expression: Box<dyn Expression>);
+
+    /// Sets the right operand expression.
+    ///
+    /// # Arguments
+    ///
+    /// * `expression` - The new right operand expression
+    fn set_right(&mut self, expression: Box<dyn Expression>);
+}
+
+/// Base implementation of a binary expression.
+///
+/// `BaseBinaryExpression` provides a concrete implementation of the `BinaryExpression` trait
+/// with standard functionality for managing left and right operands, as well as the operator
+/// symbol.
+///
+/// # Fields
+///
+/// - `left`: The left operand expression
+/// - `right`: The right operand expression
+/// - `symbol`: The operator symbol (e.g., "AND", "=", "+")
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use rocketmq_filter::expression::{BaseBinaryExpression, Expression};
+/// use cheetah_string::CheetahString;
+///
+/// // Create a custom binary expression by extending BaseBinaryExpression
+/// struct AddExpression {
+///     base: BaseBinaryExpression,
+/// }
+///
+/// impl AddExpression {
+///     fn new(left: Box<dyn Expression>, right: Box<dyn Expression>) -> Self {
+///         Self {
+///             base: BaseBinaryExpression::new(
+///                 left,
+///                 right,
+///                 CheetahString::from("+")
+///             ),
+///         }
+///     }
+/// }
+/// ```
+///
+/// # Thread Safety
+///
+/// This struct implements `Send + Sync` for concurrent evaluation scenarios.
+///
+/// # Display Format
+///
+/// The `Display` implementation formats the expression as: `(left symbol right)`
+/// For example: `(a + b)` or `(price > 100)`
+pub struct BaseBinaryExpression {
+    /// The left operand expression
+    left: Box<dyn Expression>,
+    /// The right operand expression
+    right: Box<dyn Expression>,
+    /// The operator symbol
+    symbol: CheetahString,
+}
+
+impl BaseBinaryExpression {
+    /// Creates a new `BaseBinaryExpression`.
+    ///
+    /// # Arguments
+    ///
+    /// * `left` - The left operand expression
+    /// * `right` - The right operand expression
+    /// * `symbol` - The operator symbol (e.g., "AND", "=", "+")
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use rocketmq_filter::expression::BaseBinaryExpression;
+    /// use cheetah_string::CheetahString;
+    ///
+    /// let expr = BaseBinaryExpression::new(
+    ///     Box::new(left_expr),
+    ///     Box::new(right_expr),
+    ///     CheetahString::from("=")
+    /// );
+    /// ```
+    pub fn new(left: Box<dyn Expression>, right: Box<dyn Expression>, symbol: CheetahString) -> Self {
+        Self { left, right, symbol }
+    }
+}
+
+impl BinaryExpression for BaseBinaryExpression {
+    fn left(&self) -> &dyn Expression {
+        self.left.as_ref()
+    }
+
+    fn right(&self) -> &dyn Expression {
+        self.right.as_ref()
+    }
+
+    fn get_expression_symbol(&self) -> Option<&CheetahString> {
+        Some(&self.symbol)
+    }
+
+    fn set_left(&mut self, expression: Box<dyn Expression>) {
+        self.left = expression;
+    }
+
+    fn set_right(&mut self, expression: Box<dyn Expression>) {
+        self.right = expression;
+    }
+}
+
+impl fmt::Display for BaseBinaryExpression {
+    /// Formats the binary expression as: `(left symbol right)`
+    ///
+    /// # Examples
+    ///
+    /// For an expression with left="a", symbol="+", right="b":
+    /// Output: `(a + b)`
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "({} {} {})", self.left, self.symbol, self.right)
+    }
+}
+
+impl Hash for BaseBinaryExpression {
+    /// Computes the hash based on the string representation.
+    ///
+    /// This ensures that expressions with the same structure and values
+    /// produce the same hash.
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.to_string().hash(state);
+    }
+}
+
+impl PartialEq for BaseBinaryExpression {
+    /// Compares two binary expressions for equality.
+    ///
+    /// Two expressions are equal if their string representations are identical.
+    /// This means they must have the same left operand, symbol, and right operand.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let expr1 = BaseBinaryExpression::new(left1, right1, CheetahString::from("+"));
+    /// let expr2 = BaseBinaryExpression::new(left2, right2, CheetahString::from("+"));
+    /// assert_eq!(expr1 == expr2, expr1.to_string() == expr2.to_string());
+    /// ```
+    fn eq(&self, other: &Self) -> bool {
+        self.to_string() == other.to_string()
+    }
+}
+
+impl Eq for BaseBinaryExpression {}
+
+impl fmt::Debug for BaseBinaryExpression {
+    /// Formats the binary expression for debugging.
+    ///
+    /// Uses the same format as Display: `(left symbol right)`
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+impl Expression for BaseBinaryExpression {
+    /// Evaluates the binary expression.
+    ///
+    /// This default implementation should be overridden by concrete expression types
+    /// to provide specific evaluation logic.
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - The evaluation context containing variable bindings
+    ///
+    /// # Returns
+    ///
+    /// The result of evaluating this expression
+    fn evaluate(
+        &self,
+        _context: &dyn crate::expression::EvaluationContext,
+    ) -> Result<Box<dyn std::any::Any + Send + Sync + 'static>, Box<dyn std::error::Error + Send + Sync + 'static>>
+    {
+        // Default implementation - should be overridden in derived types
+        // For now, return the expression itself as a boxed Any
+        Ok(Box::new(self.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expression::MessageEvaluationContext;
+
+    #[test]
+    fn test_base_binary_expression_new() {
+        use crate::expression::AlwaysTrueExpression;
+
+        let left = Box::new(AlwaysTrueExpression) as Box<dyn Expression>;
+        let right = Box::new(AlwaysTrueExpression) as Box<dyn Expression>;
+        let expr = BaseBinaryExpression::new(left, right, CheetahString::from("+"));
+
+        assert_eq!(expr.get_expression_symbol(), Some(&CheetahString::from("+")));
+    }
+
+    #[test]
+    fn test_base_binary_expression_display() {
+        use crate::expression::AlwaysTrueExpression;
+
+        let left = Box::new(AlwaysTrueExpression) as Box<dyn Expression>;
+        let right = Box::new(AlwaysTrueExpression) as Box<dyn Expression>;
+        let expr = BaseBinaryExpression::new(left, right, CheetahString::from("+"));
+
+        assert_eq!(expr.to_string(), "(TRUE + TRUE)");
+    }
+
+    #[test]
+    fn test_base_binary_expression_equality() {
+        use crate::expression::AlwaysFalseExpression;
+        use crate::expression::AlwaysTrueExpression;
+
+        let expr1 = BaseBinaryExpression::new(
+            Box::new(AlwaysTrueExpression) as Box<dyn Expression>,
+            Box::new(AlwaysFalseExpression) as Box<dyn Expression>,
+            CheetahString::from("+"),
+        );
+
+        let expr2 = BaseBinaryExpression::new(
+            Box::new(AlwaysTrueExpression) as Box<dyn Expression>,
+            Box::new(AlwaysFalseExpression) as Box<dyn Expression>,
+            CheetahString::from("+"),
+        );
+
+        assert_eq!(expr1, expr2);
+    }
+
+    #[test]
+    fn test_base_binary_expression_set_left_right() {
+        use crate::expression::AlwaysFalseExpression;
+        use crate::expression::AlwaysTrueExpression;
+
+        let mut expr = BaseBinaryExpression::new(
+            Box::new(AlwaysTrueExpression) as Box<dyn Expression>,
+            Box::new(AlwaysTrueExpression) as Box<dyn Expression>,
+            CheetahString::from("+"),
+        );
+
+        assert_eq!(expr.to_string(), "(TRUE + TRUE)");
+
+        expr.set_left(Box::new(AlwaysFalseExpression) as Box<dyn Expression>);
+        assert_eq!(expr.to_string(), "(FALSE + TRUE)");
+
+        expr.set_right(Box::new(AlwaysFalseExpression) as Box<dyn Expression>);
+        assert_eq!(expr.to_string(), "(FALSE + FALSE)");
+    }
+
+    #[test]
+    fn test_base_binary_expression_evaluate() {
+        use crate::expression::AlwaysTrueExpression;
+
+        let expr = BaseBinaryExpression::new(
+            Box::new(AlwaysTrueExpression) as Box<dyn Expression>,
+            Box::new(AlwaysTrueExpression) as Box<dyn Expression>,
+            CheetahString::from("+"),
+        );
+
+        let context = MessageEvaluationContext::new();
+        let result = expr.evaluate(&context);
+        assert!(result.is_ok());
+
+        let value = result.unwrap();
+        let string_value = value.downcast_ref::<String>().unwrap();
+        assert_eq!(string_value, "(TRUE + TRUE)");
+    }
 }

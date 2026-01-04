@@ -18,6 +18,8 @@ pub mod evaluation_context;
 
 use std::error::Error;
 
+pub use binary_expression::BaseBinaryExpression;
+pub use binary_expression::BinaryExpression;
 pub use boolean_expression::AlwaysFalseExpression;
 pub use boolean_expression::AlwaysTrueExpression;
 pub use boolean_expression::AndExpression;
@@ -28,7 +30,7 @@ pub use boolean_expression::PropertyEqualsExpression;
 pub use evaluation_context::EvaluationContext;
 pub use evaluation_context::MessageEvaluationContext;
 
-pub trait Expression {
+pub trait Expression: Send + Sync + std::fmt::Display {
     /// Calculate expression result with context
     ///
     /// # Arguments
