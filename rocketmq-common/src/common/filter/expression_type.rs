@@ -26,3 +26,19 @@ impl ExpressionType {
         matches!(type_, None | Some("") | Some(ExpressionType::TAG))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_expression_type() {
+        assert_eq!(ExpressionType::SQL92, "SQL92");
+        assert_eq!(ExpressionType::TAG, "TAG");
+        assert!(ExpressionType::is_tag_type(None));
+        assert!(ExpressionType::is_tag_type(Some("")));
+        assert!(ExpressionType::is_tag_type(Some("TAG")));
+        assert!(!ExpressionType::is_tag_type(Some("SQL92")));
+        assert!(!ExpressionType::is_tag_type(Some("OTHER")));
+    }
+}

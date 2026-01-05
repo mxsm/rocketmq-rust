@@ -13,4 +13,7 @@
 // limitations under the License.
 
 pub mod expression_type;
+pub mod filter_context;
+pub mod op;
+pub mod operand;
 pub mod operator;

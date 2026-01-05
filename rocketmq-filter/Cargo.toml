@@ -20,4 +20,7 @@ serde.workspace = true
 cheetah-string = { workspace = true }
 rocketmq-error = { workspace = true }
 ahash = "0.8"
+dashmap = "6.1"
 
+[dev-dependencies]
+serde_json.workspace = true

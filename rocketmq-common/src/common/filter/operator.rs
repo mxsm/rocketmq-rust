@@ -12,28 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::common::filter::op::Op;
+use crate::common::filter::op::OpBase;
 use std::cmp::Ordering;
-use std::fmt;
-use std::fmt::Formatter;
-
-#[derive(Debug, Clone)]
-pub struct OpBase {
-    symbol: String,
-}
-
-impl OpBase {
-    pub fn new(symbol: impl Into<String>) -> Self {
-        Self { symbol: symbol.into() }
-    }
-
-    pub fn symbol(&self) -> &str {
-        &self.symbol
-    }
-}
-
-pub trait Op {
-    fn symbol(&self) -> &str;
-}
 
 #[derive(Debug, Clone)]
 pub struct Operator {
@@ -42,7 +23,6 @@ pub struct Operator {
     comparable: bool,
 }
 
-use once_cell::sync::Lazy;
 impl Operator {
     fn new(symbol: impl Into<String>, priority: i32, comparable: bool) -> Self {
         Self {
@@ -87,7 +67,6 @@ impl Op for Operator {
 
 #[cfg(test)]
 mod tests {
-    use crate::common::filter::operator::Op;
     use crate::common::filter::operator::Operator;
     use std::cmp::Ordering;
 
