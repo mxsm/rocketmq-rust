@@ -11,8 +11,31 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+pub trait Op: Send + Sync {
+    fn symbol(&self) -> &str;
+}
 
-pub mod expression_type;
-pub mod filter_context;
-pub mod op;
-pub mod operand;
+#[derive(Debug, Clone)]
+pub struct OpBase {
+    symbol: String,
+}
+
+impl OpBase {
+    pub fn new(symbol: impl Into<String>) -> Self {
+        Self { symbol: symbol.into() }
+    }
+    pub fn symbol(&self) -> &str {
+        &self.symbol
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::common::filter::op::OpBase;
+
+    #[test]
+    fn create_new_op_base() {
+        let op = OpBase::new("+");
+        assert_eq!(op.symbol(), "+");
+    }
+}
