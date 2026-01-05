@@ -88,7 +88,7 @@ mod tests {
     #[test]
     fn verify_specified_op() {
         let and = Operator::create_operator("&&").unwrap();
-        assert_eq!(and.is_specified_op("&&"), true);
+        assert!(and.is_specified_op("&&"));
     }
 
     #[test]
