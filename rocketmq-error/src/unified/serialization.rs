@@ -142,13 +142,57 @@ mod tests {
     #[test]
     fn test_serialization_error() {
         let err = SerializationError::encode_failed("JSON", "unexpected token");
-        assert!(err.to_string().contains("Encoding failed"));
-        assert!(err.to_string().contains("JSON"));
+        assert_eq!(err.to_string(), "Encoding failed (JSON): unexpected token");
+
+        let err = SerializationError::decode_failed("Protobuf", "invalid length");
+        assert_eq!(err.to_string(), "Decoding failed (Protobuf): invalid length");
+
+        let err = SerializationError::invalid_format("u32", "string".to_string());
+        assert_eq!(err.to_string(), "Invalid format: expected u32, got string");
+
+        let err = SerializationError::missing_field("broker_name");
+        assert_eq!(err.to_string(), "Missing required field: broker_name");
+
+        let err = SerializationError::InvalidValue {
+            field: "timeout",
+            reason: "negative".to_string(),
+        };
+        assert_eq!(err.to_string(), "Invalid value for field 'timeout': negative");
+
+        let err = SerializationError::ProtobufError("missing tag".to_string());
+        assert_eq!(err.to_string(), "Protobuf error: missing tag");
+
+        let err = SerializationError::event_serialization_failed("error");
+        assert_eq!(err.to_string(), "Event serialization failed: error");
+
+        let err = SerializationError::event_deserialization_failed("error");
+        assert_eq!(err.to_string(), "Event deserialization failed: error");
+
+        let err = SerializationError::invalid_event_type(1);
+        assert_eq!(err.to_string(), "Invalid event type: 1");
+
+        let err = SerializationError::unknown_event_type(1);
+        assert_eq!(err.to_string(), "Unknown event type: 1");
     }
 
     #[test]
-    fn test_missing_field() {
-        let err = SerializationError::missing_field("broker_name");
-        assert_eq!(err.to_string(), "Missing required field: broker_name");
+    fn test_utf8_error() {
+        let invalid_utf8 = vec![0, 159, 146, 150];
+        let result = std::str::from_utf8(&invalid_utf8);
+        let utf8_error = result.err().unwrap();
+        let err = SerializationError::from(utf8_error);
+        assert_eq!(
+            err.to_string(),
+            "UTF-8 encoding error: invalid utf-8 sequence of 1 bytes from index 1"
+        );
+    }
+
+    #[cfg(feature = "with_serde")]
+    #[test]
+    fn test_json_error() {
+        let json_result: Result<serde_json::Value, _> = serde_json::from_str("{ invalid }");
+        let json_error = json_result.err().unwrap();
+        let err = SerializationError::from(json_error);
+        assert!(err.to_string().contains("JSON error"));
     }
 }
