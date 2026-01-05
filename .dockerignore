@@ -1,0 +1,59 @@
+# Cargo build artifacts
+target/
+**/target/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+README.md
+CHANGELOG.md
+LICENSE
+docs/
+
+# Testing
+tests/
+**/tests/
+# Cargo.lock
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Development artifacts
+*.pid
+*.seed
+*.pid.lock
+
+# Rust specific
+**/*.rs.bk
+# Cargo.lock
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+docker/
