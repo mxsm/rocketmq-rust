@@ -796,9 +796,10 @@ impl MQProducer for DefaultMQProducer {
         let mq = self.client_config.queue_with_namespace(mq);
         self.default_mqproducer_impl
             .as_mut()
-            .unwrap()
+            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send_oneway_with_message_queue(msg, mq)
-            .await
+            .await?;
+        Ok(())
     }
 
     async fn send_with_selector<M, S, T>(
