@@ -81,3 +81,37 @@ impl RpcClientError {
         RpcClientError::RemoteError(code, message.into())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+
+    #[test]
+    fn test_rpc_client_error() {
+        let err = RpcClientError::broker_not_found("broker-a");
+        assert_eq!(
+            err.to_string(),
+            "Broker 'broker-a' address not found in client metadata"
+        );
+
+        let source = io::Error::other("network error");
+        let err = RpcClientError::request_failed("127.0.0.1:10911", 10, 3000, source);
+        assert_eq!(
+            err.to_string(),
+            "RPC request failed: addr=127.0.0.1:10911, request_code=10, timeout=3000ms"
+        );
+
+        let err = RpcClientError::unexpected_response_code(1, "SYSTEM_ERROR");
+        assert_eq!(err.to_string(), "Unexpected response code: 1 (SYSTEM_ERROR)");
+
+        let err = RpcClientError::unsupported_request_code(100);
+        assert_eq!(err.to_string(), "Request code not supported: 100");
+
+        let err = RpcClientError::remote_error(2, "topic not exist");
+        assert_eq!(
+            err.to_string(),
+            "RPC error from remote: code=2, message=topic not exist"
+        );
+    }
+}
