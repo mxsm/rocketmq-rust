@@ -1281,15 +1281,13 @@ impl DefaultMQProducerImpl {
         selector: MessageQueueSelectorFn,
         arg: T,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<SendResult>
+    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
         T: std::any::Any + Sync + Send,
     {
-        let result = self
-            .send_select_impl(msg, selector, arg, CommunicationMode::Sync, None, timeout)
-            .await?;
-        Ok(result.expect("send result is none"))
+        self.send_select_impl(msg, selector, arg, CommunicationMode::Sync, None, timeout)
+            .await
     }
 
     pub async fn fetch_publish_message_queues(
