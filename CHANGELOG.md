@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **feat(common):** Add `filter_type` module to filter.rs in rocketmq-common crate ([#5454](https://github.com/mxsm/rocketmq-rust/issues/5454))
+
 ### Changed
 
 - **refactor(tui):** Reformat `rocketmq-tui` using `taplo`([#5242](https://github.com/mxsm/rocketmq-rust/issues/5242))

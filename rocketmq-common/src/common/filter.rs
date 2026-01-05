@@ -14,5 +14,6 @@
 
 pub mod expression_type;
 pub mod filter_context;
+pub mod filter_type;
 pub mod op;
 pub mod operand;
