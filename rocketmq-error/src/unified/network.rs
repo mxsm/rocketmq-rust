@@ -181,4 +181,12 @@ mod tests {
         assert_eq!(err.to_string(), "Request timeout to localhost:10911 after 100ms");
     }
 
+    #[test]
+    fn test_network_error_dns_resolution_failed() {
+        let err = NetworkError::DnsResolutionFailed {
+            host: "example.com".to_string(),
+            reason: "host not found".to_string(),
+        };
+        assert_eq!(err.to_string(), "DNS resolution failed for example.com: host not found");
+    }
 }
