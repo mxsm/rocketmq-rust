@@ -1031,7 +1031,7 @@ impl MQProducer for DefaultMQProducer {
         let batch = self.batch(msgs)?;
         self.default_mqproducer_impl
             .as_mut()
-            .unwrap()
+            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl is not initialized"))?
             .async_send_with_callback_timeout(batch, Some(Arc::new(f)), timeout)
             .await?;
         Ok(())
@@ -1050,7 +1050,7 @@ impl MQProducer for DefaultMQProducer {
         let batch = self.batch(msgs)?;
         self.default_mqproducer_impl
             .as_mut()
-            .unwrap()
+            .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl is not initialized"))?
             .async_send_with_message_queue_callback(batch, mq, Some(Arc::new(f)))
             .await
     }
@@ -1198,7 +1198,9 @@ impl MQProducer for DefaultMQProducer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
     use rocketmq_common::common::message::message_single::Message;
+    use rocketmq_error::RocketMQResult;
 
     #[tokio::test]
     async fn request_with_callback_not_initialized() {
@@ -1286,6 +1288,71 @@ mod tests {
         };
         let result = producer
             .request_with_selector_callback(msg, selector, 1, callback, 1000)
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            RocketMQError::NotInitialized(reason) => {
+                assert!(reason.contains("not initialized"), "unexpected error message: {reason}");
+            }
+            other => panic!("Unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn send_batch_with_callback_timeout_not_initialized() {
+        // Arrange
+        let mut producer = DefaultMQProducer {
+            client_config: Default::default(),
+            producer_config: Default::default(),
+            default_mqproducer_impl: None,
+        };
+        let msg = Message {
+            topic: "test-topic".into(),
+            flag: 0,
+            properties: Default::default(),
+            body: Some(Bytes::from_static(b"Hello world")),
+            compressed_body: None,
+            transaction_id: None,
+        };
+        let callback = |_msg: Option<&SendResult>, _err: Option<&dyn std::error::Error>| {
+            // no-op
+        };
+        let result: RocketMQResult<()> = producer
+            .send_batch_with_callback_timeout(vec![msg], callback, 1000)
+            .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            RocketMQError::NotInitialized(reason) => {
+                assert!(reason.contains("not initialized"), "unexpected error message: {reason}");
+            }
+            other => panic!("Unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn send_batch_to_queue_with_callback_not_initialized() {
+        // Arrange
+        let mut producer = DefaultMQProducer {
+            client_config: Default::default(),
+            producer_config: Default::default(),
+            default_mqproducer_impl: None,
+        };
+        let msg = Message {
+            topic: "test-topic".into(),
+            flag: 0,
+            properties: Default::default(),
+            body: Some(Bytes::from_static(b"Hello world")),
+            compressed_body: None,
+            transaction_id: None,
+        };
+        let callback = |_msg: Option<&SendResult>, _err: Option<&dyn std::error::Error>| {
+            // no-op
+        };
+        let mq = MessageQueue::new();
+        let result: RocketMQResult<()> = producer
+            .send_batch_to_queue_with_callback(vec![msg], mq, callback)
             .await;
         assert!(result.is_err());
         let err = result.unwrap_err();
