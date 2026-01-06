@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
+use rocketmq_error::RocketMQError;
 use rocketmq_runtime::RocketMQRuntime;
 
 use crate::producer::default_mq_producer::DefaultMQProducer;
@@ -77,7 +78,13 @@ impl TransactionMQProducer {
 impl MQProducer for TransactionMQProducer {
     async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
         let transaction_listener = self.transaction_producer_config.transaction_listener.clone();
-        let default_mqproducer_impl = self.default_producer.default_mqproducer_impl.as_mut().unwrap();
+        let default_mqproducer_impl =
+            self.default_producer
+                .default_mqproducer_impl
+                .as_mut()
+                .ok_or(RocketMQError::not_initialized(
+                    "DefaultMQProducerImpl is not initialized",
+                ))?;
         default_mqproducer_impl.init_transaction_env(self.transaction_producer_config.check_runtime.take());
         if let Some(transaction_listener) = transaction_listener {
             default_mqproducer_impl.set_transaction_listener(transaction_listener);
