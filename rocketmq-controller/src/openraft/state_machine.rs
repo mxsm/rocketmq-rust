@@ -273,7 +273,7 @@ impl StateMachine {
 impl RaftSnapshotBuilder<TypeConfig> for StateMachine {
     async fn build_snapshot(&mut self) -> Result<Snapshot<TypeConfig>, std::io::Error> {
         let data = self.build_snapshot_data().await;
-        let last_applied = data.last_applied.unwrap_or_default();
+        let last_applied = data.last_applied;
         let last_membership = data.last_membership.clone().unwrap_or_default();
 
         let snapshot_data = serde_json::to_vec(&data)
@@ -281,9 +281,9 @@ impl RaftSnapshotBuilder<TypeConfig> for StateMachine {
 
         Ok(Snapshot {
             meta: openraft::SnapshotMeta {
-                last_log_id: Some(last_applied),
+                last_log_id: last_applied,
                 last_membership,
-                snapshot_id: format!("snapshot-{}", last_applied.index),
+                snapshot_id: format!("snapshot-{}", last_applied.map_or(0, |id| id.index)),
             },
             snapshot: std::io::Cursor::new(snapshot_data),
         })

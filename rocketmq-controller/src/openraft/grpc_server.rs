@@ -208,22 +208,19 @@ impl OpenRaftService for GrpcRaftService {
             meta.last_log_id
         );
 
-        // Create install snapshot request with correct fields
-        let install_req = crate::typ::InstallSnapshotRequest {
-            vote,
+        // Create snapshot with Cursor wrapper
+        let snapshot = openraft::Snapshot {
             meta,
-            offset: 0,
-            data: snapshot_data,
-            done: true,
+            snapshot: std::io::Cursor::new(snapshot_data),
         };
 
-        // Install snapshot through Raft
-        match self.raft.install_snapshot(install_req).await {
+        // Install snapshot through Raft using the new API
+        match self.raft.install_full_snapshot(vote, snapshot).await {
             Ok(resp) => Ok(Response::new(OpenRaftSnapshotResponse {
                 vote: Some(crate::protobuf::openraft::OpenRaftVote {
-                    term: resp.vote.leader_id.term,
-                    node_id: resp.vote.leader_id.node_id,
-                    committed: resp.vote.committed,
+                    term: resp.vote.leader_id().term,
+                    node_id: resp.vote.leader_id().node_id,
+                    committed: resp.vote.is_committed(),
                 }),
             })),
             Err(e) => {
