@@ -128,4 +128,65 @@ mod tests {
         };
         assert_eq!(err.to_string(), "Connection timeout to localhost:10911 after 3000ms");
     }
+
+    #[test]
+    fn test_network_error_connection_closed() {
+        let err = NetworkError::ConnectionClosed {
+            addr: "localhost:10911".to_string(),
+        };
+        assert_eq!(err.to_string(), "Connection closed: localhost:10911");
+    }
+
+    #[test]
+    fn test_network_error_send_failed() {
+        let err = NetworkError::SendFailed {
+            addr: "localhost:10911".to_string(),
+            reason: "internal error".to_string(),
+        };
+        assert_eq!(err.to_string(), "Send failed to localhost:10911: internal error");
+    }
+
+    #[test]
+    fn test_network_error_receive_failed() {
+        let err = NetworkError::ReceiveFailed {
+            addr: "localhost:10911".to_string(),
+            reason: "internal error".to_string(),
+        };
+        assert_eq!(err.to_string(), "Receive failed from localhost:10911: internal error");
+    }
+
+    #[test]
+    fn test_network_error_invalid_address() {
+        let err = NetworkError::InvalidAddress {
+            addr: "localhost:10911".to_string(),
+        };
+        assert_eq!(err.to_string(), "Invalid address format: localhost:10911");
+    }
+
+    #[test]
+    fn test_network_error_too_many_requests() {
+        let err = NetworkError::TooManyRequests {
+            addr: "localhost:10911".to_string(),
+            limit: 5,
+        };
+        assert_eq!(err.to_string(), "Too many requests to localhost:10911, limit: 5");
+    }
+
+    #[test]
+    fn test_network_error_request_timeout() {
+        let err = NetworkError::RequestTimeout {
+            addr: "localhost:10911".to_string(),
+            timeout_ms: 100,
+        };
+        assert_eq!(err.to_string(), "Request timeout to localhost:10911 after 100ms");
+    }
+
+    #[test]
+    fn test_network_error_dns_resolution_failed() {
+        let err = NetworkError::DnsResolutionFailed {
+            host: "example.com".to_string(),
+            reason: "host not found".to_string(),
+        };
+        assert_eq!(err.to_string(), "DNS resolution failed for example.com: host not found");
+    }
 }
