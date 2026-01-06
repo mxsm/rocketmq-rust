@@ -97,7 +97,7 @@ uuid = { version = "1.19.0", features = [
 
 futures = "0.3"
 
-cheetah-string = { version = "0.1.7", features = ["serde", "bytes"] }
+cheetah-string = { version = "1.0.1", features = ["serde", "bytes","simd"] }
 
 flate2  = "1.1.7"
 dashmap = "6.1.0"
