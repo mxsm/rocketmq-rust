@@ -3679,6 +3679,7 @@ dependencies = [
  "ahash 0.8.12",
  "cheetah-string",
  "dashmap",
+ "rocketmq-common",
  "rocketmq-error",
  "serde",
  "serde_json",

@@ -36,6 +36,8 @@
 //! let expr = filter.compile("age > 18 AND region = 'US'")?;
 //! ```
 
+use rocketmq_common::common::filter::expression_type::ExpressionType;
+
 use crate::expression::Expression;
 use crate::filter::filter_spi::Filter;
 use crate::filter::filter_spi::FilterError;
@@ -93,7 +95,7 @@ impl Filter for SqlFilter {
     }
 
     fn of_type(&self) -> &str {
-        "SQL92"
+        ExpressionType::SQL92
     }
 }
 
