@@ -99,31 +99,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_error_display() {
+    fn test_controller_error() {
+        let err = ControllerError::Io(io::Error::other("test"));
+        assert_eq!(err.to_string(), "IO error: test");
+
+        let err = ControllerError::Raft("raft error".to_string());
+        assert_eq!(err.to_string(), "Raft error: raft error");
+
         let err = ControllerError::NotLeader { leader_id: Some(1) };
-        assert!(err.to_string().contains("Not leader"));
-    }
+        assert_eq!(err.to_string(), "Not leader, current leader is: 1");
 
-    #[test]
-    fn test_error_conversion() {
-        let io_err = io::Error::other("test");
-        let controller_err: ControllerError = io_err.into();
-        assert!(matches!(controller_err, ControllerError::Io(_)));
-    }
+        let err = ControllerError::NotLeader { leader_id: None };
+        assert_eq!(err.to_string(), "Not leader, current leader is: unknown");
 
-    #[test]
-    fn test_timeout_error() {
-        let err = ControllerError::Timeout { timeout_ms: 5000 };
-        let err_str = err.to_string();
-        assert!(err_str.contains("5000"));
-        assert!(err_str.contains("timeout"));
-    }
-
-    #[test]
-    fn test_metadata_not_found() {
         let err = ControllerError::MetadataNotFound {
             key: "broker-a".to_string(),
         };
-        assert!(err.to_string().contains("broker-a"));
+        assert_eq!(err.to_string(), "Metadata not found: broker-a");
+
+        let err = ControllerError::InvalidRequest("bad request".to_string());
+        assert_eq!(err.to_string(), "Invalid request: bad request");
+
+        let err = ControllerError::BrokerRegistrationFailed("failed".to_string());
+        assert_eq!(err.to_string(), "Broker registration failed: failed");
+
+        let err = ControllerError::NotInitialized("init first".to_string());
+        assert_eq!(err.to_string(), "Not initialized: init first");
+
+        let err = ControllerError::InitializationFailed;
+        assert_eq!(err.to_string(), "Initialization failed");
+
+        let err = ControllerError::ConfigError("invalid config".to_string());
+        assert_eq!(err.to_string(), "Configuration error: invalid config");
+
+        let err = ControllerError::SerializationError("serde error".to_string());
+        assert_eq!(err.to_string(), "Serialization error: serde error");
+
+        let err = ControllerError::StorageError("disk full".to_string());
+        assert_eq!(err.to_string(), "Storage error: disk full");
+
+        let err = ControllerError::NetworkError("disconnected".to_string());
+        assert_eq!(err.to_string(), "Network error: disconnected");
+
+        let err = ControllerError::Timeout { timeout_ms: 5000 };
+        assert_eq!(err.to_string(), "Operation timeout after 5000ms");
+
+        let err = ControllerError::Internal("panic".to_string());
+        assert_eq!(err.to_string(), "Internal error: panic");
+
+        let err = ControllerError::Shutdown;
+        assert_eq!(err.to_string(), "Controller is shutting down");
     }
 }
