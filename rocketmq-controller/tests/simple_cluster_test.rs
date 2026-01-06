@@ -126,7 +126,8 @@ async fn test_simple_cluster_setup() {
         }
 
         // Print metrics
-        let metrics = node.raft().metrics().borrow().clone();
+        use openraft::async_runtime::WatchReceiver;
+        let metrics = node.raft().metrics().borrow_watched().clone();
         println!("  - State: {:?}", metrics.state);
         println!("  - Term: {}", metrics.current_term);
         println!("  - Leader: {:?}", metrics.current_leader);

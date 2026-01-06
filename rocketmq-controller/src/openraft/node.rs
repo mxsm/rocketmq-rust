@@ -142,13 +142,15 @@ impl RaftNodeManager {
 
     /// Check if this node is the leader
     pub async fn is_leader(&self) -> Result<bool> {
-        let metrics = self.raft.metrics().borrow().clone();
+        use openraft::async_runtime::WatchReceiver;
+        let metrics = self.raft.metrics().borrow_watched().clone();
         Ok(metrics.current_leader == Some(self.node_id))
     }
 
     /// Get current leader ID
     pub async fn get_leader(&self) -> Result<Option<NodeId>> {
-        let metrics = self.raft.metrics().borrow().clone();
+        use openraft::async_runtime::WatchReceiver;
+        let metrics = self.raft.metrics().borrow_watched().clone();
         Ok(metrics.current_leader)
     }
 

@@ -152,26 +152,31 @@ impl RaftLogStorage<TypeConfig> for LogStore {
             let log_id = entry.log_id;
             self.logs.insert(log_id.index, entry);
         }
-        callback.io_completed(Ok(())).await;
+        callback.io_completed(Ok(()));
         Ok(())
     }
 
-    async fn truncate(&mut self, log_id: LogId) -> Result<(), std::io::Error> {
+    async fn truncate_after(&mut self, log_id: Option<LogId>) -> Result<(), std::io::Error> {
         // Remove all logs with index > log_id.index
-        let keys_to_remove: Vec<u64> = self
-            .logs
-            .iter()
-            .filter_map(|entry| {
-                if entry.key() > &log_id.index {
-                    Some(*entry.key())
-                } else {
-                    None
-                }
-            })
-            .collect();
+        if let Some(log_id) = log_id {
+            let keys_to_remove: Vec<u64> = self
+                .logs
+                .iter()
+                .filter_map(|entry| {
+                    if entry.key() > &log_id.index {
+                        Some(*entry.key())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
 
-        for key in keys_to_remove {
-            self.logs.remove(&key);
+            for key in keys_to_remove {
+                self.logs.remove(&key);
+            }
+        } else {
+            // If log_id is None, remove all logs
+            self.logs.clear();
         }
 
         Ok(())
