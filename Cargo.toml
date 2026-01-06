@@ -59,7 +59,7 @@ tokio-util   = { version = "0.7.18", features = ["full"] }
 tokio-stream = { version = "0.1.18", features = ["full"] }
 
 tracing            = "0.1.44"
-tracing-subscriber = {  version = "0.3.22" , features = ["time"]}
+tracing-subscriber = { version = "0.3.22", features = ["time"] }
 tracing-appender   = "0.2.4"
 
 thiserror = "2.0.17"
@@ -97,7 +97,7 @@ uuid = { version = "1.19.0", features = [
 
 futures = "0.3"
 
-cheetah-string = { version = "1.0.1", features = ["serde", "bytes","simd"] }
+cheetah-string = { version = "1.0.1", features = ["serde", "bytes", "simd"] }
 
 flate2  = "1.1.7"
 dashmap = "6.1.0"
