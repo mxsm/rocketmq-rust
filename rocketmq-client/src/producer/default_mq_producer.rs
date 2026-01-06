@@ -645,7 +645,11 @@ impl MQProducer for DefaultMQProducer {
         }
     }
 
-    async fn send_with_timeout<M>(&mut self, mut msg: M, timeout: u64) -> rocketmq_error::RocketMQResult<SendResult>
+    async fn send_with_timeout<M>(
+        &mut self,
+        mut msg: M,
+        timeout: u64,
+    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
@@ -657,7 +661,7 @@ impl MQProducer for DefaultMQProducer {
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send_with_timeout(&mut msg, timeout)
             .await?;
-        Ok(result.expect("SendResult should not be None"))
+        Ok(result)
     }
 
     async fn send_with_callback<M, F>(&mut self, mut msg: M, send_callback: F) -> rocketmq_error::RocketMQResult<()>
