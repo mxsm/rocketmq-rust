@@ -1809,8 +1809,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn pull_request_hold_service(&self) -> &Option<PullRequestHoldService<MS>> {
-        &self.pull_request_hold_service
+    pub fn pull_request_hold_service(&self) -> Option<&PullRequestHoldService<MS>> {
+        self.pull_request_hold_service.as_ref()
     }
 
     #[inline]
