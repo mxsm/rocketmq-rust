@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Raft state machine implementation
 //!
@@ -276,7 +273,7 @@ impl StateMachine {
 impl RaftSnapshotBuilder<TypeConfig> for StateMachine {
     async fn build_snapshot(&mut self) -> Result<Snapshot<TypeConfig>, std::io::Error> {
         let data = self.build_snapshot_data().await;
-        let last_applied = data.last_applied.unwrap_or_default();
+        let last_applied = data.last_applied;
         let last_membership = data.last_membership.clone().unwrap_or_default();
 
         let snapshot_data = serde_json::to_vec(&data)
@@ -284,9 +281,9 @@ impl RaftSnapshotBuilder<TypeConfig> for StateMachine {
 
         Ok(Snapshot {
             meta: openraft::SnapshotMeta {
-                last_log_id: Some(last_applied),
+                last_log_id: last_applied,
                 last_membership,
-                snapshot_id: format!("snapshot-{}", last_applied.index),
+                snapshot_id: format!("snapshot-{}", last_applied.map_or(0, |id| id.index)),
             },
             snapshot: std::io::Cursor::new(snapshot_data),
         })

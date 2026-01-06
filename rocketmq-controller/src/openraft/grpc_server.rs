@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! gRPC server implementation for OpenRaft network communication
 
@@ -227,22 +224,19 @@ impl OpenRaftService for GrpcRaftService {
             meta.last_log_id
         );
 
-        // Create install snapshot request with correct fields
-        let install_req = crate::typ::InstallSnapshotRequest {
-            vote,
+        // Create snapshot with Cursor wrapper
+        let snapshot = openraft::Snapshot {
             meta,
-            offset: 0,
-            data: snapshot_data,
-            done: true,
+            snapshot: std::io::Cursor::new(snapshot_data),
         };
 
-        // Install snapshot through Raft
-        match self.raft.install_snapshot(install_req).await {
+        // Install snapshot through Raft using the new API
+        match self.raft.install_full_snapshot(vote, snapshot).await {
             Ok(resp) => Ok(Response::new(OpenRaftSnapshotResponse {
                 vote: Some(crate::protobuf::openraft::OpenRaftVote {
-                    term: resp.vote.leader_id.term,
-                    node_id: resp.vote.leader_id.node_id,
-                    committed: resp.vote.committed,
+                    term: resp.vote.leader_id().term,
+                    node_id: resp.vote.leader_id().node_id,
+                    committed: resp.vote.is_committed(),
                 }),
             })),
             Err(e) => {

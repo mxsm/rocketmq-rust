@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Raft log storage implementation
 //!
@@ -155,26 +152,31 @@ impl RaftLogStorage<TypeConfig> for LogStore {
             let log_id = entry.log_id;
             self.logs.insert(log_id.index, entry);
         }
-        callback.io_completed(Ok(())).await;
+        callback.io_completed(Ok(()));
         Ok(())
     }
 
-    async fn truncate(&mut self, log_id: LogId) -> Result<(), std::io::Error> {
+    async fn truncate_after(&mut self, log_id: Option<LogId>) -> Result<(), std::io::Error> {
         // Remove all logs with index > log_id.index
-        let keys_to_remove: Vec<u64> = self
-            .logs
-            .iter()
-            .filter_map(|entry| {
-                if entry.key() > &log_id.index {
-                    Some(*entry.key())
-                } else {
-                    None
-                }
-            })
-            .collect();
+        if let Some(log_id) = log_id {
+            let keys_to_remove: Vec<u64> = self
+                .logs
+                .iter()
+                .filter_map(|entry| {
+                    if entry.key() > &log_id.index {
+                        Some(*entry.key())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
 
-        for key in keys_to_remove {
-            self.logs.remove(&key);
+            for key in keys_to_remove {
+                self.logs.remove(&key);
+            }
+        } else {
+            // If log_id is None, remove all logs
+            self.logs.clear();
         }
 
         Ok(())

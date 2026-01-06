@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Multi-node cluster integration tests
 
@@ -55,7 +52,8 @@ async fn create_cluster(node_count: u64, base_port: u16) -> Vec<(u64, Arc<RaftNo
             .cloned()
             .collect();
 
-        let config = ControllerConfig::new(node_id, addr)
+        let config = ControllerConfig::default()
+            .with_node_info(node_id, addr)
             .with_election_timeout_ms(1000)
             .with_heartbeat_interval_ms(300)
             .with_raft_peers(peers);
@@ -85,27 +83,48 @@ async fn create_cluster(node_count: u64, base_port: u16) -> Vec<(u64, Arc<RaftNo
 }
 
 /// Helper to initialize cluster from node 1
-/// Note: In OpenRaft 0.10, initialize_cluster only makes the calling node a voter.
-/// Other nodes remain as learners and cannot participate in quorum.
+/// In OpenRaft, we initialize as a single-node cluster first
 async fn initialize_cluster(nodes: &[(u64, Arc<RaftNodeManager>)], base_port: u16) {
-    let mut cluster_nodes = BTreeMap::new();
+    // Step 1: Initialize the first node as a single-node cluster
+    let first_node_id = nodes[0].0;
+    let first_node = &nodes[0].1;
 
-    for (node_id, _) in nodes {
-        let port = base_port + *node_id as u16;
-        cluster_nodes.insert(
-            *node_id,
-            Node {
-                node_id: *node_id,
-                rpc_addr: format!("127.0.0.1:{}", port),
-            },
-        );
+    let mut single_node_cluster = BTreeMap::new();
+    single_node_cluster.insert(
+        first_node_id,
+        Node {
+            node_id: first_node_id,
+            rpc_addr: format!("127.0.0.1:{}", base_port + first_node_id as u16),
+        },
+    );
+
+    println!("Initializing node {} as single-node cluster", first_node_id);
+    first_node
+        .initialize_cluster(single_node_cluster)
+        .await
+        .unwrap();
+
+    // Wait for the first node to become leader
+    for attempt in 1..=50 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if let Ok(true) = first_node.is_leader().await {
+            println!(
+                "Node {} became leader after {} attempts",
+                first_node_id, attempt
+            );
+            // Extra wait to ensure vote is committed
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            break;
+        }
+        if attempt == 50 {
+            panic!("First node failed to become leader after initialization");
+        }
     }
 
-    // Initialize from first node
-    nodes[0].1.initialize_cluster(cluster_nodes).await.unwrap();
-
-    // Wait for cluster initialization to complete
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    println!(
+        "Single-node cluster initialized with leader: {}",
+        first_node_id
+    );
 }
 
 #[tokio::test]
@@ -153,9 +172,9 @@ async fn test_cluster_client_write() {
     let nodes = create_cluster(3, BASE_PORT).await;
     initialize_cluster(&nodes, BASE_PORT).await;
 
-    // Wait for leader election
-    println!("Waiting for leader election...");
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // Wait longer for leader election and vote commit
+    println!("Waiting for leader election and vote commit...");
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
     // Find the leader and check cluster state
     let mut leader = None;
@@ -164,7 +183,8 @@ async fn test_cluster_client_write() {
 
     for (node_id, node) in &nodes {
         let is_leader = node.is_leader().await.unwrap_or(false);
-        let metrics = node.raft().metrics().borrow().clone();
+        use openraft::async_runtime::WatchReceiver;
+        let metrics = node.raft().metrics().borrow_watched().clone();
 
         if metrics.state == openraft::ServerState::Learner {
             learner_count += 1;
@@ -226,7 +246,8 @@ async fn test_cluster_client_write() {
             tokio::time::sleep(Duration::from_millis(500)).await;
 
             // Verify data is replicated (metrics check)
-            let metrics = leader_node.raft().metrics().borrow().clone();
+            use openraft::async_runtime::WatchReceiver;
+            let metrics = leader_node.raft().metrics().borrow_watched().clone();
             if metrics.last_applied.is_some() {
                 println!(" Data replicated across cluster");
             } else {
@@ -243,7 +264,8 @@ async fn test_cluster_client_write() {
         Err(_) => {
             println!(" Write operation timed out after 10 seconds");
             for (node_id, node) in &nodes {
-                let metrics = node.raft().metrics().borrow().clone();
+                use openraft::async_runtime::WatchReceiver;
+                let metrics = node.raft().metrics().borrow_watched().clone();
                 println!(
                     "  Node {}: state={:?}, term={}, leader={:?}",
                     node_id, metrics.state, metrics.current_term, metrics.current_leader
@@ -312,8 +334,8 @@ async fn test_five_node_cluster() {
     let nodes = create_cluster(5, BASE_PORT).await;
     initialize_cluster(&nodes, BASE_PORT).await;
 
-    // Wait for leader election - increased timeout for 5-node cluster
-    tokio::time::sleep(Duration::from_secs(4)).await;
+    // Wait for leader election and vote commit - increased timeout for 5-node cluster
+    tokio::time::sleep(Duration::from_secs(5)).await;
 
     // Verify cluster formation
     let mut leader_count = 0;
@@ -378,7 +400,8 @@ async fn test_five_node_cluster() {
     // Wait for replication
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let metrics = leader_node.raft().metrics().borrow().clone();
+    use openraft::async_runtime::WatchReceiver;
+    let metrics = leader_node.raft().metrics().borrow_watched().clone();
     println!("Final metrics: last_applied={:?}", metrics.last_applied);
 }
 
@@ -395,7 +418,8 @@ async fn test_cluster_metrics() {
 
     // Check metrics for all nodes
     for (node_id, node) in &nodes {
-        let metrics = node.raft().metrics().borrow().clone();
+        use openraft::async_runtime::WatchReceiver;
+        let metrics = node.raft().metrics().borrow_watched().clone();
 
         println!("Node {} metrics:", node_id);
         println!("  State: {:?}", metrics.state);

@@ -539,9 +539,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.53"
+version = "4.5.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9e340e012a1bf4935f5282ed1436d1489548e8f72308207ea5df0e23d2d03f8"
+checksum = "c6e6ff9dcd79cff5cd969a17a545d79e84ab086e444102a591e288a8aa3ce394"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -549,9 +549,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.53"
+version = "4.5.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d76b5d13eaa18c901fd2f7fca939fefe3a0727a953561fefdf3b2922b8569d00"
+checksum = "fa42cf4d2b7a41bc8f663a7cab4031ebafa1bf3875705bfaf8466dc60ab52c00"
 dependencies = [
  "anstream",
  "anstyle",
@@ -2316,7 +2316,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 [[package]]
 name = "openraft"
 version = "0.10.0"
-source = "git+https://github.com/databendlabs/openraft.git?rev=534bf40#534bf40d9acd02d2405e1786323a54520418e7cc"
+source = "git+https://github.com/databendlabs/openraft.git?rev=a90c841#a90c8414ccc1fb7b2703f244a53e6ed76b83efdd"
 dependencies = [
  "anyerror",
  "byte-unit",
@@ -2331,7 +2331,6 @@ dependencies = [
  "rand 0.9.2",
  "serde",
  "thiserror 1.0.69",
- "tokio",
  "tracing",
  "tracing-futures",
  "validit",
@@ -2340,7 +2339,7 @@ dependencies = [
 [[package]]
 name = "openraft-macros"
 version = "0.10.0"
-source = "git+https://github.com/databendlabs/openraft.git?rev=534bf40#534bf40d9acd02d2405e1786323a54520418e7cc"
+source = "git+https://github.com/databendlabs/openraft.git?rev=a90c841#a90c8414ccc1fb7b2703f244a53e6ed76b83efdd"
 dependencies = [
  "chrono",
  "proc-macro2",
@@ -2352,7 +2351,7 @@ dependencies = [
 [[package]]
 name = "openraft-rt"
 version = "0.10.0"
-source = "git+https://github.com/databendlabs/openraft.git?rev=534bf40#534bf40d9acd02d2405e1786323a54520418e7cc"
+source = "git+https://github.com/databendlabs/openraft.git?rev=a90c841#a90c8414ccc1fb7b2703f244a53e6ed76b83efdd"
 dependencies = [
  "futures",
  "openraft-macros",
@@ -2362,7 +2361,7 @@ dependencies = [
 [[package]]
 name = "openraft-rt-tokio"
 version = "0.10.0"
-source = "git+https://github.com/databendlabs/openraft.git?rev=534bf40#534bf40d9acd02d2405e1786323a54520418e7cc"
+source = "git+https://github.com/databendlabs/openraft.git?rev=a90c841#a90c8414ccc1fb7b2703f244a53e6ed76b83efdd"
 dependencies = [
  "futures",
  "openraft-rt",
@@ -3423,6 +3422,7 @@ dependencies = [
  "cheetah-string",
  "chrono",
  "clap",
+ "config",
  "criterion",
  "dashmap",
  "env_logger",
@@ -4561,7 +4561,6 @@ dependencies = [
  "signal-hook-registry",
  "socket2 0.6.0",
  "tokio-macros",
- "tracing",
  "windows-sys 0.61.2",
 ]
 
