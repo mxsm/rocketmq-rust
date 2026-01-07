@@ -945,7 +945,12 @@ impl MQProducer for DefaultMQProducer {
         M: MessageTrait + Send + Sync,
     {
         let mut batch = self.batch(msgs)?;
-        let result = self.default_mqproducer_impl.as_mut().unwrap().send(&mut batch).await?;
+        let result = self
+            .default_mqproducer_impl
+            .as_mut()
+            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .send(&mut batch)
+            .await?;
         Ok(result.expect("SendResult should not be None"))
     }
 
