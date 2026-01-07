@@ -1,0 +1,96 @@
+# RocketMQ Name Server Configuration File (TOML Format)
+# This configuration file demonstrates all available options with their default values
+# Fields support both snake_case and camelCase naming (through serde aliases)
+
+# RocketMQ installation directory
+# Environment variable: ROCKETMQ_HOME or ROCKETMQ_HOME_PROPERTY
+rocketmqHome = "/opt/rocketmq"
+
+# Key-Value configuration file path
+# Default: ~/rocketmq-namesrv/kvConfig.json
+kvConfigPath = "/home/rocketmq/rocketmq-namesrv/kvConfig.json"
+
+# Configuration persistence file path
+# Default: ~/rocketmq-namesrv/rocketmq-namesrv.properties
+configStorePath = "/home/rocketmq/rocketmq-namesrv/rocketmq-namesrv.properties"
+
+# Product environment name
+# Default: "center"
+productEnvName = "center"
+
+# Enable cluster test mode
+# Default: false
+clusterTest = false
+
+# Enable order message support
+# Default: false
+orderMessageEnable = false
+
+# Return order topic configuration to broker
+# Default: true
+returnOrderTopicConfigToBroker = true
+
+# Client request thread pool size
+# Default: 8
+clientRequestThreadPoolNums = 8
+
+# Default thread pool size for general requests
+# Default: 16
+defaultThreadPoolNums = 16
+
+# Client request thread pool queue capacity
+# Default: 50000
+clientRequestThreadPoolQueueCapacity = 50000
+
+# Default thread pool queue capacity
+# Default: 10000
+defaultThreadPoolQueueCapacity = 10000
+
+# Scan interval for inactive brokers (milliseconds)
+# Default: 5000 (5 seconds)
+scanNotActiveBrokerInterval = 5000
+
+# Unregister broker queue capacity
+# Default: 3000
+unRegisterBrokerQueueCapacity = 3000
+
+# Support acting master mode
+# Default: false
+supportActingMaster = false
+
+# Enable all topic list query
+# Default: true
+enableAllTopicList = true
+
+# Enable topic list query
+# Default: true
+enableTopicList = true
+
+# Notify when minimum broker ID changes
+# Default: false
+notifyMinBrokerIdChanged = false
+
+# Enable embedded controller in name server
+# Default: false
+enableControllerInNamesrv = false
+
+# Wait for service ready before starting
+# Default: false
+needWaitForService = false
+
+# Wait seconds for service initialization
+# Default: 45
+waitSecondsForService = 45
+
+# Delete topic when broker unregisters
+# Default: false
+deleteTopicWithBrokerRegistration = false
+
+# Configuration blacklist (properties that won't be persisted)
+# Default: "configBlackList;configStorePath;kvConfigPath"
+configBlackList = "configBlackList;configStorePath;kvConfigPath"
+
+# Use RouteInfoManager V2 (DashMap-based concurrent implementation)
+# V2 provides 5-50x better concurrency performance
+# Default: true (V2 is production-ready as of v0.7.0)
+useRouteInfoManagerV2 = true
