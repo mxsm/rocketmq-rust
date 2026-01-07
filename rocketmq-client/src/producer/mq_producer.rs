@@ -49,7 +49,7 @@ pub trait MQProducer {
     ///
     /// # Type Parameters
     ///
-    /// * `M` - A type that implements `MessageTrait`, `Clone`, `Send`, and `Sync`.
+    /// * `M` - A type that implements `MessageTrait`, `Send`, and `Sync`.
     ///
     /// # Arguments
     ///
