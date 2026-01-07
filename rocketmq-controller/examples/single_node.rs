@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Step 1: Create configuration
     println!("1. Creating node configuration...");
     let node_id = 1;
-    let listen_addr = "127.0.0.1:9876".parse()?;
+    let listen_addr = "127.0.0.1:60109".parse()?;
 
     let config = Arc::new(
         ControllerConfig::new_node(node_id, listen_addr)

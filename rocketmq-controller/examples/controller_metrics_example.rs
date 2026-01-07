@@ -37,7 +37,7 @@ async fn main() {
 
     // 1. Initialize controller configuration
     println!("1. Initializing controller configuration...");
-    let config = Arc::new(ControllerConfig::new_node(1, "127.0.0.1:9876".parse().unwrap()));
+    let config = Arc::new(ControllerConfig::new_node(1, "127.0.0.1:60109".parse().unwrap()));
 
     // 2. Initialize metrics manager (singleton)
     println!("2. Initializing metrics manager...");
