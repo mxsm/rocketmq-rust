@@ -44,12 +44,12 @@ impl RaftRsController {
 }
 
 impl Controller for RaftRsController {
-    async fn startup(&self) -> RocketMQResult<()> {
+    async fn startup(&mut self) -> RocketMQResult<()> {
         // TODO: Initialize raft-rs node
         Ok(())
     }
 
-    async fn shutdown(&self) -> RocketMQResult<()> {
+    async fn shutdown(&mut self) -> RocketMQResult<()> {
         // TODO: Shutdown raft-rs node
         Ok(())
     }

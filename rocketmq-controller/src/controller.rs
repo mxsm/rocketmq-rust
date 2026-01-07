@@ -177,10 +177,10 @@ pub trait Controller: Send + Sync {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let controller = RaftController::new(config).await?;
+    /// let mut controller = RaftController::new(config).await?;
     /// controller.startup().await?;
     /// ```
-    async fn startup(&self) -> RocketMQResult<()>;
+    async fn startup(&mut self) -> RocketMQResult<()>;
 
     /// Shutdown the controller gracefully
     ///
@@ -197,7 +197,7 @@ pub trait Controller: Send + Sync {
     ///
     /// Returns error if graceful shutdown fails. The controller may still be
     /// in an inconsistent state, requiring external intervention.
-    async fn shutdown(&self) -> RocketMQResult<()>;
+    async fn shutdown(&mut self) -> RocketMQResult<()>;
 
     /// Start scheduling controller events
     ///
@@ -520,11 +520,11 @@ impl Default for MockController {
 }
 
 impl Controller for MockController {
-    async fn startup(&self) -> RocketMQResult<()> {
+    async fn startup(&mut self) -> RocketMQResult<()> {
         Ok(())
     }
 
-    async fn shutdown(&self) -> RocketMQResult<()> {
+    async fn shutdown(&mut self) -> RocketMQResult<()> {
         Ok(())
     }
 
@@ -608,7 +608,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_controller_lifecycle() {
-        let controller = MockController::new();
+        let mut controller = MockController::new();
         assert!(controller.startup().await.is_ok());
         assert!(controller.is_leader());
         assert!(controller.shutdown().await.is_ok());
