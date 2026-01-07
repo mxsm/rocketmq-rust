@@ -17,6 +17,7 @@
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
@@ -26,26 +27,39 @@ use rocketmq_remoting::protocol::header::controller::get_next_broker_id_request_
 use rocketmq_remoting::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
 use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_runtime::RocketMQRuntime;
+use tonic::transport::Server;
 
 use crate::controller::Controller;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
+use crate::openraft::GrpcRaftService;
+use crate::openraft::RaftNodeManager;
+use crate::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
 
 /// OpenRaft-based controller implementation
 pub struct OpenRaftController {
-    runtime: Arc<RocketMQRuntime>,
-    // TODO: Add OpenRaft specific fields
+    config: Arc<ControllerConfig>,
 }
 
 impl OpenRaftController {
-    pub fn new(runtime: Arc<RocketMQRuntime>) -> Self {
-        Self { runtime }
+    pub fn new(config: Arc<ControllerConfig>) -> Self {
+        Self { config }
     }
 }
 
 impl Controller for OpenRaftController {
     async fn startup(&self) -> RocketMQResult<()> {
-        // TODO: Initialize OpenRaft node
+        let node = Arc::new(RaftNodeManager::new(Arc::clone(&self.config)).await?);
+        let service = GrpcRaftService::new(node.raft());
+        let server = Server::builder()
+            .add_service(OpenRaftServiceServer::new(service))
+            .serve(self.config.listen_addr);
+
+        let node_id_for_error = self.config.node_id;
+        tokio::spawn(async move {
+            if let Err(e) = server.await {
+                eprintln!("gRPC server error for node {}: {}", node_id_for_error, e);
+            }
+        });
         Ok(())
     }
 
@@ -133,9 +147,5 @@ impl Controller for OpenRaftController {
 
     fn register_broker_lifecycle_listener(&self, _listener: Arc<dyn BrokerLifecycleListener>) {
         // TODO: Register listener
-    }
-
-    fn get_runtime(&self) -> Arc<RocketMQRuntime> {
-        self.runtime.clone()
     }
 }

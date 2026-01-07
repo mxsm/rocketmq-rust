@@ -36,7 +36,6 @@ use rocketmq_remoting::remoting::RemotingService;
 use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
-use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
@@ -143,12 +142,12 @@ impl ControllerManager {
         info!("Creating controller manager with config: {:?}", config);
 
         // Initialize RocketMQ runtime for Raft controller
-        let runtime = Arc::new(RocketMQRuntime::new_multi(2, "controller-runtime"));
+        //let runtime = Arc::new(RocketMQRuntime::new_multi(2, "controller-runtime"));
 
         // Initialize Raft controller for leader election
         // This MUST succeed before proceeding
         // Using OpenRaft implementation by default
-        let raft_arc = Arc::new(RaftController::new_open_raft(runtime));
+        let raft_arc = Arc::new(RaftController::new_open_raft(Arc::clone(&config)));
 
         // Initialize metadata store
         // This MUST succeed before proceeding
