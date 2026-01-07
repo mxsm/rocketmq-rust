@@ -23,7 +23,6 @@
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use parking_lot::Mutex;
 use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
@@ -53,36 +52,29 @@ use crate::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
 /// 1. Sends shutdown signal to gRPC server via oneshot channel
 /// 2. Waits for Raft node to shutdown cleanly
 /// 3. Waits for gRPC server task to complete (with 10s timeout)
-///
-/// # Thread Safety
-///
-/// Internal state is protected by `Arc<Mutex<>>` to allow `&self` access
-/// while maintaining mutability for lifecycle operations.
 pub struct OpenRaftController {
     config: Arc<ControllerConfig>,
-    /// Raft node manager (protected for thread-safe access)
-    node: Arc<Mutex<Option<Arc<RaftNodeManager>>>>,
-
+    /// Raft node manager
+    node: Option<Arc<RaftNodeManager>>,
     /// gRPC server task handle
-    handle: Arc<Mutex<Option<JoinHandle<()>>>>,
-
+    handle: Option<JoinHandle<()>>,
     /// Shutdown signal sender for gRPC server
-    shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    shutdown_tx: Option<oneshot::Sender<()>>,
 }
 
 impl OpenRaftController {
     pub fn new(config: Arc<ControllerConfig>) -> Self {
         Self {
             config,
-            node: Arc::new(Mutex::new(None)),
-            handle: Arc::new(Mutex::new(None)),
-            shutdown_tx: Arc::new(Mutex::new(None)),
+            node: None,
+            handle: None,
+            shutdown_tx: None,
         }
     }
 }
 
 impl Controller for OpenRaftController {
-    async fn startup(&self) -> RocketMQResult<()> {
+    async fn startup(&mut self) -> RocketMQResult<()> {
         info!("Starting OpenRaft controller on {}", self.config.listen_addr);
 
         let node = Arc::new(RaftNodeManager::new(Arc::clone(&self.config)).await?);
@@ -111,45 +103,28 @@ impl Controller for OpenRaftController {
             }
         });
 
-        {
-            let mut node_guard = self.node.lock();
-            *node_guard = Some(node);
-        }
-        {
-            let mut handle_guard = self.handle.lock();
-            *handle_guard = Some(handle);
-        }
-        {
-            let mut shutdown_tx_guard = self.shutdown_tx.lock();
-            *shutdown_tx_guard = Some(shutdown_tx);
-        }
+        self.node = Some(node);
+        self.handle = Some(handle);
+        self.shutdown_tx = Some(shutdown_tx);
 
         info!("OpenRaft controller started successfully");
         Ok(())
     }
 
-    async fn shutdown(&self) -> RocketMQResult<()> {
+    async fn shutdown(&mut self) -> RocketMQResult<()> {
         info!("Shutting down OpenRaft controller");
 
         // Take and send shutdown signal to gRPC server
-        {
-            let mut shutdown_tx_guard = self.shutdown_tx.lock();
-            if let Some(tx) = shutdown_tx_guard.take() {
-                if tx.send(()).is_err() {
-                    eprintln!("Failed to send shutdown signal to gRPC server (receiver dropped)");
-                } else {
-                    info!("Shutdown signal sent to gRPC server");
-                }
+        if let Some(tx) = self.shutdown_tx.take() {
+            if tx.send(()).is_err() {
+                eprintln!("Failed to send shutdown signal to gRPC server (receiver dropped)");
+            } else {
+                info!("Shutdown signal sent to gRPC server");
             }
         }
 
         // Shutdown Raft node
-        let node = {
-            let mut node_guard = self.node.lock();
-            node_guard.take()
-        };
-
-        if let Some(node) = node {
+        if let Some(node) = self.node.take() {
             if let Err(e) = node.shutdown().await {
                 eprintln!("Error shutting down Raft node: {}", e);
             } else {
@@ -158,12 +133,7 @@ impl Controller for OpenRaftController {
         }
 
         // Wait for server task to complete (with timeout)
-        let handle = {
-            let mut handle_guard = self.handle.lock();
-            handle_guard.take()
-        };
-
-        if let Some(handle) = handle {
+        if let Some(handle) = self.handle.take() {
             let timeout = tokio::time::Duration::from_secs(10);
             match tokio::time::timeout(timeout, handle).await {
                 Ok(Ok(_)) => info!("Server task completed successfully"),

@@ -65,7 +65,7 @@ pub struct ProcessorManager {
     config: Arc<ControllerConfig>,
 
     /// Raft controller
-    raft: Arc<RaftController>,
+    raft: ArcMut<RaftController>,
 
     /// Metadata store
     metadata: Arc<MetadataStore>,
@@ -76,7 +76,7 @@ pub struct ProcessorManager {
 
 impl ProcessorManager {
     /// Create a new processor manager
-    pub fn new(config: Arc<ControllerConfig>, raft: Arc<RaftController>, metadata: Arc<MetadataStore>) -> Self {
+    pub fn new(config: Arc<ControllerConfig>, raft: ArcMut<RaftController>, metadata: Arc<MetadataStore>) -> Self {
         // Initialize processors
         let mut processors: HashMap<RequestType, Arc<dyn RequestProcessor>> = HashMap::new();
 

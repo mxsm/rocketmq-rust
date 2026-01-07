@@ -22,7 +22,7 @@ use rocketmq_runtime::RocketMQRuntime;
 #[tokio::test]
 async fn test_open_raft_controller_lifecycle() {
     let config = Arc::new(ControllerConfig::test_config());
-    let controller = RaftController::new_open_raft(config);
+    let mut controller = RaftController::new_open_raft(config);
 
     assert!(controller.startup().await.is_ok());
     assert!(!controller.is_leader()); // Default is false
@@ -35,7 +35,7 @@ async fn test_raft_rs_controller_lifecycle() {
         .await
         .unwrap();
 
-    let controller = RaftController::new_raft_rs(runtime.clone());
+    let mut controller = RaftController::new_raft_rs(runtime.clone());
 
     assert!(controller.startup().await.is_ok());
     assert!(!controller.is_leader()); // Default is false
@@ -57,14 +57,14 @@ async fn test_raft_controller_wrapper() {
     let config = Arc::new(ControllerConfig::test_config());
 
     // Test OpenRaft variant
-    let open_raft_controller = RaftController::new_open_raft(config.clone());
+    let mut open_raft_controller = RaftController::new_open_raft(config.clone());
     assert!(open_raft_controller.startup().await.is_ok());
     assert!(!open_raft_controller.is_leader());
     assert!(open_raft_controller.shutdown().await.is_ok());
     drop(open_raft_controller);
 
     // Test RaftRs variant
-    let raft_rs_controller = RaftController::new_raft_rs(runtime.clone());
+    let mut raft_rs_controller = RaftController::new_raft_rs(runtime.clone());
     assert!(raft_rs_controller.startup().await.is_ok());
     assert!(!raft_rs_controller.is_leader());
     assert!(raft_rs_controller.shutdown().await.is_ok());

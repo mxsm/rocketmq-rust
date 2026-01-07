@@ -59,14 +59,14 @@ impl RaftController {
 }
 
 impl Controller for RaftController {
-    async fn startup(&self) -> RocketMQResult<()> {
+    async fn startup(&mut self) -> RocketMQResult<()> {
         match self {
             Self::OpenRaft(controller) => controller.startup().await,
             Self::RaftRs(controller) => controller.startup().await,
         }
     }
 
-    async fn shutdown(&self) -> RocketMQResult<()> {
+    async fn shutdown(&mut self) -> RocketMQResult<()> {
         match self {
             Self::OpenRaft(controller) => controller.shutdown().await,
             Self::RaftRs(controller) => controller.shutdown().await,
