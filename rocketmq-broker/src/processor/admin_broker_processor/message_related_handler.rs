@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -40,9 +37,7 @@ where
     MS: MessageStore,
 {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        Self {
-            broker_runtime_inner,
-        }
+        Self { broker_runtime_inner }
     }
 }
 
@@ -57,8 +52,7 @@ where
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let search_offset_request_header =
-            request.decode_command_custom_header::<SearchOffsetRequestHeader>()?;
+        let search_offset_request_header = request.decode_command_custom_header::<SearchOffsetRequestHeader>()?;
         let mapping_context = self
             .broker_runtime_inner
             .topic_queue_mapping_manager()
@@ -105,13 +99,12 @@ where
 
         if !mapping_context.is_leader() {
             return Ok(Some(
-                RemotingCommand::create_response_command_with_code(ResponseCode::NotLeaderForQueue)
-                    .set_remark(format!(
+                RemotingCommand::create_response_command_with_code(ResponseCode::NotLeaderForQueue).set_remark(
+                    format!(
                         "{}-{:?} does not exist in request process of current broker {:?}",
-                        mapping_context.topic,
-                        mapping_context.global_id,
-                        mapping_detail.topic_queue_mapping_info.bname
-                    )),
+                        mapping_context.topic, mapping_context.global_id, mapping_detail.topic_queue_mapping_info.bname
+                    ),
+                ),
             ));
         }
 
@@ -162,19 +155,14 @@ where
                     .broker_runtime_inner
                     .broker_outer_api()
                     .rpc_client()
-                    .invoke(
-                        rpc_request,
-                        self.broker_runtime_inner.broker_config().forward_timeout,
-                    )
+                    .invoke(rpc_request, self.broker_runtime_inner.broker_config().forward_timeout)
                     .await;
 
                 match rpc_response {
                     Err(e) => {
                         return Ok(Some(
-                            RemotingCommand::create_response_command_with_code(
-                                ResponseCode::SystemError,
-                            )
-                            .set_remark(format!("{e}")),
+                            RemotingCommand::create_response_command_with_code(ResponseCode::SystemError)
+                                .set_remark(format!("{e}")),
                         ));
                     }
                     Ok(response) => {
@@ -189,9 +177,7 @@ where
                                     continue;
                                 }
                                 // Check if end offset is decided and offset exceeds it
-                                if item.check_if_end_offset_decided()
-                                    && remote_offset >= item.end_offset
-                                {
+                                if item.check_if_end_offset_decided() && remote_offset >= item.end_offset {
                                     continue;
                                 }
                                 offset = item.compute_static_queue_offset_strictly(remote_offset);

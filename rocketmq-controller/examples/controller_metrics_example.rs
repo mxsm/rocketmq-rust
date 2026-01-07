@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Integration example for ControllerMetricsManager
 //!
@@ -40,15 +37,12 @@ async fn main() {
 
     // 1. Initialize controller configuration
     println!("1. Initializing controller configuration...");
-    let config = Arc::new(ControllerConfig::new_node(
-        1,
-        "127.0.0.1:9876".parse().unwrap(),
-    ));
+    let config = Arc::new(ControllerConfig::new_node(1, "127.0.0.1:60109".parse().unwrap()));
 
     // 2. Initialize metrics manager (singleton)
     println!("2. Initializing metrics manager...");
     let metrics_manager = ControllerMetricsManager::get_instance(config.clone());
-    println!("   ✓ Metrics manager initialized\n");
+    println!("    Metrics manager initialized\n");
 
     // 3. Simulate role change
     println!("3. Simulating role changes...");
@@ -62,22 +56,22 @@ async fn main() {
 
     println!("   - Elected as LEADER (3)");
     ControllerMetricsManager::record_role_change(3, 1); // CANDIDATE -> LEADER
-    println!("   ✓ Role changes recorded\n");
+    println!("    Role changes recorded\n");
 
     // 4. Simulate controller requests
     println!("4. Simulating controller requests...");
     simulate_controller_requests(&metrics_manager).await;
-    println!("   ✓ Controller requests simulated\n");
+    println!("    Controller requests simulated\n");
 
     // 5. Simulate DLedger operations
     println!("5. Simulating DLedger operations...");
     simulate_dledger_operations(&metrics_manager).await;
-    println!("   ✓ DLedger operations simulated\n");
+    println!("    DLedger operations simulated\n");
 
     // 6. Simulate elections
     println!("6. Simulating elections...");
     simulate_elections(&metrics_manager).await;
-    println!("   ✓ Elections simulated\n");
+    println!("    Elections simulated\n");
 
     println!("=== Example completed ===");
     println!("\nNote: In production, metrics would be exported to:");
@@ -136,12 +130,7 @@ async fn simulate_dledger_operations(manager: &Arc<ControllerMetricsManager>) {
         manager.inc_dledger_op_total(DLedgerOperation::Append, status);
         manager.record_dledger_op_latency(DLedgerOperation::Append, latency);
 
-        println!(
-            "   - Append operation #{} ({:?}): {}µs",
-            i + 1,
-            status,
-            latency
-        );
+        println!("   - Append operation #{} ({:?}): {}µs", i + 1, status, latency);
 
         sleep(Duration::from_millis(50)).await;
     }

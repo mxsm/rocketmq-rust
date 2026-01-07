@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -101,11 +98,7 @@ pub trait ConsumeQueueStoreInterface: Sync + Any {
     ///
     /// # Returns
     /// Number of deleted files
-    fn delete_expired_file(
-        &self,
-        consume_queue: &dyn ConsumeQueueTrait,
-        min_commit_log_pos: i64,
-    ) -> i32;
+    fn delete_expired_file(&self, consume_queue: &dyn ConsumeQueueTrait, min_commit_log_pos: i64) -> i32;
 
     /// Check if the first file is available
     ///
@@ -178,13 +171,7 @@ pub trait ConsumeQueueStoreInterface: Sync + Any {
     ///
     /// # Returns
     /// List of Bytes for the topic-queueId in RocksDB
-    async fn range_query(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        start_index: i64,
-        num: i32,
-    ) -> Vec<Bytes>;
+    async fn range_query(&self, topic: &CheetahString, queue_id: i32, start_index: i64, num: i32) -> Vec<Bytes>;
 
     /// Get a specific consume queue unit from RocksDB
     ///
@@ -276,11 +263,7 @@ pub trait ConsumeQueueStoreInterface: Sync + Any {
     ///
     /// # Returns
     /// The max physical offset, or None if not found
-    fn get_max_phy_offset_in_consume_queue(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-    ) -> Option<i64>;
+    fn get_max_phy_offset_in_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> Option<i64>;
 
     /// Get max offset of specific topic-queueId in topic queue table
     ///
@@ -348,8 +331,7 @@ pub trait ConsumeQueueStoreInterface: Sync + Any {
     ///
     /// # Returns
     /// The consume queue
-    fn find_or_create_consume_queue(&self, topic: &CheetahString, queue_id: i32)
-        -> ArcConsumeQueue;
+    fn find_or_create_consume_queue(&self, topic: &CheetahString, queue_id: i32) -> ArcConsumeQueue;
 
     /// Find the consume queue map for a topic
     ///
@@ -358,10 +340,7 @@ pub trait ConsumeQueueStoreInterface: Sync + Any {
     ///
     /// # Returns
     /// The consume queue map for the topic, or None if not found
-    fn find_consume_queue_map(
-        &self,
-        topic: &CheetahString,
-    ) -> Option<HashMap<i32, ArcConsumeQueue>>;
+    fn find_consume_queue_map(&self, topic: &CheetahString) -> Option<HashMap<i32, ArcConsumeQueue>>;
 
     /// Get the total size of all consume queues
     ///

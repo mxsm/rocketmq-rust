@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 
@@ -32,38 +29,41 @@ pub struct BrokerBootstrap {
 impl BrokerBootstrap {
     pub async fn boot(mut self) {
         if !self.initialize().await {
-            error!("initialize fail");
+            error!("Broker initialization failed");
             return;
         }
-        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
-        self.broker_runtime.shutdown_rx = Some(shutdown_rx);
 
-        tokio::join!(self.start(), wait_for_signal_inner(shutdown_tx));
+        // Start broker services (non-blocking)
+        self.start().await;
+
+        // Wait for shutdown signal (Ctrl+C or SIGTERM)
+        wait_for_signal().await;
+        info!("Broker received shutdown signal");
+
+        // Graceful shutdown
+        self.shutdown().await;
+        info!("Broker shutdown completed");
     }
+
     #[inline]
     async fn initialize(&mut self) -> bool {
         self.broker_runtime.initialize().await
     }
+
     #[inline]
     async fn start(&mut self) {
         self.broker_runtime.start().await;
     }
-}
 
-async fn wait_for_signal_inner(shutdown_tx: tokio::sync::broadcast::Sender<()>) {
-    tokio::select! {
-        _ = wait_for_signal() => {
-            info!("Broker Received signal, initiating shutdown...");
-        }
+    #[inline]
+    async fn shutdown(&mut self) {
+        self.broker_runtime.shutdown().await;
     }
-    // Send shutdown signal to all tasks
-    let _ = shutdown_tx.send(());
 }
 
 pub struct Builder {
     broker_config: BrokerConfig,
     message_store_config: MessageStoreConfig,
-    //server_config: ServerConfig,
 }
 
 impl Builder {
@@ -72,7 +72,6 @@ impl Builder {
         Builder {
             broker_config: Default::default(),
             message_store_config: MessageStoreConfig::default(),
-            //server_config: Default::default(),
         }
     }
     #[inline]
@@ -85,19 +84,10 @@ impl Builder {
         self.message_store_config = message_store_config;
         self
     }
-    /*    #[inline]
-    pub fn set_server_config(mut self, server_config: ServerConfig) -> Self {
-        self.server_config = server_config;
-        self
-    }*/
     #[inline]
     pub fn build(self) -> BrokerBootstrap {
         BrokerBootstrap {
-            broker_runtime: BrokerRuntime::new(
-                Arc::new(self.broker_config),
-                Arc::new(self.message_store_config),
-                //Arc::new(self.server_config),
-            ),
+            broker_runtime: BrokerRuntime::new(Arc::new(self.broker_config), Arc::new(self.message_store_config)),
         }
     }
 }

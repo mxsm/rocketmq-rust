@@ -68,9 +68,7 @@ impl TopicRemappingDetailWrapper {
         &self.broker_config_map
     }
 
-    pub fn broker_config_map_mut(
-        &mut self,
-    ) -> &mut HashMap<CheetahString, TopicConfigAndQueueMapping> {
+    pub fn broker_config_map_mut(&mut self) -> &mut HashMap<CheetahString, TopicConfigAndQueueMapping> {
         &mut self.broker_config_map
     }
 
@@ -82,10 +80,7 @@ impl TopicRemappingDetailWrapper {
         &self.broker_to_map_out
     }
 
-    pub fn set_broker_config_map(
-        &mut self,
-        broker_config_map: HashMap<CheetahString, TopicConfigAndQueueMapping>,
-    ) {
+    pub fn set_broker_config_map(&mut self, broker_config_map: HashMap<CheetahString, TopicConfigAndQueueMapping>) {
         self.broker_config_map = broker_config_map;
     }
 

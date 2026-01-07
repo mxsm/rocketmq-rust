@@ -44,9 +44,7 @@ impl CommandExecute for TopicStatusSubCommand {
         let topic_status = {
             if let Some(cluster) = &self.cluster_name {
                 let cluster = cluster.trim();
-                let topic_route_data = default_mq_admin_ext
-                    .examine_topic_route_info(cluster.into())
-                    .await?;
+                let topic_route_data = default_mq_admin_ext.examine_topic_route_info(cluster.into()).await?;
                 let mut topic_stats_table = TopicStatsTable::new();
                 if let Some(route_data) = &topic_route_data {
                     let mut total_offset_table = HashMap::new();
@@ -62,9 +60,7 @@ impl CommandExecute for TopicStatusSubCommand {
                 }
                 topic_stats_table
             } else {
-                default_mq_admin_ext
-                    .examine_topic_stats(topic.into(), None)
-                    .await?
+                default_mq_admin_ext.examine_topic_stats(topic.into(), None).await?
             }
         };
 
@@ -81,8 +77,7 @@ impl CommandExecute for TopicStatusSubCommand {
             let topic_offset = offset_table.get(queue);
             if let Some(offset) = topic_offset {
                 if offset.get_last_update_timestamp() > 0 {
-                    let human_timestamp =
-                        time_millis_to_human_string2(offset.get_last_update_timestamp());
+                    let human_timestamp = time_millis_to_human_string2(offset.get_last_update_timestamp());
                     println!(
                         "{}  {}  {}  {}  {}",
                         queue.get_broker_name(),

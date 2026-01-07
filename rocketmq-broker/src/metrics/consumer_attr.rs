@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::fmt::Display;
 use std::hash::Hash;
@@ -49,12 +46,7 @@ impl ConsumerAttr {
     /// * `language` - Programming language of the consumer client
     /// * `version` - Client version
     /// * `consume_mode` - Consume mode (push/pull)
-    pub fn new(
-        group: String,
-        language: LanguageCode,
-        version: i32,
-        consume_mode: ConsumeType,
-    ) -> Self {
+    pub fn new(group: String, language: LanguageCode, version: i32, consume_mode: ConsumeType) -> Self {
         Self {
             group,
             language,
@@ -187,9 +179,7 @@ impl ConsumerAttrBuilder {
             group: self.group.ok_or(ConsumerAttrError::MissingGroup)?,
             language: self.language.ok_or(ConsumerAttrError::MissingLanguage)?,
             version: self.version.ok_or(ConsumerAttrError::MissingVersion)?,
-            consume_mode: self
-                .consume_mode
-                .ok_or(ConsumerAttrError::MissingConsumeMode)?,
+            consume_mode: self.consume_mode.ok_or(ConsumerAttrError::MissingConsumeMode)?,
         })
     }
 }
@@ -232,15 +222,11 @@ impl ConsumerAttrExt for Vec<ConsumerAttr> {
     }
 
     fn find_by_language(&self, language: LanguageCode) -> Vec<&ConsumerAttr> {
-        self.iter()
-            .filter(|attr| attr.language == language)
-            .collect()
+        self.iter().filter(|attr| attr.language == language).collect()
     }
 
     fn find_by_consume_mode(&self, consume_mode: ConsumeType) -> Vec<&ConsumerAttr> {
-        self.iter()
-            .filter(|attr| attr.consume_mode == consume_mode)
-            .collect()
+        self.iter().filter(|attr| attr.consume_mode == consume_mode).collect()
     }
 
     fn unique_groups(&self) -> Vec<String> {
@@ -259,15 +245,11 @@ impl ConsumerAttrExt for &[ConsumerAttr] {
     }
 
     fn find_by_language(&self, language: LanguageCode) -> Vec<&ConsumerAttr> {
-        self.iter()
-            .filter(|attr| attr.language == language)
-            .collect()
+        self.iter().filter(|attr| attr.language == language).collect()
     }
 
     fn find_by_consume_mode(&self, consume_mode: ConsumeType) -> Vec<&ConsumerAttr> {
-        self.iter()
-            .filter(|attr| attr.consume_mode == consume_mode)
-            .collect()
+        self.iter().filter(|attr| attr.consume_mode == consume_mode).collect()
     }
 
     fn unique_groups(&self) -> Vec<String> {

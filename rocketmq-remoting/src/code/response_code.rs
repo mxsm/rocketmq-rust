@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 /// Macro to define response code enums with automatic conversion implementations.
 /// This reduces code duplication and makes maintenance easier.
@@ -176,18 +173,9 @@ mod tests {
 
     #[test]
     fn remoting_sys_response_code_from_i32() {
-        assert_eq!(
-            RemotingSysResponseCode::from(0),
-            RemotingSysResponseCode::Success
-        );
-        assert_eq!(
-            RemotingSysResponseCode::from(1),
-            RemotingSysResponseCode::SystemError
-        );
-        assert_eq!(
-            RemotingSysResponseCode::from(2),
-            RemotingSysResponseCode::SystemBusy
-        );
+        assert_eq!(RemotingSysResponseCode::from(0), RemotingSysResponseCode::Success);
+        assert_eq!(RemotingSysResponseCode::from(1), RemotingSysResponseCode::SystemError);
+        assert_eq!(RemotingSysResponseCode::from(2), RemotingSysResponseCode::SystemBusy);
         assert_eq!(
             RemotingSysResponseCode::from(3),
             RemotingSysResponseCode::RequestCodeNotSupported
@@ -196,14 +184,8 @@ mod tests {
             RemotingSysResponseCode::from(4),
             RemotingSysResponseCode::TransactionFailed
         );
-        assert_eq!(
-            RemotingSysResponseCode::from(16),
-            RemotingSysResponseCode::NoPermission
-        );
-        assert_eq!(
-            RemotingSysResponseCode::from(999),
-            RemotingSysResponseCode::SystemError
-        ); // Edge case - unknown code defaults to SystemError
+        assert_eq!(RemotingSysResponseCode::from(16), RemotingSysResponseCode::NoPermission);
+        assert_eq!(RemotingSysResponseCode::from(999), RemotingSysResponseCode::SystemError); // Edge case - unknown code defaults to SystemError
     }
 
     #[test]
@@ -250,34 +232,16 @@ mod tests {
         assert_eq!(ResponseCode::from(20), ResponseCode::PullRetryImmediately);
         assert_eq!(ResponseCode::from(21), ResponseCode::PullOffsetMoved);
         assert_eq!(ResponseCode::from(22), ResponseCode::QueryNotFound);
-        assert_eq!(
-            ResponseCode::from(23),
-            ResponseCode::SubscriptionParseFailed
-        );
+        assert_eq!(ResponseCode::from(23), ResponseCode::SubscriptionParseFailed);
         assert_eq!(ResponseCode::from(24), ResponseCode::SubscriptionNotExist);
         assert_eq!(ResponseCode::from(25), ResponseCode::SubscriptionNotLatest);
-        assert_eq!(
-            ResponseCode::from(26),
-            ResponseCode::SubscriptionGroupNotExist
-        );
+        assert_eq!(ResponseCode::from(26), ResponseCode::SubscriptionGroupNotExist);
         assert_eq!(ResponseCode::from(27), ResponseCode::FilterDataNotExist);
         assert_eq!(ResponseCode::from(28), ResponseCode::FilterDataNotLatest);
-        assert_eq!(
-            ResponseCode::from(200),
-            ResponseCode::TransactionShouldCommit
-        );
-        assert_eq!(
-            ResponseCode::from(201),
-            ResponseCode::TransactionShouldRollback
-        );
-        assert_eq!(
-            ResponseCode::from(202),
-            ResponseCode::TransactionStateUnknow
-        );
-        assert_eq!(
-            ResponseCode::from(203),
-            ResponseCode::TransactionStateGroupWrong
-        );
+        assert_eq!(ResponseCode::from(200), ResponseCode::TransactionShouldCommit);
+        assert_eq!(ResponseCode::from(201), ResponseCode::TransactionShouldRollback);
+        assert_eq!(ResponseCode::from(202), ResponseCode::TransactionStateUnknow);
+        assert_eq!(ResponseCode::from(203), ResponseCode::TransactionStateGroupWrong);
         assert_eq!(ResponseCode::from(204), ResponseCode::NoBuyerId);
         assert_eq!(ResponseCode::from(205), ResponseCode::NotInCurrentUnit);
         assert_eq!(ResponseCode::from(206), ResponseCode::ConsumerNotOnline);
@@ -286,55 +250,28 @@ mod tests {
         assert_eq!(ResponseCode::from(209), ResponseCode::PollingFull);
         assert_eq!(ResponseCode::from(210), ResponseCode::PollingTimeout);
         assert_eq!(ResponseCode::from(211), ResponseCode::BrokerNotExist);
-        assert_eq!(
-            ResponseCode::from(212),
-            ResponseCode::BrokerDispatchNotComplete
-        );
+        assert_eq!(ResponseCode::from(212), ResponseCode::BrokerDispatchNotComplete);
         assert_eq!(ResponseCode::from(213), ResponseCode::BroadcastConsumption);
         assert_eq!(ResponseCode::from(215), ResponseCode::FlowControl);
         assert_eq!(ResponseCode::from(501), ResponseCode::NotLeaderForQueue);
         assert_eq!(ResponseCode::from(604), ResponseCode::IllegalOperation);
         assert_eq!(ResponseCode::from(-1000), ResponseCode::RpcUnknown);
         assert_eq!(ResponseCode::from(-1002), ResponseCode::RpcAddrIsNull);
-        assert_eq!(
-            ResponseCode::from(-1004),
-            ResponseCode::RpcSendToChannelFailed
-        );
+        assert_eq!(ResponseCode::from(-1004), ResponseCode::RpcSendToChannelFailed);
         assert_eq!(ResponseCode::from(-1006), ResponseCode::RpcTimeOut);
         assert_eq!(ResponseCode::from(1500), ResponseCode::GoAway);
-        assert_eq!(
-            ResponseCode::from(2000),
-            ResponseCode::ControllerFencedMasterEpoch
-        );
+        assert_eq!(ResponseCode::from(2000), ResponseCode::ControllerFencedMasterEpoch);
         assert_eq!(
             ResponseCode::from(2001),
             ResponseCode::ControllerFencedSyncStateSetEpoch
         );
-        assert_eq!(
-            ResponseCode::from(2002),
-            ResponseCode::ControllerInvalidMaster
-        );
-        assert_eq!(
-            ResponseCode::from(2003),
-            ResponseCode::ControllerInvalidReplicas
-        );
-        assert_eq!(
-            ResponseCode::from(2004),
-            ResponseCode::ControllerMasterNotAvailable
-        );
-        assert_eq!(
-            ResponseCode::from(2005),
-            ResponseCode::ControllerInvalidRequest
-        );
-        assert_eq!(
-            ResponseCode::from(2006),
-            ResponseCode::ControllerBrokerNotAlive
-        );
+        assert_eq!(ResponseCode::from(2002), ResponseCode::ControllerInvalidMaster);
+        assert_eq!(ResponseCode::from(2003), ResponseCode::ControllerInvalidReplicas);
+        assert_eq!(ResponseCode::from(2004), ResponseCode::ControllerMasterNotAvailable);
+        assert_eq!(ResponseCode::from(2005), ResponseCode::ControllerInvalidRequest);
+        assert_eq!(ResponseCode::from(2006), ResponseCode::ControllerBrokerNotAlive);
         assert_eq!(ResponseCode::from(2007), ResponseCode::ControllerNotLeader);
-        assert_eq!(
-            ResponseCode::from(2008),
-            ResponseCode::ControllerBrokerMetadataNotExist
-        );
+        assert_eq!(ResponseCode::from(2008), ResponseCode::ControllerBrokerMetadataNotExist);
         assert_eq!(
             ResponseCode::from(2009),
             ResponseCode::ControllerInvalidCleanBrokerMetadata
@@ -343,22 +280,13 @@ mod tests {
             ResponseCode::from(2010),
             ResponseCode::ControllerBrokerNeedToBeRegistered
         );
-        assert_eq!(
-            ResponseCode::from(2011),
-            ResponseCode::ControllerMasterStillExist
-        );
-        assert_eq!(
-            ResponseCode::from(2012),
-            ResponseCode::ControllerElectMasterFailed
-        );
+        assert_eq!(ResponseCode::from(2011), ResponseCode::ControllerMasterStillExist);
+        assert_eq!(ResponseCode::from(2012), ResponseCode::ControllerElectMasterFailed);
         assert_eq!(
             ResponseCode::from(2013),
             ResponseCode::ControllerAlterSyncStateSetFailed
         );
-        assert_eq!(
-            ResponseCode::from(2014),
-            ResponseCode::ControllerBrokerIdInvalid
-        );
+        assert_eq!(ResponseCode::from(2014), ResponseCode::ControllerBrokerIdInvalid);
         assert_eq!(ResponseCode::from(9999), ResponseCode::SystemError); // Edge case - unknown
                                                                          // defaults to SystemError
     }
@@ -456,10 +384,7 @@ mod tests {
         // Test RPC error codes (negative values)
         assert_eq!(ResponseCode::from(-1000), ResponseCode::RpcUnknown);
         assert_eq!(ResponseCode::from(-1002), ResponseCode::RpcAddrIsNull);
-        assert_eq!(
-            ResponseCode::from(-1004),
-            ResponseCode::RpcSendToChannelFailed
-        );
+        assert_eq!(ResponseCode::from(-1004), ResponseCode::RpcSendToChannelFailed);
         assert_eq!(ResponseCode::from(-1006), ResponseCode::RpcTimeOut);
 
         assert_eq!(ResponseCode::RpcUnknown.to_i32(), -1000);
@@ -469,15 +394,9 @@ mod tests {
     #[test]
     fn test_controller_response_codes() {
         // Test Controller error codes (2000-2014)
-        assert_eq!(
-            ResponseCode::from(2000),
-            ResponseCode::ControllerFencedMasterEpoch
-        );
+        assert_eq!(ResponseCode::from(2000), ResponseCode::ControllerFencedMasterEpoch);
         assert_eq!(ResponseCode::from(2007), ResponseCode::ControllerNotLeader);
-        assert_eq!(
-            ResponseCode::from(2014),
-            ResponseCode::ControllerBrokerIdInvalid
-        );
+        assert_eq!(ResponseCode::from(2014), ResponseCode::ControllerBrokerIdInvalid);
 
         assert_eq!(ResponseCode::ControllerFencedMasterEpoch.to_i32(), 2000);
         assert_eq!(ResponseCode::ControllerNotLeader.to_i32(), 2007);

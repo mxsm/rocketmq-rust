@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 
@@ -41,14 +38,8 @@ impl GetMetadataProcessor {
     }
 
     /// Process get metadata request
-    pub async fn process_request(
-        &self,
-        request: GetMetadataRequest,
-    ) -> Result<GetMetadataResponse> {
-        info!(
-            "Processing get metadata request, type: {:?}",
-            request.metadata_type
-        );
+    pub async fn process_request(&self, request: GetMetadataRequest) -> Result<GetMetadataResponse> {
+        info!("Processing get metadata request, type: {:?}", request.metadata_type);
 
         let (brokers, topics, configs) = match request.metadata_type {
             MetadataType::Broker => {
@@ -85,13 +76,12 @@ impl GetMetadataProcessor {
 #[async_trait::async_trait]
 impl RequestProcessor for GetMetadataProcessor {
     async fn process(&self, request: &[u8]) -> Result<Vec<u8>> {
-        let req: GetMetadataRequest = serde_json::from_slice(request)
-            .map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
+        let req: GetMetadataRequest =
+            serde_json::from_slice(request).map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
 
         let response = self.process_request(req).await?;
 
-        serde_json::to_vec(&response)
-            .map_err(|e| ControllerError::SerializationError(e.to_string()))
+        serde_json::to_vec(&response).map_err(|e| ControllerError::SerializationError(e.to_string()))
     }
 }
 

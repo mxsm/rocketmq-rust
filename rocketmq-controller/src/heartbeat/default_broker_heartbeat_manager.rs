@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Default implementation of BrokerHeartbeatManager
 
@@ -145,11 +142,7 @@ impl DefaultBrokerHeartbeatManager {
 
             // Notify all listeners
             for listener in listeners.iter() {
-                listener.on_broker_inactive(
-                    &identity.cluster_name,
-                    &identity.broker_name,
-                    broker_id,
-                );
+                listener.on_broker_inactive(&identity.cluster_name, &identity.broker_name, broker_id);
             }
         }
     }
@@ -211,9 +204,7 @@ impl BrokerHeartbeatManager for DefaultBrokerHeartbeatManager {
             prev.set_election_priority(real_election_priority);
 
             // Only update epoch/offset if they're newer
-            if real_epoch > prev.epoch()
-                || (real_epoch == prev.epoch() && real_max_offset > prev.max_offset())
-            {
+            if real_epoch > prev.epoch() || (real_epoch == prev.epoch() && real_max_offset > prev.max_offset()) {
                 prev.set_epoch(real_epoch);
                 prev.set_max_offset(real_max_offset);
                 prev.set_confirm_offset(real_confirm_offset);
@@ -233,13 +224,9 @@ impl BrokerHeartbeatManager for DefaultBrokerHeartbeatManager {
                 Some(real_confirm_offset),
             );
 
-            self.broker_live_table
-                .insert(broker_identity.clone(), live_info);
+            self.broker_live_table.insert(broker_identity.clone(), live_info);
 
-            info!(
-                "new broker registered, {}, brokerId:{}",
-                broker_identity, broker_id
-            );
+            info!("new broker registered, {}, brokerId:{}", broker_identity, broker_id);
         }
     }
 
@@ -309,19 +296,13 @@ impl BrokerHeartbeatManager for DefaultBrokerHeartbeatManager {
             if let Some((cluster_name, broker_name, broker_id)) = broker_info_for_notify {
                 let listeners = Arc::new(self.lifecycle_listeners.clone());
                 tokio::spawn(async move {
-                    Self::notify_broker_inactive(listeners, &cluster_name, &broker_name, broker_id)
-                        .await;
+                    Self::notify_broker_inactive(listeners, &cluster_name, &broker_name, broker_id).await;
                 });
             }
         }
     }
 
-    fn get_broker_live_info(
-        &self,
-        cluster_name: &str,
-        broker_name: &str,
-        broker_id: i64,
-    ) -> Option<BrokerLiveInfo> {
+    fn get_broker_live_info(&self, cluster_name: &str, broker_name: &str, broker_id: i64) -> Option<BrokerLiveInfo> {
         let identity = BrokerIdentityInfo::new(
             cluster_name.to_string(),
             broker_name.to_string(),
@@ -412,8 +393,7 @@ mod tests {
 
     #[test]
     fn test_broker_identity_info_creation() {
-        let identity =
-            BrokerIdentityInfo::new("cluster1".to_string(), "broker1".to_string(), Some(1));
+        let identity = BrokerIdentityInfo::new("cluster1".to_string(), "broker1".to_string(), Some(1));
         assert_eq!(identity.cluster_name, "cluster1");
         assert_eq!(identity.broker_name, "broker1");
         assert_eq!(identity.broker_id, Some(1));

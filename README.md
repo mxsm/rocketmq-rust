@@ -139,7 +139,7 @@ cargo run --bin rocketmq-namesrv-rust
     -V, --version                 Print version
   ```
 
-Run the following command to start the name server
+Run the following command to start the broker
 
 ```shell
 cargo run --bin rocketmq-broker-rust

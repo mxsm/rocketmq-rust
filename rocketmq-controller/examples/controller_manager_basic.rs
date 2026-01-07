@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Example: Basic ControllerManager usage
 //!
@@ -34,6 +31,7 @@ use rocketmq_controller::config::ControllerConfig;
 use rocketmq_controller::config::RaftPeer;
 use rocketmq_controller::error::Result;
 use rocketmq_controller::manager::ControllerManager;
+use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
 use tracing_subscriber::fmt;
@@ -53,9 +51,12 @@ async fn main() -> Result<()> {
     info!("Creating ControllerManager...");
     let manager = ControllerManager::new(config).await?;
 
+    // Wrap in ArcMut for initialization and start
+    let manager = ArcMut::new(manager);
+
     // Initialize the manager
     info!("Initializing ControllerManager...");
-    if !manager.initialize().await? {
+    if !manager.clone().initialize().await? {
         error!("Failed to initialize ControllerManager");
         return Err(rocketmq_controller::error::ControllerError::InitializationFailed);
     }
@@ -63,21 +64,19 @@ async fn main() -> Result<()> {
 
     // Start the manager
     info!("Starting ControllerManager...");
-    manager.start().await?;
+    manager.clone().start().await?;
     info!(" Controller started successfully");
 
     // Query controller state
     info!("Checking controller state...");
-    let is_running = manager.is_running().await;
-    let is_initialized = manager.is_initialized().await;
-    let is_leader = manager.is_leader().await;
-    let leader_id = manager.get_leader().await;
+    let is_running = manager.is_running();
+    let is_initialized = manager.is_initialized();
+    let is_leader = manager.is_leader();
 
     info!("Controller State:");
     info!("  - Running: {}", is_running);
     info!("  - Initialized: {}", is_initialized);
     info!("  - Is Leader: {}", is_leader);
-    info!("  - Leader ID: {:?}", leader_id);
 
     // Run for a short time
     info!("Controller is running... (will shutdown in 5 seconds)");

@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -108,10 +105,7 @@ impl DefaultHAService {
         }
     }
 
-    pub(crate) fn init(
-        this: &mut ArcMut<Self>,
-        general_ha_service: GeneralHAService,
-    ) -> HAResult<()> {
+    pub(crate) fn init(this: &mut ArcMut<Self>, general_ha_service: GeneralHAService) -> HAResult<()> {
         // Initialize the DefaultHAService with the provided message store.
         let config = this.default_message_store.get_message_store_config();
 
@@ -128,10 +122,8 @@ impl DefaultHAService {
             this.ha_client = Some(ha_client);
         }
 
-        let state_notification_service = HAConnectionStateNotificationService::new(
-            general_ha_service,
-            this.default_message_store.clone(),
-        );
+        let state_notification_service =
+            HAConnectionStateNotificationService::new(general_ha_service, this.default_message_store.clone());
         this.ha_connection_state_notification_service = Some(state_notification_service);
 
         let arc_mut = this.clone();
@@ -150,9 +142,7 @@ impl DefaultHAService {
     }
 
     pub async fn remove_connection(&self, connection: ArcMut<GeneralHAConnection>) {
-        if let Some(ha_connection_state_notification_service) =
-            &self.ha_connection_state_notification_service
-        {
+        if let Some(ha_connection_state_notification_service) = &self.ha_connection_state_notification_service {
             let _ = ha_connection_state_notification_service
                 .check_connection_state_and_notify(connection.as_ref())
                 .await;
@@ -209,9 +199,7 @@ impl HAService for DefaultHAService {
             group_transfer_service.shutdown().await;
         }
 
-        if let Some(ref ha_connection_state_notification_service) =
-            self.ha_connection_state_notification_service
-        {
+        if let Some(ref ha_connection_state_notification_service) = self.ha_connection_state_notification_service {
             ha_connection_state_notification_service.shutdown().await;
         }
     }
@@ -273,16 +261,9 @@ impl HAService for DefaultHAService {
         }
     }
 
-    async fn put_group_connection_state_request(
-        &self,
-        request: HAConnectionStateNotificationRequest,
-    ) {
-        if let Some(ref ha_connection_state_notification_service) =
-            self.ha_connection_state_notification_service
-        {
-            ha_connection_state_notification_service
-                .set_request(request)
-                .await;
+    async fn put_group_connection_state_request(&self, request: HAConnectionStateNotificationRequest) {
+        if let Some(ref ha_connection_state_notification_service) = self.ha_connection_state_notification_service {
+            ha_connection_state_notification_service.set_request(request).await;
         } else {
             error!("No HAConnectionStateNotificationService initialized to put state request");
         }
@@ -302,8 +283,7 @@ impl HAService for DefaultHAService {
     }
 
     fn get_push_to_slave_max_offset(&self) -> i64 {
-        self.push2_slave_max_offset
-            .load(std::sync::atomic::Ordering::Relaxed) as i64
+        self.push2_slave_max_offset.load(std::sync::atomic::Ordering::Relaxed) as i64
     }
 
     fn get_runtime_info(&self, master_put_where: i64) -> HARuntimeInfo {
@@ -316,10 +296,7 @@ impl HAService for DefaultHAService {
 
     async fn is_slave_ok(&self, master_put_where: i64) -> bool {
         !self.connections.lock().await.is_empty()
-            && (master_put_where
-                - self
-                    .push2_slave_max_offset
-                    .load(std::sync::atomic::Ordering::Relaxed) as i64)
+            && (master_put_where - self.push2_slave_max_offset.load(std::sync::atomic::Ordering::Relaxed) as i64)
                 < (self
                     .default_message_store
                     .message_store_config_ref()

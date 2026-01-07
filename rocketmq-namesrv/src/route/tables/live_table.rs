@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Broker live table with concurrent access
 //!
@@ -114,9 +111,7 @@ pub struct BrokerLiveTable {
 impl BrokerLiveTable {
     /// Create a new broker live table
     pub fn new() -> Self {
-        Self {
-            inner: DashMap::new(),
-        }
+        Self { inner: DashMap::new() }
     }
 
     /// Create with estimated capacity
@@ -172,9 +167,7 @@ impl BrokerLiveTable {
     /// # Returns
     /// Cloned Arc to live info if exists
     pub fn get(&self, broker_addr_info: &BrokerAddrInfo) -> Option<Arc<BrokerLiveInfo>> {
-        self.inner
-            .get(broker_addr_info)
-            .map(|entry| Arc::clone(entry.value()))
+        self.inner.get(broker_addr_info).map(|entry| Arc::clone(entry.value()))
     }
 
     /// Check if broker is registered
@@ -263,10 +256,7 @@ impl BrokerLiveTable {
     ///
     /// # Returns
     /// Vector of broker address info with stale versions
-    pub fn get_stale_version_brokers(
-        &self,
-        expected_version: &DataVersion,
-    ) -> Vec<Arc<BrokerAddrInfo>> {
+    pub fn get_stale_version_brokers(&self, expected_version: &DataVersion) -> Vec<Arc<BrokerAddrInfo>> {
         self.inner
             .iter()
             .filter(|entry| &entry.value().data_version != expected_version)
@@ -355,10 +345,7 @@ mod tests {
     use super::*;
 
     fn create_test_broker_addr_info(name: &str, _id: u64) -> Arc<BrokerAddrInfo> {
-        Arc::new(BrokerAddrInfo::new(
-            "DefaultCluster",
-            format!("{}:10911", name),
-        ))
+        Arc::new(BrokerAddrInfo::new("DefaultCluster", format!("{}:10911", name)))
     }
 
     fn create_test_live_info(timestamp: u64) -> BrokerLiveInfo {
@@ -451,8 +438,7 @@ mod tests {
 
     #[test]
     fn test_with_ha_server() {
-        let live_info =
-            BrokerLiveInfo::new(1000, DataVersion::default()).with_ha_server("ha-server:10912");
+        let live_info = BrokerLiveInfo::new(1000, DataVersion::default()).with_ha_server("ha-server:10912");
 
         assert_eq!(
             live_info.ha_server_addr,

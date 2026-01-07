@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Tools and Admin operation specific errors
 //!
@@ -136,17 +133,13 @@ impl ToolsError {
     /// Create a topic not found error
     #[inline]
     pub fn topic_not_found(topic: impl Into<String>) -> Self {
-        Self::TopicNotFound {
-            topic: topic.into(),
-        }
+        Self::TopicNotFound { topic: topic.into() }
     }
 
     /// Create a topic already exists error
     #[inline]
     pub fn topic_already_exists(topic: impl Into<String>) -> Self {
-        Self::TopicAlreadyExists {
-            topic: topic.into(),
-        }
+        Self::TopicAlreadyExists { topic: topic.into() }
     }
 
     /// Create a cluster not found error
@@ -160,9 +153,7 @@ impl ToolsError {
     /// Create a broker not found error
     #[inline]
     pub fn broker_not_found(broker: impl Into<String>) -> Self {
-        Self::BrokerNotFound {
-            broker: broker.into(),
-        }
+        Self::BrokerNotFound { broker: broker.into() }
     }
 
     /// Create a validation error
@@ -183,9 +174,7 @@ impl ToolsError {
     /// Create a nameserver config invalid error
     #[inline]
     pub fn nameserver_config_invalid(reason: impl Into<String>) -> Self {
-        Self::NameServerConfigInvalid {
-            reason: reason.into(),
-        }
+        Self::NameServerConfigInvalid { reason: reason.into() }
     }
 
     /// Create an internal error
@@ -202,25 +191,117 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_topic_not_found() {
+    fn test_topic_management_errors() {
         let err = ToolsError::topic_not_found("TestTopic");
         assert_eq!(err.to_string(), "Topic 'TestTopic' not found");
+
+        let err = ToolsError::topic_already_exists("TestTopic");
+        assert_eq!(err.to_string(), "Topic 'TestTopic' already exists");
+
+        let err = ToolsError::TopicInvalid {
+            reason: "invalid partitions".to_string(),
+        };
+        assert_eq!(err.to_string(), "Invalid topic configuration: invalid partitions");
     }
 
     #[test]
-    fn test_validation_error() {
-        let err = ToolsError::validation_error("topic_name", "name too long");
-        assert_eq!(
-            err.to_string(),
-            "Validation failed for 'topic_name': name too long"
-        );
+    fn test_cluster_management_errors() {
+        let err = ToolsError::cluster_not_found("TestCluster");
+        assert_eq!(err.to_string(), "Cluster 'TestCluster' not found");
+
+        let err = ToolsError::ClusterInvalid {
+            reason: "missing brokers".to_string(),
+        };
+        assert_eq!(err.to_string(), "Invalid cluster configuration: missing brokers");
     }
 
     #[test]
-    fn test_broker_offline() {
+    fn test_broker_management_errors() {
+        let err = ToolsError::broker_not_found("broker-a");
+        assert_eq!(err.to_string(), "Broker 'broker-a' not found");
+
         let err = ToolsError::BrokerOffline {
             broker: "broker-a".to_string(),
         };
         assert_eq!(err.to_string(), "Broker 'broker-a' is offline");
+    }
+
+    #[test]
+    fn test_consumer_management_errors() {
+        let err = ToolsError::ConsumerGroupNotFound {
+            group: "test-group".to_string(),
+        };
+        assert_eq!(err.to_string(), "Consumer group 'test-group' not found");
+
+        let err = ToolsError::ConsumerOffline {
+            consumer: "consumer-1".to_string(),
+        };
+        assert_eq!(err.to_string(), "Consumer 'consumer-1' is offline");
+    }
+
+    #[test]
+    fn test_nameserver_management_errors() {
+        let err = ToolsError::nameserver_unreachable("127.0.0.1:9876");
+        assert_eq!(err.to_string(), "NameServer '127.0.0.1:9876' is unreachable");
+
+        let err = ToolsError::nameserver_config_invalid("missing nameserver");
+        assert_eq!(err.to_string(), "Invalid NameServer configuration: missing nameserver");
+    }
+
+    #[test]
+    fn test_configuration_errors() {
+        let err = ToolsError::InvalidConfiguration {
+            field: "name_server".to_string(),
+            reason: "missing nameserver".to_string(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "Invalid configuration for 'name_server': missing nameserver"
+        );
+
+        let err = ToolsError::MissingRequiredField {
+            field: "topic".to_string(),
+        };
+        assert_eq!(err.to_string(), "Missing required field: 'topic'");
+    }
+
+    #[test]
+    fn test_validation_errors() {
+        let err = ToolsError::validation_error("topic_name", "name too long");
+        assert_eq!(err.to_string(), "Validation failed for 'topic_name': name too long");
+
+        let err = ToolsError::ValidationFailed {
+            message: "generic validation error".to_string(),
+        };
+        assert_eq!(err.to_string(), "Validation error: generic validation error");
+    }
+
+    #[test]
+    fn test_permission_errors() {
+        let err = ToolsError::PermissionDenied {
+            operation: "createTopic".to_string(),
+        };
+        assert_eq!(err.to_string(), "Permission denied for operation: createTopic");
+
+        let err = ToolsError::InvalidPermission {
+            value: 1,
+            allowed: vec![2, 4, 6],
+        };
+        assert!(err.to_string().contains("Invalid permission value: 1"));
+        assert!(err.to_string().contains("2, 4, 6"));
+    }
+
+    #[test]
+    fn test_operation_errors() {
+        let err = ToolsError::OperationTimeout {
+            operation: "createTopic".to_string(),
+            duration_ms: 5000,
+        };
+        assert!(err
+            .to_string()
+            .contains("Operation 'createTopic' timed out after 5000ms"));
+
+        let err = ToolsError::internal("unexpected error");
+        assert!(err.to_string().contains("Internal error: unexpected error"));
     }
 }

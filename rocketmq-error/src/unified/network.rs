@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Network-related errors for RocketMQ operations
 
@@ -129,9 +126,67 @@ mod tests {
             addr: "localhost:10911".to_string(),
             timeout_ms: 3000,
         };
-        assert_eq!(
-            err.to_string(),
-            "Connection timeout to localhost:10911 after 3000ms"
-        );
+        assert_eq!(err.to_string(), "Connection timeout to localhost:10911 after 3000ms");
+    }
+
+    #[test]
+    fn test_network_error_connection_closed() {
+        let err = NetworkError::ConnectionClosed {
+            addr: "localhost:10911".to_string(),
+        };
+        assert_eq!(err.to_string(), "Connection closed: localhost:10911");
+    }
+
+    #[test]
+    fn test_network_error_send_failed() {
+        let err = NetworkError::SendFailed {
+            addr: "localhost:10911".to_string(),
+            reason: "internal error".to_string(),
+        };
+        assert_eq!(err.to_string(), "Send failed to localhost:10911: internal error");
+    }
+
+    #[test]
+    fn test_network_error_receive_failed() {
+        let err = NetworkError::ReceiveFailed {
+            addr: "localhost:10911".to_string(),
+            reason: "internal error".to_string(),
+        };
+        assert_eq!(err.to_string(), "Receive failed from localhost:10911: internal error");
+    }
+
+    #[test]
+    fn test_network_error_invalid_address() {
+        let err = NetworkError::InvalidAddress {
+            addr: "localhost:10911".to_string(),
+        };
+        assert_eq!(err.to_string(), "Invalid address format: localhost:10911");
+    }
+
+    #[test]
+    fn test_network_error_too_many_requests() {
+        let err = NetworkError::TooManyRequests {
+            addr: "localhost:10911".to_string(),
+            limit: 5,
+        };
+        assert_eq!(err.to_string(), "Too many requests to localhost:10911, limit: 5");
+    }
+
+    #[test]
+    fn test_network_error_request_timeout() {
+        let err = NetworkError::RequestTimeout {
+            addr: "localhost:10911".to_string(),
+            timeout_ms: 100,
+        };
+        assert_eq!(err.to_string(), "Request timeout to localhost:10911 after 100ms");
+    }
+
+    #[test]
+    fn test_network_error_dns_resolution_failed() {
+        let err = NetworkError::DnsResolutionFailed {
+            host: "example.com".to_string(),
+            reason: "host not found".to_string(),
+        };
+        assert_eq!(err.to_string(), "DNS resolution failed for example.com: host not found");
     }
 }

@@ -20,7 +20,7 @@ use std::str::FromStr;
 
 use ipnetwork::IpNetwork;
 
-/// Authorization environment model (port of Java `Environment` class)
+/// Authorization environment model.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Environment {
     source_ips: Vec<String>,

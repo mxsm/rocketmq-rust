@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use serde::Deserialize;
 use serde::Deserializer;
@@ -105,14 +102,8 @@ mod tests {
 
     #[test]
     fn get_by_name_is_case_insensitive() {
-        assert_eq!(
-            Some(ResourcePattern::Any),
-            ResourcePattern::get_by_name("aNy")
-        );
-        assert_eq!(
-            Some(ResourcePattern::Literal),
-            ResourcePattern::get_by_name("LiTeRaL")
-        );
+        assert_eq!(Some(ResourcePattern::Any), ResourcePattern::get_by_name("aNy"));
+        assert_eq!(Some(ResourcePattern::Literal), ResourcePattern::get_by_name("LiTeRaL"));
         assert_eq!(
             Some(ResourcePattern::Prefixed),
             ResourcePattern::get_by_name("pReFixed")
@@ -140,18 +131,15 @@ mod tests {
     fn serde_json_serializes_to_number() {
         assert_eq!(
             "1",
-            serde_json::to_string(&ResourcePattern::Any)
-                .expect("ResourcePattern::Any must serialize")
+            serde_json::to_string(&ResourcePattern::Any).expect("ResourcePattern::Any must serialize")
         );
         assert_eq!(
             "2",
-            serde_json::to_string(&ResourcePattern::Literal)
-                .expect("ResourcePattern::Literal must serialize")
+            serde_json::to_string(&ResourcePattern::Literal).expect("ResourcePattern::Literal must serialize")
         );
         assert_eq!(
             "3",
-            serde_json::to_string(&ResourcePattern::Prefixed)
-                .expect("ResourcePattern::Prefixed must serialize")
+            serde_json::to_string(&ResourcePattern::Prefixed).expect("ResourcePattern::Prefixed must serialize")
         );
     }
 
@@ -180,19 +168,10 @@ mod tests {
             ResourcePattern::Literal,
             ResourcePattern::Prefixed,
         ] {
-            let serialized = serde_json::to_string(&variant).unwrap_or_else(|e| {
-                panic!(
-                    "Could not serialize ResourcePattern::{:?}: {}",
-                    &variant.name(),
-                    e
-                )
-            });
-            let parsed: ResourcePattern = serde_json::from_str(&serialized).unwrap_or_else(|e| {
-                panic!(
-                    "Could not parse {:?} as ResourcePattern: {}",
-                    &serialized, e
-                )
-            });
+            let serialized = serde_json::to_string(&variant)
+                .unwrap_or_else(|e| panic!("Could not serialize ResourcePattern::{:?}: {}", &variant.name(), e));
+            let parsed: ResourcePattern = serde_json::from_str(&serialized)
+                .unwrap_or_else(|e| panic!("Could not parse {:?} as ResourcePattern: {}", &serialized, e));
             assert_eq!(variant, parsed);
         }
     }

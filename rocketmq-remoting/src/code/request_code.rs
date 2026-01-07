@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 /// Macro to define RequestCode enum with automatic conversion implementations.
 /// This reduces code duplication and makes it easier to maintain.
@@ -273,10 +270,7 @@ mod tests {
         assert_eq!(RequestCode::from(11), RequestCode::PullMessage);
         assert_eq!(RequestCode::from(34), RequestCode::HeartBeat);
         assert_eq!(RequestCode::from(200050), RequestCode::PopMessage);
-        assert_eq!(
-            RequestCode::from(1001),
-            RequestCode::ControllerAlterSyncStateSet
-        );
+        assert_eq!(RequestCode::from(1001), RequestCode::ControllerAlterSyncStateSet);
         assert_eq!(RequestCode::from(3001), RequestCode::AuthCreateUser);
         assert_eq!(RequestCode::from(-9999999), RequestCode::Unknown);
     }
@@ -366,32 +360,20 @@ mod tests {
         assert_eq!(RequestCode::from(200051), RequestCode::AckMessage);
         assert_eq!(RequestCode::from(200151), RequestCode::BatchAckMessage);
         assert_eq!(RequestCode::from(200052), RequestCode::PeekMessage);
-        assert_eq!(
-            RequestCode::from(200053),
-            RequestCode::ChangeMessageInvisibleTime
-        );
+        assert_eq!(RequestCode::from(200053), RequestCode::ChangeMessageInvisibleTime);
         assert_eq!(RequestCode::from(200054), RequestCode::Notification);
         assert_eq!(RequestCode::from(200055), RequestCode::PollingInfo);
 
         // Test Controller codes (1001-1018)
-        assert_eq!(
-            RequestCode::from(1001),
-            RequestCode::ControllerAlterSyncStateSet
-        );
-        assert_eq!(
-            RequestCode::from(1018),
-            RequestCode::RaftBrokerHeartBeatEventRequest
-        );
+        assert_eq!(RequestCode::from(1001), RequestCode::ControllerAlterSyncStateSet);
+        assert_eq!(RequestCode::from(1018), RequestCode::RaftBrokerHeartBeatEventRequest);
 
         // Test Auth codes (3001-3010)
         assert_eq!(RequestCode::from(3001), RequestCode::AuthCreateUser);
         assert_eq!(RequestCode::from(3010), RequestCode::AuthListAcl);
 
         // Test Cold data flow codes (2001-2004)
-        assert_eq!(
-            RequestCode::from(2001),
-            RequestCode::UpdateColdDataFlowCtrConfig
-        );
+        assert_eq!(RequestCode::from(2001), RequestCode::UpdateColdDataFlowCtrConfig);
         assert_eq!(RequestCode::from(2004), RequestCode::SetCommitlogReadMode);
     }
 

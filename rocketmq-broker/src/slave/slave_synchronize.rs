@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::config_manager::ConfigManager;
@@ -53,10 +50,7 @@ where
         if self.master_addr == addr {
             return;
         }
-        info!(
-            "Update master address from {:?} to {:?}",
-            self.master_addr, addr
-        );
+        info!("Update master address from {:?} to {:?}", self.master_addr, addr);
         self.master_addr = addr;
     }
 
@@ -127,27 +121,14 @@ where
 
         let topic_wrapper = topic_wrapper.unwrap();
         // Sync topic config if data version differs
-        if self
-            .broker_runtime_inner
-            .topic_config_manager()
-            .data_version_ref()
+        if self.broker_runtime_inner.topic_config_manager().data_version_ref()
             != topic_wrapper.topic_config_serialize_wrapper.data_version()
         {
-            let mut data_version = self
-                .broker_runtime_inner
-                .topic_config_manager()
-                .data_version();
-            data_version
-                .assign_new_one(topic_wrapper.topic_config_serialize_wrapper.data_version());
+            let mut data_version = self.broker_runtime_inner.topic_config_manager().data_version();
+            data_version.assign_new_one(topic_wrapper.topic_config_serialize_wrapper.data_version());
 
-            let new_topic_config_table = topic_wrapper
-                .topic_config_serialize_wrapper
-                .topic_config_table
-                .clone();
-            let topic_config_table = self
-                .broker_runtime_inner
-                .topic_config_manager()
-                .topic_config_table();
+            let new_topic_config_table = topic_wrapper.topic_config_serialize_wrapper.topic_config_table.clone();
+            let topic_config_table = self.broker_runtime_inner.topic_config_manager().topic_config_table();
 
             // Delete entries not in new config
             topic_config_table.retain(|key, _| new_topic_config_table.contains_key(key));
@@ -162,26 +143,16 @@ where
         }
 
         // Sync topic queue mapping if present and data version differs
-        let new_topic_config_table = topic_wrapper
-            .topic_config_serialize_wrapper
-            .topic_config_table;
+        let new_topic_config_table = topic_wrapper.topic_config_serialize_wrapper.topic_config_table;
         let version = topic_wrapper.mapping_data_version;
-        if version
-            != self
-                .broker_runtime_inner
-                .topic_queue_mapping_manager()
-                .data_version()
-        {
+        if version != self.broker_runtime_inner.topic_queue_mapping_manager().data_version() {
             self.broker_runtime_inner
                 .topic_queue_mapping_manager()
                 .data_version_clone()
                 .lock()
                 .assign_new_one(&version);
 
-            let topic_config_table = self
-                .broker_runtime_inner
-                .topic_config_manager()
-                .topic_config_table();
+            let topic_config_table = self.broker_runtime_inner.topic_config_manager().topic_config_table();
             // Delete entries not in new config
             topic_config_table.retain(|key, _| new_topic_config_table.contains_key(key));
 
@@ -190,9 +161,7 @@ where
                 topic_config_table.insert(key, ArcMut::new(value));
             }
             drop(topic_config_table);
-            self.broker_runtime_inner
-                .topic_queue_mapping_manager()
-                .persist();
+            self.broker_runtime_inner.topic_queue_mapping_manager().persist();
         }
         Ok(())
     }
@@ -209,8 +178,7 @@ where
                 {
                     Ok(offset_wrapper) => {
                         if let Some(offset_wrapper) = offset_wrapper {
-                            let consumer_offset_manager =
-                                self.broker_runtime_inner.consumer_offset_manager();
+                            let consumer_offset_manager = self.broker_runtime_inner.consumer_offset_manager();
                             consumer_offset_manager
                                 .data_version()
                                 .assign_new_one(offset_wrapper.data_version());
@@ -294,17 +262,14 @@ where
                                 .subscription_group_manager_mut();
 
                             // Compare data versions using read locks
-                            let current_version =
-                                subscription_group_manager.data_version().read().clone();
+                            let current_version = subscription_group_manager.data_version().read().clone();
                             if current_version != *subscription_wrapper.data_version() {
                                 // Update data version
                                 *subscription_group_manager.data_version().write() =
                                     subscription_wrapper.data_version().clone();
 
-                                let new_subscription_table =
-                                    subscription_wrapper.subscription_group_table;
-                                let subscription_table =
-                                    subscription_group_manager.subscription_group_table();
+                                let new_subscription_table = subscription_wrapper.subscription_group_table;
+                                let subscription_table = subscription_group_manager.subscription_group_table();
 
                                 // Clear and update subscription table using DashMap
                                 subscription_table.clear();
@@ -313,19 +278,13 @@ where
                                 }
                                 subscription_group_manager.persist();
                             }
-                            info!(
-                                "Update slave subscription group config from master, {}",
-                                master_addr
-                            );
+                            info!("Update slave subscription group config from master, {}", master_addr);
                         } else {
                             warn!("GetAllSubscriptionGroupConfig return null, {}", master_addr);
                         }
                     }
                     Err(e) => {
-                        error!(
-                            "SyncSubscriptionGroupConfig Exception, {}: {:?}",
-                            master_addr, e
-                        );
+                        error!("SyncSubscriptionGroupConfig Exception, {}: {:?}", master_addr, e);
                     }
                 }
             }
@@ -344,13 +303,11 @@ where
                 {
                     Ok(mode) => {
                         if let Some(mode) = mode {
-                            let query_assignment_processor = self
-                                .broker_runtime_inner
-                                .query_assignment_processor_unchecked();
+                            let query_assignment_processor =
+                                self.broker_runtime_inner.query_assignment_processor_unchecked();
                             let message_request_mode_manager =
                                 query_assignment_processor.message_request_mode_manager();
-                            let message_request_mode_map =
-                                message_request_mode_manager.message_request_mode_map();
+                            let message_request_mode_map = message_request_mode_manager.message_request_mode_map();
                             let mut message_request_mode_map = message_request_mode_map.lock();
                             message_request_mode_map.clear();
                             message_request_mode_map.extend(mode.into_inner());

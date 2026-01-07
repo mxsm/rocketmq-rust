@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Performance optimization examples
 //!
@@ -88,10 +85,7 @@ pub async fn example_cache_usage() -> RocketMQResult<()> {
         }
     };
 
-    println!(
-        "Cluster info: {} brokers",
-        cluster_info.broker_addr_table.len()
-    );
+    println!("Cluster info: {} brokers", cluster_info.broker_addr_table.len());
 
     Ok(())
 }
@@ -188,23 +182,14 @@ pub async fn example_limited_concurrency() -> RocketMQResult<()> {
 
     let queries = topics.iter().map(|topic| {
         let topic = topic.clone();
-        async move {
-            admin
-                .examine_topic_route_info(topic.into())
-                .await
-                .map_err(|e| e.into())
-        }
+        async move { admin.examine_topic_route_info(topic.into()).await.map_err(|e| e.into()) }
     });
 
     // Limit to 10 concurrent queries to avoid overwhelming the server
     let results = concurrent::concurrent_query_limited(queries, 10).await;
 
     let successful = results.iter().filter(|r| r.is_ok()).count();
-    println!(
-        "Successfully queried {}/{} topics",
-        successful,
-        topics.len()
-    );
+    println!("Successfully queried {}/{} topics", successful, topics.len());
 
     Ok(())
 }
@@ -225,11 +210,7 @@ pub async fn example_cached_concurrent_queries() -> RocketMQResult<()> {
     // Check cache first for each topic
     for topic in &topics {
         if let Some(route) = cache.get_topic_route(topic).await {
-            println!(
-                "{}: using cached route ({} brokers)",
-                topic,
-                route.broker_datas.len()
-            );
+            println!("{}: using cached route ({} brokers)", topic, route.broker_datas.len());
         } else {
             // Not in cache - will fetch below
             println!("{}: will fetch from server", topic);
@@ -237,10 +218,7 @@ pub async fn example_cached_concurrent_queries() -> RocketMQResult<()> {
     }
 
     // Fetch missing topics concurrently
-    let topics_to_fetch: Vec<_> = topics
-        .iter()
-        .filter(|t| cache.get_topic_route(t).is_none())
-        .collect();
+    let topics_to_fetch: Vec<_> = topics.iter().filter(|t| cache.get_topic_route(t).is_none()).collect();
 
     if !topics_to_fetch.is_empty() {
         let queries = topics_to_fetch.iter().map(|topic| {

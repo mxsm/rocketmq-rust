@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -35,10 +32,7 @@ pub struct CommitLogDispatcherCalcBitMap {
 }
 
 impl CommitLogDispatcherCalcBitMap {
-    pub fn new(
-        broker_config: Arc<BrokerConfig>,
-        consumer_filter_manager: ConsumerFilterManager,
-    ) -> Self {
+    pub fn new(broker_config: Arc<BrokerConfig>, consumer_filter_manager: ConsumerFilterManager) -> Self {
         Self {
             broker_config,
             consumer_filter_manager,
@@ -58,8 +52,7 @@ impl CommitLogDispatcher for CommitLogDispatcherCalcBitMap {
             return;
         }
         let filter_datas = filter_datas.unwrap();
-        let mut filter_bit_map =
-            BitsArray::create(self.consumer_filter_manager.bloom_filter().unwrap().m() as usize);
+        let mut filter_bit_map = BitsArray::create(self.consumer_filter_manager.bloom_filter().unwrap().m() as usize);
 
         let start_time = Instant::now();
         for filter_data in filter_datas.iter() {
@@ -71,19 +64,12 @@ impl CommitLogDispatcher for CommitLogDispatcherCalcBitMap {
                 continue;
             }
             if filter_data.bloom_filter_data().is_none() {
-                error!(
-                    "[BUG] Consumer in filter manager has no bloom data! {:?}",
-                    filter_data
-                );
+                error!("[BUG] Consumer in filter manager has no bloom data! {:?}", filter_data);
                 continue;
             }
 
             let context = MessageEvaluationContext::new(&request.properties_map);
-            let ret = filter_data
-                .compiled_expression()
-                .as_ref()
-                .unwrap()
-                .evaluate(&context);
+            let ret = filter_data.compiled_expression().as_ref().unwrap().evaluate(&context);
 
             debug!(
                 "Result of Calc bit map: ret={:?}, data={:?}, props={:?}, offset={}",
@@ -94,13 +80,11 @@ impl CommitLogDispatcher for CommitLogDispatcherCalcBitMap {
             if let Ok(ret) = ret {
                 if let Some(b) = ret.downcast_ref::<bool>() {
                     if *b {
-                        self.consumer_filter_manager
+                        let _ = self
+                            .consumer_filter_manager
                             .bloom_filter()
                             .unwrap()
-                            .hash_to(
-                                filter_data.bloom_filter_data().unwrap(),
-                                &mut filter_bit_map,
-                            );
+                            .hash_to(filter_data.bloom_filter_data().unwrap(), &mut filter_bit_map);
                     }
                 }
             }

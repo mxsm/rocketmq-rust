@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
@@ -64,15 +61,9 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
-        info!(
-            "ChangeInvisibleTimeProcessor received request code: {:?}",
-            request_code
-        );
+        info!("ChangeInvisibleTimeProcessor received request code: {:?}", request_code);
         match request_code {
-            RequestCode::ChangeMessageInvisibleTime => {
-                self.process_request_(channel, ctx, request_code, request)
-                    .await
-            }
+            RequestCode::ChangeMessageInvisibleTime => self.process_request_(channel, ctx, request_code, request).await,
             _ => {
                 warn!(
                     "ChangeInvisibleTimeProcessor received unknown request code: {:?}",
@@ -122,8 +113,7 @@ where
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        self.process_request_inner(channel, ctx, request, true)
-            .await
+        self.process_request_inner(channel, ctx, request, true).await
     }
 
     pub async fn process_request_inner(
@@ -133,8 +123,7 @@ where
         request: &mut RemotingCommand,
         _broker_allow_suspend: bool,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_header =
-            request.decode_command_custom_header::<ChangeInvisibleTimeRequestHeader>()?;
+        let request_header = request.decode_command_custom_header::<ChangeInvisibleTimeRequestHeader>()?;
         let topic_config = self
             .broker_runtime_inner
             .topic_config_manager()
@@ -146,21 +135,17 @@ where
                 channel.remote_address()
             );
 
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::TopicNotExist,
-                    format!(
-                        "topic[{}] not exist, apply first please! {}",
-                        request_header.topic,
-                        FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
-                    ),
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::TopicNotExist,
+                format!(
+                    "topic[{}] not exist, apply first please! {}",
+                    request_header.topic,
+                    FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
                 ),
-            ));
+            )));
         }
         let topic_config = topic_config.unwrap();
-        if request_header.queue_id >= topic_config.read_queue_nums as i32
-            || request_header.queue_id < 0
-        {
+        if request_header.queue_id >= topic_config.read_queue_nums as i32 || request_header.queue_id < 0 {
             let error_info = format!(
                 "queueId[{}] is illegal, topic:[{}] topicConfig.readQueueNums:[{}] consumer:[{}]",
                 request_header.queue_id,
@@ -171,12 +156,10 @@ where
 
             error!("{}", error_info);
 
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::MessageIllegal,
-                    error_info,
-                ),
-            ));
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::MessageIllegal,
+                error_info,
+            )));
         }
         let mix_offset = self
             .broker_runtime_inner
@@ -200,12 +183,10 @@ where
 
             info!("{}", info);
 
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::NoMessage,
-                    info,
-                ),
-            ));
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::NoMessage,
+                info,
+            )));
         }
         let extra_info = ExtraInfoUtil::split(&request_header.extra_info);
         if ExtraInfoUtil::is_order(extra_info.as_slice()) {
@@ -232,25 +213,14 @@ where
             | PutMessageStatus::FlushSlaveTimeout
             | PutMessageStatus::SlaveNotAvailable => {}
             _ => {
-                error!(
-                    "change Invisible, put new ck error: {}",
-                    ck_result.put_message_status()
-                );
-                return Ok(Some(
-                    RemotingCommand::create_response_command_with_code_remark(
-                        ResponseCode::SystemError,
-                        format!(
-                            "append check point error, status: {:?}",
-                            ck_result.put_message_status()
-                        ),
-                    ),
-                ));
+                error!("change Invisible, put new ck error: {}", ck_result.put_message_status());
+                return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    format!("append check point error, status: {:?}", ck_result.put_message_status()),
+                )));
             }
         }
-        if let Err(e) = self
-            .ack_origin(&request_header, extra_info.as_slice())
-            .await
-        {
+        if let Err(e) = self.ack_origin(&request_header, extra_info.as_slice()).await {
             error!(
                 "change Invisible, put ack msg error: {}, {}",
                 request_header.extra_info, e
@@ -282,16 +252,12 @@ where
         };
 
         let rq_id = ExtraInfoUtil::get_revive_qid(extra_info)?;
-        self.broker_runtime_inner
-            .broker_stats_manager()
-            .inc_broker_ack_nums(1);
-        self.broker_runtime_inner
-            .broker_stats_manager()
-            .inc_group_ack_nums(
-                request_header.consumer_group.as_str(),
-                request_header.topic.as_str(),
-                1,
-            );
+        self.broker_runtime_inner.broker_stats_manager().inc_broker_ack_nums(1);
+        self.broker_runtime_inner.broker_stats_manager().inc_group_ack_nums(
+            request_header.consumer_group.as_str(),
+            request_header.topic.as_str(),
+            1,
+        );
         if self
             .pop_message_processor
             .pop_buffer_merge_service_mut()
@@ -307,15 +273,13 @@ where
         inner.message_ext_inner.born_timestamp = get_current_millis() as i64;
         inner.message_ext_inner.born_host = self.broker_runtime_inner.store_host();
         inner.message_ext_inner.store_host = self.broker_runtime_inner.store_host();
-        let deliver_time_ms = ExtraInfoUtil::get_pop_time(extra_info)?
-            + ExtraInfoUtil::get_invisible_time(extra_info)?;
+        let deliver_time_ms = ExtraInfoUtil::get_pop_time(extra_info)? + ExtraInfoUtil::get_invisible_time(extra_info)?;
         inner.set_delay_time_ms(deliver_time_ms as u64);
         inner.message_ext_inner.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
             CheetahString::from(PopMessageProcessor::<MS>::gen_ack_unique_id(&ack_msg)),
         );
-        inner.properties_string =
-            message_decoder::message_properties_to_string(inner.get_properties());
+        inner.properties_string = message_decoder::message_properties_to_string(inner.get_properties());
         let result = self
             .broker_runtime_inner
             .escape_bridge_mut()
@@ -328,10 +292,7 @@ where
             | PutMessageStatus::SlaveNotAvailable
             | PutMessageStatus::ServiceNotAvailable => {}
             _ => {
-                error!(
-                    "change Invisible, put ack msg error: {}",
-                    result.put_message_status()
-                );
+                error!("change Invisible, put ack msg error: {}", result.put_message_status());
             }
         }
         //PopMetricsManager.incPopReviveAckPutCount(ackMsg,
@@ -372,18 +333,13 @@ where
         inner.message_ext_inner.born_host = self.broker_runtime_inner.store_host();
         inner.message_ext_inner.store_host = self.broker_runtime_inner.store_host();
         let deliver_time_ms = ck.get_revive_time() - PopAckConstants::ACK_TIME_INTERVAL;
-        let deliver_time_ms = if deliver_time_ms > 0 {
-            deliver_time_ms as u64
-        } else {
-            0
-        };
+        let deliver_time_ms = if deliver_time_ms > 0 { deliver_time_ms as u64 } else { 0 };
         inner.set_delay_time_ms(deliver_time_ms);
         inner.message_ext_inner.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
             CheetahString::from(PopMessageProcessor::<MS>::gen_ck_unique_id(&ck)),
         );
-        inner.properties_string =
-            message_decoder::message_properties_to_string(inner.get_properties());
+        inner.properties_string = message_decoder::message_properties_to_string(inner.get_properties());
         let put_message_result = self
             .broker_runtime_inner
             .escape_bridge_mut()
@@ -391,8 +347,8 @@ where
             .await;
         if self.broker_runtime_inner.broker_config().enable_pop_log {
             info!(
-                "change Invisible , appendCheckPoint, topic {}, queueId {},reviveId {}, cid {}, \
-                 startOffset {}, rt {}, result {}",
+                "change Invisible , appendCheckPoint, topic {}, queueId {},reviveId {}, cid {}, startOffset {}, rt \
+                 {}, result {}",
                 request_header.topic,
                 queue_id,
                 revive_qid,
@@ -411,14 +367,11 @@ where
         extra_info: &[String],
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let pop_time = ExtraInfoUtil::get_pop_time(extra_info)?;
-        let old_offset = self
-            .broker_runtime_inner
-            .consumer_offset_manager()
-            .query_offset(
-                &request_header.consumer_group,
-                &request_header.topic,
-                request_header.queue_id,
-            );
+        let old_offset = self.broker_runtime_inner.consumer_offset_manager().query_offset(
+            &request_header.consumer_group,
+            &request_header.topic,
+            request_header.queue_id,
+        );
         if old_offset > request_header.offset {
             return Ok(Some(RemotingCommand::create_response_command()));
         }
@@ -432,14 +385,11 @@ where
             )
             .await
         {}
-        let old_offset = self
-            .broker_runtime_inner
-            .consumer_offset_manager()
-            .query_offset(
-                &request_header.consumer_group,
-                &request_header.topic,
-                request_header.queue_id,
-            );
+        let old_offset = self.broker_runtime_inner.consumer_offset_manager().query_offset(
+            &request_header.consumer_group,
+            &request_header.topic,
+            request_header.queue_id,
+        );
         if old_offset > request_header.offset {
             return Ok(Some(RemotingCommand::create_response_command()));
         }

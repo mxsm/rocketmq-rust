@@ -25,23 +25,29 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 // Re-export processors
-pub use broker_processor::{
-    BrokerHeartbeatProcessor, ElectMasterProcessor, RegisterBrokerProcessor,
-    UnregisterBrokerProcessor,
-};
+use crate::config::ControllerConfig;
+use crate::controller::raft_controller::RaftController;
+use crate::error::ControllerError;
+use crate::error::Result;
+use crate::metadata::MetadataStore;
+use crate::processor::controller_request_processor::ControllerRequestProcessor;
+pub use broker_processor::BrokerHeartbeatProcessor;
+pub use broker_processor::ElectMasterProcessor;
+pub use broker_processor::RegisterBrokerProcessor;
+pub use broker_processor::UnregisterBrokerProcessor;
 pub use metadata_processor::GetMetadataProcessor;
 pub use request::RequestType;
 pub use request::*;
+use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::net::channel::Channel;
+use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::processor::RejectRequestResponse;
+use rocketmq_rust::ArcMut;
 pub use topic_processor::CreateTopicProcessor;
 pub use topic_processor::DeleteTopicProcessor;
 pub use topic_processor::UpdateTopicProcessor;
 use tracing::info;
-
-use crate::config::ControllerConfig;
-use crate::error::ControllerError;
-use crate::error::Result;
-use crate::metadata::MetadataStore;
-use crate::raft::RaftController;
 
 /// Request processor trait
 #[async_trait::async_trait]
@@ -59,7 +65,7 @@ pub struct ProcessorManager {
     config: Arc<ControllerConfig>,
 
     /// Raft controller
-    raft: Arc<RaftController>,
+    raft: ArcMut<RaftController>,
 
     /// Metadata store
     metadata: Arc<MetadataStore>,
@@ -70,11 +76,7 @@ pub struct ProcessorManager {
 
 impl ProcessorManager {
     /// Create a new processor manager
-    pub fn new(
-        config: Arc<ControllerConfig>,
-        raft: Arc<RaftController>,
-        metadata: Arc<MetadataStore>,
-    ) -> Self {
+    pub fn new(config: Arc<ControllerConfig>, raft: ArcMut<RaftController>, metadata: Arc<MetadataStore>) -> Self {
         // Initialize processors
         let mut processors: HashMap<RequestType, Arc<dyn RequestProcessor>> = HashMap::new();
 
@@ -85,10 +87,7 @@ impl ProcessorManager {
         );
         processors.insert(
             RequestType::UnregisterBroker,
-            Arc::new(UnregisterBrokerProcessor::new(
-                metadata.clone(),
-                raft.clone(),
-            )),
+            Arc::new(UnregisterBrokerProcessor::new(metadata.clone(), raft.clone())),
         );
         processors.insert(
             RequestType::BrokerHeartbeat,
@@ -130,9 +129,10 @@ impl ProcessorManager {
     /// Process a request
     pub async fn process_request(&self, request_type: RequestType, data: &[u8]) -> Result<Vec<u8>> {
         // Find the processor
-        let processor = self.processors.get(&request_type).ok_or_else(|| {
-            ControllerError::InvalidRequest(format!("Unknown request type: {:?}", request_type))
-        })?;
+        let processor = self
+            .processors
+            .get(&request_type)
+            .ok_or_else(|| ControllerError::InvalidRequest(format!("Unknown request type: {:?}", request_type)))?;
 
         // Process the request
         processor.process(data).await
@@ -140,10 +140,7 @@ impl ProcessorManager {
 
     /// Start the processor manager
     pub async fn start(&self) -> Result<()> {
-        info!(
-            "Starting processor manager with {} processors",
-            self.processors.len()
-        );
+        info!("Starting processor manager with {} processors", self.processors.len());
         // TODO: Start network server to handle incoming requests
         Ok(())
     }
@@ -156,11 +153,74 @@ impl ProcessorManager {
     }
 }
 
-/*#[cfg(test)]
-mod tests {
-    #[tokio::test]
-    async fn test_processor_manager() {
-        // Placeholder test
-        assert!(true);
+pub(crate) type RequestCodeType = i32;
+
+#[derive(Clone)]
+pub enum ControllerRequestProcessorWrapper {
+    ControllerRequestProcessor(ArcMut<ControllerRequestProcessor>),
+}
+
+impl rocketmq_remoting::runtime::processor::RequestProcessor for ControllerRequestProcessorWrapper {
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        match self {
+            ControllerRequestProcessorWrapper::ControllerRequestProcessor(processor) => {
+                processor.process_request(channel, ctx, request).await
+            }
+        }
     }
-}*/
+
+    fn reject_request(&self, code: i32) -> RejectRequestResponse {
+        match self {
+            ControllerRequestProcessorWrapper::ControllerRequestProcessor(processor) => {
+                rocketmq_remoting::runtime::processor::RequestProcessor::reject_request(processor.as_ref(), code)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct ControllerServerRequestProcessor {
+    default_request_processor: Option<ControllerRequestProcessorWrapper>,
+}
+
+impl ControllerServerRequestProcessor {
+    pub fn new() -> Self {
+        Self {
+            default_request_processor: None,
+        }
+    }
+
+    pub fn register_default_processor(&mut self, processor: ControllerRequestProcessorWrapper) {
+        self.default_request_processor = Some(processor);
+    }
+}
+
+impl rocketmq_remoting::runtime::processor::RequestProcessor for ControllerServerRequestProcessor {
+    async fn process_request(
+        &mut self,
+        channel: Channel,
+        ctx: ConnectionHandlerContext,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        match self.default_request_processor.as_mut() {
+            None => {
+                let response_command = RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    format!("The request code {} is not supported.", request.code_ref()),
+                );
+                Ok(Some(response_command.set_opaque(request.opaque())))
+            }
+            Some(processor) => {
+                rocketmq_remoting::runtime::processor::RequestProcessor::process_request(
+                    processor, channel, ctx, request,
+                )
+                .await
+            }
+        }
+    }
+}

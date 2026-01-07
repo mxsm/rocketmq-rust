@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Example: Three-node Raft cluster
 //!
@@ -58,9 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     // Initialize logging
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .init();
+    tracing_subscriber::fmt().with_max_level(tracing::Level::INFO).init();
 
     println!("=== OpenRaft Three-Node Cluster ===");
     println!("Node ID: {}", args.node_id);
@@ -82,10 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     ];
 
-    let current_peer = peers
-        .iter()
-        .find(|p| p.id == args.node_id)
-        .ok_or("Invalid node ID")?;
+    let current_peer = peers.iter().find(|p| p.id == args.node_id).ok_or("Invalid node ID")?;
 
     // Create configuration
     let config = Arc::new(
@@ -98,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create Raft node
     println!("Creating Raft node...");
     let node = RaftNodeManager::new(config).await?;
-    println!("✓ Node created");
+    println!(" Node created");
     println!();
 
     // If this is node 1 and --init flag is set, initialize the cluster
@@ -117,7 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         node.initialize_cluster(nodes).await?;
-        println!("✓ Cluster initialized");
+        println!(" Cluster initialized");
         println!();
     } else if args.node_id != 1 {
         // Non-leader nodes: add as learner and wait to join
@@ -155,7 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         match node.client_write(register_request).await {
             Ok(response) => {
-                println!("✓ Broker registered: {:?}", response.data);
+                println!(" Broker registered: {:?}", response.data);
             }
             Err(e) => {
                 println!("✗ Write failed: {}", e);
@@ -183,7 +175,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\nShutting down...");
     node.shutdown().await?;
-    println!("✓ Node shut down gracefully");
+    println!(" Node shut down gracefully");
 
     Ok(())
 }

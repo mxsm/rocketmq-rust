@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::any::Any;
 
@@ -45,8 +42,7 @@ impl RpcClientUtils {
     pub fn create_command_for_rpc_response(mut rpc_response: RpcResponse) -> RemotingCommand {
         let mut cmd = match rpc_response.header.take() {
             None => RemotingCommand::create_response_command_with_code(rpc_response.code),
-            Some(value) => RemotingCommand::create_response_command()
-                .set_command_custom_header_origin(Some(value)),
+            Some(value) => RemotingCommand::create_response_command().set_command_custom_header_origin(Some(value)),
         };
         match rpc_response.exception {
             None => {}
@@ -63,11 +59,8 @@ impl RpcClientUtils {
             None
         } else if let Some(bytes) = body.downcast_ref::<Bytes>() {
             Some(bytes.clone())
-        } else if let Some(remoting_serializable) = body.downcast_ref::<&dyn RemotingSerializable>()
-        {
-            Some(Bytes::from(
-                remoting_serializable.encode().expect("encode failed"),
-            ))
+        } else if let Some(remoting_serializable) = body.downcast_ref::<&dyn RemotingSerializable>() {
+            Some(Bytes::from(remoting_serializable.encode().expect("encode failed")))
         } else if let Some(buffer) = body.downcast_ref::<BytesMut>() {
             let data = buffer.clone().freeze();
             Some(data)

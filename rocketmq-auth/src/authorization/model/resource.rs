@@ -54,18 +54,10 @@ impl Resource {
                 group_name = group_name[prefix.len()..].to_string();
             }
         }
-        Self::of(
-            ResourceType::Group,
-            Some(group_name),
-            ResourcePattern::Literal,
-        )
+        Self::of(ResourceType::Group, Some(group_name), ResourcePattern::Literal)
     }
 
-    pub fn of(
-        resource_type: ResourceType,
-        resource_name: Option<String>,
-        resource_pattern: ResourcePattern,
-    ) -> Self {
+    pub fn of(resource_type: ResourceType, resource_name: Option<String>, resource_pattern: ResourcePattern) -> Self {
         Resource {
             resource_type,
             resource_name,
@@ -105,11 +97,7 @@ impl Resource {
             None => (key, ""),
         };
         let resource_type = ResourceType::get_by_name(t)?;
-        let mut resource_name = if name.is_empty() {
-            None
-        } else {
-            Some(name.to_string())
-        };
+        let mut resource_name = if name.is_empty() { None } else { Some(name.to_string()) };
         let mut resource_pattern = ResourcePattern::Literal;
 
         if let Some(ref rn) = resource_name {
@@ -126,7 +114,7 @@ impl Resource {
         Some(Self::of(resource_type, resource_name, resource_pattern))
     }
 
-    /// Serialized resource key similar to Java `getResourceKey()`.
+    /// Serialized resource key for matching and storage.
     pub fn resource_key(&self) -> Option<String> {
         if self.resource_type == ResourceType::Any {
             return Some("*".to_string());
@@ -134,11 +122,7 @@ impl Resource {
         let type_name = self.resource_type.name();
         match self.resource_pattern {
             ResourcePattern::Any => Some(format!("{}:{}", type_name, "*")),
-            ResourcePattern::Literal => Some(format!(
-                "{}:{}",
-                type_name,
-                self.resource_name.as_deref().unwrap_or("")
-            )),
+            ResourcePattern::Literal => Some(format!("{}:{}", type_name, self.resource_name.as_deref().unwrap_or(""))),
             ResourcePattern::Prefixed => Some(format!(
                 "{}:{}*",
                 type_name,
@@ -157,9 +141,7 @@ impl Resource {
         }
         match self.resource_pattern {
             ResourcePattern::Any => true,
-            ResourcePattern::Literal => {
-                resource.resource_name.as_deref() == self.resource_name.as_deref()
-            }
+            ResourcePattern::Literal => resource.resource_name.as_deref() == self.resource_name.as_deref(),
             ResourcePattern::Prefixed => match (&resource.resource_name, &self.resource_name) {
                 (Some(target), Some(prefix)) => target.starts_with(prefix),
                 _ => false,
@@ -208,11 +190,7 @@ mod tests {
 
     #[test]
     fn test_of_and_serialization() {
-        let r = Resource::of(
-            ResourceType::Topic,
-            Some("foo".to_string()),
-            ResourcePattern::Literal,
-        );
+        let r = Resource::of(ResourceType::Topic, Some("foo".to_string()), ResourcePattern::Literal);
         assert_eq!(r.resource_key(), Some("Topic:foo".to_string()));
 
         let any = Resource::of_str("*").unwrap();
@@ -245,18 +223,10 @@ mod tests {
     #[test]
     fn test_is_match() {
         let rule_any = Resource::of(ResourceType::Any, None, ResourcePattern::Any);
-        let res = Resource::of(
-            ResourceType::Topic,
-            Some("a".to_string()),
-            ResourcePattern::Literal,
-        );
+        let res = Resource::of(ResourceType::Topic, Some("a".to_string()), ResourcePattern::Literal);
         assert!(rule_any.is_match(&res));
 
-        let rule_pref = Resource::of(
-            ResourceType::Topic,
-            Some("pre".to_string()),
-            ResourcePattern::Prefixed,
-        );
+        let rule_pref = Resource::of(ResourceType::Topic, Some("pre".to_string()), ResourcePattern::Prefixed);
         let res2 = Resource::of(
             ResourceType::Topic,
             Some("prefix_val".to_string()),
@@ -264,11 +234,7 @@ mod tests {
         );
         assert!(rule_pref.is_match(&res2));
 
-        let rule_lit = Resource::of(
-            ResourceType::Topic,
-            Some("t1".to_string()),
-            ResourcePattern::Literal,
-        );
+        let rule_lit = Resource::of(ResourceType::Topic, Some("t1".to_string()), ResourcePattern::Literal);
         assert!(rule_lit.is_match(&Resource::of(
             ResourceType::Topic,
             Some("t1".to_string()),

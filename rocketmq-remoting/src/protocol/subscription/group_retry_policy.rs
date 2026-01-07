@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::ops::Deref;
 use std::sync::LazyLock;
@@ -26,8 +23,7 @@ use crate::protocol::subscription::exponential_retry_policy::ExponentialRetryPol
 use crate::protocol::subscription::group_retry_policy_type::GroupRetryPolicyType;
 use crate::protocol::subscription::retry_policy::RetryPolicy;
 
-static DEFAULT_RETRY_POLICY: LazyLock<CustomizedRetryPolicy> =
-    LazyLock::new(CustomizedRetryPolicy::default);
+static DEFAULT_RETRY_POLICY: LazyLock<CustomizedRetryPolicy> = LazyLock::new(CustomizedRetryPolicy::default);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,17 +63,11 @@ impl GroupRetryPolicy {
         self.type_ = type_;
     }
 
-    pub fn set_exponential_retry_policy(
-        &mut self,
-        exponential_retry_policy: Option<ExponentialRetryPolicy>,
-    ) {
+    pub fn set_exponential_retry_policy(&mut self, exponential_retry_policy: Option<ExponentialRetryPolicy>) {
         self.exponential_retry_policy = exponential_retry_policy;
     }
 
-    pub fn set_customized_retry_policy(
-        &mut self,
-        customized_retry_policy: Option<CustomizedRetryPolicy>,
-    ) {
+    pub fn set_customized_retry_policy(&mut self, customized_retry_policy: Option<CustomizedRetryPolicy>) {
         self.customized_retry_policy = customized_retry_policy;
     }
 

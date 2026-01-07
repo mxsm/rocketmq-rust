@@ -13,7 +13,10 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: full
   CI: true
-
+  CARGO_PROFILE_DEV_DEBUG: "false"
+  CARGO_PROFILE_TEST_DEBUG: "false"
+  CARGO_PROFILE_DEV_OPT_LEVEL: 1
+  CARGO_PROFILE_DEV_OVERFLOW_CHECKS: "false"
   # ===== RocksDB / build cache =====
   CARGO_TARGET_DIR: target
   ROCKSDB_DISABLE_JEMALLOC: 1
@@ -66,7 +69,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy (all features)
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
 
   # =========================
   # Build + Test
@@ -130,11 +133,11 @@ jobs:
             ROCKSDB_DISABLE_JEMALLOC
 
       - name: Build (all features)
-        run: cargo build --workspace --all-features --verbose
+        run: cargo build --workspace --all-features
 
       - name: Test (all features)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo test --workspace --all-features --verbose
+        run: cargo test --workspace --all-features
 
   # =========================
   # Coverage (Ubuntu only)

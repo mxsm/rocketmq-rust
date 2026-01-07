@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
@@ -97,14 +94,10 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
-        info!(
-            "ReplyMessageProcessor received request code: {:?}",
-            request_code
-        );
+        info!("ReplyMessageProcessor received request code: {:?}", request_code);
         match request_code {
             RequestCode::SendReplyMessage | RequestCode::SendReplyMessageV2 => {
-                self.process_request_inner(channel, ctx, request_code, request)
-                    .await
+                self.process_request_inner(channel, ctx, request_code, request).await
             }
             _ => {
                 warn!(
@@ -113,10 +106,7 @@ where
                 );
                 let response = RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::RequestCodeNotSupported,
-                    format!(
-                        "ReplyMessageProcessor request code {} not supported",
-                        request.code()
-                    ),
+                    format!("ReplyMessageProcessor request code {} not supported", request.code()),
                 );
                 Ok(Some(response.set_opaque(request.opaque())))
             }
@@ -157,20 +147,13 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let mut request_header = parse_request_header(request)?;
-        let mut mqtrace_context =
-            self.inner
-                .build_msg_context(&channel, &ctx, &mut request_header, request);
-        self.inner
-            .execute_send_message_hook_before(&mqtrace_context);
+        let mut mqtrace_context = self
+            .inner
+            .build_msg_context(&channel, &ctx, &mut request_header, request);
+        self.inner.execute_send_message_hook_before(&mqtrace_context);
 
         let mut response = self
-            .process_reply_message_request(
-                &ctx,
-                &channel,
-                request,
-                &mut mqtrace_context,
-                request_header,
-            )
+            .process_reply_message_request(&ctx, &channel, request, &mut mqtrace_context, request_header)
             .await;
 
         self.inner
@@ -242,8 +225,7 @@ where
             .await;
 
         // Update properties_string after msg_inner properties are modified
-        msg_inner.properties_string =
-            MessageDecoder::message_properties_to_string(msg_inner.get_properties());
+        msg_inner.properties_string = MessageDecoder::message_properties_to_string(msg_inner.get_properties());
 
         let mut response_header = SendMessageResponseHeader::default();
         Self::handle_push_reply_result(
@@ -321,9 +303,8 @@ where
             | PutMessageStatus::SlaveNotAvailable => true,
             PutMessageStatus::ServiceNotAvailable => {
                 warn!(
-                    "service not available now. It may be caused by one of the following reasons: \
-                     the broker's disk is full, messages are put to the slave, message store has \
-                     been shut down, etc."
+                    "service not available now. It may be caused by one of the following reasons: the broker's disk \
+                     is full, messages are put to the slave, message store has been shut down, etc."
                 );
                 false
             }
@@ -339,8 +320,8 @@ where
                     .map(|store| store.get_message_store_config().max_message_size)
                     .unwrap_or(4 * 1024 * 1024); // Default 4MB
                 warn!(
-                    "the message is illegal, maybe msg body or properties length not matched. msg \
-                     body length limit {}B.",
+                    "the message is illegal, maybe msg body or properties length not matched. msg body length limit \
+                     {}B.",
                     max_size
                 );
                 false
@@ -395,8 +376,7 @@ where
                 send_message_context.queue_offset = queue_offset;
 
                 let wrote_size = append_result.wrote_bytes;
-                let commercial_msg_num =
-                    (wrote_size as f64 / commercial_size_per_msg as f64).ceil() as i32;
+                let commercial_msg_num = (wrote_size as f64 / commercial_size_per_msg as f64).ceil() as i32;
                 let inc_value = commercial_msg_num * commercial_base_count;
                 send_message_context.commercial_send_stats = StatsType::SendSuccess;
                 send_message_context.commercial_send_times = inc_value;
@@ -466,10 +446,7 @@ where
                 request_header.topic(),
                 request_header.queue_id
             );
-            return PushReplyResult::failure(format!(
-                "push reply message fail, channel of <{}> not found",
-                sender_id
-            ));
+            return PushReplyResult::failure(format!("push reply message fail, channel of <{}> not found", sender_id));
         };
 
         // Add PROPERTY_PUSH_REPLY_TIME to message properties BEFORE building header
@@ -479,8 +456,7 @@ where
         );
 
         // Build reply message request header with properties (including PROPERTY_PUSH_REPLY_TIME)
-        let reply_message_request_header =
-            self.build_reply_request_header(channel, request_header, msg);
+        let reply_message_request_header = self.build_reply_request_header(channel, request_header, msg);
         let mut command = RemotingCommand::create_request_command(
             RequestCode::PushReplyMessageToClient,
             reply_message_request_header,
@@ -495,26 +471,19 @@ where
             .call_client(&mut reply_channel, command, 3000)
             .await
         {
-            Ok(response) if response.code() == ResponseCode::Success as i32 => {
-                PushReplyResult::success()
-            }
+            Ok(response) if response.code() == ResponseCode::Success as i32 => PushReplyResult::success(),
             Ok(response) => {
                 let code = response.code();
-                let remark = response
-                    .remark()
-                    .map(|r| r.as_str())
-                    .unwrap_or("unknown error");
+                let remark = response.remark().map(|r| r.as_str()).unwrap_or("unknown error");
                 warn!(
-                    "push reply message to <{}> return fail, code: {}, remark: {}. Topic: {}, \
-                     QueueId: {}, CorrelationId: {:?}",
+                    "push reply message to <{}> return fail, code: {}, remark: {}. Topic: {}, QueueId: {}, \
+                     CorrelationId: {:?}",
                     sender_id,
                     code,
                     remark,
                     request_header.topic(),
                     request_header.queue_id,
-                    msg.get_property(&CheetahString::from_static_str(
-                        MessageConst::PROPERTY_CORRELATION_ID
-                    ))
+                    msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
                 );
                 // Reuse extracted values to avoid duplicate format
                 PushReplyResult::failure(format!(
@@ -549,8 +518,7 @@ where
 
         // Cache addresses to avoid repeated .to_string() calls
         let born_host = CheetahString::from_string(channel.remote_address().to_string());
-        let store_host =
-            CheetahString::from_string(self.inner.broker_runtime_inner.store_host().to_string());
+        let store_host = CheetahString::from_string(self.inner.broker_runtime_inner.store_host().to_string());
 
         ReplyMessageRequestHeader {
             born_host,
@@ -572,23 +540,19 @@ where
     }
 }
 
-fn parse_request_header(
-    request: &RemotingCommand,
-) -> rocketmq_error::RocketMQResult<SendMessageRequestHeader> {
+fn parse_request_header(request: &RemotingCommand) -> rocketmq_error::RocketMQResult<SendMessageRequestHeader> {
     let request_code = RequestCode::from(request.code());
     let mut request_header_v2 = None;
-    if RequestCode::SendReplyMessageV2 == request_code
-        || RequestCode::SendReplyMessage == request_code
-    {
+    if RequestCode::SendReplyMessageV2 == request_code || RequestCode::SendReplyMessage == request_code {
         request_header_v2 = request
             .decode_command_custom_header::<SendMessageRequestHeaderV2>()
             .ok();
     }
 
     match request_header_v2 {
-        Some(header) => {
-            Ok(SendMessageRequestHeaderV2::create_send_message_request_header_v1(&header))
-        }
+        Some(header) => Ok(SendMessageRequestHeaderV2::create_send_message_request_header_v1(
+            &header,
+        )),
         None => request.decode_command_custom_header::<SendMessageRequestHeader>(),
     }
 }
@@ -606,13 +570,11 @@ fn parse_request_header(
 ///
 /// Correlation ID if found, `None` otherwise
 fn get_correlation_id_with_fallback<M: MessageTrait>(msg: &M) -> Option<CheetahString> {
-    msg.get_property(&CheetahString::from_static_str(
-        MessageConst::PROPERTY_CORRELATION_ID,
-    ))
-    .or_else(|| {
-        // Fallback to old property name for backward compatibility
-        msg.get_property(&CheetahString::from_static_str("REPLY_CORRELATION_ID"))
-    })
+    msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
+        .or_else(|| {
+            // Fallback to old property name for backward compatibility
+            msg.get_property(&CheetahString::from_static_str("REPLY_CORRELATION_ID"))
+        })
 }
 
 #[derive(Debug, Clone)]

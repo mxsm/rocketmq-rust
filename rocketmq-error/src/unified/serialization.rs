@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Serialization and deserialization errors
 
@@ -24,17 +21,11 @@ use thiserror::Error;
 pub enum SerializationError {
     /// Encoding failed
     #[error("Encoding failed ({format}): {message}")]
-    EncodeFailed {
-        format: &'static str,
-        message: String,
-    },
+    EncodeFailed { format: &'static str, message: String },
 
     /// Decoding failed
     #[error("Decoding failed ({format}): {message}")]
-    DecodeFailed {
-        format: &'static str,
-        message: String,
-    },
+    DecodeFailed { format: &'static str, message: String },
 
     /// Invalid data format
     #[error("Invalid format: expected {expected}, got {got}")]
@@ -151,13 +142,57 @@ mod tests {
     #[test]
     fn test_serialization_error() {
         let err = SerializationError::encode_failed("JSON", "unexpected token");
-        assert!(err.to_string().contains("Encoding failed"));
-        assert!(err.to_string().contains("JSON"));
+        assert_eq!(err.to_string(), "Encoding failed (JSON): unexpected token");
+
+        let err = SerializationError::decode_failed("Protobuf", "invalid length");
+        assert_eq!(err.to_string(), "Decoding failed (Protobuf): invalid length");
+
+        let err = SerializationError::invalid_format("u32", "string".to_string());
+        assert_eq!(err.to_string(), "Invalid format: expected u32, got string");
+
+        let err = SerializationError::missing_field("broker_name");
+        assert_eq!(err.to_string(), "Missing required field: broker_name");
+
+        let err = SerializationError::InvalidValue {
+            field: "timeout",
+            reason: "negative".to_string(),
+        };
+        assert_eq!(err.to_string(), "Invalid value for field 'timeout': negative");
+
+        let err = SerializationError::ProtobufError("missing tag".to_string());
+        assert_eq!(err.to_string(), "Protobuf error: missing tag");
+
+        let err = SerializationError::event_serialization_failed("error");
+        assert_eq!(err.to_string(), "Event serialization failed: error");
+
+        let err = SerializationError::event_deserialization_failed("error");
+        assert_eq!(err.to_string(), "Event deserialization failed: error");
+
+        let err = SerializationError::invalid_event_type(1);
+        assert_eq!(err.to_string(), "Invalid event type: 1");
+
+        let err = SerializationError::unknown_event_type(1);
+        assert_eq!(err.to_string(), "Unknown event type: 1");
     }
 
     #[test]
-    fn test_missing_field() {
-        let err = SerializationError::missing_field("broker_name");
-        assert_eq!(err.to_string(), "Missing required field: broker_name");
+    fn test_utf8_error() {
+        let invalid_utf8 = vec![0, 159, 146, 150];
+        let result = std::str::from_utf8(&invalid_utf8);
+        let utf8_error = result.err().unwrap();
+        let err = SerializationError::from(utf8_error);
+        assert_eq!(
+            err.to_string(),
+            "UTF-8 encoding error: invalid utf-8 sequence of 1 bytes from index 1"
+        );
+    }
+
+    #[cfg(feature = "with_serde")]
+    #[test]
+    fn test_json_error() {
+        let json_result: Result<serde_json::Value, _> = serde_json::from_str("{ invalid }");
+        let json_error = json_result.err().unwrap();
+        let err = SerializationError::from(json_error);
+        assert!(err.to_string().contains("JSON error"));
     }
 }

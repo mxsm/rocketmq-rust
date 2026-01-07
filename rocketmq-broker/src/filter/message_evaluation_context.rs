@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 
@@ -53,10 +50,7 @@ mod tests {
     #[tokio::test]
     async fn get_returns_value_when_key_exists() {
         let mut properties = HashMap::new();
-        properties.insert(
-            CheetahString::from_slice("key1"),
-            CheetahString::from_slice("value1"),
-        );
+        properties.insert(CheetahString::from_slice("key1"), CheetahString::from_slice("value1"));
         let binding = Some(properties);
         let context = MessageEvaluationContext::new(&binding);
 
@@ -68,10 +62,7 @@ mod tests {
     #[tokio::test]
     async fn get_returns_none_when_key_does_not_exist() {
         let mut properties = HashMap::new();
-        properties.insert(
-            CheetahString::from_slice("key1"),
-            CheetahString::from_slice("value1"),
-        );
+        properties.insert(CheetahString::from_slice("key1"), CheetahString::from_slice("value1"));
         let binding = Some(properties);
         let context = MessageEvaluationContext::new(&binding);
 
@@ -92,14 +83,8 @@ mod tests {
     #[tokio::test]
     async fn key_values_returns_all_properties_when_present() {
         let mut properties = HashMap::new();
-        properties.insert(
-            CheetahString::from_slice("key1"),
-            CheetahString::from_slice("value1"),
-        );
-        properties.insert(
-            CheetahString::from_slice("key2"),
-            CheetahString::from_slice("value2"),
-        );
+        properties.insert(CheetahString::from_slice("key1"), CheetahString::from_slice("value1"));
+        properties.insert(CheetahString::from_slice("key2"), CheetahString::from_slice("value2"));
         let binding = Some(properties.clone());
         let context = MessageEvaluationContext::new(&binding);
 

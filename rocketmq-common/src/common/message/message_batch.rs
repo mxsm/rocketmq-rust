@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -21,7 +18,6 @@ use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::fmt::Formatter;
-use std::path::Iter;
 
 use bytes::Bytes;
 use cheetah_string::CheetahString;
@@ -40,29 +36,32 @@ pub struct MessageBatch {
     pub final_message: Message,
 
     ///`messages` stores the batch of initialized messages.
-    pub messages: Option<Vec<Message>>,
-}
-
-impl Iterator for MessageBatch {
-    type Item = Message;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match &self.messages {
-            Some(messages) => {
-                if let Some(message) = messages.iter().next() {
-                    return Some(message.clone());
-                }
-                None
-            }
-            None => None,
-        }
-    }
+    pub messages: Vec<Message>,
 }
 
 impl MessageBatch {
+    /// Encode all messages in the batch.
     #[inline]
     pub fn encode(&self) -> Bytes {
-        message_decoder::encode_messages(self.messages.as_ref().unwrap())
+        message_decoder::encode_messages(&self.messages)
+    }
+
+    /// Get an iterator over the messages in the batch.
+    #[inline]
+    pub fn iter(&self) -> std::slice::Iter<'_, Message> {
+        self.messages.iter()
+    }
+
+    /// Get the number of messages in the batch.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.messages.len()
+    }
+
+    /// Check if the batch is empty.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.messages.is_empty()
     }
 
     pub fn generate_from_vec<M>(messages: Vec<M>) -> rocketmq_error::RocketMQResult<MessageBatch>
@@ -101,10 +100,7 @@ impl MessageBatch {
                     "TimeDelayLevel is not supported for batching",
                 ));
             }
-            if message
-                .get_topic()
-                .starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
-            {
+            if message.get_topic().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
                 return Err(RocketMQError::illegal_argument(
                     "Retry group topic is not supported for batching",
                 ));
@@ -133,21 +129,37 @@ impl MessageBatch {
         final_message.set_wait_store_msg_ok(first.is_wait_store_msg_ok());
         Ok(MessageBatch {
             final_message,
-            messages: Some(message_list),
+            messages: message_list,
         })
+    }
+}
+
+impl IntoIterator for MessageBatch {
+    type Item = Message;
+    type IntoIter = std::vec::IntoIter<Message>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.messages.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a MessageBatch {
+    type Item = &'a Message;
+    type IntoIter = std::slice::Iter<'a, Message>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.messages.iter()
     }
 }
 
 impl fmt::Display for MessageBatch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let messages_str = match &self.messages {
-            Some(messages) => messages
-                .iter()
-                .map(|msg| msg.to_string())
-                .collect::<Vec<_>>()
-                .join(", "),
-            None => "None".to_string(),
-        };
+        let messages_str = self
+            .messages
+            .iter()
+            .map(|msg| msg.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
 
         write!(
             f,
@@ -250,6 +262,164 @@ impl MessageTrait for MessageBatch {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use cheetah_string::CheetahString;
+
+    use super::*;
+
+    fn create_test_message(topic: &str) -> Message {
+        let mut msg = Message::default();
+        msg.set_topic(CheetahString::from_string(topic.to_string()));
+        msg.set_body(Bytes::from_static(b"test body"));
+        msg
+    }
+
+    #[test]
+    fn test_generate_from_vec_ok() {
+        let messages = vec![create_test_message("topic1"), create_test_message("topic1")];
+        let result = MessageBatch::generate_from_vec(messages);
+        assert!(result.is_ok());
+        let batch = result.unwrap();
+        assert_eq!(batch.messages.len(), 2);
+        assert_eq!(batch.len(), 2);
+        assert!(!batch.is_empty());
+    }
+
+    #[test]
+    fn test_generate_from_vec_empty() {
+        let messages: Vec<Message> = vec![];
+        let result = MessageBatch::generate_from_vec(messages);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("empty"));
+    }
+
+    #[test]
+    fn test_generate_from_vec_different_topic() {
+        let messages = vec![
+            create_test_message("topic1"),
+            create_test_message("topic2"), // Different topic
+        ];
+        let result = MessageBatch::generate_from_vec(messages);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("topic"));
+    }
+
+    #[test]
+    fn test_generate_from_vec_delay_message() {
+        let msg1 = create_test_message("topic1");
+        let mut msg2 = create_test_message("topic1");
+        msg2.set_delay_time_level(1); // Set delay level
+
+        let messages = vec![msg1, msg2];
+        let result = MessageBatch::generate_from_vec(messages);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("TimeDelayLevel"));
+    }
+
+    #[test]
+    fn test_generate_from_vec_retry_group() {
+        let messages = vec![
+            create_test_message("topic1"),
+            create_test_message("%RETRY%topic1"), // Retry group
+        ];
+        let result = MessageBatch::generate_from_vec(messages);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Retry"));
+    }
+
+    #[test]
+    fn test_generate_from_vec_different_wait_store_msg_ok() {
+        let mut msg1 = create_test_message("topic1");
+        let mut msg2 = create_test_message("topic1");
+        msg1.set_wait_store_msg_ok(true);
+        msg2.set_wait_store_msg_ok(false); // Different waitStoreMsgOK
+
+        let messages = vec![msg1, msg2];
+        let result = MessageBatch::generate_from_vec(messages);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("waitStoreMsgOK"));
+    }
+
+    #[test]
+    fn test_encode() {
+        let messages = vec![create_test_message("topic1"), create_test_message("topic1")];
+        let batch = MessageBatch::generate_from_vec(messages).unwrap();
+        let encoded = batch.encode();
+        assert!(!encoded.is_empty());
+    }
+
+    #[test]
+    fn test_iterator_slice() {
+        let messages = vec![
+            create_test_message("topic1"),
+            create_test_message("topic1"),
+            create_test_message("topic1"),
+        ];
+        let batch = MessageBatch::generate_from_vec(messages).unwrap();
+
+        let count = batch.iter().count();
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_into_iterator() {
+        let messages = vec![
+            create_test_message("topic1"),
+            create_test_message("topic1"),
+            create_test_message("topic1"),
+        ];
+        let batch = MessageBatch::generate_from_vec(messages).unwrap();
+
+        let count = batch.into_iter().count();
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_into_iterator_ref() {
+        let messages = vec![
+            create_test_message("topic1"),
+            create_test_message("topic1"),
+            create_test_message("topic1"),
+        ];
+        let batch = MessageBatch::generate_from_vec(messages).unwrap();
+
+        let count = (&batch).into_iter().count();
+        assert_eq!(count, 3);
+
+        // Can still use batch after borrowing
+        assert_eq!(batch.len(), 3);
+    }
+
+    #[test]
+    fn test_batch_properties_inherited() {
+        let mut msg1 = create_test_message("topic1");
+        msg1.set_wait_store_msg_ok(true);
+
+        let messages = vec![msg1.clone(), msg1];
+        let batch = MessageBatch::generate_from_vec(messages).unwrap();
+
+        assert_eq!(batch.final_message.get_topic().as_str(), "topic1");
+        assert!(batch.final_message.is_wait_store_msg_ok());
+    }
+
+    #[test]
+    fn test_display_format() {
+        let messages = vec![create_test_message("topic1"), create_test_message("topic1")];
+        let batch = MessageBatch::generate_from_vec(messages).unwrap();
+
+        let display = format!("{}", batch);
+        assert!(display.contains("MessageBatch"));
+        assert!(display.contains("topic1"));
     }
 }
 

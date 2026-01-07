@@ -1,27 +1,27 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use rocketmq_rust::ArcMut;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 
+use crate::controller::raft_controller::RaftController;
+use crate::controller::Controller;
 use crate::error::ControllerError;
 use crate::error::Result;
 use crate::metadata::BrokerInfo;
@@ -35,7 +35,6 @@ use crate::processor::request::RegisterBrokerResponse;
 use crate::processor::request::UnregisterBrokerRequest;
 use crate::processor::request::UnregisterBrokerResponse;
 use crate::processor::RequestProcessor;
-use crate::raft::RaftController;
 
 /// Register broker processor
 pub struct RegisterBrokerProcessor {
@@ -43,32 +42,25 @@ pub struct RegisterBrokerProcessor {
     metadata: Arc<MetadataStore>,
 
     /// Raft controller
-    raft: Arc<RaftController>,
+    raft: ArcMut<RaftController>,
 }
 
 impl RegisterBrokerProcessor {
     /// Create a new register broker processor
-    pub fn new(metadata: Arc<MetadataStore>, raft: Arc<RaftController>) -> Self {
+    pub fn new(metadata: Arc<MetadataStore>, raft: ArcMut<RaftController>) -> Self {
         Self { metadata, raft }
     }
 
     /// Process register broker request
-    pub async fn process_request(
-        &self,
-        request: RegisterBrokerRequest,
-    ) -> Result<RegisterBrokerResponse> {
-        info!(
-            "Processing register broker request: {}",
-            request.broker_name
-        );
+    pub async fn process_request(&self, request: RegisterBrokerRequest) -> Result<RegisterBrokerResponse> {
+        info!("Processing register broker request: {}", request.broker_name);
 
         // Check if we are the leader
-        if !self.raft.is_leader().await {
-            let leader = self.raft.get_leader().await;
-            error!("Not leader, current leader: {:?}", leader);
+        if !self.raft.is_leader() {
+            error!("Not leader");
             return Ok(RegisterBrokerResponse {
                 success: false,
-                error: Some(format!("Not leader, current leader: {:?}", leader)),
+                error: Some("Not leader".to_string()),
                 broker_id: None,
             });
         }
@@ -111,15 +103,14 @@ impl RegisterBrokerProcessor {
 impl RequestProcessor for RegisterBrokerProcessor {
     async fn process(&self, request: &[u8]) -> Result<Vec<u8>> {
         // Deserialize request
-        let req: RegisterBrokerRequest = serde_json::from_slice(request)
-            .map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
+        let req: RegisterBrokerRequest =
+            serde_json::from_slice(request).map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
 
         // Process request
         let response = self.process_request(req).await?;
 
         // Serialize response
-        serde_json::to_vec(&response)
-            .map_err(|e| ControllerError::SerializationError(e.to_string()))
+        serde_json::to_vec(&response).map_err(|e| ControllerError::SerializationError(e.to_string()))
     }
 }
 
@@ -129,41 +120,29 @@ pub struct UnregisterBrokerProcessor {
     metadata: Arc<MetadataStore>,
 
     /// Raft controller
-    raft: Arc<RaftController>,
+    raft: ArcMut<RaftController>,
 }
 
 impl UnregisterBrokerProcessor {
     /// Create a new unregister broker processor
-    pub fn new(metadata: Arc<MetadataStore>, raft: Arc<RaftController>) -> Self {
+    pub fn new(metadata: Arc<MetadataStore>, raft: ArcMut<RaftController>) -> Self {
         Self { metadata, raft }
     }
 
     /// Process unregister broker request
-    pub async fn process_request(
-        &self,
-        request: UnregisterBrokerRequest,
-    ) -> Result<UnregisterBrokerResponse> {
-        info!(
-            "Processing unregister broker request: {}",
-            request.broker_name
-        );
+    pub async fn process_request(&self, request: UnregisterBrokerRequest) -> Result<UnregisterBrokerResponse> {
+        info!("Processing unregister broker request: {}", request.broker_name);
 
         // Check if we are the leader
-        if !self.raft.is_leader().await {
-            let leader = self.raft.get_leader().await;
+        if !self.raft.is_leader() {
             return Ok(UnregisterBrokerResponse {
                 success: false,
-                error: Some(format!("Not leader, current leader: {:?}", leader)),
+                error: Some("Not leader".to_string()),
             });
         }
 
         // Unregister broker
-        match self
-            .metadata
-            .broker_manager()
-            .unregister(&request.broker_name)
-            .await
-        {
+        match self.metadata.broker_manager().unregister(&request.broker_name).await {
             Ok(()) => {
                 info!("Successfully unregistered broker: {}", request.broker_name);
                 Ok(UnregisterBrokerResponse {
@@ -185,13 +164,12 @@ impl UnregisterBrokerProcessor {
 #[async_trait::async_trait]
 impl RequestProcessor for UnregisterBrokerProcessor {
     async fn process(&self, request: &[u8]) -> Result<Vec<u8>> {
-        let req: UnregisterBrokerRequest = serde_json::from_slice(request)
-            .map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
+        let req: UnregisterBrokerRequest =
+            serde_json::from_slice(request).map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
 
         let response = self.process_request(req).await?;
 
-        serde_json::to_vec(&response)
-            .map_err(|e| ControllerError::SerializationError(e.to_string()))
+        serde_json::to_vec(&response).map_err(|e| ControllerError::SerializationError(e.to_string()))
     }
 }
 
@@ -208,34 +186,20 @@ impl BrokerHeartbeatProcessor {
     }
 
     /// Process broker heartbeat request
-    pub async fn process_request(
-        &self,
-        request: BrokerHeartbeatRequest,
-    ) -> Result<BrokerHeartbeatResponse> {
+    pub async fn process_request(&self, request: BrokerHeartbeatRequest) -> Result<BrokerHeartbeatResponse> {
         debug!("Processing broker heartbeat: {}", request.broker_name);
 
         // Update heartbeat
-        match self
-            .metadata
-            .broker_manager()
-            .heartbeat(&request.broker_name)
-            .await
-        {
+        match self.metadata.broker_manager().heartbeat(&request.broker_name).await {
             Ok(()) => {
-                debug!(
-                    "Successfully updated heartbeat for broker: {}",
-                    request.broker_name
-                );
+                debug!("Successfully updated heartbeat for broker: {}", request.broker_name);
                 Ok(BrokerHeartbeatResponse {
                     success: true,
                     error: None,
                 })
             }
             Err(e) => {
-                error!(
-                    "Failed to update heartbeat for broker {}: {}",
-                    request.broker_name, e
-                );
+                error!("Failed to update heartbeat for broker {}: {}", request.broker_name, e);
                 Ok(BrokerHeartbeatResponse {
                     success: false,
                     error: Some(e.to_string()),
@@ -248,13 +212,12 @@ impl BrokerHeartbeatProcessor {
 #[async_trait::async_trait]
 impl RequestProcessor for BrokerHeartbeatProcessor {
     async fn process(&self, request: &[u8]) -> Result<Vec<u8>> {
-        let req: BrokerHeartbeatRequest = serde_json::from_slice(request)
-            .map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
+        let req: BrokerHeartbeatRequest =
+            serde_json::from_slice(request).map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
 
         let response = self.process_request(req).await?;
 
-        serde_json::to_vec(&response)
-            .map_err(|e| ControllerError::SerializationError(e.to_string()))
+        serde_json::to_vec(&response).map_err(|e| ControllerError::SerializationError(e.to_string()))
     }
 }
 
@@ -264,31 +227,27 @@ pub struct ElectMasterProcessor {
     metadata: Arc<MetadataStore>,
 
     /// Raft controller
-    raft: Arc<RaftController>,
+    raft: ArcMut<RaftController>,
 }
 
 impl ElectMasterProcessor {
     /// Create a new elect master processor
-    pub fn new(metadata: Arc<MetadataStore>, raft: Arc<RaftController>) -> Self {
+    pub fn new(metadata: Arc<MetadataStore>, raft: ArcMut<RaftController>) -> Self {
         Self { metadata, raft }
     }
 
     /// Process elect master request
-    pub async fn process_request(
-        &self,
-        request: ElectMasterRequest,
-    ) -> Result<ElectMasterResponse> {
+    pub async fn process_request(&self, request: ElectMasterRequest) -> Result<ElectMasterResponse> {
         info!(
             "Processing elect master request for cluster: {}, broker: {}",
             request.cluster_name, request.broker_name
         );
 
         // Check if we are the leader
-        if !self.raft.is_leader().await {
-            let leader = self.raft.get_leader().await;
+        if !self.raft.is_leader() {
             return Ok(ElectMasterResponse {
                 success: false,
-                error: Some(format!("Not leader, current leader: {:?}", leader)),
+                error: Some("Not leader".to_string()),
                 master_broker: None,
                 master_addr: None,
             });
@@ -311,9 +270,7 @@ impl ElectMasterProcessor {
         }
 
         // Find the master broker (simple logic: first broker with Master role)
-        let master = brokers
-            .iter()
-            .find(|b| b.role == crate::metadata::BrokerRole::Master);
+        let master = brokers.iter().find(|b| b.role == crate::metadata::BrokerRole::Master);
 
         match master {
             Some(broker) => {
@@ -338,12 +295,11 @@ impl ElectMasterProcessor {
 #[async_trait::async_trait]
 impl RequestProcessor for ElectMasterProcessor {
     async fn process(&self, request: &[u8]) -> Result<Vec<u8>> {
-        let req: ElectMasterRequest = serde_json::from_slice(request)
-            .map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
+        let req: ElectMasterRequest =
+            serde_json::from_slice(request).map_err(|e| ControllerError::InvalidRequest(e.to_string()))?;
 
         let response = self.process_request(req).await?;
 
-        serde_json::to_vec(&response)
-            .map_err(|e| ControllerError::SerializationError(e.to_string()))
+        serde_json::to_vec(&response).map_err(|e| ControllerError::SerializationError(e.to_string()))
     }
 }

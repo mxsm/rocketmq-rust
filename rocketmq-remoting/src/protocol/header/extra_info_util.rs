@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::vec::Vec;
@@ -99,11 +96,7 @@ impl ExtraInfoUtil {
     }
 
     /// Get the real topic name based on the retry flag
-    pub fn get_real_topic(
-        extra_info_strs: &[String],
-        topic: &str,
-        cid: &str,
-    ) -> RocketMQResult<String> {
+    pub fn get_real_topic(extra_info_strs: &[String], topic: &str, cid: &str) -> RocketMQResult<String> {
         if extra_info_strs.len() < 5 {
             return Err(IllegalArgument(format!(
                 "getRealTopic fail, extraInfoStrs length {}",
@@ -122,11 +115,7 @@ impl ExtraInfoUtil {
     }
 
     /// Get the real topic name based on the retry flag
-    pub fn get_real_topic_with_retry(
-        topic: &str,
-        cid: &str,
-        retry: &str,
-    ) -> RocketMQResult<String> {
+    pub fn get_real_topic_with_retry(topic: &str, cid: &str, retry: &str) -> RocketMQResult<String> {
         if retry == NORMAL_TOPIC {
             Ok(topic.to_string())
         } else if retry == RETRY_TOPIC {
@@ -141,11 +130,9 @@ impl ExtraInfoUtil {
     /// Get the retry flag from the extra info
     pub fn get_retry(extra_info_strs: &[String]) -> RocketMQResult<String> {
         if extra_info_strs.len() < 5 {
-            return Err(IllegalArgument(format!(
-                "getRetry fail, extraInfoStrs length {}",
-                extra_info_strs.len()
-            ))
-            .into());
+            return Err(
+                IllegalArgument(format!("getRetry fail, extraInfoStrs length {}", extra_info_strs.len())).into(),
+            );
         }
         Ok(extra_info_strs[4].clone())
     }
@@ -241,12 +228,7 @@ impl ExtraInfoUtil {
     }
 
     /// Build start offset info
-    pub fn build_start_offset_info(
-        string_builder: &mut String,
-        topic: &str,
-        queue_id: i32,
-        start_offset: i64,
-    ) {
+    pub fn build_start_offset_info(string_builder: &mut String, topic: &str, queue_id: i32, start_offset: i64) {
         if !string_builder.is_empty() {
             string_builder.push(';');
         }
@@ -259,12 +241,7 @@ impl ExtraInfoUtil {
     }
 
     /// Build queue ID order count info
-    pub fn build_queue_id_order_count_info(
-        string_builder: &mut String,
-        topic: &str,
-        queue_id: i32,
-        order_count: i32,
-    ) {
+    pub fn build_queue_id_order_count_info(string_builder: &mut String, topic: &str, queue_id: i32, order_count: i32) {
         if !string_builder.is_empty() {
             string_builder.push(';');
         }
@@ -290,21 +267,13 @@ impl ExtraInfoUtil {
 
         string_builder.push_str(&Self::get_retry_from_topic(topic));
         string_builder.push_str(MessageConst::KEY_SEPARATOR);
-        string_builder.push_str(&Self::get_queue_offset_key_value_key(
-            queue_id,
-            queue_offset,
-        ));
+        string_builder.push_str(&Self::get_queue_offset_key_value_key(queue_id, queue_offset));
         string_builder.push_str(MessageConst::KEY_SEPARATOR);
         string_builder.push_str(&order_count.to_string());
     }
 
     /// Build message offset info
-    pub fn build_msg_offset_info(
-        string_builder: &mut String,
-        topic: &str,
-        queue_id: i32,
-        msg_offsets: &[u64],
-    ) {
+    pub fn build_msg_offset_info(string_builder: &mut String, topic: &str, queue_id: i32, msg_offsets: &[u64]) {
         if !string_builder.is_empty() {
             string_builder.push(';');
         }
@@ -323,9 +292,7 @@ impl ExtraInfoUtil {
     }
 
     /// Parse message offset info into a HashMap
-    pub fn parse_msg_offset_info(
-        msg_offset_info: &str,
-    ) -> RocketMQResult<HashMap<String, Vec<i64>>> {
+    pub fn parse_msg_offset_info(msg_offset_info: &str) -> RocketMQResult<HashMap<String, Vec<i64>>> {
         let mut msg_offset_map: HashMap<String, Vec<i64>> = HashMap::with_capacity(4);
         if msg_offset_info.is_empty() {
             return Ok(msg_offset_map);
@@ -344,9 +311,7 @@ impl ExtraInfoUtil {
 
             let key = format!("{}@{}", split[0], split[1]);
             if msg_offset_map.contains_key(&key) {
-                return Err(
-                    IllegalArgument("parse msgOffsetMap error, duplicate".to_string()).into(),
-                );
+                return Err(IllegalArgument("parse msgOffsetMap error, duplicate".to_string()).into());
             }
 
             msg_offset_map.insert(key.clone(), Vec::with_capacity(8));
@@ -364,9 +329,7 @@ impl ExtraInfoUtil {
     }
 
     /// Parse start offset info into a HashMap
-    pub fn parse_start_offset_info(
-        start_offset_info: &str,
-    ) -> RocketMQResult<HashMap<String, i64>> {
+    pub fn parse_start_offset_info(start_offset_info: &str) -> RocketMQResult<HashMap<String, i64>> {
         let mut start_offset_map: HashMap<String, i64> = HashMap::with_capacity(4);
         if start_offset_info.is_empty() {
             return Ok(start_offset_map);
@@ -380,18 +343,12 @@ impl ExtraInfoUtil {
         for one in array {
             let split: Vec<&str> = one.split(MessageConst::KEY_SEPARATOR).collect();
             if split.len() != 3 {
-                return Err(IllegalArgument(format!(
-                    "parse startOffsetInfo error, {start_offset_info}"
-                ))
-                .into());
+                return Err(IllegalArgument(format!("parse startOffsetInfo error, {start_offset_info}")).into());
             }
 
             let key = format!("{}@{}", split[0], split[1]);
             if start_offset_map.contains_key(&key) {
-                return Err(IllegalArgumentError(
-                    "parse startOffsetMap error, duplicate".to_string(),
-                )
-                .into());
+                return Err(IllegalArgumentError("parse startOffsetMap error, duplicate".to_string()).into());
             }
 
             start_offset_map.insert(
@@ -420,18 +377,14 @@ impl ExtraInfoUtil {
         for one in array {
             let split: Vec<&str> = one.split(MessageConst::KEY_SEPARATOR).collect();
             if split.len() != 3 {
-                return Err(IllegalArgument(format!(
-                    "parse orderCountInfo error {order_count_info}"
-                ))
-                .into());
+                return Err(IllegalArgument(format!("parse orderCountInfo error {order_count_info}")).into());
             }
 
             let key = format!("{}@{}", split[0], split[1]);
             if order_count_map.contains_key(&key) {
-                return Err(IllegalArgument(format!(
-                    "parse orderCountInfo error, duplicate, {order_count_info}"
-                ))
-                .into());
+                return Err(
+                    IllegalArgument(format!("parse orderCountInfo error, duplicate, {order_count_info}")).into(),
+                );
             }
 
             order_count_map.insert(
@@ -456,11 +409,7 @@ impl ExtraInfoUtil {
         pop_ck: Option<&str>,
         key: i64,
     ) -> RocketMQResult<String> {
-        Ok(format!(
-            "{}@{}",
-            Self::get_retry_from_topic_pop_ck(topic, pop_ck)?,
-            key
-        ))
+        Ok(format!("{}@{}", Self::get_retry_from_topic_pop_ck(topic, pop_ck)?, key))
     }
 
     /// Get queue offset key value key
@@ -523,10 +472,7 @@ mod tests {
     #[test]
     fn get_ck_queue_offset_with_invalid_string() {
         let result = ExtraInfoUtil::get_ck_queue_offset(&["abc".to_string()]).unwrap_err();
-        assert_eq!(
-            result.to_string(),
-            "Illegal argument: parse ck_queue_offset error"
-        );
+        assert_eq!(result.to_string(), "Illegal argument: parse ck_queue_offset error");
     }
 
     #[test]
@@ -546,19 +492,14 @@ mod tests {
 
     #[test]
     fn get_invisible_time_with_valid_string() {
-        let result = ExtraInfoUtil::get_invisible_time(&[
-            "123".to_string(),
-            "456".to_string(),
-            "789".to_string(),
-        ])
-        .unwrap();
+        let result =
+            ExtraInfoUtil::get_invisible_time(&["123".to_string(), "456".to_string(), "789".to_string()]).unwrap();
         assert_eq!(result, 789);
     }
 
     #[test]
     fn get_invisible_time_with_insufficient_length() {
-        let result =
-            ExtraInfoUtil::get_invisible_time(&["123".to_string(), "456".to_string()]).unwrap_err();
+        let result = ExtraInfoUtil::get_invisible_time(&["123".to_string(), "456".to_string()]).unwrap_err();
         assert_eq!(
             result.to_string(),
             "Illegal argument: getInvisibleTime fail, extraInfoStrs length 2"
@@ -579,12 +520,8 @@ mod tests {
 
     #[test]
     fn get_revive_qid_with_insufficient_length() {
-        let result = ExtraInfoUtil::get_revive_qid(&[
-            "123".to_string(),
-            "456".to_string(),
-            "789".to_string(),
-        ])
-        .unwrap_err();
+        let result =
+            ExtraInfoUtil::get_revive_qid(&["123".to_string(), "456".to_string(), "789".to_string()]).unwrap_err();
         assert_eq!(
             result.to_string(),
             "Illegal argument: getReviveQid fail, extraInfoStrs length 3"
@@ -664,10 +601,7 @@ mod tests {
     #[test]
     fn get_real_topic_with_retry_invalid() {
         let result = ExtraInfoUtil::get_real_topic_with_retry("topic", "cid", "3").unwrap_err();
-        assert_eq!(
-            result.to_string(),
-            "Illegal argument: getRetry fail, format is wrong"
-        );
+        assert_eq!(result.to_string(), "Illegal argument: getRetry fail, format is wrong");
     }
 
     #[test]
@@ -802,9 +736,7 @@ mod tests {
 
     #[test]
     fn build_extra_info_with_msg_queue_offset_creates_correct_string() {
-        let result = ExtraInfoUtil::build_extra_info_with_offset(
-            123, 456, 789, 10, "topic", "broker", 7, 100,
-        );
+        let result = ExtraInfoUtil::build_extra_info_with_offset(123, 456, 789, 10, "topic", "broker", 7, 100);
         assert_eq!(result, "123 456 789 10 0 broker 7 100");
     }
 
@@ -825,13 +757,7 @@ mod tests {
     #[test]
     fn build_queue_offset_order_count_info_creates_correct_string() {
         let mut string_builder = String::new();
-        ExtraInfoUtil::build_queue_offset_order_count_info(
-            &mut string_builder,
-            "topic",
-            7,
-            100,
-            100,
-        );
+        ExtraInfoUtil::build_queue_offset_order_count_info(&mut string_builder, "topic", 7, 100, 100);
         assert_eq!(string_builder, "0 qo7%100 100");
     }
 
@@ -886,8 +812,7 @@ mod tests {
 
     #[test]
     fn get_start_offset_info_map_key_with_pop_ck_creates_correct_string() {
-        let result =
-            ExtraInfoUtil::get_start_offset_info_map_key_with_pop_ck("topic", None, 7).unwrap();
+        let result = ExtraInfoUtil::get_start_offset_info_map_key_with_pop_ck("topic", None, 7).unwrap();
         assert_eq!(result, "0@7");
     }
 

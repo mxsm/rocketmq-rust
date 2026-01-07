@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -92,10 +89,7 @@ impl DefaultMQProducerBuilder {
     }
 
     #[inline]
-    pub fn default_mqproducer_impl(
-        mut self,
-        default_mqproducer_impl: DefaultMQProducerImpl,
-    ) -> Self {
+    pub fn default_mqproducer_impl(mut self, default_mqproducer_impl: DefaultMQProducerImpl) -> Self {
         self.default_mqproducer_impl = Some(default_mqproducer_impl);
         self
     }
@@ -160,19 +154,13 @@ impl DefaultMQProducerBuilder {
     }
 
     #[inline]
-    pub fn retry_times_when_send_async_failed(
-        mut self,
-        retry_times_when_send_async_failed: u32,
-    ) -> Self {
+    pub fn retry_times_when_send_async_failed(mut self, retry_times_when_send_async_failed: u32) -> Self {
         self.retry_times_when_send_async_failed = Some(retry_times_when_send_async_failed);
         self
     }
 
     #[inline]
-    pub fn retry_another_broker_when_not_store_ok(
-        mut self,
-        retry_another_broker_when_not_store_ok: bool,
-    ) -> Self {
+    pub fn retry_another_broker_when_not_store_ok(mut self, retry_another_broker_when_not_store_ok: bool) -> Self {
         self.retry_another_broker_when_not_store_ok = Some(retry_another_broker_when_not_store_ok);
         self
     }
@@ -184,10 +172,7 @@ impl DefaultMQProducerBuilder {
     }
 
     #[inline]
-    pub fn trace_dispatcher(
-        mut self,
-        trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>,
-    ) -> Self {
+    pub fn trace_dispatcher(mut self, trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>) -> Self {
         self.trace_dispatcher = Some(trace_dispatcher);
         self
     }
@@ -205,28 +190,19 @@ impl DefaultMQProducerBuilder {
     }
 
     #[inline]
-    pub fn enable_backpressure_for_async_mode(
-        mut self,
-        enable_backpressure_for_async_mode: bool,
-    ) -> Self {
+    pub fn enable_backpressure_for_async_mode(mut self, enable_backpressure_for_async_mode: bool) -> Self {
         self.enable_backpressure_for_async_mode = Some(enable_backpressure_for_async_mode);
         self
     }
 
     #[inline]
-    pub fn back_pressure_for_async_send_num(
-        mut self,
-        back_pressure_for_async_send_num: u32,
-    ) -> Self {
+    pub fn back_pressure_for_async_send_num(mut self, back_pressure_for_async_send_num: u32) -> Self {
         self.back_pressure_for_async_send_num = Some(back_pressure_for_async_send_num);
         self
     }
 
     #[inline]
-    pub fn back_pressure_for_async_send_size(
-        mut self,
-        back_pressure_for_async_send_size: u32,
-    ) -> Self {
+    pub fn back_pressure_for_async_send_size(mut self, back_pressure_for_async_send_size: u32) -> Self {
         self.back_pressure_for_async_send_size = Some(back_pressure_for_async_send_size);
         self
     }
@@ -288,22 +264,21 @@ impl DefaultMQProducerBuilder {
         if let Some(retry_times_when_send_async_failed) = self.retry_times_when_send_async_failed {
             mq_producer.set_retry_times_when_send_async_failed(retry_times_when_send_async_failed);
         }
-        if let Some(retry_another_broker_when_not_store_ok) =
-            self.retry_another_broker_when_not_store_ok
-        {
-            mq_producer
-                .set_retry_another_broker_when_not_store_ok(retry_another_broker_when_not_store_ok);
+        if let Some(retry_another_broker_when_not_store_ok) = self.retry_another_broker_when_not_store_ok {
+            mq_producer.set_retry_another_broker_when_not_store_ok(retry_another_broker_when_not_store_ok);
         }
         if let Some(max_message_size) = self.max_message_size {
             mq_producer.set_max_message_size(max_message_size);
         }
 
-        mq_producer.set_trace_dispatcher(self.trace_dispatcher);
+        if let Some(trace_dispatcher) = self.trace_dispatcher {
+            mq_producer.set_trace_dispatcher(trace_dispatcher);
+        }
         if let Some(auto_batch) = self.auto_batch {
             mq_producer.set_auto_batch(auto_batch);
         }
         if let Some(produce_accumulator) = self.produce_accumulator {
-            mq_producer.set_produce_accumulator(Some(produce_accumulator));
+            mq_producer.set_produce_accumulator(produce_accumulator);
         }
 
         if let Some(enable_backpressure_for_async_mode) = self.enable_backpressure_for_async_mode {
@@ -315,7 +290,9 @@ impl DefaultMQProducerBuilder {
         if let Some(back_pressure_for_async_send_size) = self.back_pressure_for_async_send_size {
             mq_producer.set_back_pressure_for_async_send_size(back_pressure_for_async_send_size);
         }
-        mq_producer.set_rpc_hook(self.rpc_hook);
+        if let Some(rpc_hook) = self.rpc_hook {
+            mq_producer.set_rpc_hook(rpc_hook);
+        }
         if let Some(compress_level) = self.compress_level {
             mq_producer.set_compress_level(compress_level);
         }

@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #![allow(dead_code)]
 
@@ -83,9 +80,7 @@ impl DefaultMQAdminExt {
             client_config,
             default_mqadmin_ext_impl,
             admin_ext_group,
-            create_topic_key: CheetahString::from_static_str(
-                TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
-            ),
+            create_topic_key: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
             timeout_millis: Duration::from_millis(5000),
         }
     }
@@ -102,9 +97,7 @@ impl DefaultMQAdminExt {
                 admin_ext_group.clone(),
             )),
             admin_ext_group,
-            create_topic_key: CheetahString::from_static_str(
-                TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
-            ),
+            create_topic_key: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
             timeout_millis,
         }
     }
@@ -122,9 +115,7 @@ impl DefaultMQAdminExt {
                 admin_ext_group.clone(),
             )),
             admin_ext_group,
-            create_topic_key: CheetahString::from_static_str(
-                TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
-            ),
+            create_topic_key: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
             timeout_millis: Duration::from_millis(5000),
         }
     }
@@ -142,9 +133,7 @@ impl DefaultMQAdminExt {
                 admin_ext_group.clone(),
             )),
             admin_ext_group,
-            create_topic_key: CheetahString::from_static_str(
-                TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
-            ),
+            create_topic_key: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
             timeout_millis,
         }
     }
@@ -161,9 +150,7 @@ impl DefaultMQAdminExt {
                 admin_ext_group.clone(),
             )),
             admin_ext_group,
-            create_topic_key: CheetahString::from_static_str(
-                TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
-            ),
+            create_topic_key: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
             timeout_millis: Duration::from_millis(5000),
         }
     }
@@ -183,9 +170,7 @@ impl DefaultMQAdminExt {
                 admin_ext_group.clone(),
             )),
             admin_ext_group,
-            create_topic_key: CheetahString::from_static_str(
-                TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
-            ),
+            create_topic_key: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
             timeout_millis,
         }
     }
@@ -331,10 +316,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         todo!()
     }
 
-    async fn examine_topic_stats_concurrent(
-        &self,
-        topic: CheetahString,
-    ) -> AdminToolResult<TopicStatsTable> {
+    async fn examine_topic_stats_concurrent(&self, topic: CheetahString) -> AdminToolResult<TopicStatsTable> {
         todo!()
     }
 
@@ -342,17 +324,11 @@ impl MQAdminExt for DefaultMQAdminExt {
         todo!()
     }
 
-    async fn fetch_topics_by_cluster(
-        &self,
-        cluster_name: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<TopicList> {
+    async fn fetch_topics_by_cluster(&self, cluster_name: CheetahString) -> rocketmq_error::RocketMQResult<TopicList> {
         todo!()
     }
 
-    async fn fetch_broker_runtime_stats(
-        &self,
-        broker_addr: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<KVTable> {
+    async fn fetch_broker_runtime_stats(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<KVTable> {
         todo!()
     }
 
@@ -375,9 +351,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<Option<TopicRouteData>> {
-        self.default_mqadmin_ext_impl
-            .examine_topic_route_info(topic)
-            .await
+        self.default_mqadmin_ext_impl.examine_topic_route_info(topic).await
     }
 
     async fn examine_consumer_connection_info(
@@ -397,9 +371,7 @@ impl MQAdminExt for DefaultMQAdminExt {
     }
 
     async fn get_name_server_address_list(&self) -> Vec<CheetahString> {
-        self.default_mqadmin_ext_impl
-            .get_name_server_address_list()
-            .await
+        self.default_mqadmin_ext_impl.get_name_server_address_list().await
     }
 
     async fn wipe_write_perm_of_broker(
@@ -422,12 +394,7 @@ impl MQAdminExt for DefaultMQAdminExt {
             .await
     }
 
-    async fn put_kv_config(
-        &self,
-        namespace: CheetahString,
-        key: CheetahString,
-        value: CheetahString,
-    ) {
+    async fn put_kv_config(&self, namespace: CheetahString, key: CheetahString, value: CheetahString) {
         todo!()
     }
 
@@ -439,10 +406,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         todo!()
     }
 
-    async fn get_kv_list_by_namespace(
-        &self,
-        namespace: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<KVTable> {
+    async fn get_kv_list_by_namespace(&self, namespace: CheetahString) -> rocketmq_error::RocketMQResult<KVTable> {
         todo!()
     }
 
@@ -491,14 +455,8 @@ impl MQAdminExt for DefaultMQAdminExt {
             .await
     }
 
-    async fn delete_kv_config(
-        &self,
-        namespace: CheetahString,
-        key: CheetahString,
-    ) -> RocketMQResult<()> {
-        self.default_mqadmin_ext_impl
-            .delete_kv_config(namespace, key)
-            .await
+    async fn delete_kv_config(&self, namespace: CheetahString, key: CheetahString) -> RocketMQResult<()> {
+        self.default_mqadmin_ext_impl.delete_kv_config(namespace, key).await
     }
 
     async fn reset_offset_by_timestamp(
@@ -539,24 +497,15 @@ impl MQAdminExt for DefaultMQAdminExt {
         todo!()
     }
 
-    async fn query_topic_consume_by_who(
-        &self,
-        topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<GroupList> {
+    async fn query_topic_consume_by_who(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<GroupList> {
         todo!()
     }
 
-    async fn query_topics_by_consumer(
-        &self,
-        group: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<TopicList> {
+    async fn query_topics_by_consumer(&self, group: CheetahString) -> rocketmq_error::RocketMQResult<TopicList> {
         todo!()
     }
 
-    async fn query_topics_by_consumer_concurrent(
-        &self,
-        group: CheetahString,
-    ) -> AdminToolResult<TopicList> {
+    async fn query_topics_by_consumer_concurrent(&self, group: CheetahString) -> AdminToolResult<TopicList> {
         todo!()
     }
 
@@ -633,21 +582,12 @@ impl MQAdminExt for DefaultMQAdminExt {
         todo!()
     }
 
-    async fn get_cluster_list(
-        &self,
-        topic: String,
-    ) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>> {
+    async fn get_cluster_list(&self, topic: String) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>> {
         todo!()
     }
 
-    async fn get_topic_cluster_list(
-        &self,
-        topic: String,
-    ) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>> {
-        return self
-            .default_mqadmin_ext_impl
-            .get_topic_cluster_list(topic)
-            .await;
+    async fn get_topic_cluster_list(&self, topic: String) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>> {
+        return self.default_mqadmin_ext_impl.get_topic_cluster_list(topic).await;
     }
 
     async fn get_all_topic_config(
@@ -690,11 +630,8 @@ impl MQAdminExt for DefaultMQAdminExt {
     async fn get_name_server_config(
         &self,
         name_servers: Vec<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>
-    {
-        self.default_mqadmin_ext_impl
-            .get_name_server_config(name_servers)
-            .await
+    ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>> {
+        self.default_mqadmin_ext_impl.get_name_server_config(name_servers).await
     }
 
     async fn resume_check_half_message(
@@ -767,8 +704,7 @@ impl MQAdminExt for DefaultMQAdminExt {
     async fn get_controller_config(
         &self,
         controller_servers: Vec<CheetahString>,
-    ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>
-    {
+    ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>> {
         todo!()
     }
 

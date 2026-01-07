@@ -56,27 +56,17 @@ static SYSTEM_TOPIC_SET: LazyLock<DashSet<CheetahString>> = LazyLock::new(|| {
     set.insert(CheetahString::from_static_str(
         TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC,
     ));
-    set.insert(CheetahString::from_static_str(
-        TopicValidator::RMQ_SYS_SCHEDULE_TOPIC,
-    ));
-    set.insert(CheetahString::from_static_str(
-        TopicValidator::RMQ_SYS_BENCHMARK_TOPIC,
-    ));
-    set.insert(CheetahString::from_static_str(
-        TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC,
-    ));
-    set.insert(CheetahString::from_static_str(
-        TopicValidator::RMQ_SYS_TRACE_TOPIC,
-    ));
+    set.insert(CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC));
+    set.insert(CheetahString::from_static_str(TopicValidator::RMQ_SYS_BENCHMARK_TOPIC));
+    set.insert(CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC));
+    set.insert(CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRACE_TOPIC));
     set.insert(CheetahString::from_static_str(
         TopicValidator::RMQ_SYS_TRANS_OP_HALF_TOPIC,
     ));
     set.insert(CheetahString::from_static_str(
         TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC,
     ));
-    set.insert(CheetahString::from_static_str(
-        TopicValidator::RMQ_SYS_SELF_TEST_TOPIC,
-    ));
+    set.insert(CheetahString::from_static_str(TopicValidator::RMQ_SYS_SELF_TEST_TOPIC));
     set.insert(CheetahString::from_static_str(
         TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT,
     ));
@@ -88,21 +78,15 @@ static SYSTEM_TOPIC_SET: LazyLock<DashSet<CheetahString>> = LazyLock::new(|| {
 
 static NOT_ALLOWED_SEND_TOPIC_SET: LazyLock<DashSet<CheetahString>> = LazyLock::new(|| {
     let set = DashSet::new();
-    set.insert(CheetahString::from_static_str(
-        TopicValidator::RMQ_SYS_SCHEDULE_TOPIC,
-    ));
-    set.insert(CheetahString::from_static_str(
-        TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC,
-    ));
+    set.insert(CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC));
+    set.insert(CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC));
     set.insert(CheetahString::from_static_str(
         TopicValidator::RMQ_SYS_TRANS_OP_HALF_TOPIC,
     ));
     set.insert(CheetahString::from_static_str(
         TopicValidator::RMQ_SYS_TRANS_CHECK_MAX_TIME_TOPIC,
     ));
-    set.insert(CheetahString::from_static_str(
-        TopicValidator::RMQ_SYS_SELF_TEST_TOPIC,
-    ));
+    set.insert(CheetahString::from_static_str(TopicValidator::RMQ_SYS_SELF_TEST_TOPIC));
     set.insert(CheetahString::from_static_str(
         TopicValidator::RMQ_SYS_OFFSET_MOVED_EVENT,
     ));
@@ -164,8 +148,7 @@ impl TopicValidator {
         }
 
         if Self::is_topic_or_group_illegal(topic) {
-            const REMARK: &str =
-                "The specified topic contains illegal characters, allowing only ^[%|a-zA-Z0-9_-]+$";
+            const REMARK: &str = "The specified topic contains illegal characters, allowing only ^[%|a-zA-Z0-9_-]+$";
             return ValidateTopicResult {
                 valid: false,
                 remark: CheetahString::from_static_str(REMARK),
@@ -191,9 +174,7 @@ impl TopicValidator {
     #[inline]
     pub fn is_not_allowed_send_topic(topic: &str) -> bool {
         // DashSet iteration is lock-free
-        NOT_ALLOWED_SEND_TOPIC_SET
-            .iter()
-            .any(|entry| entry.as_str() == topic)
+        NOT_ALLOWED_SEND_TOPIC_SET.iter().any(|entry| entry.as_str() == topic)
     }
 
     pub fn add_system_topic(system_topic: impl Into<CheetahString>) {
@@ -205,10 +186,7 @@ impl TopicValidator {
     }
 
     pub fn get_not_allowed_send_topic_set() -> Vec<CheetahString> {
-        NOT_ALLOWED_SEND_TOPIC_SET
-            .iter()
-            .map(|entry| entry.clone())
-            .collect()
+        NOT_ALLOWED_SEND_TOPIC_SET.iter().map(|entry| entry.clone()).collect()
     }
 }
 
@@ -287,9 +265,7 @@ mod tests {
 
     #[test]
     fn is_system_topic_with_system_topic() {
-        assert!(TopicValidator::is_system_topic(
-            TopicValidator::RMQ_SYS_SCHEDULE_TOPIC
-        ));
+        assert!(TopicValidator::is_system_topic(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC));
     }
 
     #[test]

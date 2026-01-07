@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -41,16 +38,16 @@ impl BaseAuthenticationContext {
         self.channel_id.as_ref()
     }
 
-    pub fn set_channel_id(&mut self, channel_id: CheetahString) {
-        self.channel_id = Some(channel_id);
+    pub fn set_channel_id(&mut self, channel_id: Option<CheetahString>) {
+        self.channel_id = channel_id;
     }
 
     pub fn rpc_code(&self) -> Option<&CheetahString> {
         self.rpc_code.as_ref()
     }
 
-    pub fn set_rpc_code(&mut self, rpc_code: CheetahString) {
-        self.rpc_code = Some(rpc_code);
+    pub fn set_rpc_code(&mut self, rpc_code: Option<CheetahString>) {
+        self.rpc_code = rpc_code;
     }
 }
 
@@ -110,8 +107,8 @@ mod tests {
     #[test]
     fn set_and_get_channel_and_rpc() {
         let mut base_authentication_context = BaseAuthenticationContext::new();
-        base_authentication_context.set_channel_id(CheetahString::from("channel-123"));
-        base_authentication_context.set_rpc_code(CheetahString::from("rpc-456"));
+        base_authentication_context.set_channel_id(Some(CheetahString::from("channel-123")));
+        base_authentication_context.set_rpc_code(Some(CheetahString::from("rpc-456")));
 
         assert_eq!(
             Some(&CheetahString::from("channel-123")),
@@ -151,8 +148,7 @@ mod tests {
     #[test]
     fn ext_info_wrong_type_returns_none() {
         let mut base_authentication_context = BaseAuthenticationContext::new();
-        base_authentication_context
-            .set_ext_info(CheetahString::from("info-2"), CheetahString::from("xyz"));
+        base_authentication_context.set_ext_info(CheetahString::from("info-2"), CheetahString::from("xyz"));
 
         assert_eq!(
             None,
@@ -182,13 +178,9 @@ mod tests {
         let mut base_authentication_context = BaseAuthenticationContext::new();
 
         let any_ref = base_authentication_context.as_any();
-        assert!(any_ref
-            .downcast_ref::<BaseAuthenticationContext>()
-            .is_some());
+        assert!(any_ref.downcast_ref::<BaseAuthenticationContext>().is_some());
 
         let any_mut_ref = base_authentication_context.as_any_mut();
-        assert!(any_mut_ref
-            .downcast_mut::<BaseAuthenticationContext>()
-            .is_some());
+        assert!(any_mut_ref.downcast_mut::<BaseAuthenticationContext>().is_some());
     }
 }

@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 /// Pop (Pull-on-Push) metrics constants for RocketMQ metrics collection
 /// Equivalent to Java's PopMetricsConstant class
@@ -21,23 +18,18 @@ pub struct PopMetricsConstant;
 
 impl PopMetricsConstant {
     // Histogram Metrics - Performance
-    pub const HISTOGRAM_POP_BUFFER_SCAN_TIME_CONSUME: &'static str =
-        "rocketmq_pop_buffer_scan_time_consume";
+    pub const HISTOGRAM_POP_BUFFER_SCAN_TIME_CONSUME: &'static str = "rocketmq_pop_buffer_scan_time_consume";
 
     // Counter Metrics - Message Flow
-    pub const COUNTER_POP_REVIVE_IN_MESSAGE_TOTAL: &'static str =
-        "rocketmq_pop_revive_in_message_total";
-    pub const COUNTER_POP_REVIVE_OUT_MESSAGE_TOTAL: &'static str =
-        "rocketmq_pop_revive_out_message_total";
-    pub const COUNTER_POP_REVIVE_RETRY_MESSAGES_TOTAL: &'static str =
-        "rocketmq_pop_revive_retry_messages_total";
+    pub const COUNTER_POP_REVIVE_IN_MESSAGE_TOTAL: &'static str = "rocketmq_pop_revive_in_message_total";
+    pub const COUNTER_POP_REVIVE_OUT_MESSAGE_TOTAL: &'static str = "rocketmq_pop_revive_out_message_total";
+    pub const COUNTER_POP_REVIVE_RETRY_MESSAGES_TOTAL: &'static str = "rocketmq_pop_revive_retry_messages_total";
 
     // Gauge Metrics - System Status
     pub const GAUGE_POP_REVIVE_LAG: &'static str = "rocketmq_pop_revive_lag";
     pub const GAUGE_POP_REVIVE_LATENCY: &'static str = "rocketmq_pop_revive_latency";
     pub const GAUGE_POP_OFFSET_BUFFER_SIZE: &'static str = "rocketmq_pop_offset_buffer_size";
-    pub const GAUGE_POP_CHECKPOINT_BUFFER_SIZE: &'static str =
-        "rocketmq_pop_checkpoint_buffer_size";
+    pub const GAUGE_POP_CHECKPOINT_BUFFER_SIZE: &'static str = "rocketmq_pop_checkpoint_buffer_size";
 
     // Label Names - Pop-specific
     pub const LABEL_REVIVE_MESSAGE_TYPE: &'static str = "revive_message_type";
@@ -62,8 +54,7 @@ pub mod pop_metrics {
 
         pub const POP_REVIVE_IN_MESSAGE_TOTAL: &str = PMC::COUNTER_POP_REVIVE_IN_MESSAGE_TOTAL;
         pub const POP_REVIVE_OUT_MESSAGE_TOTAL: &str = PMC::COUNTER_POP_REVIVE_OUT_MESSAGE_TOTAL;
-        pub const POP_REVIVE_RETRY_MESSAGES_TOTAL: &str =
-            PMC::COUNTER_POP_REVIVE_RETRY_MESSAGES_TOTAL;
+        pub const POP_REVIVE_RETRY_MESSAGES_TOTAL: &str = PMC::COUNTER_POP_REVIVE_RETRY_MESSAGES_TOTAL;
     }
 
     /// Gauge metric names for Pop operations
@@ -142,9 +133,7 @@ impl PopMetricsConstant {
 
     /// Check if a metric name is a Pop gauge
     pub fn is_pop_gauge_metric(metric_name: &str) -> bool {
-        Self::is_pop_metric(metric_name)
-            && !metric_name.ends_with("_total")
-            && !metric_name.contains("_time_consume")
+        Self::is_pop_metric(metric_name) && !metric_name.ends_with("_total") && !metric_name.contains("_time_consume")
     }
 
     /// Check if a metric name is a Pop histogram
@@ -318,10 +307,7 @@ impl PopMetricLabels {
         }
 
         if let Some(queue_id) = self.queue_id {
-            labels.push((
-                PopMetricsConstant::LABEL_QUEUE_ID.to_string(),
-                queue_id.to_string(),
-            ));
+            labels.push((PopMetricsConstant::LABEL_QUEUE_ID.to_string(), queue_id.to_string()));
         }
 
         labels
@@ -359,9 +345,7 @@ mod tests {
     fn test_utility_functions() {
         let histogram_metrics = PopMetricsConstant::get_all_histogram_metrics();
         assert!(!histogram_metrics.is_empty());
-        assert!(
-            histogram_metrics.contains(&PopMetricsConstant::HISTOGRAM_POP_BUFFER_SCAN_TIME_CONSUME)
-        );
+        assert!(histogram_metrics.contains(&PopMetricsConstant::HISTOGRAM_POP_BUFFER_SCAN_TIME_CONSUME));
 
         let counter_metrics = PopMetricsConstant::get_all_counter_metrics();
         assert_eq!(counter_metrics.len(), 3);
@@ -385,19 +369,13 @@ mod tests {
         assert!(PopMetricsConstant::is_pop_counter_metric(
             "rocketmq_pop_revive_in_message_total"
         ));
-        assert!(PopMetricsConstant::is_pop_gauge_metric(
-            "rocketmq_pop_revive_lag"
-        ));
+        assert!(PopMetricsConstant::is_pop_gauge_metric("rocketmq_pop_revive_lag"));
         assert!(PopMetricsConstant::is_pop_histogram_metric(
             "rocketmq_pop_buffer_scan_time_consume"
         ));
 
-        assert!(!PopMetricsConstant::is_pop_metric(
-            "rocketmq_messages_in_total"
-        ));
-        assert!(!PopMetricsConstant::is_pop_counter_metric(
-            "rocketmq_pop_revive_lag"
-        ));
+        assert!(!PopMetricsConstant::is_pop_metric("rocketmq_messages_in_total"));
+        assert!(!PopMetricsConstant::is_pop_counter_metric("rocketmq_pop_revive_lag"));
         assert!(!PopMetricsConstant::is_pop_gauge_metric(
             "rocketmq_pop_revive_in_message_total"
         ));
@@ -444,10 +422,7 @@ mod tests {
 
         assert_eq!(ReviveMessageType::from("normal"), ReviveMessageType::Normal);
         assert_eq!(ReviveMessageType::from("RETRY"), ReviveMessageType::Retry);
-        assert_eq!(
-            ReviveMessageType::from("invalid"),
-            ReviveMessageType::Normal
-        );
+        assert_eq!(ReviveMessageType::from("invalid"), ReviveMessageType::Normal);
     }
 
     #[test]
@@ -456,10 +431,7 @@ mod tests {
         assert_eq!(PutStatus::MessageIllegal.as_str(), "message_illegal");
 
         assert_eq!(PutStatus::from("put_ok"), PutStatus::PutOk);
-        assert_eq!(
-            PutStatus::from("MESSAGE_ILLEGAL"),
-            PutStatus::MessageIllegal
-        );
+        assert_eq!(PutStatus::from("MESSAGE_ILLEGAL"), PutStatus::MessageIllegal);
         assert_eq!(PutStatus::from("invalid"), PutStatus::UnknownError);
     }
 
@@ -474,10 +446,7 @@ mod tests {
         assert_eq!(labels.len(), 3);
 
         let label_map: std::collections::HashMap<String, String> = labels.into_iter().collect();
-        assert_eq!(
-            label_map.get("revive_message_type"),
-            Some(&"retry".to_string())
-        );
+        assert_eq!(label_map.get("revive_message_type"), Some(&"retry".to_string()));
         assert_eq!(label_map.get("put_status"), Some(&"put_ok".to_string()));
         assert_eq!(label_map.get("queue_id"), Some(&"5".to_string()));
     }

@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Unified error system for RocketMQ Rust implementation
 //!
@@ -29,6 +26,9 @@ mod tools;
 
 use std::io;
 
+// Re-export filter error
+pub use crate::filter_error::FilterError;
+
 pub use network::NetworkError;
 pub use protocol::ProtocolError;
 pub use rpc::RpcClientError;
@@ -36,11 +36,15 @@ pub use serialization::SerializationError;
 use thiserror::Error;
 pub use tools::ToolsError;
 
+// Re-export auth error from the auth_error module
+pub use crate::auth_error::AuthError;
 // Re-export legacy error types for backward compatibility (will be deprecated)
 #[allow(deprecated)]
 pub use crate::client_error::*;
 #[allow(deprecated)]
 pub use crate::common_error::*;
+// Re-export controller error from the controller_error module
+pub use crate::controller_error::ControllerError;
 
 /// Main error type for all RocketMQ operations
 ///
@@ -66,6 +70,14 @@ pub use crate::common_error::*;
 ///             "localhost:9876",
 ///             "empty address",
 ///         ));
+///     }
+///     Ok(())
+/// }
+///
+/// fn authenticate_user(username: &str) -> RocketMQResult<()> {
+///     // Create an authentication error
+///     if username.is_empty() {
+///         return Err(RocketMQError::user_not_found(""));
 ///     }
 ///     Ok(())
 /// }
@@ -101,6 +113,20 @@ pub enum RocketMQError {
     Rpc(#[from] RpcClientError),
 
     // ============================================================================
+    // Authentication Errors
+    // ============================================================================
+    /// Authentication/authorization errors (credential validation, access control, etc.)
+    #[error(transparent)]
+    Authentication(#[from] AuthError),
+
+    // ============================================================================
+    // Controller Errors
+    // ============================================================================
+    /// Controller operation errors (Raft consensus, leader election, broker management, etc.)
+    #[error(transparent)]
+    Controller(#[from] ControllerError),
+
+    // ============================================================================
     // Broker Errors
     // ============================================================================
     /// Broker not found
@@ -134,11 +160,7 @@ pub enum RocketMQError {
 
     /// Queue ID out of range
     #[error("Queue {queue_id} out of range (0-{max}) for topic '{topic}'")]
-    QueueIdOutOfRange {
-        topic: String,
-        queue_id: i32,
-        max: i32,
-    },
+    QueueIdOutOfRange { topic: String, queue_id: i32, max: i32 },
 
     /// Message body too large
     #[error("Message body length {actual} bytes exceeds limit {limit} bytes")]
@@ -150,11 +172,7 @@ pub enum RocketMQError {
 
     /// Retry limit exceeded
     #[error("Retry limit {current}/{max} exceeded for group '{group}'")]
-    RetryLimitExceeded {
-        group: String,
-        current: i32,
-        max: i32,
-    },
+    RetryLimitExceeded { group: String, current: i32, max: i32 },
 
     /// Transaction message rejected
     #[error("Transaction message rejected by broker policy")]
@@ -190,10 +208,7 @@ pub enum RocketMQError {
     // ============================================================================
     /// Request body missing or invalid
     #[error("Request body {operation} failed: {reason}")]
-    RequestBodyInvalid {
-        operation: &'static str,
-        reason: String,
-    },
+    RequestBodyInvalid { operation: &'static str, reason: String },
 
     /// Request header missing or invalid
     #[error("Request header error: {0}")]
@@ -201,10 +216,7 @@ pub enum RocketMQError {
 
     /// Response encoding/decoding failed
     #[error("Response {operation} failed: {reason}")]
-    ResponseProcessFailed {
-        operation: &'static str,
-        reason: String,
-    },
+    ResponseProcessFailed { operation: &'static str, reason: String },
 
     // ============================================================================
     // NameServer/Route Errors
@@ -246,10 +258,7 @@ pub enum RocketMQError {
 
     /// Invalid client state
     #[error("Invalid client state: expected {expected}, got {actual}")]
-    ClientInvalidState {
-        expected: &'static str,
-        actual: String,
-    },
+    ClientInvalidState { expected: &'static str, actual: String },
 
     /// Producer not available
     #[error("Producer is not available")]
@@ -265,6 +274,13 @@ pub enum RocketMQError {
     /// Tools and admin operation errors
     #[error(transparent)]
     Tools(#[from] ToolsError),
+
+    // ============================================================================
+    // Filter Errors
+    // ============================================================================
+    /// Bloom filter and bit array operation errors
+    #[error(transparent)]
+    Filter(#[from] FilterError),
 
     // ============================================================================
     // Storage Errors
@@ -321,10 +337,7 @@ pub enum RocketMQError {
 
     /// Consensus operation timeout
     #[error("Consensus operation '{operation}' timed out after {timeout_ms}ms")]
-    ControllerConsensusTimeout {
-        operation: &'static str,
-        timeout_ms: u64,
-    },
+    ControllerConsensusTimeout { operation: &'static str, timeout_ms: u64 },
 
     /// Snapshot operation failed
     #[error("Snapshot operation failed: {reason}")]
@@ -343,10 +356,7 @@ pub enum RocketMQError {
 
     /// Operation timeout
     #[error("Operation '{operation}' timed out after {timeout_ms}ms")]
-    Timeout {
-        operation: &'static str,
-        timeout_ms: u64,
-    },
+    Timeout { operation: &'static str, timeout_ms: u64 },
 
     /// Internal error (should be rare)
     #[error("Internal error: {0}")]
@@ -373,6 +383,9 @@ pub enum RocketMQError {
 
     #[error("Not initialized: {0}")]
     NotInitialized(String),
+
+    #[error("Message is missing required property: {property}")]
+    MissingRequiredMessageProperty { property: &'static str },
 }
 
 // ============================================================================
@@ -388,11 +401,7 @@ impl RocketMQError {
 
     /// Create a broker operation failed error
     #[inline]
-    pub fn broker_operation_failed(
-        operation: &'static str,
-        code: i32,
-        message: impl Into<String>,
-    ) -> Self {
+    pub fn broker_operation_failed(operation: &'static str, code: i32, message: impl Into<String>) -> Self {
         Self::BrokerOperationFailed {
             operation,
             code,
@@ -428,17 +437,12 @@ impl RocketMQError {
     /// Create a route not found error
     #[inline]
     pub fn route_not_found(topic: impl Into<String>) -> Self {
-        Self::RouteNotFound {
-            topic: topic.into(),
-        }
+        Self::RouteNotFound { topic: topic.into() }
     }
 
     /// Create a route registration conflict error
     #[inline]
-    pub fn route_registration_conflict(
-        broker_name: impl Into<String>,
-        reason: impl Into<String>,
-    ) -> Self {
+    pub fn route_registration_conflict(broker_name: impl Into<String>, reason: impl Into<String>) -> Self {
         Self::RouteRegistrationConflict {
             broker_name: broker_name.into(),
             reason: reason.into(),
@@ -529,6 +533,114 @@ impl RocketMQError {
     #[inline]
     pub fn not_initialized(reason: impl Into<String>) -> Self {
         Self::NotInitialized(reason.into())
+    }
+
+    // ============================================================================
+    // Authentication Error Constructors
+    // ============================================================================
+
+    /// Create an authentication failed error
+    #[inline]
+    pub fn authentication_failed(reason: impl Into<String>) -> Self {
+        Self::Authentication(AuthError::AuthenticationFailed(reason.into()))
+    }
+
+    /// Create an invalid credential error
+    #[inline]
+    pub fn invalid_credential(reason: impl Into<String>) -> Self {
+        Self::Authentication(AuthError::InvalidCredential(reason.into()))
+    }
+
+    /// Create a user not found error
+    #[inline]
+    pub fn user_not_found(username: impl Into<String>) -> Self {
+        Self::Authentication(AuthError::UserNotFound(username.into()))
+    }
+
+    /// Create an invalid signature error
+    #[inline]
+    pub fn invalid_signature(reason: impl Into<String>) -> Self {
+        Self::Authentication(AuthError::InvalidSignature(reason.into()))
+    }
+
+    // ============================================================================
+    // Controller Error Constructors
+    // ============================================================================
+
+    /// Create a controller not leader error
+    #[inline]
+    pub fn controller_not_leader(leader_id: Option<u64>) -> Self {
+        Self::Controller(ControllerError::NotLeader { leader_id })
+    }
+
+    /// Create a controller Raft error
+    #[inline]
+    pub fn controller_raft_error(reason: impl Into<String>) -> Self {
+        Self::Controller(ControllerError::Raft(reason.into()))
+    }
+
+    /// Create a controller metadata not found error
+    #[inline]
+    pub fn controller_metadata_not_found(key: impl Into<String>) -> Self {
+        Self::Controller(ControllerError::MetadataNotFound { key: key.into() })
+    }
+
+    /// Create a controller invalid request error
+    #[inline]
+    pub fn controller_invalid_request(reason: impl Into<String>) -> Self {
+        Self::Controller(ControllerError::InvalidRequest(reason.into()))
+    }
+
+    /// Create a controller timeout error
+    #[inline]
+    pub fn controller_timeout(timeout_ms: u64) -> Self {
+        Self::Controller(ControllerError::Timeout { timeout_ms })
+    }
+
+    /// Create a controller shutdown error
+    #[inline]
+    pub fn controller_shutdown() -> Self {
+        Self::Controller(ControllerError::Shutdown)
+    }
+
+    // ============================================================================
+    // Filter Error Constructors
+    // ============================================================================
+
+    /// Create an empty bytes error
+    #[inline]
+    pub fn filter_empty_bytes() -> Self {
+        Self::Filter(FilterError::empty_bytes())
+    }
+
+    /// Create an invalid bit length error
+    #[inline]
+    pub fn filter_invalid_bit_length() -> Self {
+        Self::Filter(FilterError::invalid_bit_length())
+    }
+
+    /// Create a bit length too small error
+    #[inline]
+    pub fn filter_bit_length_too_small() -> Self {
+        Self::Filter(FilterError::bit_length_too_small())
+    }
+
+    /// Create a bit position out of bounds error
+    #[inline]
+    pub fn filter_bit_position_out_of_bounds(pos: usize, max: usize) -> Self {
+        Self::Filter(FilterError::bit_position_out_of_bounds(pos, max))
+    }
+
+    /// Create a byte position out of bounds error
+    #[inline]
+    pub fn filter_byte_position_out_of_bounds(pos: usize, max: usize) -> Self {
+        Self::Filter(FilterError::byte_position_out_of_bounds(pos, max))
+    }
+
+    /// Create an uninitialized error
+    #[inline]
+    pub fn filter_uninitialized() -> Self {
+        Self::Filter(FilterError::uninitialized())
     }
 }
 
@@ -638,8 +750,8 @@ mod tests {
 
     #[test]
     fn test_broker_operation_with_addr() {
-        let err = RocketMQError::broker_operation_failed("SEND_MESSAGE", 1, "failed")
-            .with_broker_addr("127.0.0.1:10911");
+        let err =
+            RocketMQError::broker_operation_failed("SEND_MESSAGE", 1, "failed").with_broker_addr("127.0.0.1:10911");
 
         if let RocketMQError::BrokerOperationFailed { broker_addr, .. } = err {
             assert_eq!(broker_addr, Some("127.0.0.1:10911".to_string()));

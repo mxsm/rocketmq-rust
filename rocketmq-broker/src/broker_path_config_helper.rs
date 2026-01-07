@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::path::PathBuf;
 
@@ -155,21 +152,15 @@ mod test {
 
     #[test]
     fn test_get_topic_config_path() {
-        let root_dir = PathBuf::from("/path/to/root")
-            .to_string_lossy()
-            .into_owned();
+        let root_dir = PathBuf::from("/path/to/root").to_string_lossy().into_owned();
         let path = get_topic_config_path(root_dir.as_str());
-        let expected_path = PathBuf::from(root_dir.clone())
-            .join("config")
-            .join("topics.json");
+        let expected_path = PathBuf::from(root_dir.clone()).join("config").join("topics.json");
         assert_eq!(path, expected_path.to_string_lossy().into_owned());
     }
 
     #[test]
     fn test_get_topic_queue_mapping_path() {
-        let root_dir = PathBuf::from("/path/to/root")
-            .to_string_lossy()
-            .into_owned();
+        let root_dir = PathBuf::from("/path/to/root").to_string_lossy().into_owned();
         let path = get_topic_queue_mapping_path(root_dir.as_str());
         let expected_path = PathBuf::from(root_dir.clone())
             .join("config")
@@ -179,9 +170,7 @@ mod test {
 
     #[test]
     fn test_get_consumer_offset_path() {
-        let root_dir = PathBuf::from("/path/to/root")
-            .to_string_lossy()
-            .into_owned();
+        let root_dir = PathBuf::from("/path/to/root").to_string_lossy().into_owned();
         let path = get_consumer_offset_path(root_dir.as_str());
         let expected_path = PathBuf::from(root_dir.clone())
             .join("config")
@@ -191,9 +180,7 @@ mod test {
 
     #[test]
     fn test_get_lmq_consumer_offset_path() {
-        let root_dir = PathBuf::from("/path/to/root")
-            .to_string_lossy()
-            .into_owned();
+        let root_dir = PathBuf::from("/path/to/root").to_string_lossy().into_owned();
         let path = get_lmq_consumer_offset_path(root_dir.as_str());
         let expected_path = PathBuf::from(root_dir.clone())
             .join("config")
@@ -203,9 +190,7 @@ mod test {
 
     #[test]
     fn test_get_consumer_order_info_path() {
-        let root_dir = PathBuf::from("/path/to/root")
-            .to_string_lossy()
-            .into_owned();
+        let root_dir = PathBuf::from("/path/to/root").to_string_lossy().into_owned();
         let path = get_consumer_order_info_path(root_dir.as_str());
         let expected_path = PathBuf::from(root_dir.clone())
             .join("config")
@@ -215,9 +200,7 @@ mod test {
 
     #[test]
     fn test_get_subscription_group_path() {
-        let root_dir = PathBuf::from("/path/to/root")
-            .to_string_lossy()
-            .into_owned();
+        let root_dir = PathBuf::from("/path/to/root").to_string_lossy().into_owned();
         let path = get_subscription_group_path(root_dir.as_str());
         let expected_path = PathBuf::from(root_dir.clone())
             .join("config")
@@ -227,33 +210,23 @@ mod test {
 
     #[test]
     fn test_get_timer_check_path() {
-        let root_dir = PathBuf::from("/path/to/root")
-            .to_string_lossy()
-            .into_owned();
+        let root_dir = PathBuf::from("/path/to/root").to_string_lossy().into_owned();
         let path = get_timer_check_path(root_dir.as_str());
-        let expected_path = PathBuf::from(root_dir.clone())
-            .join("config")
-            .join("timercheck");
+        let expected_path = PathBuf::from(root_dir.clone()).join("config").join("timercheck");
         assert_eq!(path, expected_path.to_string_lossy().into_owned());
     }
 
     #[test]
     fn test_get_timer_metrics_path() {
-        let root_dir = PathBuf::from("/path/to/root")
-            .to_string_lossy()
-            .into_owned();
+        let root_dir = PathBuf::from("/path/to/root").to_string_lossy().into_owned();
         let path = get_timer_metrics_path(root_dir.as_str());
-        let expected_path = PathBuf::from(root_dir.clone())
-            .join("config")
-            .join("timermetrics");
+        let expected_path = PathBuf::from(root_dir.clone()).join("config").join("timermetrics");
         assert_eq!(path, expected_path.to_string_lossy().into_owned());
     }
 
     #[test]
     fn test_get_transaction_metrics_path() {
-        let root_dir = PathBuf::from("/path/to/root")
-            .to_string_lossy()
-            .into_owned();
+        let root_dir = PathBuf::from("/path/to/root").to_string_lossy().into_owned();
         let path = get_transaction_metrics_path(root_dir.as_str());
         let expected_path = PathBuf::from(root_dir.clone())
             .join("config")
@@ -263,9 +236,7 @@ mod test {
 
     #[test]
     fn test_get_consumer_filter_path() {
-        let root_dir = PathBuf::from("/path/to/root")
-            .to_string_lossy()
-            .into_owned();
+        let root_dir = PathBuf::from("/path/to/root").to_string_lossy().into_owned();
         let path = get_consumer_filter_path(root_dir.as_str());
         let expected_path = PathBuf::from(root_dir.clone())
             .join("config")
@@ -275,9 +246,7 @@ mod test {
 
     #[test]
     fn test_get_message_request_mode_path() {
-        let root_dir = PathBuf::from("/path/to/root")
-            .to_string_lossy()
-            .into_owned();
+        let root_dir = PathBuf::from("/path/to/root").to_string_lossy().into_owned();
         let path = get_message_request_mode_path(root_dir.as_str());
         let expected_path = PathBuf::from(root_dir.clone())
             .join("config")

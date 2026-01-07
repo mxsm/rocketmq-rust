@@ -1,15 +1,15 @@
 [package]
-name = "rocketmq-filter"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-homepage.workspace = true
-repository.workspace = true
-license.workspace = true
-keywords = ["filter", "rocketmq", "tag", "sql"]
-categories = ["development-tools", "network-programming", "asynchronous"]
-readme.workspace = true
-description = "A filter for RocketMQ messages"
+name                   = "rocketmq-filter"
+version.workspace      = true
+authors.workspace      = true
+edition.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+license.workspace      = true
+keywords               = ["filter", "rocketmq", "tag", "sql"]
+categories             = ["development-tools", "network-programming", "asynchronous"]
+readme.workspace       = true
+description            = "A filter for RocketMQ messages"
 rust-version.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -17,5 +17,11 @@ rust-version.workspace = true
 [dependencies]
 #json spupport
 serde.workspace = true
-cheetah-string = { workspace = true }
+cheetah-string  = { workspace = true }
+rocketmq-common = { workspace = true }
+rocketmq-error  = { workspace = true }
+ahash           = "0.8"
+dashmap         = "6.1"
 
+[dev-dependencies]
+serde_json.workspace = true

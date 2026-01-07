@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::any::Any;
 
@@ -73,3 +70,48 @@ impl AsAny for DefaultAuthenticationContext {
 }
 
 impl AuthenticationContext for DefaultAuthenticationContext {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_authentication_context_default_and_new() {
+        let context = DefaultAuthenticationContext::default();
+        assert!(context.username().is_none());
+        assert!(context.content().is_none());
+        assert!(context.signature().is_none());
+
+        let context = DefaultAuthenticationContext::new();
+        assert!(context.username().is_none());
+        assert!(context.content().is_none());
+        assert!(context.signature().is_none());
+    }
+
+    #[test]
+    fn test_default_authentication_context_setters_and_getters() {
+        let mut context = DefaultAuthenticationContext::new();
+        let username = CheetahString::from("test_user");
+        let content = vec![1, 2, 3];
+        let signature = CheetahString::from("test_signature");
+
+        context.set_username(username.clone());
+        context.set_content(content.clone());
+        context.set_signature(signature.clone());
+
+        assert_eq!(context.username(), Some(&username));
+        assert_eq!(context.content(), Some(content.as_slice()));
+        assert_eq!(context.signature(), Some(&signature));
+    }
+
+    #[test]
+    fn test_default_authentication_context_as_any() {
+        let context = DefaultAuthenticationContext::new();
+        let any = context.as_any();
+        assert!(any.is::<DefaultAuthenticationContext>());
+
+        let mut context_mut = DefaultAuthenticationContext::new();
+        let any_mut = context_mut.as_any_mut();
+        assert!(any_mut.is::<DefaultAuthenticationContext>());
+    }
+}

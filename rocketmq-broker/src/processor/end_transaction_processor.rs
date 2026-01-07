@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
@@ -63,15 +60,9 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
-        info!(
-            "EndTransactionProcessor received request code: {:?}",
-            request_code
-        );
+        info!("EndTransactionProcessor received request code: {:?}", request_code);
         match request_code {
-            RequestCode::EndTransaction => {
-                self.process_request_inner(channel, ctx, request_code, request)
-                    .await
-            }
+            RequestCode::EndTransaction => self.process_request_inner(channel, ctx, request_code, request).await,
             _ => {
                 warn!(
                     "EndTransactionProcessor received unknown request code: {:?}",
@@ -111,8 +102,7 @@ where
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_header =
-            request.decode_command_custom_header::<EndTransactionRequestHeader>()?;
+        let request_header = request.decode_command_custom_header::<EndTransactionRequestHeader>()?;
         debug!("Transaction request: {:?}", request_header);
 
         if BrokerRole::Slave == self.broker_runtime_inner.message_store_config().broker_role {
@@ -125,8 +115,7 @@ where
             match request_header.commit_or_rollback {
                 MessageSysFlag::TRANSACTION_NOT_TYPE => {
                     warn!(
-                        "Check producer transaction state, but it's pending status. \
-                         RequestHeader: {:?}, Remark: {:?}",
+                        "Check producer transaction state, but it's pending status. RequestHeader: {:?}, Remark: {:?}",
                         request_header,
                         request.remark()
                     );
@@ -134,16 +123,16 @@ where
                 }
                 MessageSysFlag::TRANSACTION_COMMIT_TYPE => {
                     warn!(
-                        "Check producer transaction state, the producer commit the message. \
-                         RequestHeader: {:?}, Remark: {:?}",
+                        "Check producer transaction state, the producer commit the message. RequestHeader: {:?}, \
+                         Remark: {:?}",
                         request_header,
                         request.remark()
                     );
                 }
                 MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => {
                     warn!(
-                        "Check producer transaction state, the producer rollback the message. \
-                         RequestHeader: {:?}, Remark: {:?}",
+                        "Check producer transaction state, the producer rollback the message. RequestHeader: {:?}, \
+                         Remark: {:?}",
                         request_header,
                         request.remark()
                     );
@@ -154,8 +143,8 @@ where
             match request_header.commit_or_rollback {
                 MessageSysFlag::TRANSACTION_NOT_TYPE => {
                     warn!(
-                        "The producer end transaction in sending message, and it's pending \
-                         status. RequestHeader: {:?}, Remark: {:?}",
+                        "The producer end transaction in sending message, and it's pending status. RequestHeader: \
+                         {:?}, Remark: {:?}",
                         request_header,
                         request.remark()
                     );
@@ -166,8 +155,8 @@ where
                 }
                 MessageSysFlag::TRANSACTION_ROLLBACK_TYPE => {
                     warn!(
-                        "The producer end transaction in sending message, rollback the message. \
-                         RequestHeader: {:?}, Remark: {:?}",
+                        "The producer end transaction in sending message, rollback the message. RequestHeader: {:?}, \
+                         Remark: {:?}",
                         request_header,
                         request.remark()
                     );
@@ -181,48 +170,38 @@ where
             response_code,
             ..
         } = if MessageSysFlag::TRANSACTION_COMMIT_TYPE == request_header.commit_or_rollback {
-            let mut result = self
-                .transactional_message_service
-                .commit_message(&request_header);
+            let mut result = self.transactional_message_service.commit_message(&request_header);
             if result.response_code == ResponseCode::Success {
                 if self.reject_commit_or_rollback(
                     request_header.from_transaction_check,
                     result.prepare_message.as_ref().unwrap(),
                 ) {
                     warn!(
-                        "Message commit fail [producer end]. currentTimeMillis - bornTime > \
-                         checkImmunityTime, msgId={},commitLogOffset={}, wait check",
+                        "Message commit fail [producer end]. currentTimeMillis - bornTime > checkImmunityTime, \
+                         msgId={},commitLogOffset={}, wait check",
                         request_header.msg_id, request_header.commit_log_offset
                     );
                     return Ok(Some(RemotingCommand::create_response_command_with_code(
                         ResponseCode::IllegalOperation,
                     )));
                 }
-                let res =
-                    self.check_prepare_message(result.prepare_message.as_ref(), &request_header);
+                let res = self.check_prepare_message(result.prepare_message.as_ref(), &request_header);
                 if ResponseCode::from(res.code()) == ResponseCode::Success {
                     // Validation passed, send final message
-                    let mut msg_inner =
-                        end_message_transaction(result.prepare_message.as_mut().unwrap());
+                    let mut msg_inner = end_message_transaction(result.prepare_message.as_mut().unwrap());
                     msg_inner.message_ext_inner.sys_flag = MessageSysFlag::reset_transaction_value(
                         msg_inner.message_ext_inner.sys_flag,
                         request_header.commit_or_rollback,
                     );
-                    msg_inner.message_ext_inner.queue_offset =
-                        request_header.tran_state_table_offset as i64;
-                    msg_inner.message_ext_inner.prepared_transaction_offset =
-                        request_header.commit_log_offset as i64;
+                    msg_inner.message_ext_inner.queue_offset = request_header.tran_state_table_offset as i64;
+                    msg_inner.message_ext_inner.prepared_transaction_offset = request_header.commit_log_offset as i64;
                     msg_inner.message_ext_inner.store_timestamp =
                         result.prepare_message.as_ref().unwrap().store_timestamp;
-                    MessageAccessor::clear_property(
-                        &mut msg_inner,
-                        MessageConst::PROPERTY_TRANSACTION_PREPARED,
-                    );
+                    MessageAccessor::clear_property(&mut msg_inner, MessageConst::PROPERTY_TRANSACTION_PREPARED);
 
                     // Save topic and born_timestamp before sending (msg_inner is moved)
                     let topic = msg_inner.get_topic().clone();
-                    let born_timestamp =
-                        result.prepare_message.as_ref().unwrap().born_timestamp as u64;
+                    let born_timestamp = result.prepare_message.as_ref().unwrap().born_timestamp as u64;
 
                     let send_result = self.send_final_message(msg_inner).await;
                     if ResponseCode::from(send_result.code()) == ResponseCode::Success {
@@ -237,8 +216,7 @@ where
                             metrics.inc_commit_messages(&topic, 1);
 
                             // Record transaction finish latency (in seconds)
-                            let commit_latency_secs =
-                                (get_current_millis() - born_timestamp) / 1000;
+                            let commit_latency_secs = (get_current_millis() - born_timestamp) / 1000;
                             metrics.record_transaction_finish_latency(&topic, commit_latency_secs);
                         }
 
@@ -256,25 +234,22 @@ where
                 OperationResult::default()
             }
         } else if MessageSysFlag::TRANSACTION_ROLLBACK_TYPE == request_header.commit_or_rollback {
-            let result = self
-                .transactional_message_service
-                .rollback_message(&request_header);
+            let result = self.transactional_message_service.rollback_message(&request_header);
             if result.response_code == ResponseCode::Success {
                 if self.reject_commit_or_rollback(
                     request_header.from_transaction_check,
                     result.prepare_message.as_ref().unwrap(),
                 ) {
                     warn!(
-                        "Message commit fail [producer end]. currentTimeMillis - bornTime > \
-                         checkImmunityTime, msgId={},commitLogOffset={}, wait check",
+                        "Message commit fail [producer end]. currentTimeMillis - bornTime > checkImmunityTime, \
+                         msgId={},commitLogOffset={}, wait check",
                         request_header.msg_id, request_header.commit_log_offset
                     );
                     return Ok(Some(RemotingCommand::create_response_command_with_code(
                         ResponseCode::IllegalOperation,
                     )));
                 }
-                let res =
-                    self.check_prepare_message(result.prepare_message.as_ref(), &request_header);
+                let res = self.check_prepare_message(result.prepare_message.as_ref(), &request_header);
                 if ResponseCode::from(res.code()) == ResponseCode::Success {
                     let _ = self
                         .transactional_message_service
@@ -284,9 +259,7 @@ where
                     // Record metrics for successful rollback
                     if let Some(prepare_msg) = result.prepare_message.as_ref() {
                         let real_topic = prepare_msg
-                            .get_property(&CheetahString::from_static_str(
-                                MessageConst::PROPERTY_REAL_TOPIC,
-                            ))
+                            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
                             .unwrap_or_default();
 
                         if let Some(metrics) = BrokerMetricsManager::try_global() {
@@ -309,16 +282,11 @@ where
         };
 
         Ok(Some(
-            RemotingCommand::create_remoting_command(response_code)
-                .set_remark_option(response_remark),
+            RemotingCommand::create_remoting_command(response_code).set_remark_option(response_remark),
         ))
     }
 
-    pub fn reject_commit_or_rollback(
-        &self,
-        from_transaction_check: bool,
-        message_ext: &MessageExt,
-    ) -> bool {
+    pub fn reject_commit_or_rollback(&self, from_transaction_check: bool, message_ext: &MessageExt) -> bool {
         if from_transaction_check {
             return false;
         }
@@ -326,17 +294,14 @@ where
         // The setting of MessageConst::PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS is configured in the
         // SendMessageActivity of the Proxy. Therefore, messages sent through the SDK will not have
         // this property.
-        if let Some(check_immunity_time_str) = message_ext.get_user_property(
-            &CheetahString::from_static_str(MessageConst::PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS),
-        ) {
+        if let Some(check_immunity_time_str) = message_ext.get_user_property(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS,
+        )) {
             if !check_immunity_time_str.is_empty() {
-                let value_of_current_minus_born =
-                    get_current_millis() - (message_ext.born_timestamp as u64);
+                let value_of_current_minus_born = get_current_millis() - (message_ext.born_timestamp as u64);
                 let check_immunity_time = TransactionalMessageUtil::get_immunity_time(
                     &check_immunity_time_str,
-                    self.broker_runtime_inner
-                        .broker_config()
-                        .transaction_timeout,
+                    self.broker_runtime_inner.broker_config().transaction_timeout,
                 );
                 return value_of_current_minus_born > check_immunity_time;
             }
@@ -352,9 +317,8 @@ where
     ) -> RemotingCommand {
         let mut command = RemotingCommand::create_response_command();
         if let Some(message_ext) = message_ext {
-            let pgroup_read = message_ext.get_property(&CheetahString::from_static_str(
-                MessageConst::PROPERTY_PRODUCER_GROUP,
-            ));
+            let pgroup_read =
+                message_ext.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP));
             match pgroup_read {
                 Some(pgroup) if pgroup == request_header.producer_group.as_str() => {
                     // Producer group matches, continue validation
@@ -427,11 +391,9 @@ where
             PutMessageStatus::MessageIllegal | PutMessageStatus::PropertiesSizeExceeded => {
                 response.set_code_mut(ResponseCode::MessageIllegal);
                 response.set_remark_mut(format!(
-                    "The message is illegal, maybe msg body or properties length not matched. msg \
-                     body length limit {}B, msg properties length limit 32KB.",
-                    self.broker_runtime_inner
-                        .message_store_config()
-                        .max_message_size
+                    "The message is illegal, maybe msg body or properties length not matched. msg body length limit \
+                     {}B, msg properties length limit 32KB.",
+                    self.broker_runtime_inner.message_store_config().max_message_size
                 ));
             }
             PutMessageStatus::OsPageCacheBusy => {
@@ -457,8 +419,8 @@ where
             PutMessageStatus::WheelTimerFlowControl => {
                 response.set_code_mut(ResponseCode::SystemError);
                 response.set_remark_mut(format!(
-                    "timer message is under flow control, max num limit is {} or the current \
-                     value is greater than {} and less than {}, trigger random flow control",
+                    "timer message is under flow control, max num limit is {} or the current value is greater than {} \
+                     and less than {}, trigger random flow control",
                     self.broker_runtime_inner
                         .message_store_config()
                         .timer_congest_num_each_slot
@@ -475,22 +437,16 @@ where
             PutMessageStatus::WheelTimerMsgIllegal => {
                 response.set_code_mut(ResponseCode::MessageIllegal);
                 response.set_remark_mut(format!(
-                    "timer message illegal, the delay time should not be bigger than the max \
-                     delay {}ms; or if set del msg, the delay time should be bigger than the \
-                     current time",
-                    self.broker_runtime_inner
-                        .message_store_config()
-                        .timer_max_delay_sec
-                        * 1000
+                    "timer message illegal, the delay time should not be bigger than the max delay {}ms; or if set \
+                     del msg, the delay time should be bigger than the current time",
+                    self.broker_runtime_inner.message_store_config().timer_max_delay_sec * 1000
                 ));
             }
             PutMessageStatus::WheelTimerNotEnable => {
                 response.set_code_mut(ResponseCode::SystemError);
                 response.set_remark_mut(format!(
                     "accurate timer message is not enabled, timerWheelEnable is {}",
-                    self.broker_runtime_inner
-                        .message_store_config()
-                        .timer_wheel_enable
+                    self.broker_runtime_inner.message_store_config().timer_wheel_enable
                 ));
             }
         }
@@ -502,15 +458,11 @@ fn end_message_transaction(msg_ext: &mut MessageExt) -> MessageExtBrokerInner {
     let mut msg_inner = MessageExtBrokerInner::default();
     msg_inner.set_topic(
         msg_ext
-            .get_user_property(&CheetahString::from_static_str(
-                MessageConst::PROPERTY_REAL_TOPIC,
-            ))
+            .get_user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
             .unwrap_or_default(),
     );
     msg_inner.message_ext_inner.queue_id = msg_ext
-        .get_user_property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_REAL_QUEUE_ID,
-        ))
+        .get_user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID))
         .unwrap_or_default()
         .parse()
         .unwrap_or_default();
@@ -529,14 +481,12 @@ fn end_message_transaction(msg_ext: &mut MessageExt) -> MessageExtBrokerInner {
         msg_inner.set_transaction_id(transaction_id);
     }
     msg_inner.message_ext_inner.sys_flag = msg_ext.sys_flag;
-    let topic_filter_type = if msg_inner.message_ext_inner.sys_flag
-        & MessageSysFlag::MULTI_TAGS_FLAG
-        == MessageSysFlag::MULTI_TAGS_FLAG
-    {
-        TopicFilterType::MultiTag
-    } else {
-        TopicFilterType::SingleTag
-    };
+    let topic_filter_type =
+        if msg_inner.message_ext_inner.sys_flag & MessageSysFlag::MULTI_TAGS_FLAG == MessageSysFlag::MULTI_TAGS_FLAG {
+            TopicFilterType::MultiTag
+        } else {
+            TopicFilterType::SingleTag
+        };
     let tags_code_value = if let Some(tags) = msg_ext.get_tags() {
         MessageExtBrokerInner::tags_string2tags_code(&topic_filter_type, tags.as_str())
     } else {
@@ -544,8 +494,7 @@ fn end_message_transaction(msg_ext: &mut MessageExt) -> MessageExtBrokerInner {
     };
     msg_inner.tags_code = tags_code_value;
     MessageAccessor::set_properties(&mut msg_inner, msg_ext.get_properties().clone());
-    msg_inner.properties_string =
-        message_decoder::message_properties_to_string(msg_ext.get_properties());
+    msg_inner.properties_string = message_decoder::message_properties_to_string(msg_ext.get_properties());
     MessageAccessor::clear_property(&mut msg_inner, MessageConst::PROPERTY_REAL_TOPIC);
     MessageAccessor::clear_property(&mut msg_inner, MessageConst::PROPERTY_REAL_QUEUE_ID);
     msg_inner
@@ -562,33 +511,23 @@ mod tests {
         assert_eq!(
             msg_inner.get_topic(),
             &msg_ext
-                .get_user_property(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_REAL_TOPIC
-                ))
+                .get_user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
                 .unwrap_or_default()
         );
         assert_eq!(
             msg_inner.message_ext_inner.queue_id,
             msg_ext
-                .get_user_property(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_REAL_QUEUE_ID
-                ))
+                .get_user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID))
                 .unwrap_or_default()
                 .parse::<i32>()
                 .unwrap_or_default()
         );
         assert_eq!(msg_inner.get_body(), msg_ext.get_body());
         assert_eq!(msg_inner.get_flag(), msg_ext.get_flag());
-        assert_eq!(
-            msg_inner.message_ext_inner.born_timestamp,
-            msg_ext.born_timestamp
-        );
+        assert_eq!(msg_inner.message_ext_inner.born_timestamp, msg_ext.born_timestamp);
         assert_eq!(msg_inner.message_ext_inner.born_host, msg_ext.born_host);
         assert_eq!(msg_inner.message_ext_inner.store_host, msg_ext.store_host);
-        assert_eq!(
-            msg_inner.message_ext_inner.reconsume_times,
-            msg_ext.reconsume_times
-        );
+        assert_eq!(msg_inner.message_ext_inner.reconsume_times, msg_ext.reconsume_times);
         assert!(msg_inner.is_wait_store_msg_ok());
         assert_eq!(
             msg_inner.get_transaction_id(),

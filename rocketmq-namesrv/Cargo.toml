@@ -1,23 +1,23 @@
 [package]
-name = "rocketmq-namesrv"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-homepage.workspace = true
-repository.workspace = true
-license.workspace = true
-description = "Rust implementation of Apache rocketmq name sever"
-keywords = ["rocketmq", "rust", "name-server"]
-readme = "README.md"
+name                   = "rocketmq-namesrv"
+version.workspace      = true
+authors.workspace      = true
+edition.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+license.workspace      = true
+description            = "Rust implementation of Apache rocketmq name sever"
+keywords               = ["rocketmq", "rust", "name-server"]
+readme                 = "README.md"
 rust-version.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rocketmq-rust = { workspace = true }
-rocketmq-common = { workspace = true }
+rocketmq-rust     = { workspace = true }
+rocketmq-common   = { workspace = true }
 rocketmq-remoting = { workspace = true }
-rocketmq-runtime = { workspace = true }
-rocketmq-error = { workspace = true }
+rocketmq-runtime  = { workspace = true }
+rocketmq-error    = { workspace = true }
 
 
 anyhow.workspace = true
@@ -28,34 +28,34 @@ tracing.workspace = true
 
 
 #json spupport
-serde.workspace = true
+serde.workspace      = true
 serde_json.workspace = true
 
-config.workspace = true
+config.workspace      = true
 parking_lot.workspace = true
-dashmap = { version = "6.1.0", features = ["serde"] }
-hashbrown = "0.16"
+dashmap               = { version = "6.1.0", features = ["serde"] }
+hashbrown             = "0.16"
 
-clap = { version = "4.5.53", features = ["derive"] }
+clap           = { version = "4.5.54", features = ["derive"] }
 cheetah-string = { workspace = true }
-thiserror = { workspace = true }
+thiserror      = { workspace = true }
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports", "async_futures"] }
-futures = "0.3"
+futures   = "0.3"
 
 [[bin]]
 name = "rocketmq-namesrv-rust"
 path = "src/bin/namesrv_bootstrap_server.rs"
 
 [[bench]]
-name = "route_manager_benchmark"
+name    = "route_manager_benchmark"
 harness = false
 
 [[bench]]
-name = "route_concurrency_bench"
+name    = "route_concurrency_bench"
 harness = false
 
 [[bench]]
-name = "async_segmented_lock_bench"
+name    = "async_segmented_lock_bench"
 harness = false

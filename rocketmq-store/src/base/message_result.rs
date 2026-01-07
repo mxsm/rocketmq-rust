@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::fmt::Display;
 use std::sync::Arc;
@@ -66,8 +63,8 @@ impl Display for AppendMessageResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "AppendMessageResult [status={:?}, wrote_offset={}, wrote_bytes={}, msg_id={:?}, \
-             store_timestamp={}, logics_offset={}, page_cache_rt={}, msg_num={}]",
+            "AppendMessageResult [status={:?}, wrote_offset={}, wrote_bytes={}, msg_id={:?}, store_timestamp={}, \
+             logics_offset={}, page_cache_rt={}, msg_num={}]",
             self.status,
             self.wrote_offset,
             self.wrote_bytes,
@@ -160,10 +157,7 @@ impl PutMessageResult {
     }
 
     #[inline]
-    pub fn set_append_message_result(
-        &mut self,
-        append_message_result: Option<AppendMessageResult>,
-    ) {
+    pub fn set_append_message_result(&mut self, append_message_result: Option<AppendMessageResult>) {
         self.append_message_result = append_message_result;
     }
 
@@ -180,8 +174,7 @@ impl PutMessageResult {
                 || self.put_message_status == PutMessageStatus::FlushSlaveTimeout
                 || self.put_message_status == PutMessageStatus::SlaveNotAvailable
         } else {
-            self.append_message_result.is_some()
-                && self.append_message_result.as_ref().unwrap().is_ok()
+            self.append_message_result.is_some() && self.append_message_result.as_ref().unwrap().is_ok()
         }
     }
 }

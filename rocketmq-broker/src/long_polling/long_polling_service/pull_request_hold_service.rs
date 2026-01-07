@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -82,16 +79,10 @@ where
                     }
                 }
                 let instant = Instant::now();
-                this.pull_request_hold_service()
-                    .as_ref()
-                    .unwrap()
-                    .check_hold_request();
+                this.pull_request_hold_service().as_ref().unwrap().check_hold_request();
                 let elapsed = instant.elapsed().as_millis();
                 if elapsed > 5000 {
-                    warn!(
-                        "PullRequestHoldService: check hold pull request cost {}ms",
-                        elapsed
-                    );
+                    warn!("PullRequestHoldService: check hold pull request cost {}ms", elapsed);
                 }
             }
         });
@@ -167,20 +158,17 @@ where
                     }
 
                     if newest_offset > request.pull_from_this_offset() {
-                        let match_by_consume_queue =
-                            request.message_filter().is_matched_by_consume_queue(
-                                tags_code,
-                                Some(&CqExtUnit::new(
-                                    tags_code.unwrap_or(0),
-                                    msg_store_time,
-                                    filter_bit_map.clone(),
-                                )),
-                            );
+                        let match_by_consume_queue = request.message_filter().is_matched_by_consume_queue(
+                            tags_code,
+                            Some(&CqExtUnit::new(
+                                tags_code.unwrap_or(0),
+                                msg_store_time,
+                                filter_bit_map.clone(),
+                            )),
+                        );
                         let mut match_by_commit_log = match_by_consume_queue;
                         if match_by_consume_queue && properties.is_some() {
-                            match_by_commit_log = request
-                                .message_filter()
-                                .is_matched_by_commit_log(None, properties);
+                            match_by_commit_log = request.message_filter().is_matched_by_commit_log(None, properties);
                         }
 
                         if match_by_commit_log {
@@ -195,9 +183,7 @@ where
                         }
                     }
 
-                    if get_current_millis()
-                        >= (request.suspend_timestamp() + request.timeout_millis())
-                    {
+                    if get_current_millis() >= (request.suspend_timestamp() + request.timeout_millis()) {
                         let pull_message_this = self.pull_message_processor.clone();
                         self.pull_message_processor.execute_request_when_wakeup(
                             pull_message_this,

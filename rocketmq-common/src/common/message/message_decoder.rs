@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -64,20 +61,15 @@ pub const QUEUE_OFFSET_POSITION: usize = 4 + 4 + 4 + 4 + 4;
 pub const SYSFLAG_POSITION: usize = 4 + 4 + 4 + 4 + 4 + 8 + 8;
 pub const BORN_TIMESTAMP_POSITION: usize = 4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8;
 
-pub fn string_to_message_properties(
-    properties: Option<&CheetahString>,
-) -> HashMap<CheetahString, CheetahString> {
+pub fn string_to_message_properties(properties: Option<&CheetahString>) -> HashMap<CheetahString, CheetahString> {
     let mut map = HashMap::new();
     if let Some(properties) = properties {
         let mut index = 0;
         let len = properties.len();
         while index < len {
-            let new_index = properties[index..]
-                .find(PROPERTY_SEPARATOR)
-                .map_or(len, |i| index + i);
+            let new_index = properties[index..].find(PROPERTY_SEPARATOR).map_or(len, |i| index + i);
             if new_index - index >= 3 {
-                if let Some(kv_sep_index) = properties[index..new_index].find(NAME_VALUE_SEPARATOR)
-                {
+                if let Some(kv_sep_index) = properties[index..new_index].find(NAME_VALUE_SEPARATOR) {
                     let kv_sep_index = index + kv_sep_index;
                     if kv_sep_index > index && kv_sep_index < new_index - 1 {
                         let k = &properties[index..kv_sep_index];
@@ -92,20 +84,15 @@ pub fn string_to_message_properties(
     map
 }
 
-pub fn str_to_message_properties(
-    properties: Option<&str>,
-) -> HashMap<CheetahString, CheetahString> {
+pub fn str_to_message_properties(properties: Option<&str>) -> HashMap<CheetahString, CheetahString> {
     let mut map = HashMap::new();
     if let Some(properties) = properties {
         let mut index = 0;
         let len = properties.len();
         while index < len {
-            let new_index = properties[index..]
-                .find(PROPERTY_SEPARATOR)
-                .map_or(len, |i| index + i);
+            let new_index = properties[index..].find(PROPERTY_SEPARATOR).map_or(len, |i| index + i);
             if new_index - index >= 3 {
-                if let Some(kv_sep_index) = properties[index..new_index].find(NAME_VALUE_SEPARATOR)
-                {
+                if let Some(kv_sep_index) = properties[index..new_index].find(NAME_VALUE_SEPARATOR) {
                     let kv_sep_index = index + kv_sep_index;
                     if kv_sep_index > index && kv_sep_index < new_index - 1 {
                         let k = &properties[index..kv_sep_index];
@@ -120,9 +107,7 @@ pub fn str_to_message_properties(
     map
 }
 
-pub fn message_properties_to_string(
-    properties: &HashMap<CheetahString, CheetahString>,
-) -> CheetahString {
+pub fn message_properties_to_string(properties: &HashMap<CheetahString, CheetahString>) -> CheetahString {
     let mut len = 0;
     for (name, value) in properties.iter() {
         len += name.len();
@@ -228,29 +213,23 @@ pub fn decode(
     msg_ext.set_born_timestamp(born_time_stamp);
 
     // 10 BORNHOST
-    let (born_host_address, born_host_ip_length) =
-        if sys_flag & MessageSysFlag::BORNHOST_V6_FLAG != 0 {
-            let mut born_host = [0; 16];
-            byte_buffer.copy_to_slice(&mut born_host);
-            let port = byte_buffer.get_i32();
-            (
-                SocketAddr::V6(SocketAddrV6::new(
-                    Ipv6Addr::from(born_host),
-                    port as u16,
-                    0,
-                    0,
-                )),
-                16,
-            )
-        } else {
-            let mut born_host = [0; 4];
-            byte_buffer.copy_to_slice(&mut born_host);
-            let port = byte_buffer.get_i32();
-            (
-                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(born_host), port as u16)),
-                4,
-            )
-        };
+    let (born_host_address, born_host_ip_length) = if sys_flag & MessageSysFlag::BORNHOST_V6_FLAG != 0 {
+        let mut born_host = [0; 16];
+        byte_buffer.copy_to_slice(&mut born_host);
+        let port = byte_buffer.get_i32();
+        (
+            SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::from(born_host), port as u16, 0, 0)),
+            16,
+        )
+    } else {
+        let mut born_host = [0; 4];
+        byte_buffer.copy_to_slice(&mut born_host);
+        let port = byte_buffer.get_i32();
+        (
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(born_host), port as u16)),
+            4,
+        )
+    };
     msg_ext.set_born_host(born_host_address);
 
     // 11 STORETIMESTAMP
@@ -258,29 +237,23 @@ pub fn decode(
     msg_ext.set_store_timestamp(store_timestamp);
 
     // 12 STOREHOST
-    let (store_host_address, store_host_ip_length) =
-        if sys_flag & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG != 0 {
-            let mut store_host = [0; 16];
-            byte_buffer.copy_to_slice(&mut store_host);
-            let port = byte_buffer.get_i32();
-            (
-                SocketAddr::V6(SocketAddrV6::new(
-                    Ipv6Addr::from(store_host),
-                    port as u16,
-                    0,
-                    0,
-                )),
-                16,
-            )
-        } else {
-            let mut store_host = [0; 4];
-            byte_buffer.copy_to_slice(&mut store_host);
-            let port = byte_buffer.get_i32();
-            (
-                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(store_host), port as u16)),
-                4,
-            )
-        };
+    let (store_host_address, store_host_ip_length) = if sys_flag & MessageSysFlag::STOREHOSTADDRESS_V6_FLAG != 0 {
+        let mut store_host = [0; 16];
+        byte_buffer.copy_to_slice(&mut store_host);
+        let port = byte_buffer.get_i32();
+        (
+            SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::from(store_host), port as u16, 0, 0)),
+            16,
+        )
+    } else {
+        let mut store_host = [0; 4];
+        byte_buffer.copy_to_slice(&mut store_host);
+        let port = byte_buffer.get_i32();
+        (
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::from(store_host), port as u16)),
+            4,
+        )
+    };
     msg_ext.set_store_host(store_host_address);
 
     // 13 RECONSUMETIMES
@@ -305,12 +278,9 @@ pub fn decode(
                 }
             }
             let mut body_bytes = Bytes::from(body);
-            if de_compress_body
-                && (sys_flag & MessageSysFlag::COMPRESSED_FLAG) == MessageSysFlag::COMPRESSED_FLAG
-            {
-                let compression_type = CompressionType::find_by_value(
-                    (flag & MessageSysFlag::COMPRESSION_TYPE_COMPARATOR) >> 8,
-                );
+            if de_compress_body && (sys_flag & MessageSysFlag::COMPRESSED_FLAG) == MessageSysFlag::COMPRESSED_FLAG {
+                let compression_type =
+                    CompressionType::find_by_value((flag & MessageSysFlag::COMPRESSION_TYPE_COMPARATOR) >> 8);
                 body_bytes = compression_type.decompression(&body_bytes)
             }
             msg_ext.message.body = Some(body_bytes);
@@ -345,20 +315,15 @@ pub fn decode(
         byte_buffer.copy_to_slice(&mut properties);
         if !is_set_properties_string {
             //can optimize later
-            let properties_string = CheetahString::from_string(
-                String::from_utf8_lossy(properties.as_slice()).to_string(),
-            );
+            let properties_string =
+                CheetahString::from_string(String::from_utf8_lossy(properties.as_slice()).to_string());
             let message_properties = string_to_message_properties(Some(&properties_string));
             msg_ext.message.properties = message_properties;
         } else {
-            let properties_string = CheetahString::from_string(
-                String::from_utf8_lossy(properties.as_slice()).to_string(),
-            );
+            let properties_string =
+                CheetahString::from_string(String::from_utf8_lossy(properties.as_slice()).to_string());
             let mut message_properties = string_to_message_properties(Some(&properties_string));
-            message_properties.insert(
-                CheetahString::from_static_str("propertiesString"),
-                properties_string,
-            );
+            message_properties.insert(CheetahString::from_static_str("propertiesString"), properties_string);
             msg_ext.message.properties = message_properties;
         }
     }
@@ -440,15 +405,10 @@ pub fn encode_message(message: &Message) -> Bytes {
     bytes.freeze()
 }
 
-pub fn decodes_batch(
-    byte_buffer: &mut Bytes,
-    read_body: bool,
-    decompress_body: bool,
-) -> Vec<MessageExt> {
+pub fn decodes_batch(byte_buffer: &mut Bytes, read_body: bool, decompress_body: bool) -> Vec<MessageExt> {
     let mut messages = Vec::new();
     while byte_buffer.has_remaining() {
-        if let Some(msg_ext) = decode(byte_buffer, read_body, decompress_body, false, false, false)
-        {
+        if let Some(msg_ext) = decode(byte_buffer, read_body, decompress_body, false, false, false) {
             messages.push(msg_ext);
         } else {
             break;
@@ -457,15 +417,10 @@ pub fn decodes_batch(
     messages
 }
 
-pub fn decodes_batch_client(
-    byte_buffer: &mut Bytes,
-    read_body: bool,
-    decompress_body: bool,
-) -> Vec<MessageClientExt> {
+pub fn decodes_batch_client(byte_buffer: &mut Bytes, read_body: bool, decompress_body: bool) -> Vec<MessageClientExt> {
     let mut messages = Vec::new();
     while byte_buffer.has_remaining() {
-        if let Some(msg_ext) = decode_client(byte_buffer, read_body, decompress_body, false, false)
-        {
+        if let Some(msg_ext) = decode_client(byte_buffer, read_body, decompress_body, false, false) {
             messages.push(msg_ext);
         } else {
             break;
@@ -560,10 +515,7 @@ pub fn decode_message_id(msg_id: &str) -> MessageId {
     }
 }
 
-pub fn encode(
-    message_ext: &MessageExt,
-    need_compress: bool,
-) -> rocketmq_error::RocketMQResult<Bytes> {
+pub fn encode(message_ext: &MessageExt, need_compress: bool) -> rocketmq_error::RocketMQResult<Bytes> {
     let body = message_ext.get_body().unwrap();
     let topic = message_ext.get_topic().as_bytes();
     let topic_len = topic.len();
@@ -581,11 +533,8 @@ pub fn encode(
     } else {
         20
     };
-    let new_body = if need_compress
-        && (sys_flag & MessageSysFlag::COMPRESSED_FLAG) == MessageSysFlag::COMPRESSED_FLAG
-    {
-        let compressor =
-            CompressorFactory::get_compressor(MessageSysFlag::get_compression_type(sys_flag));
+    let new_body = if need_compress && (sys_flag & MessageSysFlag::COMPRESSED_FLAG) == MessageSysFlag::COMPRESSED_FLAG {
+        let compressor = CompressorFactory::get_compressor(MessageSysFlag::get_compression_type(sys_flag));
         let compressed_body = compressor.compress(body, 5)?;
         Some(compressed_body)
     } else {
@@ -691,10 +640,7 @@ pub fn encode(
     Ok(byte_buffer.freeze())
 }
 
-pub fn encode_uniquely(
-    message_ext: &MessageExt,
-    need_compress: bool,
-) -> rocketmq_error::RocketMQResult<Bytes> {
+pub fn encode_uniquely(message_ext: &MessageExt, need_compress: bool) -> rocketmq_error::RocketMQResult<Bytes> {
     let body = message_ext.get_body().unwrap();
     let topics = message_ext.get_topic().as_bytes();
     let topic_len = topics.len();
@@ -707,11 +653,8 @@ pub fn encode_uniquely(
     } else {
         20
     };
-    let new_body = if need_compress
-        && (sys_flag & MessageSysFlag::COMPRESSED_FLAG) == MessageSysFlag::COMPRESSED_FLAG
-    {
-        let compressor =
-            CompressorFactory::get_compressor(MessageSysFlag::get_compression_type(sys_flag));
+    let new_body = if need_compress && (sys_flag & MessageSysFlag::COMPRESSED_FLAG) == MessageSysFlag::COMPRESSED_FLAG {
+        let compressor = CompressorFactory::get_compressor(MessageSysFlag::get_compression_type(sys_flag));
         let compressed_body = compressor.compress(body, 5)?;
         Some(compressed_body)
     } else {
@@ -824,8 +767,7 @@ pub fn decode_properties(bytes: &mut Bytes) -> Option<HashMap<CheetahString, Che
 
     // Read sysFlag and magicCode using fixed positions.
     let sys_flag = BigEndian::read_i32(&bytes[SYSFLAG_POSITION..SYSFLAG_POSITION + 4]);
-    let magic_code =
-        BigEndian::read_i32(&bytes[MESSAGE_MAGIC_CODE_POSITION..MESSAGE_MAGIC_CODE_POSITION + 4]);
+    let magic_code = BigEndian::read_i32(&bytes[MESSAGE_MAGIC_CODE_POSITION..MESSAGE_MAGIC_CODE_POSITION + 4]);
     let version = match MessageVersion::value_of_magic_code(magic_code) {
         Ok(value) => value,
         Err(_) => return None,
@@ -864,8 +806,7 @@ pub fn decode_properties(bytes: &mut Bytes) -> Option<HashMap<CheetahString, Che
     }
 
     // Read the body size stored as an int.
-    let body_size =
-        BigEndian::read_i32(&bytes[body_size_position..body_size_position + 4]) as usize;
+    let body_size = BigEndian::read_i32(&bytes[body_size_position..body_size_position + 4]) as usize;
 
     // Compute the topic length position.
     let topic_length_position = body_size_position + 4 + body_size;
@@ -887,8 +828,7 @@ pub fn decode_properties(bytes: &mut Bytes) -> Option<HashMap<CheetahString, Che
     }
 
     // Read a short (2 bytes) as propertiesLength.
-    let properties_length =
-        BigEndian::read_i16(&bytes[properties_position..properties_position + 2]);
+    let properties_length = BigEndian::read_i16(&bytes[properties_position..properties_position + 2]);
 
     // Advance past the short value.
     let properties_start = properties_position + 2;
@@ -899,9 +839,9 @@ pub fn decode_properties(bytes: &mut Bytes) -> Option<HashMap<CheetahString, Che
         }
         let properties_bytes = &bytes[properties_start..end];
         if let Ok(properties_string) = String::from_utf8(properties_bytes.to_vec()) {
-            Some(string_to_message_properties(Some(
-                &CheetahString::from_string(properties_string),
-            )))
+            Some(string_to_message_properties(Some(&CheetahString::from_string(
+                properties_string,
+            ))))
         } else {
             None
         }
@@ -1046,11 +986,7 @@ mod tests {
 
     #[test]
     fn decode_properties_returns_none_if_magic_code_is_invalid() {
-        let mut bytes =
-            BytesMut::from_iter(vec![
-                0u8;
-                SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4
-            ]);
+        let mut bytes = BytesMut::from_iter(vec![0u8; SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4]);
         BigEndian::write_i32(&mut bytes[SYSFLAG_POSITION..SYSFLAG_POSITION + 4], 0);
         BigEndian::write_i32(
             &mut bytes[MESSAGE_MAGIC_CODE_POSITION..MESSAGE_MAGIC_CODE_POSITION + 4],
@@ -1061,14 +997,7 @@ mod tests {
 
     #[test]
     fn decode_properties_returns_none_if_body_size_is_insufficient() {
-        let mut bytes = BytesMut::from_iter(vec![
-            0u8;
-            SYSFLAG_POSITION
-                + 4
-                + MESSAGE_MAGIC_CODE_POSITION
-                + 4
-                + 4
-        ]);
+        let mut bytes = BytesMut::from_iter(vec![0u8; SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4 + 4]);
         BigEndian::write_i32(&mut bytes[SYSFLAG_POSITION..SYSFLAG_POSITION + 4], 0);
         BigEndian::write_i32(
             &mut bytes[MESSAGE_MAGIC_CODE_POSITION..MESSAGE_MAGIC_CODE_POSITION + 4],
@@ -1081,12 +1010,7 @@ mod tests {
     fn decode_properties_returns_none_if_topic_length_is_insufficient() {
         let mut bytes = BytesMut::from_iter(vec![
             0u8;
-            SYSFLAG_POSITION
-                + 4
-                + MESSAGE_MAGIC_CODE_POSITION
-                + 4
-                + 4
-                + 4
+            SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4 + 4 + 4
         ]);
         BigEndian::write_i32(&mut bytes[SYSFLAG_POSITION..SYSFLAG_POSITION + 4], 0);
         BigEndian::write_i32(
@@ -1105,13 +1029,7 @@ mod tests {
     fn decode_properties_returns_none_if_properties_length_is_insufficient() {
         let mut bytes = BytesMut::from_iter(vec![
             0u8;
-            SYSFLAG_POSITION
-                + 4
-                + MESSAGE_MAGIC_CODE_POSITION
-                + 4
-                + 4
-                + 4
-                + 2
+            SYSFLAG_POSITION + 4 + MESSAGE_MAGIC_CODE_POSITION + 4 + 4 + 4 + 2
         ]);
         BigEndian::write_i32(&mut bytes[SYSFLAG_POSITION..SYSFLAG_POSITION + 4], 0);
         BigEndian::write_i32(

@@ -1,27 +1,24 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
+use chrono::Offset;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
 use std::fmt;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::OnceLock;
-
-use rocketmq_error::RocketMQError;
-use rocketmq_error::RocketMQResult;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
@@ -29,9 +26,16 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
 
+use chrono_tz::Tz;
+use time::UtcOffset;
+use tracing_subscriber::fmt::time::OffsetTime;
+
 /// Static storage for the worker guard to prevent premature log flushing.
 /// This ensures logs are properly written before the program exits.
 static WORKER_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
+
+/// Cached local timezone to avoid repeated system calls
+static LOCAL_TIMEZONE: OnceLock<Tz> = OnceLock::new();
 
 /// Initializes the logger with the specified configuration.
 ///
@@ -45,11 +49,11 @@ static WORKER_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 /// Returns `Ok(())` on success, or a `RocketMQError` if initialization fails.
 pub fn init_logger() -> RocketMQResult<()> {
     let info_level = std::env::var("RUST_LOG").unwrap_or_else(|_| String::from("INFO"));
-    let level = tracing::Level::from_str(&info_level).map_err(|_| {
-        RocketMQError::illegal_argument(format!("Invalid log level: {}", info_level))
-    })?;
+    let level = tracing::Level::from_str(&info_level)
+        .map_err(|_| RocketMQError::illegal_argument(format!("Invalid log level: {}", info_level)))?;
 
     tracing_subscriber::fmt()
+        .with_timer(get_timer_from_env())
         .with_thread_names(true)
         .with_level(true)
         .with_line_number(true)
@@ -78,6 +82,7 @@ pub fn init_logger_with_level(level: Level) -> RocketMQResult<()> {
     let tracing_level = level.to_tracing_level()?;
 
     tracing_subscriber::fmt()
+        .with_timer(get_timer_from_env())
         .with_thread_names(true)
         .with_level(true)
         .with_line_number(true)
@@ -124,6 +129,7 @@ pub fn init_logger_with_file(
 
     // console layer (colorful output)
     let console_layer = tracing_subscriber::fmt::layer()
+        .with_timer(get_timer_from_env())
         .with_writer(std::io::stdout)
         .with_thread_names(true)
         .with_thread_ids(true)
@@ -134,6 +140,7 @@ pub fn init_logger_with_file(
 
     // file layer (non-color output)
     let file_layer = tracing_subscriber::fmt::layer()
+        .with_timer(get_timer_from_env())
         .with_writer(file_writer)
         .with_thread_names(true)
         .with_thread_ids(true)
@@ -156,6 +163,139 @@ pub fn init_logger_with_file(
         .map_err(|_| RocketMQError::Internal("Logger already initialized".to_string()))?;
 
     Ok(())
+}
+
+/// decides the time zone of the logs
+///
+/// this function gets the LOG_TIMEZONE from environment variables
+/// defaults to system local timezone if nothing is provided
+/// the IANA timezone has to be provided in the env file
+/// ex LOG_TIMEZONE=Asia/Kolkata
+/// ex LOG_TIMEZONE=Europe/Berlin
+/// ex LOG_TIMEZONE=UTC (use UTC timezone)
+/// ex LOG_TIMEZONE=Local (use system local timezone)
+/// we use the IANA timezone instead of just the abbreviations
+/// because the abbreviations can refer to different countries
+/// for ex IST can refer to Indian Standard Time or Irish Standard Time or Israel Standard Time
+/// added to this we also have the benefit of taking DST into consideration with IANA timezones
+/// the usage of LocalTime provided by tracing subscriber is not recommended
+/// hence going with OffsetTime
+///
+/// # Returns
+///
+/// Returns 'OffsetTime'
+pub fn get_timer_from_env() -> OffsetTime<time::format_description::well_known::Rfc3339> {
+    let tz: Tz = if let Ok(tz_str) = std::env::var("LOG_TIMEZONE") {
+        // If LOG_TIMEZONE is explicitly set
+        if tz_str.eq_ignore_ascii_case("Local") {
+            // Use system local timezone
+            get_local_timezone()
+        } else {
+            // Parse the provided timezone string
+            tz_str.parse().unwrap_or_else(|e| {
+                eprintln!(
+                    "Warning: Invalid timezone '{}': {}. Falling back to local timezone.",
+                    tz_str, e
+                );
+                get_local_timezone()
+            })
+        }
+    } else {
+        // Default: use system local timezone if LOG_TIMEZONE is not set
+        get_local_timezone()
+    };
+
+    let now = chrono::Utc::now().with_timezone(&tz);
+
+    let offset_seconds = now.offset().fix().local_minus_utc();
+
+    let offset = UtcOffset::from_whole_seconds(offset_seconds).unwrap_or_else(|e| {
+        eprintln!(
+            "Warning: Invalid offset {} seconds: {}. Falling back to UTC.",
+            offset_seconds, e
+        );
+        UtcOffset::UTC
+    });
+
+    OffsetTime::new(offset, time::format_description::well_known::Rfc3339)
+}
+
+/// Get the system local timezone
+///
+/// Attempts to get the system timezone directly from the OS using `iana-time-zone` crate.
+/// If that fails, tries the `TZ` environment variable.
+/// As a last resort, guesses the timezone based on the UTC offset.
+/// Results are cached to avoid repeated system calls.
+///
+/// # Returns
+///
+/// Returns 'Tz'
+fn get_local_timezone() -> Tz {
+    *LOCAL_TIMEZONE.get_or_init(|| {
+        // Try to get timezone directly from the system
+        if let Ok(tz_name) = iana_time_zone::get_timezone() {
+            if let Ok(tz) = tz_name.parse::<Tz>() {
+                return tz;
+            } else {
+                eprintln!(
+                    "Warning: System returned timezone '{}' but it could not be parsed. Trying fallback methods.",
+                    tz_name
+                );
+            }
+        }
+
+        // Try to get timezone name from environment variable
+        if let Ok(tz_name) = std::env::var("TZ") {
+            if let Ok(tz) = tz_name.parse::<Tz>() {
+                return tz;
+            }
+        }
+
+        // Get the UTC offset of the local time
+        let local_now = chrono::Local::now();
+        let offset_seconds = local_now.offset().fix().local_minus_utc();
+        let offset_hours = offset_seconds / 3600;
+
+        // Guess common timezones based on offset as last resort
+        eprintln!(
+            "Warning: Could not determine system timezone. Guessing based on UTC offset ({} hours).",
+            offset_hours
+        );
+        match offset_hours {
+            -12 => chrono_tz::Pacific::Fiji,
+            -11 => chrono_tz::Pacific::Midway,
+            -10 => chrono_tz::Pacific::Honolulu,
+            -9 => chrono_tz::America::Anchorage,
+            -8 => chrono_tz::America::Los_Angeles,
+            -7 => chrono_tz::America::Denver,
+            -6 => chrono_tz::America::Chicago,
+            -5 => chrono_tz::America::New_York,
+            -4 => chrono_tz::America::Halifax,
+            -3 => chrono_tz::America::Sao_Paulo,
+            -2 => chrono_tz::Atlantic::South_Georgia,
+            -1 => chrono_tz::Atlantic::Azores,
+            0 => chrono_tz::UTC,
+            1 => chrono_tz::Europe::Paris,
+            2 => chrono_tz::Europe::Helsinki,
+            3 => chrono_tz::Europe::Moscow,
+            4 => chrono_tz::Asia::Dubai,
+            5 => chrono_tz::Asia::Karachi,
+            6 => chrono_tz::Asia::Dhaka,
+            7 => chrono_tz::Asia::Bangkok,
+            8 => chrono_tz::Asia::Shanghai,
+            9 => chrono_tz::Asia::Tokyo,
+            10 => chrono_tz::Australia::Sydney,
+            11 => chrono_tz::Pacific::Noumea,
+            12 => chrono_tz::Pacific::Auckland,
+            _ => {
+                eprintln!(
+                    "Warning: Unsupported local timezone offset {} hours. Falling back to UTC.",
+                    offset_hours
+                );
+                chrono_tz::UTC
+            }
+        }
+    })
 }
 
 /// Custom log level type that wraps a static string.

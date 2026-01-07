@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -54,8 +51,7 @@ const QUERY_ASSIGNMENT_TIMEOUT: u64 = 3000;
 pub(crate) struct RebalanceImpl<R> {
     pub(crate) process_queue_table: Arc<RwLock<HashMap<MessageQueue, Arc<ProcessQueue>>>>,
     pub(crate) pop_process_queue_table: Arc<RwLock<HashMap<MessageQueue, Arc<PopProcessQueue>>>>,
-    pub(crate) topic_subscribe_info_table:
-        Arc<RwLock<HashMap<CheetahString, HashSet<MessageQueue>>>>,
+    pub(crate) topic_subscribe_info_table: Arc<RwLock<HashMap<CheetahString, HashSet<MessageQueue>>>>,
     pub(crate) subscription_inner: Arc<RwLock<HashMap<CheetahString, SubscriptionData>>>,
     pub(crate) consumer_group: Option<CheetahString>,
     pub(crate) message_model: Option<MessageModel>,
@@ -92,11 +88,7 @@ where
     }
 
     #[inline]
-    pub async fn put_subscription_data(
-        &self,
-        topic: &CheetahString,
-        subscription_data: SubscriptionData,
-    ) {
+    pub async fn put_subscription_data(&self, topic: &CheetahString, subscription_data: SubscriptionData) {
         let mut subscription_inner = self.subscription_inner.write().await;
         subscription_inner.insert(topic.clone(), subscription_data);
     }
@@ -189,8 +181,7 @@ where
 
         // Retry query assignment
         for retry_times in 1..=TIMEOUT_CHECK_TIMES {
-            let timeout =
-                QUERY_ASSIGNMENT_TIMEOUT / (TIMEOUT_CHECK_TIMES as u64) * (retry_times as u64);
+            let timeout = QUERY_ASSIGNMENT_TIMEOUT / (TIMEOUT_CHECK_TIMES as u64) * (retry_times as u64);
             match client_instance
                 .query_assignment(
                     topic,
@@ -283,17 +274,10 @@ where
     ///
     /// This function logs errors if the allocation strategy is not set or if the query assignment
     /// fails.
-    async fn get_rebalance_result_from_broker(
-        &mut self,
-        topic: &CheetahString,
-        is_order: bool,
-    ) -> bool {
+    async fn get_rebalance_result_from_broker(&mut self, topic: &CheetahString, is_order: bool) -> bool {
         let strategy_name = match self.allocate_message_queue_strategy.as_ref() {
             None => {
-                error!(
-                    "get_rebalance_result_from_broker error: allocate_message_queue_strategy is \
-                     None."
-                );
+                error!("get_rebalance_result_from_broker error: allocate_message_queue_strategy is None.");
                 return false;
             }
             Some(strategy) => strategy.get_name(),
@@ -401,8 +385,7 @@ where
                     &CheetahString::from_static_str(SubscriptionData::SUB_ALL),
                 );
                 if let Ok(subscription_data) = subscription_data {
-                    self.put_subscription_data(&retry_topic, subscription_data)
-                        .await;
+                    self.put_subscription_data(&retry_topic, subscription_data).await;
                 }
             } else if !mq2pop_assignment.is_empty() && mq2push_assignment.is_empty() {
                 //push switch to pop
@@ -426,15 +409,13 @@ where
                         pq.set_dropped(true);
                         remove_queue_map.insert(mq.clone(), pq.clone());
                     } else if pq.is_pull_expired() {
-                        if let Some(sub_rebalance) =
-                            self.sub_rebalance_impl.as_mut().unwrap().upgrade()
-                        {
+                        if let Some(sub_rebalance) = self.sub_rebalance_impl.as_mut().unwrap().upgrade() {
                             if sub_rebalance.consume_type() == ConsumeType::ConsumePassively {
                                 pq.set_dropped(true);
                                 remove_queue_map.insert(mq.clone(), pq.clone());
                                 error!(
-                                    "[BUG]doRebalance, {:?}, try remove unnecessary mq, {}, \
-                                     because pull is pause, so try to fixed it",
+                                    "[BUG]doRebalance, {:?}, try remove unnecessary mq, {}, because pull is pause, so \
+                                     try to fixed it",
                                     self.consumer_group,
                                     mq.get_topic()
                                 );
@@ -450,13 +431,8 @@ where
                 let mut process_queue_table = self.process_queue_table.write().await;
                 // Remove message queues no longer belong to me
                 for (mq, pq) in remove_queue_map {
-                    if let Some(mut sub_rebalance) =
-                        self.sub_rebalance_impl.as_mut().unwrap().upgrade()
-                    {
-                        if sub_rebalance
-                            .remove_unnecessary_message_queue(&mq, &pq)
-                            .await
-                        {
+                    if let Some(mut sub_rebalance) = self.sub_rebalance_impl.as_mut().unwrap().upgrade() {
+                        if sub_rebalance.remove_unnecessary_message_queue(&mq, &pq).await {
                             process_queue_table.remove(&mq);
                             changed = true;
                             info!(
@@ -480,15 +456,13 @@ where
                         pq.set_dropped(true);
                         remove_queue_map.insert(mq.clone(), pq.clone());
                     } else if pq.is_pull_expired() {
-                        if let Some(sub_rebalance) =
-                            self.sub_rebalance_impl.as_mut().unwrap().upgrade()
-                        {
+                        if let Some(sub_rebalance) = self.sub_rebalance_impl.as_mut().unwrap().upgrade() {
                             if sub_rebalance.consume_type() == ConsumeType::ConsumePassively {
                                 pq.set_dropped(true);
                                 remove_queue_map.insert(mq.clone(), pq.clone());
                                 error!(
-                                    "[BUG]doRebalance, {:?}, try remove unnecessary mq, {}, \
-                                     because pull is pause, so try to fixed it",
+                                    "[BUG]doRebalance, {:?}, try remove unnecessary mq, {}, because pull is pause, so \
+                                     try to fixed it",
                                     self.consumer_group,
                                     mq.get_topic()
                                 );
@@ -504,9 +478,7 @@ where
                 let mut pop_process_queue_table = self.pop_process_queue_table.write().await;
                 // Remove message queues no longer belong to me
                 for (mq, pq) in remove_queue_map {
-                    if let Some(mut sub_rebalance) =
-                        self.sub_rebalance_impl.as_mut().unwrap().upgrade()
-                    {
+                    if let Some(mut sub_rebalance) = self.sub_rebalance_impl.as_mut().unwrap().upgrade() {
                         if sub_rebalance.remove_unnecessary_pop_message_queue(&mq, &pq) {
                             pop_process_queue_table.remove(&mq);
                             changed = true;
@@ -547,9 +519,7 @@ where
                     sub_rebalance_impl.remove_dirty_offset(mq).await;
                     let pq = Arc::new(sub_rebalance_impl.create_process_queue());
                     pq.set_locked(true);
-                    let next_offset = sub_rebalance_impl
-                        .compute_pull_from_where_with_exception(mq)
-                        .await;
+                    let next_offset = sub_rebalance_impl.compute_pull_from_where_with_exception(mq).await;
                     if next_offset.is_err() {
                         continue;
                     }
@@ -588,9 +558,7 @@ where
             if !all_mq_locked {
                 self.client_instance.as_mut().unwrap().rebalance_later(500);
             }
-            sub_rebalance_impl
-                .dispatch_pull_request(pull_request_list, 500)
-                .await;
+            sub_rebalance_impl.dispatch_pull_request(pull_request_list, 500).await;
         }
 
         {
@@ -602,15 +570,9 @@ where
                         let pq = rebalance_impl.create_pop_process_queue();
                         let pre = pop_process_queue_table.insert(mq.clone(), Arc::new(pq.clone()));
                         if pre.is_none() {
-                            info!(
-                                "doRebalance, {:?}, mq already exists, {}",
-                                self.consumer_group, mq
-                            );
+                            info!("doRebalance, {:?}, mq already exists, {}", self.consumer_group, mq);
                         } else {
-                            info!(
-                                "doRebalance, {:?}, add a new pop mq, {}",
-                                self.consumer_group, mq
-                            );
+                            info!("doRebalance, {:?}, add a new pop mq, {}", self.consumer_group, mq);
                             let request = PopRequest::new(
                                 topic.clone(),
                                 self.consumer_group.as_ref().unwrap().clone(),
@@ -623,9 +585,7 @@ where
                         }
                     }
                 }
-                rebalance_impl
-                    .dispatch_pop_pull_request(pop_request_list, 500)
-                    .await;
+                rebalance_impl.dispatch_pop_pull_request(pop_request_list, 500).await;
             }
         }
 
@@ -650,15 +610,13 @@ where
                         pq.set_dropped(true);
                         remove_queue_map.insert(mq.clone(), pq.clone());
                     } else if pq.is_pull_expired() {
-                        if let Some(sub_rebalance) =
-                            self.sub_rebalance_impl.as_mut().unwrap().upgrade()
-                        {
+                        if let Some(sub_rebalance) = self.sub_rebalance_impl.as_mut().unwrap().upgrade() {
                             if sub_rebalance.consume_type() == ConsumeType::ConsumePassively {
                                 pq.set_dropped(true);
                                 remove_queue_map.insert(mq.clone(), pq.clone());
                                 error!(
-                                    "[BUG]doRebalance, {:?}, try remove unnecessary mq, {}, \
-                                     because pull is pause, so try to fixed it",
+                                    "[BUG]doRebalance, {:?}, try remove unnecessary mq, {}, because pull is pause, so \
+                                     try to fixed it",
                                     self.consumer_group,
                                     mq.get_topic()
                                 );
@@ -674,13 +632,8 @@ where
                 let mut process_queue_table = process_queue_table_cloned.write().await;
                 // Remove message queues no longer belong to me
                 for (mq, pq) in remove_queue_map {
-                    if let Some(mut sub_rebalance) =
-                        self.sub_rebalance_impl.as_mut().unwrap().upgrade()
-                    {
-                        if sub_rebalance
-                            .remove_unnecessary_message_queue(&mq, &pq)
-                            .await
-                        {
+                    if let Some(mut sub_rebalance) = self.sub_rebalance_impl.as_mut().unwrap().upgrade() {
+                        if sub_rebalance.remove_unnecessary_message_queue(&mq, &pq).await {
                             process_queue_table.remove(&mq);
                             changed = true;
                             info!(
@@ -752,9 +705,7 @@ where
         if !all_mq_locked {
             self.client_instance.as_mut().unwrap().rebalance_later(500);
         }
-        sub_rebalance_impl
-            .dispatch_pull_request(pull_request_list, 500)
-            .await;
+        sub_rebalance_impl.dispatch_pull_request(pull_request_list, 500).await;
 
         changed
     }
@@ -772,9 +723,7 @@ where
                     if changed {
                         let sub_rebalance_impl = self.sub_rebalance_impl.as_mut().unwrap();
                         if let Some(mut sub_rebalance_impl) = sub_rebalance_impl.upgrade() {
-                            sub_rebalance_impl
-                                .message_queue_changed(topic, mq_set, mq_set)
-                                .await;
+                            sub_rebalance_impl.message_queue_changed(topic, mq_set, mq_set).await;
                         }
                     }
                     mq_set.eq(&self.get_working_message_queue(topic).await)
@@ -805,9 +754,7 @@ where
                 let topic_subscribe_info_table_inner = topic_sub_cloned.read().await;
                 let mq_set = topic_subscribe_info_table_inner.get(topic);
                 if mq_set.is_none() && !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
-                    if let Some(mut sub_rebalance_impl) =
-                        self.sub_rebalance_impl.as_ref().unwrap().upgrade()
-                    {
+                    if let Some(mut sub_rebalance_impl) = self.sub_rebalance_impl.as_ref().unwrap().upgrade() {
                         sub_rebalance_impl
                             .message_queue_changed(topic, &HashSet::new(), &HashSet::new())
                             .await;
@@ -843,30 +790,20 @@ where
                         Err(e) => {
                             error!(
                                 "allocate message queue exception. strategy name: {}, ex: {}",
-                                self.allocate_message_queue_strategy
-                                    .as_ref()
-                                    .unwrap()
-                                    .get_name(),
+                                self.allocate_message_queue_strategy.as_ref().unwrap().get_name(),
                                 e.to_string()
                             );
                             return false;
                         }
                     };
-                    let allocate_result_set = allocate_result
-                        .into_iter()
-                        .collect::<HashSet<MessageQueue>>();
+                    let allocate_result_set = allocate_result.into_iter().collect::<HashSet<MessageQueue>>();
                     let changed = self
-                        .update_process_queue_table_in_rebalance(
-                            topic,
-                            &allocate_result_set,
-                            is_order,
-                        )
+                        .update_process_queue_table_in_rebalance(topic, &allocate_result_set, is_order)
                         .await;
                     if changed {
                         info!(
-                            "client rebalanced result changed. \
-                             allocateMessageQueueStrategyName={}, group={}, topic={}, \
-                             clientId={}, mqAllSize={}, cidAllSize={}, rebalanceResultSize={}, \
+                            "client rebalanced result changed. allocateMessageQueueStrategyName={}, group={}, \
+                             topic={}, clientId={}, mqAllSize={}, cidAllSize={}, rebalanceResultSize={}, \
                              rebalanceResultSet={:?}",
                             strategy_name,
                             self.consumer_group.as_ref().unwrap(),
@@ -878,9 +815,7 @@ where
                             allocate_result_set
                         );
 
-                        if let Some(mut sub_rebalance_impl) =
-                            self.sub_rebalance_impl.as_ref().unwrap().upgrade()
-                        {
+                        if let Some(mut sub_rebalance_impl) = self.sub_rebalance_impl.as_ref().unwrap().upgrade() {
                             sub_rebalance_impl
                                 .message_queue_changed(topic, mq_set, &allocate_result_set)
                                 .await;
@@ -949,10 +884,7 @@ where
                         }
                     }
                     let lock_ok = locked_mq.contains(mq);
-                    info!(
-                        "message queue lock {}, {:?} {}",
-                        lock_ok, self.consumer_group, mq
-                    );
+                    info!("message queue lock {}, {:?} {}", lock_ok, self.consumer_group, mq);
                     lock_ok
                 }
                 Err(e) => {
@@ -993,11 +925,7 @@ where
                             .mq_client_api_impl
                             .as_mut()
                             .unwrap()
-                            .lock_batch_mq(
-                                find_broker_result.broker_addr.as_str(),
-                                request_body,
-                                1_000,
-                            )
+                            .lock_batch_mq(find_broker_result.broker_addr.as_str(), request_body, 1_000)
                             .await;
                         match result {
                             Ok(lock_okmqset) => {
@@ -1115,10 +1043,7 @@ where
                         for mq in &mqs {
                             if let Some(pq) = process_queue_table.get(mq) {
                                 pq.set_locked(false);
-                                info!(
-                                    "the message queue unlock OK, Group: {:?} {}",
-                                    self.consumer_group, mq
-                                );
+                                info!("the message queue unlock OK, Group: {:?} {}", self.consumer_group, mq);
                             }
                         }
                     }

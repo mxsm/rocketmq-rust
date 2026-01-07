@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Default election policy implementation for RocketMQ controller.
 //!
@@ -117,8 +114,7 @@ impl DefaultElectPolicy {
         // Filter brokers by validity predicate
         let mut valid_brokers = brokers.clone();
         if let Some(ref predicate) = self.valid_predicate {
-            valid_brokers
-                .retain(|&broker_id| predicate.check(cluster_name, broker_name, Some(broker_id)));
+            valid_brokers.retain(|&broker_id| predicate.check(cluster_name, broker_name, Some(broker_id)));
         }
 
         if valid_brokers.is_empty() {
@@ -226,24 +222,12 @@ impl ElectPolicy for DefaultElectPolicy {
         // Try to elect from sync state brokers first
         // Note: Always call try_elect even if empty, to match Java behavior
         // where null check differs from emptiness check
-        if let Some(master) = self.try_elect(
-            cluster_name,
-            broker_name,
-            sync_state_brokers,
-            old_master,
-            broker_id,
-        ) {
+        if let Some(master) = self.try_elect(cluster_name, broker_name, sync_state_brokers, old_master, broker_id) {
             return Some(master);
         }
 
         // Fallback to all replica brokers
-        self.try_elect(
-            cluster_name,
-            broker_name,
-            all_replica_brokers,
-            old_master,
-            broker_id,
-        )
+        self.try_elect(cluster_name, broker_name, all_replica_brokers, old_master, broker_id)
     }
 }
 
@@ -273,14 +257,7 @@ mod tests {
         let sync_brokers = HashSet::new();
         let all_brokers = HashSet::new();
 
-        let result = policy.elect(
-            "test-cluster",
-            "test-broker",
-            &sync_brokers,
-            &all_brokers,
-            None,
-            None,
-        );
+        let result = policy.elect("test-cluster", "test-broker", &sync_brokers, &all_brokers, None, None);
         assert!(result.is_none());
     }
 
@@ -374,14 +351,7 @@ mod tests {
 
         let policy = DefaultElectPolicy::new(Some(predicate), None);
 
-        let result = policy.elect(
-            "test-cluster",
-            "test-broker",
-            &sync_brokers,
-            &all_brokers,
-            None,
-            None,
-        );
+        let result = policy.elect("test-cluster", "test-broker", &sync_brokers, &all_brokers, None, None);
 
         // Should fallback and elect some broker (either 1 or 2)
         assert!(result.is_some());
@@ -401,14 +371,7 @@ mod tests {
 
         let policy = DefaultElectPolicy::new(Some(predicate), None);
 
-        let result = policy.elect(
-            "test-cluster",
-            "test-broker",
-            &brokers,
-            &HashSet::new(),
-            None,
-            None,
-        );
+        let result = policy.elect("test-cluster", "test-broker", &brokers, &HashSet::new(), None, None);
 
         assert!(result.is_none());
     }
@@ -421,14 +384,7 @@ mod tests {
 
         let policy = DefaultElectPolicy::default_instance();
 
-        let result = policy.elect(
-            "test-cluster",
-            "test-broker",
-            &brokers,
-            &HashSet::new(),
-            None,
-            None,
-        );
+        let result = policy.elect("test-cluster", "test-broker", &brokers, &HashSet::new(), None, None);
 
         assert!(result.is_some()); // Should elect some broker
     }
@@ -505,14 +461,7 @@ mod tests {
         let policy = DefaultElectPolicy::new(Some(predicate), None);
 
         // Should elect from sync_brokers first
-        let result = policy.elect(
-            "test-cluster",
-            "test-broker",
-            &sync_brokers,
-            &all_brokers,
-            None,
-            None,
-        );
+        let result = policy.elect("test-cluster", "test-broker", &sync_brokers, &all_brokers, None, None);
 
         assert_eq!(result, Some(1));
     }

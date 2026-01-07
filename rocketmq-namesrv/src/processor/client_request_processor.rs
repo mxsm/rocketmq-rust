@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -93,18 +90,15 @@ impl ClientRequestProcessor {
 
         // Early return: Check if nameserver is ready (using cached config)
         if self.need_wait_for_service {
-            let elapsed_millis =
-                TimeUtils::get_current_millis().saturating_sub(self.startup_time_millis);
-            let namesrv_ready = !self.need_check_namesrv_ready.load(Ordering::Relaxed)
-                || elapsed_millis >= self.wait_seconds_millis;
+            let elapsed_millis = TimeUtils::get_current_millis().saturating_sub(self.startup_time_millis);
+            let namesrv_ready =
+                !self.need_check_namesrv_ready.load(Ordering::Relaxed) || elapsed_millis >= self.wait_seconds_millis;
 
             if !namesrv_ready {
                 warn!("name server not ready. request code {}", request.code());
                 return Ok(Some(
-                    RemotingCommand::create_response_command_with_code(
-                        RemotingSysResponseCode::SystemError,
-                    )
-                    .set_remark("name server not ready"),
+                    RemotingCommand::create_response_command_with_code(RemotingSysResponseCode::SystemError)
+                        .set_remark("name server not ready"),
                 ));
             }
         }
@@ -118,36 +112,32 @@ impl ClientRequestProcessor {
             Some(data) => data,
             None => {
                 return Ok(Some(
-                    RemotingCommand::create_response_command_with_code(ResponseCode::TopicNotExist)
-                        .set_remark(format!(
+                    RemotingCommand::create_response_command_with_code(ResponseCode::TopicNotExist).set_remark(
+                        format!(
                             "No topic route info in name server for the topic: {}{}",
                             request_header.topic,
                             FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
-                        )),
+                        ),
+                    ),
                 ));
             }
         };
 
         if self.need_check_namesrv_ready.load(Ordering::Relaxed) {
-            self.need_check_namesrv_ready
-                .store(false, Ordering::Relaxed);
+            self.need_check_namesrv_ready.store(false, Ordering::Relaxed);
         }
 
         if self.order_message_enable {
-            topic_route_data.order_topic_conf = self
-                .name_server_runtime_inner
-                .kvconfig_manager()
-                .get_kvconfig(
-                    &CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG),
-                    &request_header.topic,
-                );
+            topic_route_data.order_topic_conf = self.name_server_runtime_inner.kvconfig_manager().get_kvconfig(
+                &CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG),
+                &request_header.topic,
+            );
         }
 
         // Encode and return successful response
         let content = topic_route_data.encode()?;
         Ok(Some(
-            RemotingCommand::create_response_command_with_code(ResponseCode::Success)
-                .set_body(content),
+            RemotingCommand::create_response_command_with_code(ResponseCode::Success).set_body(content),
         ))
     }
 }

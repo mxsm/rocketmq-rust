@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! RocketMQ protocol-specific errors
 
@@ -47,13 +44,8 @@ pub enum ProtocolError {
     InvalidMessage { reason: String },
 
     /// Protocol decode error
-    #[error(
-        "Protocol decode error: ext_fields_length={ext_fields_len}, header_length={header_len}"
-    )]
-    DecodeError {
-        ext_fields_len: usize,
-        header_len: usize,
-    },
+    #[error("Protocol decode error: ext_fields_length={ext_fields_len}, header_length={header_len}")]
+    DecodeError { ext_fields_len: usize, header_len: usize },
 
     /// Unsupported serialization type
     #[error("Unsupported serialization type: {serialize_type}")]
@@ -82,9 +74,7 @@ impl ProtocolError {
     /// Create an invalid message error
     #[inline]
     pub fn invalid_message(reason: impl Into<String>) -> Self {
-        Self::InvalidMessage {
-            reason: reason.into(),
-        }
+        Self::InvalidMessage { reason: reason.into() }
     }
 }
 
@@ -96,12 +86,33 @@ mod tests {
     fn test_protocol_error() {
         let err = ProtocolError::invalid_command(999);
         assert_eq!(err.to_string(), "Invalid command code: 999");
-    }
 
-    #[test]
-    fn test_checksum_mismatch() {
+        let err = ProtocolError::UnsupportedVersion { version: 1 };
+        assert_eq!(err.to_string(), "Unsupported protocol version: 1");
+
+        let err = ProtocolError::header_missing("topic");
+        assert_eq!(err.to_string(), "Missing required header field: topic");
+
+        let err = ProtocolError::BodyMissing;
+        assert_eq!(err.to_string(), "Missing required message body");
+
         let err = ProtocolError::checksum_mismatch(0xABCD, 0x1234);
         assert!(err.to_string().contains("abcd"));
         assert!(err.to_string().contains("1234"));
+
+        let err = ProtocolError::invalid_message("too long");
+        assert_eq!(err.to_string(), "Invalid message format: too long");
+
+        let err = ProtocolError::DecodeError {
+            ext_fields_len: 10,
+            header_len: 20,
+        };
+        assert_eq!(
+            err.to_string(),
+            "Protocol decode error: ext_fields_length=10, header_length=20"
+        );
+
+        let err = ProtocolError::UnsupportedSerializationType { serialize_type: 2 };
+        assert_eq!(err.to_string(), "Unsupported serialization type: 2");
     }
 }

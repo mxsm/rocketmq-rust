@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Cluster address table with concurrent access
 //!
@@ -52,9 +49,7 @@ pub struct ClusterAddrTable {
 impl ClusterAddrTable {
     /// Create a new cluster address table
     pub fn new() -> Self {
-        Self {
-            inner: DashMap::new(),
-        }
+        Self { inner: DashMap::new() }
     }
 
     /// Create with estimated capacity
@@ -76,10 +71,7 @@ impl ClusterAddrTable {
     /// # Returns
     /// true if broker was newly added, false if already existed
     pub fn add_broker(&self, cluster_name: ClusterName, broker_name: BrokerName) -> bool {
-        self.inner
-            .entry(cluster_name)
-            .or_default()
-            .insert(broker_name)
+        self.inner.entry(cluster_name).or_default().insert(broker_name)
     }
 
     /// Remove a broker from a cluster
@@ -175,10 +167,7 @@ impl ClusterAddrTable {
     /// # Arguments
     /// * `cluster_name` - Cluster name
     pub fn broker_count_in_cluster(&self, cluster_name: &str) -> usize {
-        self.inner
-            .get(cluster_name)
-            .map(|brokers| brokers.len())
-            .unwrap_or(0)
+        self.inner.get(cluster_name).map(|brokers| brokers.len()).unwrap_or(0)
     }
 
     /// Get total number of brokers across all clusters
@@ -260,14 +249,8 @@ mod tests {
         let table = ClusterAddrTable::new();
         let cluster: ClusterName = CheetahString::from_string("DefaultCluster".to_string());
 
-        table.add_broker(
-            cluster.clone(),
-            CheetahString::from_string("broker-a".to_string()),
-        );
-        table.add_broker(
-            cluster.clone(),
-            CheetahString::from_string("broker-b".to_string()),
-        );
+        table.add_broker(cluster.clone(), CheetahString::from_string("broker-a".to_string()));
+        table.add_broker(cluster.clone(), CheetahString::from_string("broker-b".to_string()));
 
         // Remove cluster
         assert!(table.remove_cluster("DefaultCluster"));
@@ -363,10 +346,7 @@ mod tests {
         assert_eq!(all_data.len(), 2);
 
         // Verify ClusterA has 2 brokers
-        let cluster_a_data = all_data
-            .iter()
-            .find(|(name, _)| &**name == "ClusterA")
-            .unwrap();
+        let cluster_a_data = all_data.iter().find(|(name, _)| &**name == "ClusterA").unwrap();
         assert_eq!(cluster_a_data.1.len(), 2);
     }
 

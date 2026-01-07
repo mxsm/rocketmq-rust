@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -100,9 +97,7 @@ where
     }
 
     fn get_half_message_by_offset(&self, offset: i64) -> OperationResult {
-        let message_ext = self
-            .transactional_message_bridge
-            .look_message_by_offset(offset);
+        let message_ext = self.transactional_message_bridge.look_message_by_offset(offset);
 
         if let Some(message_ext) = message_ext {
             OperationResult {
@@ -121,10 +116,7 @@ where
 
     pub async fn batch_send_op_message(&self) -> u64 {
         let start_time = get_current_millis();
-        let broker_config = self
-            .transactional_message_bridge
-            .broker_runtime_inner
-            .broker_config();
+        let broker_config = self.transactional_message_bridge.broker_runtime_inner.broker_config();
         let interval = broker_config.transaction_op_batch_interval;
         let max_size = broker_config.transaction_op_msg_max_size as usize;
         let mut over_size = false;
@@ -135,8 +127,7 @@ where
             if mq_context.get_total_size().await == 0
                 || mq_context.is_empty().await
                 || (mq_context.get_total_size().await < max_size as u32
-                    && (start_time as i64 - mq_context.get_last_write_timestamp().await as i64)
-                        < interval as i64)
+                    && (start_time as i64 - mq_context.get_last_write_timestamp().await as i64) < interval as i64)
             {
                 continue;
             }
@@ -167,20 +158,12 @@ where
         0
     }
 
-    pub async fn get_op_message(
-        &self,
-        queue_id: i32,
-        more_data: Option<String>,
-    ) -> Option<Message> {
+    pub async fn get_op_message(&self, queue_id: i32, more_data: Option<String>) -> Option<Message> {
         let topic = TransactionalMessageUtil::build_op_topic();
         let mut delete_context = self.delete_context.lock().await;
         let mq_context = delete_context.get_mut(&queue_id)?;
 
-        let more_data_length = if let Some(ref data) = more_data {
-            data.len()
-        } else {
-            0
-        };
+        let more_data_length = if let Some(ref data) = more_data { data.len() } else { 0 };
         let mut length = more_data_length;
         let max_size = self
             .transactional_message_bridge
@@ -238,10 +221,7 @@ where
         let topic = CheetahString::from_static_str(TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC);
 
         //TopicValidator::RMQ_SYS_TRANS_HALF_TOPIC only one read and write queue
-        let msg_queues = self
-            .transactional_message_bridge
-            .fetch_message_queues(&topic)
-            .await;
+        let msg_queues = self.transactional_message_bridge.fetch_message_queues(&topic).await;
 
         if msg_queues.is_empty() {
             warn!("The queue of topic is empty: {}", topic);
@@ -254,12 +234,8 @@ where
             let start_time = get_current_millis() as i64;
             let op_queue = self.get_op_queue(&message_queue).await;
 
-            let half_offset = self
-                .transactional_message_bridge
-                .fetch_consume_offset(&message_queue);
-            let op_offset = self
-                .transactional_message_bridge
-                .fetch_consume_offset(&op_queue);
+            let half_offset = self.transactional_message_bridge.fetch_consume_offset(&message_queue);
+            let op_offset = self.transactional_message_bridge.fetch_consume_offset(&op_queue);
 
             info!(
                 "Before check, the queue={:?} msgOffset={} opOffset={}",
@@ -355,10 +331,7 @@ where
             }
 
             if let Some(removed_op_offset) = remove_map.remove(&consume_half_offset) {
-                debug!(
-                    "Half offset {} has been committed/rolled back",
-                    consume_half_offset
-                );
+                debug!("Half offset {} has been committed/rolled back", consume_half_offset);
 
                 if let Some(op_msg_set) = op_msg_map.get_mut(&removed_op_offset) {
                     op_msg_set.remove(&consume_half_offset);
@@ -368,9 +341,7 @@ where
                     }
                 }
             } else {
-                let get_result = self
-                    .get_half_msg(message_queue, consume_half_offset)
-                    .await?;
+                let get_result = self.get_half_msg(message_queue, consume_half_offset).await?;
                 let mut msg_ext = match get_result.msg {
                     Some(msg) => msg,
                     None => {
@@ -382,15 +353,13 @@ where
                         if let Some(pr) = get_result.pull_result {
                             if *pr.pull_status() == PullStatus::NoNewMsg {
                                 debug!(
-                                    "No new msg, the miss offset={} in={:?}, continue check={}, \
-                                     pull result={}",
+                                    "No new msg, the miss offset={} in={:?}, continue check={}, pull result={}",
                                     consume_half_offset, message_queue, get_message_null_count, pr
                                 );
                                 break;
                             } else {
                                 info!(
-                                    "Illegal offset, the miss offset={} in={:?}, continue \
-                                     check={}, pull result={}",
+                                    "Illegal offset, the miss offset={} in={:?}, continue check={}, pull result={}",
                                     consume_half_offset, message_queue, get_message_null_count, pr
                                 );
                                 consume_half_offset = pr.next_begin_offset() as i64;
@@ -403,12 +372,8 @@ where
                 };
                 // Handle slave acting master scenario
                 if self.should_escape_message() {
-                    let msg_inner =
-                        TransactionalMessageBridge::<MS>::renew_half_message_inner(&msg_ext);
-                    let is_success = self
-                        .transactional_message_bridge
-                        .escape_message(msg_inner)
-                        .await;
+                    let msg_inner = TransactionalMessageBridge::<MS>::renew_half_message_inner(&msg_ext);
+                    let is_success = self.transactional_message_bridge.escape_message(msg_inner).await;
 
                     if is_success {
                         escape_fail_cnt = 0;
@@ -441,9 +406,7 @@ where
                 }
 
                 // Check if message should be discarded or skipped
-                if self.need_discard(&mut msg_ext, transaction_check_max)
-                    || self.need_skip(&msg_ext)
-                {
+                if self.need_discard(&mut msg_ext, transaction_check_max) || self.need_skip(&msg_ext) {
                     listener.resolve_discard_msg(msg_ext).await;
                     new_offset = consume_half_offset + 1;
                     consume_half_offset += 1;
@@ -465,30 +428,20 @@ where
                 let value_of_current_minus_born = current_time - msg_ext.born_timestamp();
                 let mut check_immunity_time = transaction_timeout as i64;
 
-                if let Some(immunity_time_str) =
-                    msg_ext.get_user_property(&CheetahString::from_static_str(
-                        MessageConst::PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS,
-                    ))
-                {
-                    check_immunity_time =
-                        self.get_immunity_time(&immunity_time_str, transaction_timeout as i64);
+                if let Some(immunity_time_str) = msg_ext.get_user_property(&CheetahString::from_static_str(
+                    MessageConst::PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS,
+                )) {
+                    check_immunity_time = self.get_immunity_time(&immunity_time_str, transaction_timeout as i64);
                     if value_of_current_minus_born < check_immunity_time
                         && self
-                            .check_prepare_queue_offset(
-                                remove_map,
-                                done_op_offset,
-                                &msg_ext,
-                                &immunity_time_str,
-                            )
+                            .check_prepare_queue_offset(remove_map, done_op_offset, &msg_ext, &immunity_time_str)
                             .await?
                     {
                         new_offset = consume_half_offset + 1;
                         consume_half_offset += 1;
                         continue;
                     }
-                } else if 0 <= value_of_current_minus_born
-                    && value_of_current_minus_born < check_immunity_time
-                {
+                } else if 0 <= value_of_current_minus_born && value_of_current_minus_born < check_immunity_time {
                     /* debug!(
                         "New arrived, the miss offset={}, check it later checkImmunity={}, born={}",
                         i,
@@ -512,21 +465,15 @@ where
                     transaction_timeout as i64,
                 );
                 if is_need_check {
-                    if !self
-                        .put_back_half_msg_queue(&mut msg_ext, consume_half_offset)
-                        .await
-                    {
+                    if !self.put_back_half_msg_queue(&mut msg_ext, consume_half_offset).await {
                         continue;
                     }
                     put_in_queue_count += 1;
 
                     info!(
-                        "Check transaction. real_topic={}, uniqKey={}, offset={}, \
-                         commitLogOffset={}",
+                        "Check transaction. real_topic={}, uniqKey={}, offset={}, commitLogOffset={}",
                         msg_ext
-                            .get_user_property(&CheetahString::from_static_str(
-                                MessageConst::PROPERTY_REAL_TOPIC
-                            ))
+                            .get_user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
                             .unwrap_or_default(),
                         msg_ext
                             .get_user_property(&CheetahString::from_static_str(
@@ -537,12 +484,9 @@ where
                         msg_ext.commit_log_offset()
                     );
 
-                    listener
-                        .resolve_half_msg(msg_ext)
-                        .await
-                        .unwrap_or_else(|err| {
-                            error!("Failed to resolve half message, error: {}", err);
-                        })
+                    listener.resolve_half_msg(msg_ext).await.unwrap_or_else(|err| {
+                        error!("Failed to resolve half message, error: {}", err);
+                    })
                 } else {
                     // Pull more operation messages
                     next_op_offset = if let Some(pr) = pull_result.as_ref() {
@@ -565,16 +509,13 @@ where
                     if pull_result.is_none()
                         || matches!(
                             pull_result.as_ref().unwrap().pull_status(),
-                            PullStatus::NoNewMsg
-                                | PullStatus::OffsetIllegal
-                                | PullStatus::NoMatchedMsg
+                            PullStatus::NoNewMsg | PullStatus::OffsetIllegal | PullStatus::NoMatchedMsg
                         )
                     {
                         tokio::time::sleep(Duration::from_millis(SLEEP_WHILE_NO_OP as u64)).await;
                     } else {
                         info!(
-                            "The miss message offset:{}, pullOffsetOfOp:{}, miniOffset:{} get \
-                             more opMsg.",
+                            "The miss message offset:{}, pullOffsetOfOp:{}, miniOffset:{} get more opMsg.",
                             consume_half_offset, next_op_offset, half_offset
                         );
                     }
@@ -618,8 +559,8 @@ where
             .unwrap_or_else(|| get_current_millis() as i64);
 
         info!(
-            "After check, {:?} opOffset={} opOffsetDiff={} msgOffset={} msgOffsetDiff={} \
-             msgTime={} msgTimeDelayInMs={} putInQueueCount={}",
+            "After check, {:?} opOffset={} opOffsetDiff={} msgOffset={} msgOffsetDiff={} msgTime={} \
+             msgTimeDelayInMs={} putInQueueCount={}",
             message_queue,
             new_op_offset,
             max_op_offset as i64 - new_op_offset,
@@ -640,17 +581,11 @@ where
                 if let Some(append_result) = put_message_result.append_message_result() {
                     msg_ext.set_queue_offset(append_result.logics_offset);
                     msg_ext.set_commit_log_offset(append_result.wrote_offset);
-                    msg_ext.set_msg_id(
-                        append_result
-                            .msg_id
-                            .clone()
-                            .unwrap_or("".to_string())
-                            .into(),
-                    );
+                    msg_ext.set_msg_id(append_result.msg_id.clone().unwrap_or("".to_string()).into());
 
                     debug!(
-                        "Send check message, the offset={} restored in queueOffset={} \
-                         commitLogOffset={} newMsgId={} realMsgId={} topic={}",
+                        "Send check message, the offset={} restored in queueOffset={} commitLogOffset={} newMsgId={} \
+                         realMsgId={} topic={}",
                         offset,
                         msg_ext.queue_offset(),
                         msg_ext.commit_log_offset(),
@@ -677,10 +612,7 @@ where
     }
 
     /// Put message back to half queue and return result
-    async fn put_back_to_half_queue_return_result(
-        &self,
-        message_ext: &MessageExt,
-    ) -> Option<PutMessageResult> {
+    async fn put_back_to_half_queue_return_result(&self, message_ext: &MessageExt) -> Option<PutMessageResult> {
         let msg_inner = TransactionalMessageBridge::<MS>::renew_half_message_inner(message_ext);
         Some(
             self.transactional_message_bridge
@@ -691,11 +623,8 @@ where
 
     /// Put immunity message back to half queue
     async fn put_immunity_msg_back_to_half_queue(&mut self, message_ext: &MessageExt) -> bool {
-        let msg_inner =
-            TransactionalMessageBridge::<MS>::renew_immunity_half_message_inner(message_ext);
-        self.transactional_message_bridge
-            .put_message(msg_inner)
-            .await
+        let msg_inner = TransactionalMessageBridge::<MS>::renew_immunity_half_message_inner(message_ext);
+        self.transactional_message_bridge.put_message(msg_inner).await
     }
 
     /// Determine if message check is needed
@@ -713,8 +642,7 @@ where
             }
         }
 
-        op_msg.is_none() && value_of_current_minus_born > check_immunity_time
-            || value_of_current_minus_born <= -1
+        op_msg.is_none() && value_of_current_minus_born > check_immunity_time || value_of_current_minus_born <= -1
     }
 
     /// Check prepare queue offset
@@ -737,12 +665,10 @@ where
                     if let Some(tmp_op_offset) = remove_map.remove(&prepare_queue_offset) {
                         done_op_offset.push(tmp_op_offset);
                         info!(
-                            "removeMap contain prepareQueueOffset. real_topic={}, uniqKey={}, \
-                             immunityTime={}, offset={}",
+                            "removeMap contain prepareQueueOffset. real_topic={}, uniqKey={}, immunityTime={}, \
+                             offset={}",
                             msg_ext
-                                .get_user_property(&CheetahString::from_static_str(
-                                    MessageConst::PROPERTY_REAL_TOPIC
-                                ))
+                                .get_user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
                                 .unwrap_or_default(),
                             msg_ext
                                 .get_user_property(&CheetahString::from_static_str(
@@ -864,10 +790,7 @@ where
     ) -> Result<GetResult, Box<dyn std::error::Error + Send + Sync>> {
         let mut get_result = GetResult::new();
 
-        if let Some(result) = self
-            .pull_half_msg(message_queue, offset, PULL_MSG_RETRY_NUMBER)
-            .await
-        {
+        if let Some(result) = self.pull_half_msg(message_queue, offset, PULL_MSG_RETRY_NUMBER).await {
             if let Some(message_exts) = result.msg_found_list() {
                 if !message_exts.is_empty() {
                     get_result.set_msg(Some(message_exts[0].as_ref().clone()));
@@ -932,9 +855,7 @@ where
         op_msg_map: &mut HashMap<i64, HashSet<i64>>,
         done_op_offset: &mut Vec<i64>,
     ) -> Result<Option<PullResult>, Box<dyn std::error::Error + Send + Sync>> {
-        let pull_result = self
-            .pull_op_msg(op_queue, pull_offset_of_op, OP_MSG_PULL_NUMS)
-            .await;
+        let pull_result = self.pull_op_msg(op_queue, pull_offset_of_op, OP_MSG_PULL_NUMS).await;
 
         let Some(pull_result) = pull_result else {
             return Ok(None);
@@ -992,11 +913,7 @@ where
                 queue_offset_body
             );
 
-            if op_message_ext.get_tags()
-                == Some(CheetahString::from_static_str(
-                    TransactionalMessageUtil::REMOVE_TAG,
-                ))
-            {
+            if op_message_ext.get_tags() == Some(CheetahString::from_static_str(TransactionalMessageUtil::REMOVE_TAG)) {
                 let offset_array: Vec<&str> = queue_offset_body
                     .split(TransactionalMessageUtil::OFFSET_SEPARATOR)
                     .collect();
@@ -1044,18 +961,11 @@ where
     MS: MessageStore + Send + Sync + 'static,
 {
     async fn prepare_message(&mut self, message_inner: MessageExtBrokerInner) -> PutMessageResult {
-        self.transactional_message_bridge
-            .put_half_message(message_inner)
-            .await
+        self.transactional_message_bridge.put_half_message(message_inner).await
     }
 
-    async fn async_prepare_message(
-        &mut self,
-        message_inner: MessageExtBrokerInner,
-    ) -> PutMessageResult {
-        self.transactional_message_bridge
-            .put_half_message(message_inner)
-            .await
+    async fn async_prepare_message(&mut self, message_inner: MessageExtBrokerInner) -> PutMessageResult {
+        self.transactional_message_bridge.put_half_message(message_inner).await
     }
 
     async fn delete_prepare_message(&mut self, message_ext: &MessageExt) -> bool {
@@ -1070,9 +980,7 @@ where
             TransactionalMessageUtil::OFFSET_SEPARATOR
         );
         let len = data.len();
-        let res = mq_context
-            .offer(data.clone(), Duration::from_millis(100))
-            .await;
+        let res = mq_context.offer(data.clone(), Duration::from_millis(100)).await;
         if res.is_ok() {
             let total_size = mq_context.total_size_add_and_get(len as u32).await;
             if total_size
@@ -1118,10 +1026,7 @@ where
     }
 
     #[inline]
-    fn rollback_message(
-        &mut self,
-        request_header: &EndTransactionRequestHeader,
-    ) -> OperationResult {
+    fn rollback_message(&mut self, request_header: &EndTransactionRequestHeader) -> OperationResult {
         self.get_half_message_by_offset(request_header.commit_log_offset as i64)
     }
 

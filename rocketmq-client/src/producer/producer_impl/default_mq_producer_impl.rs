@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -120,11 +117,8 @@ impl DefaultMQProducerImpl {
     ) -> Self {
         let semaphore_async_send_num =
             Semaphore::new(producer_config.back_pressure_for_async_send_num().max(10) as usize);
-        let semaphore_async_send_size = Semaphore::new(
-            producer_config
-                .back_pressure_for_async_send_size()
-                .max(1024 * 1024) as usize,
-        );
+        let semaphore_async_send_size =
+            Semaphore::new(producer_config.back_pressure_for_async_send_size().max(1024 * 1024) as usize);
         let topic_publish_info_table = Arc::new(RwLock::new(HashMap::new()));
         DefaultMQProducerImpl {
             client_config: client_config.clone(),
@@ -140,10 +134,7 @@ impl DefaultMQProducerImpl {
             semaphore_async_send_num: Arc::new(semaphore_async_send_num),
             semaphore_async_send_size: Arc::new(semaphore_async_send_size),
             async_sender_runtime: None,
-            default_async_sender_runtime: Some(Arc::new(RocketMQRuntime::new_multi(
-                num_cpus::get(),
-                "async-sender",
-            ))),
+            default_async_sender_runtime: Some(Arc::new(RocketMQRuntime::new_multi(num_cpus::get(), "async-sender"))),
             default_mqproducer_impl_inner: None,
             transaction_listener: None,
             check_runtime: None,
@@ -164,10 +155,7 @@ impl DefaultMQProducerImpl {
     }
 
     #[inline]
-    pub async fn send<T>(
-        &mut self,
-        msg: &mut T,
-    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    pub async fn send<T>(&mut self, msg: &mut T) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         T: MessageTrait + Send + Sync,
     {
@@ -184,12 +172,8 @@ impl DefaultMQProducerImpl {
     where
         T: MessageTrait + Send + Sync,
     {
-        self.async_send_with_callback_timeout(
-            msg,
-            send_callback,
-            self.producer_config.send_msg_timeout() as u64,
-        )
-        .await
+        self.async_send_with_callback_timeout(msg, send_callback, self.producer_config.send_msg_timeout() as u64)
+            .await
     }
 
     #[inline]
@@ -201,12 +185,8 @@ impl DefaultMQProducerImpl {
     where
         T: MessageTrait + Send + Sync,
     {
-        self.sync_send_with_message_queue_timeout(
-            msg,
-            mq,
-            self.producer_config.send_msg_timeout() as u64,
-        )
-        .await
+        self.sync_send_with_message_queue_timeout(msg, mq, self.producer_config.send_msg_timeout() as u64)
+            .await
     }
 
     #[inline]
@@ -271,15 +251,8 @@ impl DefaultMQProducerImpl {
                 timeout_ms: timeout,
             });
         }
-        self.send_kernel_impl(
-            &mut msg,
-            &mq,
-            CommunicationMode::Sync,
-            None,
-            None,
-            timeout - cost_time,
-        )
-        .await
+        self.send_kernel_impl(&mut msg, &mq, CommunicationMode::Sync, None, None, timeout - cost_time)
+            .await
     }
 
     #[inline]
@@ -391,17 +364,11 @@ impl DefaultMQProducerImpl {
                     .as_mut()
                     .unwrap()
                     .mq_admin_impl
-                    .parse_publish_message_queues(
-                        &topic_publish_info.message_queue_list,
-                        &mut self.client_config,
-                    );
+                    .parse_publish_message_queues(&topic_publish_info.message_queue_list, &mut self.client_config);
                 let mut user_message = MessageAccessor::clone_message(&msg);
                 let user_topic = NamespaceUtil::without_namespace_with_namespace(
                     user_message.get_topic(),
-                    self.client_config
-                        .get_namespace()
-                        .unwrap_or_default()
-                        .as_str(),
+                    self.client_config.get_namespace().unwrap_or_default().as_str(),
                 );
                 user_message.set_topic(CheetahString::from_string(user_topic));
                 let message_queue = selector(&message_queue_list, &msg, &arg);
@@ -461,13 +428,11 @@ impl DefaultMQProducerImpl {
             if msg.get_topic() != mq.get_topic() {
                 send_callback_inner.as_ref().unwrap()(
                     None,
-                    Some(&rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(
-                        format!(
-                            "message topic [{}] is not equal with message queue topic [{}]",
-                            msg.get_topic(),
-                            mq.get_topic()
-                        ),
-                    ))),
+                    Some(&rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(format!(
+                        "message topic [{}] is not equal with message queue topic [{}]",
+                        msg.get_topic(),
+                        mq.get_topic()
+                    )))),
                 );
                 return;
             }
@@ -523,20 +488,13 @@ impl DefaultMQProducerImpl {
             if timeout <= cost_time {
                 send_callback_inner.as_ref().unwrap()(
                     None,
-                    Some(&RemotingTooMuchRequestError(
-                        "asyncSend call timeout".to_string(),
-                    )),
+                    Some(&RemotingTooMuchRequestError("asyncSend call timeout".to_string())),
                 );
             }
 
             let result = producer_impl
                 .clone()
-                .send_default_impl(
-                    &mut msg,
-                    CommunicationMode::Async,
-                    send_callback_inner.clone(),
-                    timeout,
-                )
+                .send_default_impl(&mut msg, CommunicationMode::Async, send_callback_inner.clone(), timeout)
                 .await;
             match result {
                 Ok(_) => {}
@@ -562,8 +520,7 @@ impl DefaultMQProducerImpl {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        let is_enable_backpressure_for_async_mode =
-            self.producer_config.enable_backpressure_for_async_mode();
+        let is_enable_backpressure_for_async_mode = self.producer_config.enable_backpressure_for_async_mode();
 
         let (acquire_value_num, acquire_value_size) = if is_enable_backpressure_for_async_mode {
             //back pressure
@@ -704,25 +661,20 @@ impl DefaultMQProducerImpl {
                     }
 
                     //select one message queue to send message
-                    let mq_selected = self.select_one_message_queue(
-                        &topic_publish_info,
-                        last_broker_name,
-                        reset_index,
-                    );
+                    let mq_selected = self.select_one_message_queue(&topic_publish_info, last_broker_name, reset_index);
                     if mq_selected.is_some() {
                         mq = mq_selected;
-                        brokers_sent[times as usize] =
-                            mq.as_ref().unwrap().get_broker_name().to_string();
+                        brokers_sent[times as usize] = mq.as_ref().unwrap().get_broker_name().to_string();
                         begin_timestamp_prev = Instant::now();
                         if times > 0 {
                             //Reset topic with namespace during resend.
                             let namespace = self.client_config.get_namespace().unwrap_or_default();
-                            msg.set_topic(CheetahString::from_string(
-                                NamespaceUtil::wrap_namespace(namespace.as_str(), topic.as_str()),
-                            ));
+                            msg.set_topic(CheetahString::from_string(NamespaceUtil::wrap_namespace(
+                                namespace.as_str(),
+                                topic.as_str(),
+                            )));
                         }
-                        let cost_time =
-                            (begin_timestamp_prev - begin_timestamp_first).as_millis() as u64;
+                        let cost_time = (begin_timestamp_prev - begin_timestamp_first).as_millis() as u64;
                         if timeout < cost_time {
                             call_timeout = true;
                             break;
@@ -755,25 +707,20 @@ impl DefaultMQProducerImpl {
                                     CommunicationMode::Sync => {
                                         if let Some(ref result) = send_result {
                                             if result.send_status != SendStatus::SendOk
-                                                && self
-                                                    .producer_config
-                                                    .retry_another_broker_when_not_store_ok()
+                                                && self.producer_config.retry_another_broker_when_not_store_ok()
                                             {
                                                 continue;
                                             }
                                         }
                                         Ok(send_result)
                                     }
-                                    CommunicationMode::Async | CommunicationMode::Oneway => {
-                                        Ok(None)
-                                    }
+                                    CommunicationMode::Async | CommunicationMode::Oneway => Ok(None),
                                 };
                             }
                             Err(err) => match err {
                                 rocketmq_error::RocketMQError::IllegalArgument(_) => {
                                     end_timestamp = Instant::now();
-                                    let elapsed =
-                                        (end_timestamp - begin_timestamp_prev).as_millis() as u64;
+                                    let elapsed = (end_timestamp - begin_timestamp_prev).as_millis() as u64;
                                     self.update_fault_item(
                                         mq.as_ref().unwrap().get_broker_name().clone(),
                                         elapsed,
@@ -782,8 +729,8 @@ impl DefaultMQProducerImpl {
                                     )
                                     .await;
                                     warn!(
-                                        "sendKernelImpl exception, resend at once, InvokeID: {}, \
-                                         RT: {}ms, Broker: {:?},{}",
+                                        "sendKernelImpl exception, resend at once, InvokeID: {}, RT: {}ms, Broker: \
+                                         {:?},{}",
                                         invoke_id,
                                         elapsed,
                                         mq,
@@ -793,13 +740,9 @@ impl DefaultMQProducerImpl {
                                     exception = Some(err);
                                     continue;
                                 }
-                                rocketmq_error::RocketMQError::BrokerOperationFailed {
-                                    code,
-                                    ..
-                                } => {
+                                rocketmq_error::RocketMQError::BrokerOperationFailed { code, .. } => {
                                     end_timestamp = Instant::now();
-                                    let elapsed =
-                                        (end_timestamp - begin_timestamp_prev).as_millis() as u64;
+                                    let elapsed = (end_timestamp - begin_timestamp_prev).as_millis() as u64;
                                     self.update_fault_item(
                                         mq.as_ref().unwrap().get_broker_name().clone(),
                                         elapsed,
@@ -819,8 +762,7 @@ impl DefaultMQProducerImpl {
                                 }
                                 rocketmq_error::RocketMQError::Network(_) => {
                                     end_timestamp = Instant::now();
-                                    let elapsed =
-                                        (end_timestamp - begin_timestamp_prev).as_millis() as u64;
+                                    let elapsed = (end_timestamp - begin_timestamp_prev).as_millis() as u64;
                                     if self.mq_fault_strategy.is_start_detector_enable() {
                                         self.update_fault_item(
                                             mq.as_ref().unwrap().get_broker_name().clone(),
@@ -873,21 +815,18 @@ impl DefaultMQProducerImpl {
 
                 return if let Some(err) = exception {
                     match err {
-                        rocketmq_error::RocketMQError::IllegalArgument(_) => Err(mq_client_err!(
-                            ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
-                            info
-                        )),
-                        rocketmq_error::RocketMQError::Timeout { .. } => Err(mq_client_err!(
-                            ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
-                            info
-                        )),
-                        rocketmq_error::RocketMQError::BrokerOperationFailed { .. } => Err(
-                            mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info),
-                        ),
-                        rocketmq_error::RocketMQError::Network(_) => Err(mq_client_err!(
-                            ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
-                            info
-                        )),
+                        rocketmq_error::RocketMQError::IllegalArgument(_) => {
+                            Err(mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info))
+                        }
+                        rocketmq_error::RocketMQError::Timeout { .. } => {
+                            Err(mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info))
+                        }
+                        rocketmq_error::RocketMQError::BrokerOperationFailed { .. } => {
+                            Err(mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info))
+                        }
+                        rocketmq_error::RocketMQError::Network(_) => {
+                            Err(mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info))
+                        }
                         _ => Err(err),
                     }
                 } else {
@@ -962,16 +901,10 @@ impl DefaultMQProducerImpl {
         }
 
         if broker_addr.is_none() {
-            return Err(mq_client_err!(format!(
-                "The broker[{}] not exist",
-                broker_name,
-            )));
+            return Err(mq_client_err!(format!("The broker[{}] not exist", broker_name,)));
         }
         let mut broker_addr = broker_addr.unwrap();
-        broker_addr = mix_all::broker_vip_channel(
-            self.client_config.vip_channel_enabled,
-            broker_addr.as_str(),
-        );
+        broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, broker_addr.as_str());
         //let prev_body = msg.body.clone();
         let batch = msg.as_any().downcast_ref::<MessageBatch>().is_some();
         if !batch {
@@ -1015,21 +948,15 @@ impl DefaultMQProducerImpl {
 
         //build send message request header
         let mut request_header = SendMessageRequestHeader {
-            producer_group: CheetahString::from_string(
-                self.producer_config.producer_group().to_string(),
-            ),
+            producer_group: CheetahString::from_string(self.producer_config.producer_group().to_string()),
             topic: CheetahString::from_string(msg.get_topic().to_string()),
-            default_topic: CheetahString::from_string(
-                self.producer_config.create_topic_key().to_string(),
-            ),
+            default_topic: CheetahString::from_string(self.producer_config.create_topic_key().to_string()),
             default_topic_queue_nums: self.producer_config.default_topic_queue_nums() as i32,
             queue_id: mq.get_queue_id(),
             sys_flag,
             born_timestamp: get_current_millis() as i64,
             flag: msg.get_flag(),
-            properties: Some(MessageDecoder::message_properties_to_string(
-                msg.get_properties(),
-            )),
+            properties: Some(MessageDecoder::message_properties_to_string(msg.get_properties())),
             reconsume_times: Some(0),
             unit_mode: Some(self.is_unit_mode()),
             batch: Some(batch),
@@ -1043,10 +970,7 @@ impl DefaultMQProducerImpl {
             ..Default::default()
         };
 
-        if request_header
-            .topic
-            .starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
-        {
+        if request_header.topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
             let reconsume_times = MessageAccessor::get_reconsume_time(msg);
             if let Some(value) = reconsume_times {
                 request_header.reconsume_times = value.parse::<i32>().map_or(Some(0), Some);
@@ -1065,10 +989,7 @@ impl DefaultMQProducerImpl {
             msg.set_topic(CheetahString::from_string(
                 NamespaceUtil::without_namespace_with_namespace(
                     msg.get_topic(),
-                    self.client_config
-                        .get_namespace()
-                        .unwrap_or_default()
-                        .as_str(),
+                    self.client_config.get_namespace().unwrap_or_default().as_str(),
                 ),
             ));
         }
@@ -1086,9 +1007,7 @@ impl DefaultMQProducerImpl {
                 ))
                 .is_some()
                 || msg
-                    .get_property(&CheetahString::from_static_str(
-                        MessageConst::PROPERTY_DELAY_TIME_LEVEL,
-                    ))
+                    .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL))
                     .is_some();
             let mut send_message_context = SendMessageContext {
                 producer: self.default_mqproducer_impl_inner.clone(),
@@ -1212,10 +1131,7 @@ impl DefaultMQProducerImpl {
         !self.check_forbidden_hook_list.is_empty()
     }
 
-    pub fn execute_check_forbidden_hook(
-        &self,
-        context: &CheckForbiddenContext,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    pub fn execute_check_forbidden_hook(&self, context: &CheckForbiddenContext) -> rocketmq_error::RocketMQResult<()> {
         if self.has_check_forbidden_hook() {
             for hook in self.check_forbidden_hook_list.iter() {
                 hook.check_forbidden(context)?;
@@ -1257,11 +1173,7 @@ impl DefaultMQProducerImpl {
     }
 
     fn validate_name_server_setting(&self) -> rocketmq_error::RocketMQResult<()> {
-        let binding = self
-            .client_instance
-            .as_ref()
-            .unwrap()
-            .get_mq_client_api_impl();
+        let binding = self.client_instance.as_ref().unwrap().get_mq_client_api_impl();
         let ns_list = binding.get_name_server_address_list();
         if ns_list.is_empty() {
             return Err(mq_client_err!(
@@ -1275,10 +1187,7 @@ impl DefaultMQProducerImpl {
         Ok(())
     }
 
-    async fn try_to_find_topic_publish_info(
-        &self,
-        topic: &CheetahString,
-    ) -> Option<TopicPublishInfo> {
+    async fn try_to_find_topic_publish_info(&self, topic: &CheetahString) -> Option<TopicPublishInfo> {
         let mut write_guard = self.topic_publish_info_table.write().await;
         let mut topic_publish_info = write_guard.get(topic).cloned();
         if topic_publish_info.is_none() || !topic_publish_info.as_ref().unwrap().ok() {
@@ -1303,17 +1212,9 @@ impl DefaultMQProducerImpl {
             .as_ref()
             .unwrap()
             .mut_from_ref()
-            .update_topic_route_info_from_name_server_default(
-                topic,
-                true,
-                Some(&self.producer_config),
-            )
+            .update_topic_route_info_from_name_server_default(topic, true, Some(&self.producer_config))
             .await;
-        self.topic_publish_info_table
-            .write()
-            .await
-            .get(topic)
-            .cloned()
+        self.topic_publish_info_table.write().await.get(topic).cloned()
     }
 
     fn make_sure_state_ok(&self) -> rocketmq_error::RocketMQResult<()> {
@@ -1349,17 +1250,11 @@ impl DefaultMQProducerImpl {
                     .as_mut()
                     .unwrap()
                     .mq_admin_impl
-                    .parse_publish_message_queues(
-                        &topic_publish_info.message_queue_list,
-                        &mut self.client_config,
-                    );
+                    .parse_publish_message_queues(&topic_publish_info.message_queue_list, &mut self.client_config);
                 let mut user_message = MessageAccessor::clone_message(msg);
                 let user_topic = NamespaceUtil::without_namespace_with_namespace(
                     user_message.get_topic(),
-                    self.client_config
-                        .get_namespace()
-                        .unwrap_or_default()
-                        .as_str(),
+                    self.client_config.get_namespace().unwrap_or_default().as_str(),
                 );
                 user_message.set_topic(CheetahString::from_string(user_topic));
                 let message_queue = selector(&message_queue_list, msg, arg);
@@ -1386,15 +1281,13 @@ impl DefaultMQProducerImpl {
         selector: MessageQueueSelectorFn,
         arg: T,
         timeout: u64,
-    ) -> rocketmq_error::RocketMQResult<SendResult>
+    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
         T: std::any::Any + Sync + Send,
     {
-        let result = self
-            .send_select_impl(msg, selector, arg, CommunicationMode::Sync, None, timeout)
-            .await?;
-        Ok(result.expect("send result is none"))
+        self.send_select_impl(msg, selector, arg, CommunicationMode::Sync, None, timeout)
+            .await
     }
 
     pub async fn fetch_publish_message_queues(
@@ -1402,12 +1295,7 @@ impl DefaultMQProducerImpl {
         topic: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>> {
         self.make_sure_state_ok()?;
-        let client_instance = self
-            .client_instance
-            .as_mut()
-            .unwrap()
-            .mq_client_api_impl
-            .clone();
+        let client_instance = self.client_instance.as_mut().unwrap().mq_client_api_impl.clone();
         self.client_instance
             .as_mut()
             .unwrap()
@@ -1424,32 +1312,22 @@ impl DefaultMQProducerImpl {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
     where
-        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
-            + Send
-            + Sync
-            + 'static,
+        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue> + Send + Sync + 'static,
         T: std::any::Any + Sync + Send,
         M: MessageTrait + Send + Sync,
     {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
         let correlation_id = msg
-            .get_property(&CheetahString::from_static_str(
-                MessageConst::PROPERTY_CORRELATION_ID,
-            ))
+            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
             .unwrap();
-        let request_response_future = Arc::new(RequestResponseFuture::new(
-            correlation_id.clone(),
-            timeout,
-            None,
-        ));
+        let request_response_future = Arc::new(RequestResponseFuture::new(correlation_id.clone(), timeout, None));
         REQUEST_FUTURE_HOLDER
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let cost = begin_timestamp.elapsed().as_millis() as u64;
         let request_response_future_inner = request_response_future.clone();
-        let send_callback = move |result: Option<&SendResult>,
-                                  err: Option<&dyn std::error::Error>| {
+        let send_callback = move |result: Option<&SendResult>, err: Option<&dyn std::error::Error>| {
             if result.is_some() {
                 request_response_future_inner.set_send_request_ok(true);
                 return;
@@ -1457,9 +1335,9 @@ impl DefaultMQProducerImpl {
             if let Some(error) = err {
                 request_response_future_inner.set_send_request_ok(false);
                 request_response_future_inner.put_response_message(None);
-                request_response_future_inner.set_cause(Box::new(
-                    rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(error.to_string())),
-                ));
+                request_response_future_inner.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(
+                    ClientErr::new(error.to_string()),
+                )));
             }
         };
         let topic = msg.get_topic().clone();
@@ -1473,13 +1351,9 @@ impl DefaultMQProducerImpl {
                 timeout - cost,
             )
             .await?;
-        let result = self
-            .wait_response(&topic, timeout, request_response_future, cost)
-            .await;
+        let result = self.wait_response(&topic, timeout, request_response_future, cost).await;
 
-        REQUEST_FUTURE_HOLDER
-            .remove_request(correlation_id.as_str())
-            .await;
+        REQUEST_FUTURE_HOLDER.remove_request(correlation_id.as_str()).await;
         result
     }
 
@@ -1492,19 +1366,14 @@ impl DefaultMQProducerImpl {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue>
-            + Send
-            + Sync
-            + 'static,
+        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue> + Send + Sync + 'static,
         T: std::any::Any + Sync + Send,
         M: MessageTrait + Send + Sync,
     {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
         let correlation_id = msg
-            .get_property(&CheetahString::from_static_str(
-                MessageConst::PROPERTY_CORRELATION_ID,
-            ))
+            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
             .unwrap();
         let request_response_future = Arc::new(RequestResponseFuture::new(
             correlation_id.clone(),
@@ -1515,17 +1384,16 @@ impl DefaultMQProducerImpl {
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let cost = begin_timestamp.elapsed().as_millis() as u64;
-        let send_callback = move |result: Option<&SendResult>,
-                                  err: Option<&dyn std::error::Error>| {
+        let send_callback = move |result: Option<&SendResult>, err: Option<&dyn std::error::Error>| {
             if result.is_some() {
                 request_response_future.set_send_request_ok(true);
                 request_response_future.execute_request_callback();
                 return;
             }
             if let Some(error) = err {
-                request_response_future.set_cause(Box::new(
-                    rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(error.to_string())),
-                ));
+                request_response_future.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(
+                    ClientErr::new(error.to_string()),
+                )));
                 Self::request_fail(correlation_id.as_str());
             }
         };
@@ -1554,22 +1422,15 @@ impl DefaultMQProducerImpl {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
         let correlation_id = msg
-            .get_property(&CheetahString::from_static_str(
-                MessageConst::PROPERTY_CORRELATION_ID,
-            ))
+            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
             .unwrap();
-        let request_response_future = Arc::new(RequestResponseFuture::new(
-            correlation_id.clone(),
-            timeout,
-            None,
-        ));
+        let request_response_future = Arc::new(RequestResponseFuture::new(correlation_id.clone(), timeout, None));
         REQUEST_FUTURE_HOLDER
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let cost = begin_timestamp.elapsed().as_millis() as u64;
         let request_response_future_inner = request_response_future.clone();
-        let send_callback = move |result: Option<&SendResult>,
-                                  err: Option<&dyn std::error::Error>| {
+        let send_callback = move |result: Option<&SendResult>, err: Option<&dyn std::error::Error>| {
             if result.is_some() {
                 request_response_future_inner.set_send_request_ok(true);
                 return;
@@ -1577,9 +1438,9 @@ impl DefaultMQProducerImpl {
             if let Some(error) = err {
                 request_response_future_inner.set_send_request_ok(false);
                 request_response_future_inner.put_response_message(None);
-                request_response_future_inner.set_cause(Box::new(
-                    rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(error.to_string())),
-                ));
+                request_response_future_inner.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(
+                    ClientErr::new(error.to_string()),
+                )));
             }
         };
         let topic = msg.get_topic().clone();
@@ -1593,13 +1454,9 @@ impl DefaultMQProducerImpl {
                 timeout - cost,
             )
             .await?;
-        let result = self
-            .wait_response(&topic, timeout, request_response_future, cost)
-            .await;
+        let result = self.wait_response(&topic, timeout, request_response_future, cost).await;
 
-        REQUEST_FUTURE_HOLDER
-            .remove_request(correlation_id.as_str())
-            .await;
+        REQUEST_FUTURE_HOLDER.remove_request(correlation_id.as_str()).await;
         result
     }
 
@@ -1616,9 +1473,7 @@ impl DefaultMQProducerImpl {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
         let correlation_id = msg
-            .get_property(&CheetahString::from_static_str(
-                MessageConst::PROPERTY_CORRELATION_ID,
-            ))
+            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
             .unwrap();
         let request_response_future = Arc::new(RequestResponseFuture::new(
             correlation_id.clone(),
@@ -1629,16 +1484,15 @@ impl DefaultMQProducerImpl {
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let cost = begin_timestamp.elapsed().as_millis() as u64;
-        let send_callback = move |result: Option<&SendResult>,
-                                  err: Option<&dyn std::error::Error>| {
+        let send_callback = move |result: Option<&SendResult>, err: Option<&dyn std::error::Error>| {
             if result.is_some() {
                 request_response_future.set_send_request_ok(true);
                 return;
             }
             if let Some(error) = err {
-                request_response_future.set_cause(Box::new(
-                    rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(error.to_string())),
-                ));
+                request_response_future.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(
+                    ClientErr::new(error.to_string()),
+                )));
                 Self::request_fail(correlation_id.as_str());
             }
         };
@@ -1667,9 +1521,7 @@ impl DefaultMQProducerImpl {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
         let correlation_id = msg
-            .get_property(&CheetahString::from_static_str(
-                MessageConst::PROPERTY_CORRELATION_ID,
-            ))
+            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
             .unwrap();
         let request_response_future = Arc::new(RequestResponseFuture::new(
             correlation_id.clone(),
@@ -1680,17 +1532,16 @@ impl DefaultMQProducerImpl {
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let cost = begin_timestamp.elapsed().as_millis() as u64;
-        let send_callback = move |result: Option<&SendResult>,
-                                  err: Option<&dyn std::error::Error>| {
+        let send_callback = move |result: Option<&SendResult>, err: Option<&dyn std::error::Error>| {
             if result.is_some() {
                 request_response_future.set_send_request_ok(true);
                 request_response_future.execute_request_callback();
                 return;
             }
             if let Some(error) = err {
-                request_response_future.set_cause(Box::new(
-                    rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(error.to_string())),
-                ));
+                request_response_future.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(
+                    ClientErr::new(error.to_string()),
+                )));
                 Self::request_fail(correlation_id.as_str());
             }
         };
@@ -1724,21 +1575,14 @@ impl DefaultMQProducerImpl {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
         let correlation_id = msg
-            .get_property(&CheetahString::from_static_str(
-                MessageConst::PROPERTY_CORRELATION_ID,
-            ))
+            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
             .unwrap();
-        let request_response_future = Arc::new(RequestResponseFuture::new(
-            correlation_id.clone(),
-            timeout,
-            None,
-        ));
+        let request_response_future = Arc::new(RequestResponseFuture::new(correlation_id.clone(), timeout, None));
         REQUEST_FUTURE_HOLDER
             .put_request(correlation_id.to_string(), request_response_future.clone())
             .await;
         let request_response_future_inner = request_response_future.clone();
-        let send_callback = move |result: Option<&SendResult>,
-                                  err: Option<&dyn std::error::Error>| {
+        let send_callback = move |result: Option<&SendResult>, err: Option<&dyn std::error::Error>| {
             if result.is_some() {
                 request_response_future_inner.set_send_request_ok(true);
                 return;
@@ -1746,9 +1590,9 @@ impl DefaultMQProducerImpl {
             if let Some(error) = err {
                 //request_response_future_inner.set_send_request_ok(false);
                 request_response_future_inner.put_response_message(None);
-                request_response_future_inner.set_cause(Box::new(
-                    rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(error.to_string())),
-                ));
+                request_response_future_inner.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(
+                    ClientErr::new(error.to_string()),
+                )));
             }
         };
         let topic = msg.get_topic().clone();
@@ -1761,13 +1605,9 @@ impl DefaultMQProducerImpl {
         )
         .await?;
 
-        let result = self
-            .wait_response(&topic, timeout, request_response_future, cost)
-            .await;
+        let result = self.wait_response(&topic, timeout, request_response_future, cost).await;
 
-        REQUEST_FUTURE_HOLDER
-            .remove_request(correlation_id.as_str())
-            .await;
+        REQUEST_FUTURE_HOLDER.remove_request(correlation_id.as_str()).await;
         result
     }
 
@@ -1821,13 +1661,7 @@ impl DefaultMQProducerImpl {
             CheetahString::from_static_str(MessageConst::PROPERTY_MESSAGE_TTL),
             CheetahString::from_string(timeout.to_string()),
         );
-        let guard = self
-            .client_instance
-            .as_mut()
-            .unwrap()
-            .topic_route_table
-            .read()
-            .await;
+        let guard = self.client_instance.as_mut().unwrap().topic_route_table.read().await;
         let has_route_data = guard.contains_key(msg.get_topic().as_str());
         drop(guard);
         if !has_route_data {
@@ -1840,11 +1674,7 @@ impl DefaultMQProducerImpl {
                 .await;
             let cost = begin_timestamp.elapsed().as_millis() as u64;
             if cost > 500 {
-                warn!(
-                    "prepare send request for <{}> cost {} ms",
-                    msg.get_topic(),
-                    cost
-                );
+                warn!("prepare send request for <{}> cost {} ms", msg.get_topic(), cost);
             }
         }
     }
@@ -1874,12 +1704,12 @@ impl DefaultMQProducerImpl {
         );
         let result = self.send(&mut msg).await;
         if let Err(e) = result {
-            return Err(mq_client_err!(format!(
-                "send message in transaction error, {}",
-                e
-            )));
+            return Err(mq_client_err!(format!("send message in transaction error, {}", e)));
         }
-        let send_result = result.unwrap().expect("send result is none");
+        let send_result = match result.unwrap() {
+            Some(res) => res,
+            None => return Err(mq_client_err!("send result is none")),
+        };
         let local_transaction_state = match send_result.send_status {
             SendStatus::SendOk => {
                 if let Some(ref transaction_id) = send_result.transaction_id {
@@ -1899,14 +1729,11 @@ impl DefaultMQProducerImpl {
                     .unwrap()
                     .execute_local_transaction(&msg, arg.as_deref())
             }
-            SendStatus::FlushDiskTimeout
-            | SendStatus::FlushSlaveTimeout
-            | SendStatus::SlaveNotAvailable => LocalTransactionState::RollbackMessage,
+            SendStatus::FlushDiskTimeout | SendStatus::FlushSlaveTimeout | SendStatus::SlaveNotAvailable => {
+                LocalTransactionState::RollbackMessage
+            }
         };
-        if let Err(e) = self
-            .end_transaction(&msg, &send_result, local_transaction_state)
-            .await
-        {
+        if let Err(e) = self.end_transaction(&msg, &send_result, local_transaction_state).await {
             warn!(
                 "local transaction execute {}, but end broker transaction failed,{}",
                 local_transaction_state,
@@ -1960,9 +1787,7 @@ impl DefaultMQProducerImpl {
             .await;
         let request_header = EndTransactionRequestHeader {
             topic: CheetahString::from_string(msg.get_topic().to_string()),
-            producer_group: CheetahString::from_string(
-                self.producer_config.producer_group().to_string(),
-            ),
+            producer_group: CheetahString::from_string(self.producer_config.producer_group().to_string()),
             tran_state_table_offset: send_result.queue_offset,
             commit_log_offset: id.offset as u64,
             commit_or_rollback: match local_transaction_state {
@@ -2029,17 +1854,11 @@ impl DefaultMQProducerImpl {
         }
     }
 
-    pub fn set_default_mqproducer_impl_inner(
-        &mut self,
-        default_mqproducer_impl_inner: ArcMut<DefaultMQProducerImpl>,
-    ) {
+    pub fn set_default_mqproducer_impl_inner(&mut self, default_mqproducer_impl_inner: ArcMut<DefaultMQProducerImpl>) {
         self.default_mqproducer_impl_inner = Some(default_mqproducer_impl_inner);
     }
 
-    pub fn set_transaction_listener(
-        &mut self,
-        transaction_listener: Arc<Box<dyn TransactionListener>>,
-    ) {
+    pub fn set_transaction_listener(&mut self, transaction_listener: Arc<Box<dyn TransactionListener>>) {
         self.transaction_listener = Some(transaction_listener);
     }
 
@@ -2053,14 +1872,7 @@ impl MQProducerInner for DefaultMQProducerImpl {
         let handle = Handle::current();
         let topic_publish_info_table = self.topic_publish_info_table.clone();
         thread::spawn(move || {
-            handle.block_on(async move {
-                topic_publish_info_table
-                    .read()
-                    .await
-                    .keys()
-                    .cloned()
-                    .collect()
-            })
+            handle.block_on(async move { topic_publish_info_table.read().await.keys().cloned().collect() })
         })
         .join()
         .unwrap()
@@ -2097,73 +1909,55 @@ impl MQProducerInner for DefaultMQProducerImpl {
         let transaction_listener = self.transaction_listener.clone().unwrap();
         let mut producer_impl_inner = self.default_mqproducer_impl_inner.clone().unwrap();
         let broker_addr = broker_addr.clone();
-        self.check_runtime
-            .as_ref()
-            .unwrap()
-            .get_handle()
-            .spawn(async move {
-                let mut unique_key = msg.get_property(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
-                ));
-                if unique_key.is_none() {
-                    unique_key = Some(msg.msg_id.clone());
-                }
-                let transaction_state = transaction_listener.check_local_transaction(&msg);
-                let request_header = EndTransactionRequestHeader {
-                    topic: check_request_header.topic.clone().unwrap_or_default(),
-                    producer_group: CheetahString::from_string(
-                        producer_impl_inner
-                            .producer_config
-                            .producer_group()
-                            .to_string(),
-                    ),
-                    tran_state_table_offset: check_request_header.commit_log_offset as u64,
-                    commit_log_offset: check_request_header.commit_log_offset as u64,
-                    commit_or_rollback: match transaction_state {
-                        LocalTransactionState::CommitMessage => {
-                            MessageSysFlag::TRANSACTION_COMMIT_TYPE
-                        }
-                        LocalTransactionState::RollbackMessage => {
-                            MessageSysFlag::TRANSACTION_ROLLBACK_TYPE
-                        }
-                        LocalTransactionState::Unknown => MessageSysFlag::TRANSACTION_NOT_TYPE,
-                    },
-                    from_transaction_check: true,
-                    msg_id: unique_key.clone().unwrap_or_default(),
-                    transaction_id: check_request_header.transaction_id.clone(),
-                    rpc_request_header: RpcRequestHeader {
-                        broker_name: check_request_header
-                            .rpc_request_header
-                            .unwrap_or_default()
-                            .broker_name,
-                        ..Default::default()
-                    },
-                };
-                producer_impl_inner.do_execute_end_transaction_hook(
-                    &msg.message,
-                    unique_key.as_ref().unwrap(),
-                    &broker_addr,
-                    transaction_state,
-                    true,
-                );
-                let _ = producer_impl_inner
-                    .client_instance
-                    .as_mut()
-                    .unwrap()
-                    .mq_client_api_impl
-                    .as_mut()
-                    .unwrap()
-                    .end_transaction_oneway(
-                        &broker_addr,
-                        request_header,
-                        CheetahString::from_static_str(""),
-                        3000,
-                    )
-                    .await;
-            });
+        self.check_runtime.as_ref().unwrap().get_handle().spawn(async move {
+            let mut unique_key = msg.get_property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
+            ));
+            if unique_key.is_none() {
+                unique_key = Some(msg.msg_id.clone());
+            }
+            let transaction_state = transaction_listener.check_local_transaction(&msg);
+            let request_header = EndTransactionRequestHeader {
+                topic: check_request_header.topic.clone().unwrap_or_default(),
+                producer_group: CheetahString::from_string(
+                    producer_impl_inner.producer_config.producer_group().to_string(),
+                ),
+                tran_state_table_offset: check_request_header.commit_log_offset as u64,
+                commit_log_offset: check_request_header.commit_log_offset as u64,
+                commit_or_rollback: match transaction_state {
+                    LocalTransactionState::CommitMessage => MessageSysFlag::TRANSACTION_COMMIT_TYPE,
+                    LocalTransactionState::RollbackMessage => MessageSysFlag::TRANSACTION_ROLLBACK_TYPE,
+                    LocalTransactionState::Unknown => MessageSysFlag::TRANSACTION_NOT_TYPE,
+                },
+                from_transaction_check: true,
+                msg_id: unique_key.clone().unwrap_or_default(),
+                transaction_id: check_request_header.transaction_id.clone(),
+                rpc_request_header: RpcRequestHeader {
+                    broker_name: check_request_header.rpc_request_header.unwrap_or_default().broker_name,
+                    ..Default::default()
+                },
+            };
+            producer_impl_inner.do_execute_end_transaction_hook(
+                &msg.message,
+                unique_key.as_ref().unwrap(),
+                &broker_addr,
+                transaction_state,
+                true,
+            );
+            let _ = producer_impl_inner
+                .client_instance
+                .as_mut()
+                .unwrap()
+                .mq_client_api_impl
+                .as_mut()
+                .unwrap()
+                .end_transaction_oneway(&broker_addr, request_header, CheetahString::from_static_str(""), 3000)
+                .await;
+        });
     }
 
-    fn update_topic_publish_info(&mut self, topic: CheetahString, info: Option<TopicPublishInfo>) {
+    fn update_topic_publish_info(&mut self, topic: impl Into<CheetahString>, info: Option<TopicPublishInfo>) {
+        let topic = topic.into();
         if topic.is_empty() || info.is_none() {
             return;
         }
@@ -2189,10 +1983,7 @@ impl DefaultMQProducerImpl {
     }
 
     #[inline]
-    pub async fn start_with_factory(
-        &mut self,
-        start_factory: bool,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    pub async fn start_with_factory(&mut self, start_factory: bool) -> rocketmq_error::RocketMQResult<()> {
         match self.service_state {
             ServiceState::CreateJust => {
                 self.service_state = ServiceState::StartFailed;
@@ -2203,10 +1994,7 @@ impl DefaultMQProducerImpl {
                 }
 
                 let client_instance = MQClientManager::get_instance()
-                    .get_or_create_mq_client_instance(
-                        self.client_config.clone(),
-                        self.rpc_hook.clone(),
-                    );
+                    .get_or_create_mq_client_instance(self.client_config.clone(), self.rpc_hook.clone());
 
                 let service_detector = DefaultServiceDetector {
                     client_instance: client_instance.clone(),
@@ -2216,8 +2004,7 @@ impl DefaultMQProducerImpl {
                     client_instance: client_instance.clone(),
                 };
                 self.mq_fault_strategy.set_resolve(resolver);
-                self.mq_fault_strategy
-                    .set_service_detector(service_detector);
+                self.mq_fault_strategy.set_service_detector(service_detector);
                 self.client_instance = Some(client_instance);
                 let self_clone = self.default_mqproducer_impl_inner.clone();
                 let register_ok = self
@@ -2234,8 +2021,7 @@ impl DefaultMQProducerImpl {
                 if !register_ok {
                     self.service_state = ServiceState::CreateJust;
                     return Err(mq_client_err!(format!(
-                        "The producer group[{}] has been created before, specify another name \
-                         please. {}",
+                        "The producer group[{}] has been created before, specify another name please. {}",
                         self.producer_config.producer_group(),
                         FAQUrl::suggest_todo(FAQUrl::GROUP_NAME_DUPLICATE_URL)
                     )));
@@ -2254,9 +2040,7 @@ impl DefaultMQProducerImpl {
                 return Err(mq_client_err!("The producer service state is Running"));
             }
             ServiceState::ShutdownAlready => {
-                return Err(mq_client_err!(
-                    "The producer service state is ShutdownAlready"
-                ));
+                return Err(mq_client_err!("The producer service state is ShutdownAlready"));
             }
             ServiceState::StartFailed => {
                 return Err(mq_client_err!(format!(
@@ -2282,8 +2066,7 @@ impl DefaultMQProducerImpl {
         Validators::check_group(self.producer_config.producer_group())?;
         if self.producer_config.producer_group() == DEFAULT_PRODUCER_GROUP {
             return Err(mq_client_err!(format!(
-                "The specified group name[{}] is equal to default group, please specify another \
-                 one.",
+                "The specified group name[{}] is equal to default group, please specify another one.",
                 DEFAULT_PRODUCER_GROUP
             )));
         }
@@ -2293,10 +2076,7 @@ impl DefaultMQProducerImpl {
     async fn init_topic_route(&mut self) {
         for topic in self.producer_config.topics() {
             let new_topic = CheetahString::from_string(NamespaceUtil::wrap_namespace(
-                self.client_config
-                    .get_namespace()
-                    .unwrap_or_default()
-                    .as_str(),
+                self.client_config.get_namespace().unwrap_or_default().as_str(),
                 topic,
             ));
             let topic_publish_info = self.try_to_find_topic_publish_info(&new_topic).await;
@@ -2334,8 +2114,6 @@ pub(crate) struct DefaultResolver {
 
 impl Resolver for DefaultResolver {
     async fn resolve(&self, name: &CheetahString) -> Option<CheetahString> {
-        self.client_instance
-            .find_broker_address_in_publish(name)
-            .await
+        self.client_instance.find_broker_address_in_publish(name).await
     }
 }

@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Example: 3-Node ControllerManager cluster
 //!
@@ -28,7 +25,6 @@
 //! cargo run --example controller_manager_cluster
 //! ```
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use rocketmq_controller::config::ControllerConfig;
@@ -36,6 +32,7 @@ use rocketmq_controller::config::RaftPeer;
 use rocketmq_controller::config::StorageBackendType;
 use rocketmq_controller::error::Result;
 use rocketmq_controller::manager::ControllerManager;
+use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -72,7 +69,7 @@ async fn main() -> Result<()> {
 }
 
 /// Start a 3-node controller cluster
-async fn start_cluster() -> Result<Vec<Arc<ControllerManager>>> {
+async fn start_cluster() -> Result<Vec<ArcMut<ControllerManager>>> {
     let mut managers = Vec::new();
 
     // Define node configurations
@@ -95,16 +92,19 @@ async fn start_cluster() -> Result<Vec<Arc<ControllerManager>>> {
         let config = create_cluster_config(node_id, port, peers.clone())?;
 
         // Create manager
-        let manager = Arc::new(ControllerManager::new(config).await?);
+        let manager = ControllerManager::new(config).await?;
+
+        // Wrap in ArcMut for initialization and start
+        let manager = ArcMut::new(manager);
 
         // Initialize
-        if !manager.initialize().await? {
+        if !manager.clone().initialize().await? {
             error!("Failed to initialize node {}", node_id);
             return Err(rocketmq_controller::error::ControllerError::InitializationFailed);
         }
 
         // Start
-        manager.start().await?;
+        manager.clone().start().await?;
         info!("✓ Node {} started successfully", node_id);
 
         managers.push(manager);
@@ -117,11 +117,7 @@ async fn start_cluster() -> Result<Vec<Arc<ControllerManager>>> {
 }
 
 /// Create configuration for a cluster node
-fn create_cluster_config(
-    node_id: u64,
-    port: u16,
-    peers: Vec<RaftPeer>,
-) -> Result<ControllerConfig> {
+fn create_cluster_config(node_id: u64, port: u16, peers: Vec<RaftPeer>) -> Result<ControllerConfig> {
     use std::net::SocketAddr;
 
     let listen_addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
@@ -139,21 +135,17 @@ fn create_cluster_config(
 }
 
 /// Check and display cluster state
-async fn check_cluster_state(managers: &[Arc<ControllerManager>]) {
+async fn check_cluster_state(managers: &[ArcMut<ControllerManager>]) {
     let mut leader_count = 0;
     let mut follower_count = 0;
     let mut leader_node_id = None;
 
     for (i, manager) in managers.iter().enumerate() {
         let node_id = i + 1;
-        let is_leader = manager.is_leader().await;
-        let is_running = manager.is_running().await;
-        let leader_id = manager.get_leader().await;
+        let is_leader = manager.is_leader();
+        let is_running = manager.is_running();
 
-        info!(
-            "Node {} - Running: {}, Is Leader: {}, Leader ID: {:?}",
-            node_id, is_running, is_leader, leader_id
-        );
+        info!("Node {} - Running: {}, Is Leader: {}", node_id, is_running, is_leader);
 
         if is_leader {
             leader_count += 1;
@@ -178,7 +170,7 @@ async fn check_cluster_state(managers: &[Arc<ControllerManager>]) {
 }
 
 /// Shutdown all nodes in the cluster
-async fn shutdown_cluster(managers: Vec<Arc<ControllerManager>>) -> Result<()> {
+async fn shutdown_cluster(managers: Vec<ArcMut<ControllerManager>>) -> Result<()> {
     info!("Shutting down cluster...");
 
     for (i, manager) in managers.iter().enumerate() {

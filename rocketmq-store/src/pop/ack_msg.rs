@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::fmt::Display;
 
@@ -134,8 +131,8 @@ impl Display for AckMsg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "AckMsg [ack_offset={}, start_offset={}, consumer_group={}, topic={}, queue_id={}, \
-             pop_time={}, broker_name={}]",
+            "AckMsg [ack_offset={}, start_offset={}, consumer_group={}, topic={}, queue_id={}, pop_time={}, \
+             broker_name={}]",
             self.ack_offset,
             self.start_offset,
             self.consumer_group,
@@ -164,8 +161,8 @@ mod tests {
             pop_time: 789,
             broker_name: CheetahString::from_static_str("test_broker"),
         };
-        let expected = "AckMsg [ack_offset=123, start_offset=456, consumer_group=test_group, \
-                        topic=test_topic, queue_id=1, pop_time=789, broker_name=test_broker]";
+        let expected = "AckMsg [ack_offset=123, start_offset=456, consumer_group=test_group, topic=test_topic, \
+                        queue_id=1, pop_time=789, broker_name=test_broker]";
         assert_eq!(format!("{}", ack_msg), expected);
     }
 
@@ -191,16 +188,10 @@ mod tests {
         let ack_msg: AckMsg = serde_json::from_str(json).unwrap();
         assert_eq!(ack_msg.ack_offset, 123);
         assert_eq!(ack_msg.start_offset, 456);
-        assert_eq!(
-            ack_msg.consumer_group,
-            CheetahString::from_static_str("test_group")
-        );
+        assert_eq!(ack_msg.consumer_group, CheetahString::from_static_str("test_group"));
         assert_eq!(ack_msg.topic, CheetahString::from_static_str("test_topic"));
         assert_eq!(ack_msg.queue_id, 1);
         assert_eq!(ack_msg.pop_time, 789);
-        assert_eq!(
-            ack_msg.broker_name,
-            CheetahString::from_static_str("test_broker")
-        );
+        assert_eq!(ack_msg.broker_name, CheetahString::from_static_str("test_broker"));
     }
 }

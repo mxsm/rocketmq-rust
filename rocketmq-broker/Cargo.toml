@@ -1,31 +1,31 @@
 [package]
-name = "rocketmq-broker"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-homepage.workspace = true
-repository.workspace = true
-license.workspace = true
-keywords.workspace = true
-readme = "README.md"
-description.workspace = true
+name                   = "rocketmq-broker"
+version.workspace      = true
+authors.workspace      = true
+edition.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+license.workspace      = true
+keywords.workspace     = true
+readme                 = "README.md"
+description.workspace  = true
 rust-version.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["local_file_store"]
+default          = ["local_file_store"]
 local_file_store = ["rocketmq-store/local_file_store"]
 
 [dependencies]
-rocketmq-rust = { workspace = true }
-rocketmq-common = { workspace = true }
-rocketmq-remoting = { workspace = true }
-rocketmq-store = { workspace = true }
-rocketmq-filter = { workspace = true }
-rocketmq-runtime = { workspace = true }
+rocketmq-rust        = { workspace = true }
+rocketmq-common      = { workspace = true }
+rocketmq-remoting    = { workspace = true }
+rocketmq-store       = { workspace = true }
+rocketmq-filter      = { workspace = true }
+rocketmq-runtime     = { workspace = true }
 rocketmq-client-rust = { workspace = true }
-rocketmq-error = { workspace = true }
+rocketmq-error       = { workspace = true }
 
 anyhow.workspace = true
 
@@ -34,53 +34,52 @@ tokio.workspace = true
 tracing.workspace = true
 
 
-#json spupport
-serde.workspace = true
+#JSON support
+serde.workspace      = true
 serde_json.workspace = true
 
-bytes = { workspace = true }
+bytes                 = { workspace = true }
 parking_lot.workspace = true
 
-clap = { version = "4.5.53", features = ["derive"] }
+clap = { version = "4.5.54", features = ["derive"] }
 rand = { workspace = true }
 
 #tools
 dirs.workspace = true
-dns-lookup = "3.0"
+dns-lookup     = "3.0"
 
-cfg-if = { workspace = true }
-lazy_static.workspace = true
-num_cpus = { workspace = true }
-sysinfo = { workspace = true }
-thiserror = { workspace = true }
-trait-variant = { workspace = true }
+cfg-if         = { workspace = true }
+num_cpus       = { workspace = true }
+sysinfo        = { workspace = true }
+thiserror      = { workspace = true }
+trait-variant  = { workspace = true }
 cheetah-string = { workspace = true }
-dashmap = { workspace = true }
+dashmap        = { workspace = true }
 
 crossbeam-skiplist = "0.1"
 
 futures = "0.3.31"
 
-opentelemetry = { workspace = true }
+opentelemetry     = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 
 [dev-dependencies]
-mockall = "0.14.0"
+mockall           = "0.14.0"
 static_assertions = { version = "1" }
-criterion = { version = "0.8", features = ["html_reports"] }
+criterion         = { version = "0.8", features = ["html_reports"] }
 
 [[bin]]
 name = "rocketmq-broker-rust"
 path = "src/bin/broker_bootstrap_server.rs"
 
 [[bench]]
-name = "syncunsafecell_mut"
+name    = "syncunsafecell_mut"
 harness = false
 
 [[bench]]
-name = "subscription_group_manager_benchmark"
+name    = "subscription_group_manager_benchmark"
 harness = false
 
 [[bench]]
-name = "schedule_message_service_performance"
+name    = "schedule_message_service_performance"
 harness = false

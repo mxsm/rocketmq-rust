@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -89,10 +86,7 @@ impl ConsumeMessageOrderlyService {
             consumer_config,
             consumer_group,
             message_listener,
-            consume_runtime: RocketMQRuntime::new_multi(
-                consume_thread as usize,
-                consumer_group_tag.as_str(),
-            ),
+            consume_runtime: RocketMQRuntime::new_multi(consume_thread as usize, consumer_group_tag.as_str()),
             stopped: AtomicBool::new(false),
             global_lock: Arc::new(Default::default()),
             message_queue_lock: Default::default(),
@@ -142,10 +136,7 @@ impl ConsumeMessageOrderlyService {
         self.consume_runtime.get_handle().spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(delay_mills)).await;
 
-            if consume_message_orderly_service
-                .lock_one_mq(&message_queue)
-                .await
-            {
+            if consume_message_orderly_service.lock_one_mq(&message_queue).await {
                 consume_message_orderly_service.submit_consume_request_later(
                     process_queue,
                     message_queue.clone(),
@@ -226,8 +217,7 @@ impl ConsumeMessageOrderlyService {
             msg.get_body().unwrap(),
         );
         MessageAccessor::set_properties(&mut new_msg, msg.get_properties().clone());
-        let origin_msg_id =
-            MessageAccessor::get_origin_message_id(msg).unwrap_or(msg.msg_id.clone());
+        let origin_msg_id = MessageAccessor::get_origin_message_id(msg).unwrap_or(msg.msg_id.clone());
         MessageAccessor::set_origin_message_id(&mut new_msg, origin_msg_id);
         new_msg.set_flag(msg.get_flag());
         MessageAccessor::put_property(
@@ -245,8 +235,7 @@ impl ConsumeMessageOrderlyService {
         );
         MessageAccessor::clear_property(&mut new_msg, MessageConst::PROPERTY_TRANSACTION_PREPARED);
         new_msg.set_delay_time_level(3 + msg.reconsume_times());
-        let mut default_mqpush_consumer_impl =
-            self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
+        let mut default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
 
         let result = default_mqpush_consumer_impl
             .client_instance
@@ -292,17 +281,12 @@ impl ConsumeMessageOrderlyService {
     ) -> bool {
         let (continue_consume, commit_offset) = if context.is_auto_commit() {
             match status {
-                ConsumeOrderlyStatus::Success
-                | ConsumeOrderlyStatus::Rollback
-                | ConsumeOrderlyStatus::Commit => {
+                ConsumeOrderlyStatus::Success | ConsumeOrderlyStatus::Rollback | ConsumeOrderlyStatus::Commit => {
                     (true, consume_request.process_queue.commit().await)
                 }
                 ConsumeOrderlyStatus::SuspendCurrentQueueAMoment => {
                     if self.check_reconsume_times(&mut msgs).await {
-                        consume_request
-                            .process_queue
-                            .make_message_to_consume_again(&msgs)
-                            .await;
+                        consume_request.process_queue.make_message_to_consume_again(&msgs).await;
                         self.submit_consume_request_later(
                             consume_request.process_queue.clone(),
                             consume_request.message_queue.clone(),
@@ -318,9 +302,7 @@ impl ConsumeMessageOrderlyService {
         } else {
             match status {
                 ConsumeOrderlyStatus::Success => (true, -1),
-                ConsumeOrderlyStatus::Rollback => {
-                    (true, consume_request.process_queue.commit().await)
-                }
+                ConsumeOrderlyStatus::Rollback => (true, consume_request.process_queue.commit().await),
                 ConsumeOrderlyStatus::Commit => {
                     consume_request.process_queue.rollback().await;
                     self.submit_consume_request_later(
@@ -333,10 +315,7 @@ impl ConsumeMessageOrderlyService {
                 }
                 ConsumeOrderlyStatus::SuspendCurrentQueueAMoment => {
                     if self.check_reconsume_times(&mut msgs).await {
-                        consume_request
-                            .process_queue
-                            .make_message_to_consume_again(&msgs)
-                            .await;
+                        consume_request.process_queue.make_message_to_consume_again(&msgs).await;
                         self.submit_consume_request_later(
                             consume_request.process_queue.clone(),
                             consume_request.message_queue.clone(),
@@ -352,8 +331,7 @@ impl ConsumeMessageOrderlyService {
         };
 
         if commit_offset >= 0 && consume_request.process_queue.is_dropped() {
-            let mut default_mqpush_consumer_impl =
-                self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
+            let mut default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
 
             default_mqpush_consumer_impl
                 .offset_store
@@ -373,10 +351,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
                 tokio::time::sleep(tokio::time::Duration::from_millis(1_000)).await;
                 loop {
                     this.lock_mqperiodically().await;
-                    tokio::time::sleep(tokio::time::Duration::from_millis(
-                        *REBALANCE_LOCK_INTERVAL,
-                    ))
-                    .await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(*REBALANCE_LOCK_INTERVAL)).await;
                 }
             });
         }
@@ -395,11 +370,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
         broker_name: Option<CheetahString>,
     ) -> ConsumeMessageDirectlyResult {
         info!("consumeMessageDirectly receive new message: {}", msg);
-        let mq = MessageQueue::from_parts(
-            msg.topic().clone(),
-            broker_name.unwrap_or_default(),
-            msg.queue_id(),
-        );
+        let mq = MessageQueue::from_parts(msg.topic().clone(), broker_name.unwrap_or_default(), msg.queue_id());
         let mut msgs = vec![ArcMut::new(msg)];
         let mut context = ConsumeOrderlyContext::new(mq);
         self.default_mqpush_consumer_impl
@@ -411,10 +382,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
         let begin_timestamp = Instant::now();
 
         let status = self.message_listener.consume_message(
-            &msgs
-                .iter()
-                .map(|msg| msg.as_ref())
-                .collect::<Vec<&MessageExt>>()[..],
+            &msgs.iter().map(|msg| msg.as_ref()).collect::<Vec<&MessageExt>>()[..],
             &mut context,
         );
         let mut result = ConsumeMessageDirectlyResult::default();
@@ -502,8 +470,7 @@ impl ConsumeRequest {
             .fetch_lock_object(&self.message_queue)
             .await;
         let locked = lock.lock().await;
-        let mut default_mqpush_consumer_impl =
-            self.default_mqpush_consumer_impl.as_mut().unwrap().clone();
+        let mut default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_mut().unwrap().clone();
         if MessageModel::Broadcasting == default_mqpush_consumer_impl.message_model()
             || self.process_queue.is_locked() && !self.process_queue.is_lock_expired()
         {
@@ -569,9 +536,7 @@ impl ConsumeRequest {
                 let mut msgs = self.process_queue.take_messages(consume_batch_size).await;
                 default_mqpush_consumer_impl.reset_retry_and_namespace(
                     &mut msgs,
-                    consume_message_orderly_service_inner
-                        .consumer_group
-                        .as_ref(),
+                    consume_message_orderly_service_inner.consumer_group.as_ref(),
                 );
                 if msgs.is_empty() {
                     break;
@@ -602,16 +567,12 @@ impl ConsumeRequest {
                 let consume_lock = self.process_queue.consume_lock.write().await;
                 if self.process_queue.is_dropped() {
                     warn!(
-                        "consumeMessage, the message queue not be able to consume, because it's \
-                         dropped. {}",
+                        "consumeMessage, the message queue not be able to consume, because it's dropped. {}",
                         self.message_queue
                     );
                     break;
                 }
-                let vec = &msgs
-                    .iter()
-                    .map(|msg| msg.as_ref())
-                    .collect::<Vec<&MessageExt>>()[..];
+                let vec = &msgs.iter().map(|msg| msg.as_ref()).collect::<Vec<&MessageExt>>()[..];
 
                 match consume_message_orderly_service_inner
                     .message_listener
@@ -646,11 +607,7 @@ impl ConsumeRequest {
                         }
                     }
                     Some(status_value) => {
-                        if consume_rt
-                            >= default_mqpush_consumer_impl.consumer_config.consume_timeout
-                                * 60
-                                * 1000
-                        {
+                        if consume_rt >= default_mqpush_consumer_impl.consumer_config.consume_timeout * 60 * 1000 {
                             ConsumeReturnType::TimeOut
                         } else if status_value == ConsumeOrderlyStatus::SuspendCurrentQueueAMoment {
                             ConsumeReturnType::Failed
@@ -673,9 +630,8 @@ impl ConsumeRequest {
                 }
                 if default_mqpush_consumer_impl.has_hook() {
                     let status = *status.as_ref().unwrap();
-                    consume_message_context.as_mut().unwrap().success = status
-                        == ConsumeOrderlyStatus::Success
-                        || status == ConsumeOrderlyStatus::Commit;
+                    consume_message_context.as_mut().unwrap().success =
+                        status == ConsumeOrderlyStatus::Success || status == ConsumeOrderlyStatus::Commit;
                     consume_message_context.as_mut().unwrap().status = status.to_string().into();
                     default_mqpush_consumer_impl.execute_hook_after(&mut consume_message_context);
                 }
@@ -700,8 +656,7 @@ impl ConsumeRequest {
                 );
                 return;
             }
-            let consume_message_orderly_service_weak =
-                consume_message_orderly_service_inner.clone();
+            let consume_message_orderly_service_weak = consume_message_orderly_service_inner.clone();
             consume_message_orderly_service_inner
                 .try_lock_later_and_reconsume(
                     consume_message_orderly_service_weak,

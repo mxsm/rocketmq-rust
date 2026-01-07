@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! RouteInfoManager wrapper to support both v1 and v2 implementations
 //!
@@ -220,12 +217,8 @@ impl RouteInfoManagerWrapper {
     /// Submit unregister broker request
     pub fn submit_unregister_broker_request(&self, request: UnRegisterBrokerRequestHeader) -> bool {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => {
-                manager.submit_unregister_broker_request(request)
-            }
-            RouteInfoManagerWrapper::V2(manager) => {
-                manager.submit_unregister_broker_request(request)
-            }
+            RouteInfoManagerWrapper::V1(manager) => manager.submit_unregister_broker_request(request),
+            RouteInfoManagerWrapper::V2(manager) => manager.submit_unregister_broker_request(request),
         }
     }
 
@@ -283,11 +276,7 @@ impl RouteInfoManagerWrapper {
     }
 
     /// Update broker info update timestamp
-    pub fn update_broker_info_update_timestamp(
-        &mut self,
-        cluster_name: CheetahString,
-        broker_addr: CheetahString,
-    ) {
+    pub fn update_broker_info_update_timestamp(&mut self, cluster_name: CheetahString, broker_addr: CheetahString) {
         match self {
             RouteInfoManagerWrapper::V1(manager) => {
                 manager.update_broker_info_update_timestamp(cluster_name, broker_addr)
@@ -305,12 +294,10 @@ impl RouteInfoManagerWrapper {
         broker_addr: CheetahString,
     ) -> Option<DataVersion> {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager
-                .query_broker_topic_config(cluster_name, broker_addr)
-                .cloned(),
-            RouteInfoManagerWrapper::V2(manager) => {
-                manager.query_broker_topic_config(cluster_name, broker_addr)
+            RouteInfoManagerWrapper::V1(manager) => {
+                manager.query_broker_topic_config(cluster_name, broker_addr).cloned()
             }
+            RouteInfoManagerWrapper::V2(manager) => manager.query_broker_topic_config(cluster_name, broker_addr),
         }
     }
 
@@ -328,9 +315,9 @@ impl RouteInfoManagerWrapper {
     pub fn wipe_write_perm_of_broker_by_lock(&self, broker_name: &str) -> i32 {
         use cheetah_string::CheetahString;
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.wipe_write_perm_of_broker_by_lock(
-                &CheetahString::from_string(broker_name.to_string()),
-            ),
+            RouteInfoManagerWrapper::V1(manager) => {
+                manager.wipe_write_perm_of_broker_by_lock(&CheetahString::from_string(broker_name.to_string()))
+            }
             RouteInfoManagerWrapper::V2(manager) => manager
                 .wipe_write_perm_of_broker_by_lock(broker_name.to_string())
                 .unwrap_or(0),
@@ -341,9 +328,9 @@ impl RouteInfoManagerWrapper {
     pub fn add_write_perm_of_broker_by_lock(&self, broker_name: &str) -> i32 {
         use cheetah_string::CheetahString;
         match self {
-            RouteInfoManagerWrapper::V1(manager) => manager.add_write_perm_of_broker_by_lock(
-                &CheetahString::from_string(broker_name.to_string()),
-            ),
+            RouteInfoManagerWrapper::V1(manager) => {
+                manager.add_write_perm_of_broker_by_lock(&CheetahString::from_string(broker_name.to_string()))
+            }
             RouteInfoManagerWrapper::V2(manager) => manager
                 .add_write_perm_of_broker_by_lock(broker_name.to_string())
                 .unwrap_or(0),
@@ -357,12 +344,8 @@ impl RouteInfoManagerWrapper {
         broker_name: CheetahString,
     ) -> Option<BrokerMemberGroup> {
         match self {
-            RouteInfoManagerWrapper::V1(manager) => {
-                manager.get_broker_member_group(cluster_name, broker_name)
-            }
-            RouteInfoManagerWrapper::V2(manager) => {
-                manager.get_broker_member_group(cluster_name, broker_name)
-            }
+            RouteInfoManagerWrapper::V1(manager) => manager.get_broker_member_group(cluster_name, broker_name),
+            RouteInfoManagerWrapper::V2(manager) => manager.get_broker_member_group(cluster_name, broker_name),
         }
     }
 
@@ -412,14 +395,10 @@ impl RouteInfoManagerWrapper {
     pub fn get_system_topic_list(&self) -> TopicList {
         match self {
             RouteInfoManagerWrapper::V1(manager) => manager.get_system_topic_list(),
-            RouteInfoManagerWrapper::V2(manager) => {
-                manager
-                    .get_system_topic_list()
-                    .unwrap_or_else(|_| TopicList {
-                        topic_list: vec![],
-                        broker_addr: None,
-                    })
-            }
+            RouteInfoManagerWrapper::V2(manager) => manager.get_system_topic_list().unwrap_or_else(|_| TopicList {
+                topic_list: vec![],
+                broker_addr: None,
+            }),
         }
     }
 
@@ -428,9 +407,7 @@ impl RouteInfoManagerWrapper {
         match self {
             RouteInfoManagerWrapper::V1(manager) => manager.get_topics_by_cluster(cluster),
             RouteInfoManagerWrapper::V2(manager) => {
-                let topics = manager
-                    .get_topics_by_cluster(cluster)
-                    .unwrap_or_else(|_| vec![]);
+                let topics = manager.get_topics_by_cluster(cluster).unwrap_or_else(|_| vec![]);
                 TopicList {
                     topic_list: topics,
                     broker_addr: None,
@@ -443,12 +420,10 @@ impl RouteInfoManagerWrapper {
     pub fn get_unit_topics(&self) -> TopicList {
         match self {
             RouteInfoManagerWrapper::V1(manager) => manager.get_unit_topics(),
-            RouteInfoManagerWrapper::V2(manager) => {
-                manager.get_unit_topics().unwrap_or_else(|_| TopicList {
-                    topic_list: vec![],
-                    broker_addr: None,
-                })
-            }
+            RouteInfoManagerWrapper::V2(manager) => manager.get_unit_topics().unwrap_or_else(|_| TopicList {
+                topic_list: vec![],
+                broker_addr: None,
+            }),
         }
     }
 
@@ -456,12 +431,12 @@ impl RouteInfoManagerWrapper {
     pub fn get_has_unit_sub_topic_list(&self) -> TopicList {
         match self {
             RouteInfoManagerWrapper::V1(manager) => manager.get_has_unit_sub_topic_list(),
-            RouteInfoManagerWrapper::V2(manager) => manager
-                .get_has_unit_sub_topic_list()
-                .unwrap_or_else(|_| TopicList {
+            RouteInfoManagerWrapper::V2(manager) => {
+                manager.get_has_unit_sub_topic_list().unwrap_or_else(|_| TopicList {
                     topic_list: vec![],
                     broker_addr: None,
-                }),
+                })
+            }
         }
     }
 
@@ -469,12 +444,14 @@ impl RouteInfoManagerWrapper {
     pub fn get_has_unit_sub_un_unit_topic_list(&self) -> TopicList {
         match self {
             RouteInfoManagerWrapper::V1(manager) => manager.get_has_unit_sub_un_unit_topic_list(),
-            RouteInfoManagerWrapper::V2(manager) => manager
-                .get_has_unit_sub_ununit_topic_list()
-                .unwrap_or_else(|_| TopicList {
-                    topic_list: vec![],
-                    broker_addr: None,
-                }),
+            RouteInfoManagerWrapper::V2(manager) => {
+                manager
+                    .get_has_unit_sub_ununit_topic_list()
+                    .unwrap_or_else(|_| TopicList {
+                        topic_list: vec![],
+                        broker_addr: None,
+                    })
+            }
         }
     }
 

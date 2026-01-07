@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -128,10 +125,7 @@ impl ConsumerConnection {
     ///
     /// # Arguments
     /// * `subscription_table` - The new subscription table
-    pub fn set_subscription_table(
-        &mut self,
-        subscription_table: HashMap<CheetahString, SubscriptionData>,
-    ) {
+    pub fn set_subscription_table(&mut self, subscription_table: HashMap<CheetahString, SubscriptionData>) {
         self.subscription_table = subscription_table;
     }
 
@@ -328,10 +322,7 @@ mod tests {
         let mut sub_table = HashMap::new();
 
         let sub_data = create_test_subscription();
-        sub_table.insert(
-            CheetahString::from_static_str("test_topic"),
-            sub_data.clone(),
-        );
+        sub_table.insert(CheetahString::from_static_str("test_topic"), sub_data.clone());
 
         consumer_conn.set_subscription_table(sub_table);
         assert_eq!(consumer_conn.get_subscription_table().len(), 1);
@@ -344,10 +335,7 @@ mod tests {
 
         {
             let sub_table = consumer_conn.get_subscription_table_mut();
-            sub_table.insert(
-                CheetahString::from_static_str("test_topic"),
-                sub_data.clone(),
-            );
+            sub_table.insert(CheetahString::from_static_str("test_topic"), sub_data.clone());
         }
 
         assert_eq!(consumer_conn.get_subscription_table().len(), 1);
@@ -363,10 +351,7 @@ mod tests {
         assert!(consumer_conn.get_consume_type().is_none());
 
         consumer_conn.set_consume_type(ConsumeType::ConsumeActively);
-        assert_eq!(
-            consumer_conn.get_consume_type(),
-            Some(ConsumeType::ConsumeActively)
-        );
+        assert_eq!(consumer_conn.get_consume_type(), Some(ConsumeType::ConsumeActively));
     }
 
     #[test]
@@ -375,10 +360,7 @@ mod tests {
         assert!(consumer_conn.get_message_model().is_none());
 
         consumer_conn.set_message_model(MessageModel::Clustering);
-        assert_eq!(
-            consumer_conn.get_message_model(),
-            Some(MessageModel::Clustering)
-        );
+        assert_eq!(consumer_conn.get_message_model(), Some(MessageModel::Clustering));
     }
 
     #[test]

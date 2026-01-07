@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -249,10 +246,7 @@ impl ConsumerConfig {
      * This method will be removed in a certain version after April 5, 2020, so please do not
      * use this method.
      */
-    pub fn set_subscription(
-        &mut self,
-        subscription: ArcMut<HashMap<CheetahString, CheetahString>>,
-    ) {
+    pub fn set_subscription(&mut self, subscription: ArcMut<HashMap<CheetahString, CheetahString>>) {
         self.subscription = subscription;
     }
 
@@ -263,10 +257,7 @@ impl ConsumerConfig {
         self.message_listener = message_listener;
     }*/
 
-    pub fn set_message_queue_listener(
-        &mut self,
-        message_queue_listener: Option<Arc<Box<dyn MessageQueueListener>>>,
-    ) {
+    pub fn set_message_queue_listener(&mut self, message_queue_listener: Option<Arc<Box<dyn MessageQueueListener>>>) {
         self.message_queue_listener = message_queue_listener;
     }
 
@@ -278,10 +269,7 @@ impl ConsumerConfig {
         self.consume_thread_max = consume_thread_max;
     }
 
-    pub fn set_adjust_thread_pool_nums_threshold(
-        &mut self,
-        adjust_thread_pool_nums_threshold: u64,
-    ) {
+    pub fn set_adjust_thread_pool_nums_threshold(&mut self, adjust_thread_pool_nums_threshold: u64) {
         self.adjust_thread_pool_nums_threshold = adjust_thread_pool_nums_threshold;
     }
 
@@ -337,10 +325,7 @@ impl ConsumerConfig {
         self.max_reconsume_times = max_reconsume_times;
     }
 
-    pub fn set_suspend_current_queue_time_millis(
-        &mut self,
-        suspend_current_queue_time_millis: u64,
-    ) {
+    pub fn set_suspend_current_queue_time_millis(&mut self, suspend_current_queue_time_millis: u64) {
         self.suspend_current_queue_time_millis = suspend_current_queue_time_millis;
     }
 
@@ -356,17 +341,11 @@ impl ConsumerConfig {
         self.pop_batch_nums = pop_batch_nums;
     }
 
-    pub fn set_await_termination_millis_when_shutdown(
-        &mut self,
-        await_termination_millis_when_shutdown: u64,
-    ) {
+    pub fn set_await_termination_millis_when_shutdown(&mut self, await_termination_millis_when_shutdown: u64) {
         self.await_termination_millis_when_shutdown = await_termination_millis_when_shutdown;
     }
 
-    pub fn set_trace_dispatcher(
-        &mut self,
-        trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>,
-    ) {
+    pub fn set_trace_dispatcher(&mut self, trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>) {
         self.trace_dispatcher = trace_dispatcher;
     }
 
@@ -387,11 +366,9 @@ impl Default for ConsumerConfig {
             sub_expression: CheetahString::new(),
             message_model: MessageModel::Clustering,
             consume_from_where: ConsumeFromWhere::ConsumeFromLastOffset,
-            consume_timestamp: Some(CheetahString::from_string(
-                util_all::time_millis_to_human_string3(
-                    (get_current_millis() - (1000 * 60 * 30)) as i64,
-                ),
-            )),
+            consume_timestamp: Some(CheetahString::from_string(util_all::time_millis_to_human_string3(
+                (get_current_millis() - (1000 * 60 * 30)) as i64,
+            ))),
             allocate_message_queue_strategy: Some(Arc::new(AllocateMessageQueueAveragely)),
             subscription: ArcMut::new(HashMap::new()),
             message_listener: None,
@@ -471,11 +448,7 @@ impl MQAdmin for DefaultMQPushConsumer {
         panic!("This method is not implemented for DefaultMQPushConsumer");
     }
 
-    fn search_offset(
-        &self,
-        mq: &MessageQueue,
-        timestamp: u64,
-    ) -> rocketmq_error::RocketMQResult<i64> {
+    fn search_offset(&self, mq: &MessageQueue, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
         panic!("This method is not implemented for DefaultMQPushConsumer");
     }
 
@@ -502,11 +475,7 @@ impl MQAdmin for DefaultMQPushConsumer {
         panic!("This method is not implemented for DefaultMQPushConsumer");
     }
 
-    fn view_message(
-        &self,
-        topic: &str,
-        msg_id: &str,
-    ) -> rocketmq_error::RocketMQResult<MessageExt> {
+    fn view_message(&self, topic: &str, msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt> {
         panic!("This method is not implemented for DefaultMQPushConsumer");
     }
 }
@@ -514,18 +483,11 @@ impl MQAdmin for DefaultMQPushConsumer {
 impl MQPushConsumer for DefaultMQPushConsumer {
     async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
         let consumer_group = NamespaceUtil::wrap_namespace(
-            self.client_config
-                .get_namespace()
-                .unwrap_or_default()
-                .as_str(),
+            self.client_config.get_namespace().unwrap_or_default().as_str(),
             self.consumer_config.consumer_group.as_str(),
         );
         self.set_consumer_group(consumer_group.as_str());
-        self.default_mqpush_consumer_impl
-            .as_mut()
-            .unwrap()
-            .start()
-            .await?;
+        self.default_mqpush_consumer_impl.as_mut().unwrap().start().await?;
 
         if self.client_config.enable_trace {
             let mut dispatcher = AsyncTraceDispatcher::new(
@@ -534,16 +496,13 @@ impl MQPushConsumer for DefaultMQPushConsumer {
                 self.client_config.trace_topic.clone().unwrap().as_str(),
                 self.consumer_config.rpc_hook.clone(),
             );
-            dispatcher
-                .set_host_consumer(self.default_mqpush_consumer_impl.as_ref().unwrap().clone());
+            dispatcher.set_host_consumer(self.default_mqpush_consumer_impl.as_ref().unwrap().clone());
             dispatcher.set_namespace_v2(self.client_config.namespace_v2.clone());
-            let dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>> =
-                Arc::new(Box::new(dispatcher));
+            let dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>> = Arc::new(Box::new(dispatcher));
             self.consumer_config.trace_dispatcher = Some(dispatcher.clone());
             let default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_mut().unwrap();
-            default_mqpush_consumer_impl.register_consume_message_hook(
-                ConsumeMessageTraceHookImpl::new(dispatcher.clone()),
-            );
+            default_mqpush_consumer_impl
+                .register_consume_message_hook(ConsumeMessageTraceHookImpl::new(dispatcher.clone()));
         }
 
         if let Some(ref rpc_hook) = self.consumer_config.trace_dispatcher {
@@ -559,10 +518,7 @@ impl MQPushConsumer for DefaultMQPushConsumer {
 
     fn register_message_listener_concurrently_fn<MLCFN>(&mut self, message_listener: MLCFN)
     where
-        MLCFN: Fn(
-                Vec<MessageExt>,
-                ConsumeConcurrentlyContext,
-            ) -> rocketmq_error::RocketMQResult<ConsumeConcurrentlyStatus>
+        MLCFN: Fn(Vec<MessageExt>, ConsumeConcurrentlyContext) -> rocketmq_error::RocketMQResult<ConsumeConcurrentlyStatus>
             + Send
             + Sync,
     {
@@ -586,10 +542,7 @@ impl MQPushConsumer for DefaultMQPushConsumer {
 
     async fn register_message_listener_orderly_fn<MLOFN>(&mut self, message_listener: MLOFN)
     where
-        MLOFN: Fn(
-                Vec<MessageExt>,
-                ConsumeOrderlyContext,
-            ) -> rocketmq_error::RocketMQResult<ConsumeOrderlyStatus>
+        MLOFN: Fn(Vec<MessageExt>, ConsumeOrderlyContext) -> rocketmq_error::RocketMQResult<ConsumeOrderlyStatus>
             + Send
             + Sync,
     {
@@ -611,11 +564,7 @@ impl MQPushConsumer for DefaultMQPushConsumer {
             .register_message_listener(self.consumer_config.message_listener.clone());
     }
 
-    fn subscribe(
-        &mut self,
-        topic: &str,
-        sub_expression: &str,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    fn subscribe(&mut self, topic: &str, sub_expression: &str) -> rocketmq_error::RocketMQResult<()> {
         let handle = Handle::current();
         let mut default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.clone();
         let topic = topic.to_string();
@@ -669,10 +618,7 @@ impl DefaultMQPushConsumer {
         self.consumer_config.consumer_group = consumer_group.into();
     }
 
-    pub fn new(
-        client_config: ClientConfig,
-        consumer_config: ConsumerConfig,
-    ) -> DefaultMQPushConsumer {
+    pub fn new(client_config: ClientConfig, consumer_config: ConsumerConfig) -> DefaultMQPushConsumer {
         let consumer_config = ArcMut::new(consumer_config);
         let mut default_mqpush_consumer_impl = ArcMut::new(DefaultMQPushConsumerImpl::new(
             client_config.clone(),

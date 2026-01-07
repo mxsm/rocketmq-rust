@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodecV2;
@@ -183,10 +180,7 @@ mod tests {
         assert_eq!(deserialized.broker_name, CheetahString::from("broker1"));
         assert_eq!(deserialized.broker_addr, CheetahString::from("127.0.0.1"));
         assert_eq!(deserialized.cluster_name, CheetahString::from("cluster1"));
-        assert_eq!(
-            deserialized.ha_server_addr,
-            CheetahString::from("127.0.0.2")
-        );
+        assert_eq!(deserialized.ha_server_addr, CheetahString::from("127.0.0.2"));
         assert_eq!(deserialized.broker_id, 1);
         assert_eq!(deserialized.heartbeat_timeout_millis, Some(3000));
         assert_eq!(deserialized.enable_acting_master, Some(true));
@@ -201,10 +195,7 @@ mod tests {
         assert_eq!(deserialized.broker_name, CheetahString::from("broker1"));
         assert_eq!(deserialized.broker_addr, CheetahString::from("127.0.0.1"));
         assert_eq!(deserialized.cluster_name, CheetahString::from("cluster1"));
-        assert_eq!(
-            deserialized.ha_server_addr,
-            CheetahString::from("127.0.0.2")
-        );
+        assert_eq!(deserialized.ha_server_addr, CheetahString::from("127.0.0.2"));
         assert_eq!(deserialized.broker_id, 1);
         assert_eq!(deserialized.heartbeat_timeout_millis, None);
         assert_eq!(deserialized.enable_acting_master, None);
@@ -218,10 +209,7 @@ mod tests {
             Some(CheetahString::from("127.0.0.2")),
             Some(CheetahString::from("127.0.0.3")),
         );
-        assert_eq!(
-            header.ha_server_addr,
-            Some(CheetahString::from("127.0.0.2"))
-        );
+        assert_eq!(header.ha_server_addr, Some(CheetahString::from("127.0.0.2")));
         assert_eq!(header.master_addr, Some(CheetahString::from("127.0.0.3")));
     }
 
@@ -232,34 +220,22 @@ mod tests {
             Some(CheetahString::from("127.0.0.3")),
         );
         let serialized = serde_json::to_string(&header).unwrap();
-        assert_eq!(
-            serialized,
-            r#"{"haServerAddr":"127.0.0.2","masterAddr":"127.0.0.3"}"#
-        );
+        assert_eq!(serialized, r#"{"haServerAddr":"127.0.0.2","masterAddr":"127.0.0.3"}"#);
     }
 
     #[test]
     fn register_broker_response_header_deserialization() {
         let json = r#"{"haServerAddr":"127.0.0.2","masterAddr":"127.0.0.3"}"#;
         let deserialized: RegisterBrokerResponseHeader = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            deserialized.ha_server_addr,
-            Some(CheetahString::from("127.0.0.2"))
-        );
-        assert_eq!(
-            deserialized.master_addr,
-            Some(CheetahString::from("127.0.0.3"))
-        );
+        assert_eq!(deserialized.ha_server_addr, Some(CheetahString::from("127.0.0.2")));
+        assert_eq!(deserialized.master_addr, Some(CheetahString::from("127.0.0.3")));
     }
 
     #[test]
     fn register_broker_response_header_deserialization_missing_fields() {
         let json = r#"{"haServerAddr":"127.0.0.2"}"#;
         let deserialized: RegisterBrokerResponseHeader = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            deserialized.ha_server_addr,
-            Some(CheetahString::from("127.0.0.2"))
-        );
+        assert_eq!(deserialized.ha_server_addr, Some(CheetahString::from("127.0.0.2")));
         assert_eq!(deserialized.master_addr, None);
     }
 }

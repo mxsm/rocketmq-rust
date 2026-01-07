@@ -78,3 +78,10 @@ cargo test
   ```shell
   cargo fmt --all
   ```
+
+- Use `taplo` to format `Cargo.toml` files across the repository
+
+  ```shell
+  cargo install taplo-cli --locked
+  taplo format -o align_entries=true **/Cargo.toml
+  ```

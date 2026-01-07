@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use cheetah_string::CheetahString;
 use clap::Parser;
@@ -51,10 +48,7 @@ impl CommandExecute for WipeWritePermCommand {
         }
 
         // 2. Build admin client
-        output::print_operation_start(&format!(
-            "Wiping write permission for broker '{}'",
-            self.broker_name
-        ));
+        output::print_operation_start(&format!("Wiping write permission for broker '{}'", self.broker_name));
         let spinner = progress::create_spinner("Connecting to NameServer...");
 
         let mut builder = AdminBuilder::new();
@@ -102,14 +96,8 @@ mod tests {
 
     #[test]
     fn test_wipe_write_perm_command() {
-        let cmd = WipeWritePermCommand::try_parse_from([
-            "wipe_write_perm",
-            "-b",
-            "broker-a",
-            "-n",
-            "127.0.0.1:9876",
-        ])
-        .unwrap();
+        let cmd = WipeWritePermCommand::try_parse_from(["wipe_write_perm", "-b", "broker-a", "-n", "127.0.0.1:9876"])
+            .unwrap();
 
         assert_eq!(cmd.broker_name, "broker-a");
         assert!(!cmd.common.skip_confirm);
@@ -117,15 +105,9 @@ mod tests {
 
     #[test]
     fn test_command_with_yes_flag() {
-        let cmd = WipeWritePermCommand::try_parse_from([
-            "wipe_write_perm",
-            "-b",
-            "broker-a",
-            "-n",
-            "127.0.0.1:9876",
-            "-y",
-        ])
-        .unwrap();
+        let cmd =
+            WipeWritePermCommand::try_parse_from(["wipe_write_perm", "-b", "broker-a", "-n", "127.0.0.1:9876", "-y"])
+                .unwrap();
 
         assert_eq!(cmd.broker_name, "broker-a");
         assert!(cmd.common.skip_confirm);
@@ -142,14 +124,9 @@ mod tests {
         let test_cases = vec!["broker-a", "broker-master", "my-broker-01"];
 
         for broker_name in test_cases {
-            let cmd = WipeWritePermCommand::try_parse_from([
-                "wipe_write_perm",
-                "-b",
-                broker_name,
-                "-n",
-                "127.0.0.1:9876",
-            ])
-            .unwrap();
+            let cmd =
+                WipeWritePermCommand::try_parse_from(["wipe_write_perm", "-b", broker_name, "-n", "127.0.0.1:9876"])
+                    .unwrap();
 
             assert_eq!(cmd.broker_name, broker_name);
         }
@@ -157,13 +134,8 @@ mod tests {
 
     #[test]
     fn test_command_with_long_flags() {
-        let cmd = WipeWritePermCommand::try_parse_from([
-            "wipe_write_perm",
-            "--broker-name",
-            "test-broker",
-            "--yes",
-        ])
-        .unwrap();
+        let cmd =
+            WipeWritePermCommand::try_parse_from(["wipe_write_perm", "--broker-name", "test-broker", "--yes"]).unwrap();
 
         assert_eq!(cmd.broker_name, "test-broker");
         assert!(cmd.common.skip_confirm);

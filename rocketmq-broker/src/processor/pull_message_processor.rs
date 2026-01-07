@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 
@@ -109,26 +106,16 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
-        info!(
-            "PullMessageProcessor received request code: {:?}",
-            request_code
-        );
+        info!("PullMessageProcessor received request code: {:?}", request_code);
         match request_code {
             RequestCode::PullMessage | RequestCode::LitePullMessage => {
-                self.process_request_(channel, ctx, request_code, request)
-                    .await
+                self.process_request_(channel, ctx, request_code, request).await
             }
             _ => {
-                warn!(
-                    "PullMessageProcessor received unknown request code: {:?}",
-                    request_code
-                );
+                warn!("PullMessageProcessor received unknown request code: {:?}", request_code);
                 let response = RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::RequestCodeNotSupported,
-                    format!(
-                        "ClientManageProcessor request code {} not supported",
-                        request.code()
-                    ),
+                    format!("ClientManageProcessor request code {} not supported", request.code()),
                 );
                 Ok(Some(response.set_opaque(request.opaque())))
             }
@@ -168,10 +155,7 @@ where
         let cpus = num_cpus::get();
         Self {
             pull_message_result_handler,
-            write_message_runtime: Arc::new(RocketMQRuntime::new_multi(
-                cpus,
-                "write_consumer_message_runtime",
-            )),
+            write_message_runtime: Arc::new(RocketMQRuntime::new_multi(cpus, "write_consumer_message_runtime")),
             write_message_lock: Arc::new(Default::default()),
             broker_runtime_inner,
         }
@@ -263,19 +247,12 @@ where
         sys_flag = PullSysFlag::clear_suspend_flag(sys_flag as u32) as i32;
         sys_flag = PullSysFlag::clear_commit_offset_flag(sys_flag as u32) as i32;
         request_header.sys_flag = sys_flag;
-        let rpc_request = RpcRequest::new(
-            RequestCode::PullMessage.to_i32(),
-            request_header.clone(),
-            None,
-        );
+        let rpc_request = RpcRequest::new(RequestCode::PullMessage.to_i32(), request_header.clone(), None);
         let rpc_response = self
             .broker_runtime_inner
             .broker_outer_api()
             .rpc_client()
-            .invoke(
-                rpc_request,
-                self.broker_runtime_inner.broker_config().forward_timeout,
-            )
+            .invoke(rpc_request, self.broker_runtime_inner.broker_config().forward_timeout)
             .await;
         let rpc_response = match rpc_response {
             Ok(value) => value,
@@ -296,9 +273,7 @@ where
         if rewrite_result.is_some() {
             return rewrite_result;
         }
-        Some(RpcClientUtils::create_command_for_rpc_response(
-            rpc_response,
-        ))
+        Some(RpcClientUtils::create_command_for_rpc_response(rpc_response))
     }
 
     /// Gets subscription data when HAS_SUBSCRIPTION_FLAG is set.
@@ -325,33 +300,30 @@ where
             ));
         }
         let subscription_data = subscription_data.unwrap();
-        self.broker_runtime_inner
-            .consumer_manager()
-            .compensate_subscribe_data(
-                request_header.consumer_group.as_ref(),
-                request_header.topic.as_ref(),
-                &subscription_data,
+        self.broker_runtime_inner.consumer_manager().compensate_subscribe_data(
+            request_header.consumer_group.as_ref(),
+            request_header.topic.as_ref(),
+            &subscription_data,
+        );
+        let consumer_filter_data = if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
+            let consumer_filter_data = ConsumerFilterManager::build(
+                request_header.topic.clone(),
+                request_header.consumer_group.clone(),
+                request_header.subscription.clone(),
+                request_header.expression_type.clone(),
+                request_header.sub_version as u64,
             );
-        let consumer_filter_data =
-            if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
-                let consumer_filter_data = ConsumerFilterManager::build(
-                    request_header.topic.clone(),
-                    request_header.consumer_group.clone(),
-                    request_header.subscription.clone(),
-                    request_header.expression_type.clone(),
-                    request_header.sub_version as u64,
-                );
-                if consumer_filter_data.is_none() {
-                    return Err(Self::error_response(
-                        response.clone(),
-                        ResponseCode::SubscriptionParseFailed,
-                        "parse the consumer's subscription failed",
-                    ));
-                }
-                consumer_filter_data
-            } else {
-                None
-            };
+            if consumer_filter_data.is_none() {
+                return Err(Self::error_response(
+                    response.clone(),
+                    ResponseCode::SubscriptionParseFailed,
+                    "parse the consumer's subscription failed",
+                ));
+            }
+            consumer_filter_data
+        } else {
+            None
+        };
         Ok(SubscriptionDataResult {
             subscription_data,
             consumer_filter_data,
@@ -403,14 +375,11 @@ where
             ));
         }
 
-        let read_forbidden = self
-            .broker_runtime_inner
-            .subscription_group_manager()
-            .get_forbidden(
-                subscription_group_config.group_name(),
-                &request_header.topic,
-                PermName::INDEX_PERM_READ as i32,
-            );
+        let read_forbidden = self.broker_runtime_inner.subscription_group_manager().get_forbidden(
+            subscription_group_config.group_name(),
+            &request_header.topic,
+            PermName::INDEX_PERM_READ as i32,
+        );
         if read_forbidden {
             response_header.forbidden_type = Some(ForbiddenType::SUBSCRIPTION_FORBIDDEN);
             return Err(Self::error_response_with_header(
@@ -425,8 +394,7 @@ where
             ));
         }
 
-        let subscription_data =
-            consumer_group_info.find_subscription_data(request_header.topic.as_ref());
+        let subscription_data = consumer_group_info.find_subscription_data(request_header.topic.as_ref());
         if subscription_data.is_none() {
             warn!(
                 "the consumer's subscription not exist, group: {}, topic:{}",
@@ -455,44 +423,36 @@ where
             ));
         }
 
-        let consumer_filter_data =
-            if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
-                let consumer_filter_data = self
-                    .broker_runtime_inner
-                    .consumer_filter_manager()
-                    .get_consumer_filter_data(
-                        request_header.topic.as_ref(),
-                        request_header.consumer_group.as_ref(),
-                    );
-                if consumer_filter_data.is_none() {
-                    return Err(Self::error_response(
-                        response.clone(),
-                        ResponseCode::FilterDataNotExist,
-                        "The broker's consumer filter data is not exist!Your expression may be \
-                         wrong!",
-                    ));
-                }
-                if consumer_filter_data.as_ref().unwrap().client_version()
-                    < request_header.sub_version as u64
-                {
-                    warn!(
-                        "The broker's consumer filter data is not latest, group: {}, topic: {}, \
-                         serverV: {}, clientV: {}",
-                        request_header.consumer_group,
-                        request_header.topic,
-                        consumer_filter_data.as_ref().unwrap().client_version(),
-                        request_header.sub_version,
-                    );
-                    return Err(Self::error_response(
-                        response.clone(),
-                        ResponseCode::FilterDataNotLatest,
-                        "the consumer's consumer filter data not latest",
-                    ));
-                }
-                consumer_filter_data
-            } else {
-                None
-            };
+        let consumer_filter_data = if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
+            let consumer_filter_data = self
+                .broker_runtime_inner
+                .consumer_filter_manager()
+                .get_consumer_filter_data(request_header.topic.as_ref(), request_header.consumer_group.as_ref());
+            if consumer_filter_data.is_none() {
+                return Err(Self::error_response(
+                    response.clone(),
+                    ResponseCode::FilterDataNotExist,
+                    "The broker's consumer filter data is not exist!Your expression may be wrong!",
+                ));
+            }
+            if consumer_filter_data.as_ref().unwrap().client_version() < request_header.sub_version as u64 {
+                warn!(
+                    "The broker's consumer filter data is not latest, group: {}, topic: {}, serverV: {}, clientV: {}",
+                    request_header.consumer_group,
+                    request_header.topic,
+                    consumer_filter_data.as_ref().unwrap().client_version(),
+                    request_header.sub_version,
+                );
+                return Err(Self::error_response(
+                    response.clone(),
+                    ResponseCode::FilterDataNotLatest,
+                    "the consumer's consumer filter data not latest",
+                ));
+            }
+            consumer_filter_data
+        } else {
+            None
+        };
 
         Ok(SubscriptionDataResult {
             subscription_data,
@@ -507,11 +467,7 @@ where
         consumer_filter_data: Option<ConsumerFilterData>,
     ) -> Arc<Box<dyn MessageFilter>> {
         // TODO: Consider optimizing consumer_filter_manager clone - Arc wrapper might be better
-        if self
-            .broker_runtime_inner
-            .broker_config()
-            .filter_support_retry
-        {
+        if self.broker_runtime_inner.broker_config().filter_support_retry {
             Arc::new(Box::new(ExpressionForRetryMessageFilter))
         } else {
             Arc::new(Box::new(ExpressionMessageFilter::new(
@@ -534,8 +490,7 @@ pub fn rewrite_response_for_static_topic(
     let leader_item = mapping_context.leader_item.as_ref().unwrap();
     let current_item = mapping_context.current_item.as_ref().unwrap();
     let mapping_items = &mut mapping_context.mapping_item_list;
-    let earlist_item =
-        TopicQueueMappingUtils::find_logic_queue_mapping_item(mapping_items, 0, true).unwrap();
+    let earlist_item = TopicQueueMappingUtils::find_logic_queue_mapping_item(mapping_items, 0, true).unwrap();
 
     assert!(current_item.logic_offset >= 0);
 
@@ -575,9 +530,7 @@ pub fn rewrite_response_for_static_topic(
                 response_code = ResponseCode::PullOffsetMoved;
                 next_begin_offset = min_offset;
             } else if request_offset >= max_offset {
-                if let Some(next_item) =
-                    TopicQueueMappingUtils::find_next(mapping_items, Some(current_item), true)
-                {
+                if let Some(next_item) = TopicQueueMappingUtils::find_next(mapping_items, Some(current_item), true) {
                     is_revised = true;
                     next_begin_offset = next_item.start_offset;
                     min_offset = next_item.start_offset;
@@ -591,17 +544,12 @@ pub fn rewrite_response_for_static_topic(
             }
         }
 
-        if !is_revised
-            && leader_item.gen != current_item.gen
-            && earlist_item.gen != current_item.gen
-        {
+        if !is_revised && leader_item.gen != current_item.gen && earlist_item.gen != current_item.gen {
             if request_offset < min_offset {
                 next_begin_offset = min_offset;
                 response_code = ResponseCode::PullRetryImmediately;
             } else if request_offset >= max_offset {
-                if let Some(next_item) =
-                    TopicQueueMappingUtils::find_next(mapping_items, Some(current_item), true)
-                {
+                if let Some(next_item) = TopicQueueMappingUtils::find_next(mapping_items, Some(current_item), true) {
                     next_begin_offset = next_item.start_offset;
                     min_offset = next_item.start_offset;
                     max_offset = min_offset;
@@ -619,23 +567,16 @@ pub fn rewrite_response_for_static_topic(
         next_begin_offset = current_item.end_offset;
     }
 
-    response_header.next_begin_offset =
-        current_item.compute_static_queue_offset_strictly(next_begin_offset);
-    response_header.min_offset = current_item
-        .compute_static_queue_offset_strictly(min_offset.max(current_item.start_offset));
-    response_header.max_offset = current_item
-        .compute_static_queue_offset_strictly(max_offset)
-        .max(TopicQueueMappingDetail::compute_max_offset_from_mapping(
-            mapping_detail,
-            mapping_context.global_id,
-        ));
+    response_header.next_begin_offset = current_item.compute_static_queue_offset_strictly(next_begin_offset);
+    response_header.min_offset =
+        current_item.compute_static_queue_offset_strictly(min_offset.max(current_item.start_offset));
+    response_header.max_offset = current_item.compute_static_queue_offset_strictly(max_offset).max(
+        TopicQueueMappingDetail::compute_max_offset_from_mapping(mapping_detail, mapping_context.global_id),
+    );
     response_header.offset_delta = Some(current_item.compute_offset_delta());
 
     if code != ResponseCode::Success {
-        Some(
-            RemotingCommand::create_response_command_with_header(response_header.clone())
-                .set_code(response_code),
-        )
+        Some(RemotingCommand::create_response_command_with_header(response_header.clone()).set_code(response_code))
     } else {
         None
     }
@@ -711,10 +652,7 @@ where
             ));
         }
         if RequestCode::LitePullMessage == request_code
-            && !self
-                .broker_runtime_inner
-                .broker_config()
-                .lite_pull_message_enable
+            && !self.broker_runtime_inner.broker_config().lite_pull_message_enable
         {
             response_header.forbidden_type = Some(ForbiddenType::BROKER_FORBIDDEN);
             return Ok(Some(
@@ -766,15 +704,13 @@ where
                 request_header.topic,
                 channel.remote_address()
             );
-            return Ok(Some(
-                response
-                    .set_code(ResponseCode::TopicNotExist)
-                    .set_remark(format!(
-                        "topic[{}] not exist, apply first please! {}",
-                        request_header.topic,
-                        FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
-                    )),
-            ));
+            return Ok(Some(response.set_code(ResponseCode::TopicNotExist).set_remark(
+                format!(
+                    "topic[{}] not exist, apply first please! {}",
+                    request_header.topic,
+                    FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
+                ),
+            )));
         }
         if !PermName::is_readable(topic_config.as_ref().unwrap().perm) {
             response_header.forbidden_type = Some(ForbiddenType::TOPIC_FORBIDDEN);
@@ -805,8 +741,7 @@ where
                 response
                     .set_code(RemotingSysResponseCode::SystemError)
                     .set_remark(format!(
-                        "queueId[{}] is illegal, topic:[{}] topicConfig.readQueueNums:[{}] \
-                         consumer:[{}]",
+                        "queueId[{}] is illegal, topic:[{}] topicConfig.readQueueNums:[{}] consumer:[{}]",
                         request_header.queue_id,
                         request_header.topic,
                         topic_config.as_ref().unwrap().read_queue_nums,
@@ -830,8 +765,7 @@ where
                     MessageModel::Clustering,
                 ),
         }
-        let has_subscription_flag =
-            PullSysFlag::has_subscription_flag(request_header.sys_flag as u32);
+        let has_subscription_flag = PullSysFlag::has_subscription_flag(request_header.sys_flag as u32);
 
         // Get subscription data and consumer filter data using helper methods
         let subscription_result = if has_subscription_flag {
@@ -854,10 +788,7 @@ where
         };
 
         if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str()))
-            && !self
-                .broker_runtime_inner
-                .broker_config()
-                .enable_property_filter
+            && !self.broker_runtime_inner.broker_config().enable_property_filter
         {
             return Ok(Some(
                 response
@@ -937,10 +868,7 @@ where
             }
         }
 
-        let use_reset_offset_feature = self
-            .broker_runtime_inner
-            .broker_config()
-            .use_server_side_reset_offset;
+        let use_reset_offset_feature = self.broker_runtime_inner.broker_config().use_server_side_reset_offset;
         let topic = request_header.topic.as_ref();
         let group = request_header.consumer_group.as_ref();
         let queue_id = request_header.queue_id;
@@ -948,9 +876,7 @@ where
             .broker_runtime_inner
             .consumer_offset_manager()
             .query_then_erase_reset_offset(topic, group, queue_id);
-        let get_message_result = if let (true, Some(reset_offset)) =
-            (use_reset_offset_feature, reset_offset)
-        {
+        let get_message_result = if let (true, Some(reset_offset)) = (use_reset_offset_feature, reset_offset) {
             let mut get_message_result = GetMessageResult::new();
             get_message_result.set_status(Some(GetMessageStatus::OffsetReset));
             get_message_result.set_next_begin_offset(reset_offset);
@@ -969,13 +895,8 @@ where
             get_message_result.set_suggest_pulling_from_slave(false);
             Some(get_message_result)
         } else {
-            let broadcast_init_offset = self.query_broadcast_pull_init_offset(
-                topic,
-                group,
-                queue_id,
-                &request_header,
-                &channel,
-            );
+            let broadcast_init_offset =
+                self.query_broadcast_pull_init_offset(topic, group, queue_id, &request_header, &channel);
             if broadcast_init_offset >= 0 {
                 let mut get_message_result = GetMessageResult::new();
                 get_message_result.set_status(Some(GetMessageStatus::OffsetReset));
@@ -1005,9 +926,7 @@ where
                 }
                 // Accumulate cold data read bytes for flow control
                 if let Some(ref result) = result {
-                    if let Some(cold_data_cg_ctr_service) =
-                        self.broker_runtime_inner.cold_data_cg_ctr_service()
-                    {
+                    if let Some(cold_data_cg_ctr_service) = self.broker_runtime_inner.cold_data_cg_ctr_service() {
                         cold_data_cg_ctr_service.cold_acc(group.as_str(), result.cold_data_sum());
                     }
                 }
@@ -1044,46 +963,35 @@ where
         request_header: &PullMessageRequestHeader,
         channel: &Channel,
     ) -> i64 {
-        if !self
-            .broker_runtime_inner
-            .broker_config()
-            .enable_broadcast_offset_store
-        {
+        if !self.broker_runtime_inner.broker_config().enable_broadcast_offset_store {
             return -1;
         }
         let consumer_group_info = self
             .broker_runtime_inner
             .consumer_manager()
             .get_consumer_group_info(group);
-        let proxy_pull_broadcast = RequestSource::ProxyForBroadcast
-            == From::from(request_header.request_source.unwrap_or(-2));
+        let proxy_pull_broadcast =
+            RequestSource::ProxyForBroadcast == From::from(request_header.request_source.unwrap_or(-2));
 
         if is_broadcast(proxy_pull_broadcast, consumer_group_info.as_ref()) {
             let client_id = if proxy_pull_broadcast {
                 request_header.proxy_forward_client_id.as_ref().cloned()
             } else {
-                match consumer_group_info
-                    .as_ref()
-                    .unwrap()
-                    .find_channel_by_channel(channel)
-                {
+                match consumer_group_info.as_ref().unwrap().find_channel_by_channel(channel) {
                     None => {
                         return -1;
                     }
                     Some(value) => Some(value.client_id().clone()),
                 }
             };
-            return self
-                .broker_runtime_inner
-                .broadcast_offset_manager()
-                .query_init_offset(
-                    topic,
-                    group,
-                    queue_id,
-                    client_id.as_ref().unwrap().as_str(),
-                    request_header.queue_offset,
-                    proxy_pull_broadcast,
-                );
+            return self.broker_runtime_inner.broadcast_offset_manager().query_init_offset(
+                topic,
+                group,
+                queue_id,
+                client_id.as_ref().unwrap().as_str(),
+                request_header.queue_offset,
+                proxy_pull_broadcast,
+            );
         }
         -1
     }
@@ -1097,8 +1005,8 @@ where
     ) {
         let lock = Arc::clone(&self.write_message_lock);
         self.write_message_runtime.get_handle().spawn(async move {
-            let broker_allow_flow_ctr_suspend = !(request.ext_fields().is_some()
-                && request.ext_fields().unwrap().contains_key(NO_SUSPEND_KEY));
+            let broker_allow_flow_ctr_suspend =
+                !(request.ext_fields().is_some() && request.ext_fields().unwrap().contains_key(NO_SUSPEND_KEY));
             let opaque = request.opaque();
             let response = pull_message_processor
                 .process_request_inner(
@@ -1121,10 +1029,7 @@ where
         });
     }
 }
-pub(crate) fn is_broadcast(
-    proxy_pull_broadcast: bool,
-    consumer_group_info: Option<&ConsumerGroupInfo>,
-) -> bool {
+pub(crate) fn is_broadcast(proxy_pull_broadcast: bool, consumer_group_info: Option<&ConsumerGroupInfo>) -> bool {
     proxy_pull_broadcast
         || consumer_group_info.is_some_and(|info| {
             matches!(info.get_message_model(), MessageModel::Broadcasting)
@@ -1144,10 +1049,7 @@ mod tests {
     #[test]
     fn returns_true_for_proxy_pull_broadcast() {
         let result = is_broadcast(true, None);
-        assert!(
-            result,
-            "Should return true when proxy_pull_broadcast is true"
-        );
+        assert!(result, "Should return true when proxy_pull_broadcast is true");
     }
 
     #[test]
@@ -1159,10 +1061,7 @@ mod tests {
             ConsumeFromWhere::ConsumeFromLastOffset,
         );
         let result = is_broadcast(false, Some(&consumer_group_info));
-        assert!(
-            !result,
-            "Should return false for non-broadcast and active consumption"
-        );
+        assert!(!result, "Should return false for non-broadcast and active consumption");
     }
 
     #[test]
@@ -1174,18 +1073,12 @@ mod tests {
             ConsumeFromWhere::ConsumeFromLastOffset,
         );
         let result = is_broadcast(false, Some(&consumer_group_info));
-        assert!(
-            result,
-            "Should return true for broadcast and passive consumption"
-        );
+        assert!(result, "Should return true for broadcast and passive consumption");
     }
 
     #[test]
     fn returns_false_when_no_consumer_group_info_provided() {
         let result = is_broadcast(false, None);
-        assert!(
-            !result,
-            "Should return false when no consumer group info is provided"
-        );
+        assert!(!result, "Should return false when no consumer group info is provided");
     }
 }

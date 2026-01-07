@@ -1,25 +1,25 @@
 [package]
-name = "rocketmq-cli"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-homepage.workspace = true
-repository.workspace = true
-license.workspace = true
-keywords = ["rocketmq", "cli", "tools"]
-readme = "README.md"
-description = "Provide some command-line tools to read data from RocketMQ files"
-categories = ["development-tools"]
+name                   = "rocketmq-cli"
+version.workspace      = true
+authors.workspace      = true
+edition.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+license.workspace      = true
+keywords               = ["rocketmq", "cli", "tools"]
+readme                 = "README.md"
+description            = "Provide some command-line tools to read data from RocketMQ files"
+categories             = ["development-tools"]
 rust-version.workspace = true
 
 [dependencies]
 rocketmq-common = { workspace = true }
-rocketmq-store = { workspace = true }
+rocketmq-store  = { workspace = true }
 
 
-clap = { version = "4.5.53", features = ["derive"] }
-tabled = "0.20.0"
-bytes = { workspace = true }
+clap           = { version = "4.5.54", features = ["derive"] }
+tabled         = "0.20.0"
+bytes          = { workspace = true }
 cheetah-string = { workspace = true }
 [[bin]]
 name = "rocketmq-cli-rust"

@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 
@@ -71,11 +68,7 @@ pub trait MQAdmin {
     ///
     /// # Returns
     /// A `Result` containing the offset if found, or an error.
-    fn search_offset(
-        &self,
-        mq: &MessageQueue,
-        timestamp: u64,
-    ) -> rocketmq_error::RocketMQResult<i64>;
+    fn search_offset(&self, mq: &MessageQueue, timestamp: u64) -> rocketmq_error::RocketMQResult<i64>;
 
     /// Retrieves the maximum offset of a message in a queue.
     ///
@@ -132,6 +125,5 @@ pub trait MQAdmin {
     ///
     /// # Returns
     /// A `Result` containing the `MessageExt` if found, or an error.
-    fn view_message(&self, topic: &str, msg_id: &str)
-        -> rocketmq_error::RocketMQResult<MessageExt>;
+    fn view_message(&self, topic: &str, msg_id: &str) -> rocketmq_error::RocketMQResult<MessageExt>;
 }

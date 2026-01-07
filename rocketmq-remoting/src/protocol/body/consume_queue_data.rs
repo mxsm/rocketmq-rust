@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::fmt::Display;
 
@@ -37,8 +34,8 @@ impl Display for ConsumeQueueData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "ConsumeQueueData [physic_offset={}, physic_size={}, tags_code={}, \
-             extend_data_json={:?}, bit_map={:?}, eval={}, msg={:?}]",
+            "ConsumeQueueData [physic_offset={}, physic_size={}, tags_code={}, extend_data_json={:?}, bit_map={:?}, \
+             eval={}, msg={:?}]",
             self.physic_offset,
             self.physic_size,
             self.tags_code,
@@ -71,8 +68,7 @@ mod tests {
         assert_eq!(
             display,
             "ConsumeQueueData [physic_offset=123, physic_size=456, tags_code=789, \
-             extend_data_json=Some(\"extend_data\"), bit_map=Some(\"bit_map\"), eval=true, \
-             msg=Some(\"message\")]"
+             extend_data_json=Some(\"extend_data\"), bit_map=Some(\"bit_map\"), eval=true, msg=Some(\"message\")]"
         );
     }
 
@@ -117,10 +113,7 @@ mod tests {
             deserialized.extend_data_json.unwrap(),
             CheetahString::from("extend_data")
         );
-        assert_eq!(
-            deserialized.bit_map.unwrap(),
-            CheetahString::from("bit_map")
-        );
+        assert_eq!(deserialized.bit_map.unwrap(), CheetahString::from("bit_map"));
         assert!(deserialized.eval);
         assert_eq!(deserialized.msg.unwrap(), CheetahString::from("message"));
     }

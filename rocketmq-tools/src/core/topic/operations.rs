@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Topic operations - Core business logic
 //!
@@ -69,8 +66,7 @@ impl TopicService {
     pub async fn get_topic_route(
         admin: &mut DefaultMQAdminExt,
         topic: impl Into<CheetahString>,
-    ) -> RocketMQResult<Option<rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData>>
-    {
+    ) -> RocketMQResult<Option<rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData>> {
         let topic = topic.into();
         Ok(admin
             .examine_topic_route_info(topic.clone())
@@ -95,14 +91,11 @@ impl TopicService {
         let topic = topic.into();
         let cluster = cluster_name.into();
 
-        Ok(admin
-            .delete_topic(topic.clone(), cluster.clone())
-            .await
-            .map_err(|e| {
-                ToolsError::internal(format!(
-                    "Failed to delete topic '{topic}' from cluster '{cluster}': {e}"
-                ))
-            })?)
+        Ok(admin.delete_topic(topic.clone(), cluster.clone()).await.map_err(|e| {
+            ToolsError::internal(format!(
+                "Failed to delete topic '{topic}' from cluster '{cluster}': {e}"
+            ))
+        })?)
     }
 
     /// Create or update a topic configuration
@@ -141,21 +134,19 @@ impl TopicService {
             super::types::TopicTarget::Broker(addr) => admin
                 .create_and_update_topic_config(addr, internal_config)
                 .await
-                .map_err(|e| {
-                    ToolsError::internal(format!("Failed to create/update topic: {e}")).into()
-                }),
+                .map_err(|e| ToolsError::internal(format!("Failed to create/update topic: {e}")).into()),
             super::types::TopicTarget::Cluster(cluster_name) => {
                 // Get all master brokers in cluster
-                let cluster_info = admin.examine_broker_cluster_info().await.map_err(|e| {
-                    ToolsError::internal(format!("Failed to get cluster info: {e}"))
-                })?;
+                let cluster_info = admin
+                    .examine_broker_cluster_info()
+                    .await
+                    .map_err(|e| ToolsError::internal(format!("Failed to get cluster info: {e}")))?;
 
                 // Find master brokers in the cluster
-                let master_addrs =
-                    crate::commands::command_util::CommandUtil::fetch_master_addr_by_cluster_name(
-                        &cluster_info,
-                        &cluster_name,
-                    )?;
+                let master_addrs = crate::commands::command_util::CommandUtil::fetch_master_addr_by_cluster_name(
+                    &cluster_info,
+                    &cluster_name,
+                )?;
 
                 if master_addrs.is_empty() {
                     return Err(ToolsError::ClusterNotFound {
@@ -169,9 +160,7 @@ impl TopicService {
                     admin
                         .create_and_update_topic_config(addr, internal_config.clone())
                         .await
-                        .map_err(|e| {
-                            ToolsError::internal(format!("Failed to create/update topic: {e}"))
-                        })?;
+                        .map_err(|e| ToolsError::internal(format!("Failed to create/update topic: {e}")))?;
                 }
 
                 Ok(())
@@ -193,9 +182,7 @@ impl TopicService {
     ) -> RocketMQResult<std::collections::HashMap<String, HashSet<CheetahString>>> {
         use futures::future::join_all;
 
-        let futures = topics
-            .iter()
-            .map(|topic| admin.get_topic_cluster_list(topic.clone()));
+        let futures = topics.iter().map(|topic| admin.get_topic_cluster_list(topic.clone()));
 
         let results = join_all(futures).await;
 
@@ -221,9 +208,7 @@ impl TopicService {
     ///
     /// # Returns
     /// Set of all topic names
-    pub async fn list_all_topics(
-        admin: &mut DefaultMQAdminExt,
-    ) -> RocketMQResult<HashSet<CheetahString>> {
+    pub async fn list_all_topics(admin: &mut DefaultMQAdminExt) -> RocketMQResult<HashSet<CheetahString>> {
         let topic_list = admin
             .fetch_all_topic_list()
             .await
@@ -245,8 +230,7 @@ impl TopicService {
         admin: &mut DefaultMQAdminExt,
         topic: impl Into<CheetahString>,
         broker_addr: Option<CheetahString>,
-    ) -> RocketMQResult<rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable>
-    {
+    ) -> RocketMQResult<rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable> {
         admin
             .examine_topic_stats(topic.into(), broker_addr)
             .await
@@ -279,9 +263,7 @@ impl TopicService {
                 let topic_config = admin
                     .examine_topic_config(broker_addr.clone(), topic.clone())
                     .await
-                    .map_err(|e| {
-                        ToolsError::internal(format!("Failed to get topic config: {e}"))
-                    })?;
+                    .map_err(|e| ToolsError::internal(format!("Failed to get topic config: {e}")))?;
 
                 // Update permission
                 let updated_config = RocketMQTopicConfig {
@@ -298,24 +280,22 @@ impl TopicService {
                 admin
                     .create_and_update_topic_config(broker_addr, updated_config)
                     .await
-                    .map_err(|e| {
-                        ToolsError::internal(format!("Failed to update topic permission: {e}"))
-                    })?;
+                    .map_err(|e| ToolsError::internal(format!("Failed to update topic permission: {e}")))?;
 
                 Ok(())
             }
             super::types::TopicTarget::Cluster(cluster_name) => {
                 // Get cluster info
-                let cluster_info = admin.examine_broker_cluster_info().await.map_err(|e| {
-                    ToolsError::internal(format!("Failed to get cluster info: {e}"))
-                })?;
+                let cluster_info = admin
+                    .examine_broker_cluster_info()
+                    .await
+                    .map_err(|e| ToolsError::internal(format!("Failed to get cluster info: {e}")))?;
 
                 // Find master brokers
-                let master_addrs =
-                    crate::commands::command_util::CommandUtil::fetch_master_addr_by_cluster_name(
-                        &cluster_info,
-                        &cluster_name,
-                    )?;
+                let master_addrs = crate::commands::command_util::CommandUtil::fetch_master_addr_by_cluster_name(
+                    &cluster_info,
+                    &cluster_name,
+                )?;
 
                 if master_addrs.is_empty() {
                     return Err(ToolsError::ClusterNotFound {
@@ -329,9 +309,7 @@ impl TopicService {
                     let topic_config = admin
                         .examine_topic_config(broker_addr.clone(), topic.clone())
                         .await
-                        .map_err(|e| {
-                            ToolsError::internal(format!("Failed to get topic config: {e}"))
-                        })?;
+                        .map_err(|e| ToolsError::internal(format!("Failed to get topic config: {e}")))?;
 
                     let updated_config = RocketMQTopicConfig {
                         topic_name: Some(topic.clone()),
@@ -347,9 +325,7 @@ impl TopicService {
                     admin
                         .create_and_update_topic_config(broker_addr, updated_config)
                         .await
-                        .map_err(|e| {
-                            ToolsError::internal(format!("Failed to update topic permission: {e}"))
-                        })?;
+                        .map_err(|e| ToolsError::internal(format!("Failed to update topic permission: {e}")))?;
                 }
 
                 Ok(())

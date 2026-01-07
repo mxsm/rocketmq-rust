@@ -36,13 +36,7 @@ impl Policy {
         environment: Option<Environment>,
         decision: Decision,
     ) -> Self {
-        Self::of_type(
-            PolicyType::Custom,
-            resources,
-            actions,
-            environment,
-            decision,
-        )
+        Self::of_type(PolicyType::Custom, resources, actions, environment, decision)
     }
 
     pub fn of_type(
@@ -56,17 +50,11 @@ impl Policy {
             .into_iter()
             .map(|r| PolicyEntry::of(r, actions.clone(), environment.clone(), decision))
             .collect();
-        Policy {
-            policy_type,
-            entries,
-        }
+        Policy { policy_type, entries }
     }
 
     pub fn of_entries(policy_type: PolicyType, entries: Vec<PolicyEntry>) -> Self {
-        Policy {
-            policy_type,
-            entries,
-        }
+        Policy { policy_type, entries }
     }
 
     pub fn update_entry(&mut self, new_entries: Vec<PolicyEntry>) {
@@ -128,16 +116,8 @@ mod tests {
 
     #[test]
     fn test_of_and_update_delete() {
-        let r1 = Resource::of(
-            ResourceType::Topic,
-            Some("t1".to_string()),
-            ResourcePattern::Literal,
-        );
-        let r2 = Resource::of(
-            ResourceType::Topic,
-            Some("t2".to_string()),
-            ResourcePattern::Literal,
-        );
+        let r1 = Resource::of(ResourceType::Topic, Some("t1".to_string()), ResourcePattern::Literal);
+        let r2 = Resource::of(ResourceType::Topic, Some("t2".to_string()), ResourcePattern::Literal);
         let mut p = Policy::of(vec![r1.clone()], vec![Action::Pub], None, Decision::Allow);
         assert_eq!(p.entries().len(), 1);
 

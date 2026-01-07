@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -47,38 +44,27 @@ impl TransactionalMessageUtil {
         mix_all::CID_SYS_RMQ_TRANS
     }
 
-    pub fn build_transactional_message_from_half_message(
-        msg_ext: &MessageExt,
-    ) -> MessageExtBrokerInner {
+    pub fn build_transactional_message_from_half_message(msg_ext: &MessageExt) -> MessageExtBrokerInner {
         let mut msg_inner = MessageExtBrokerInner::default();
         msg_inner.set_wait_store_msg_ok(false);
-        msg_inner
-            .message_ext_inner
-            .set_msg_id(msg_ext.msg_id().clone());
+        msg_inner.message_ext_inner.set_msg_id(msg_ext.msg_id().clone());
         msg_inner.set_topic(
             msg_ext
-                .get_property(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_REAL_TOPIC,
-                ))
+                .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
                 .unwrap_or_default(),
         );
         if let Some(body) = msg_ext.get_body() {
             msg_inner.set_body(body.clone());
         }
-        if let Some(real_queue_id_str) =
-            msg_ext.get_property(&CheetahString::from_static_str("REAL_QUEUE_ID"))
-        {
+        if let Some(real_queue_id_str) = msg_ext.get_property(&CheetahString::from_static_str("REAL_QUEUE_ID")) {
             if let Ok(value) = real_queue_id_str.parse::<i32>() {
                 msg_inner.message_ext_inner.set_queue_id(value);
             }
         }
         msg_inner.set_flag(msg_ext.get_flag());
-        msg_inner.tags_code = MessageExtBrokerInner::tags_string_to_tags_code(
-            msg_inner.get_tags().unwrap_or_default().as_str(),
-        );
-        msg_inner
-            .message_ext_inner
-            .set_born_timestamp(msg_ext.born_timestamp);
+        msg_inner.tags_code =
+            MessageExtBrokerInner::tags_string_to_tags_code(msg_inner.get_tags().unwrap_or_default().as_str());
+        msg_inner.message_ext_inner.set_born_timestamp(msg_ext.born_timestamp);
         msg_inner.message_ext_inner.set_born_host(msg_ext.born_host);
 
         if let Some(transaction_id) = msg_ext.get_property(&CheetahString::from_static_str(
@@ -93,13 +79,9 @@ impl TransactionalMessageUtil {
             CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_PREPARED),
             CheetahString::from_static_str("true"),
         );
-        MessageAccessor::clear_property(
-            &mut msg_inner,
-            MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET,
-        );
+        MessageAccessor::clear_property(&mut msg_inner, MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET);
         MessageAccessor::clear_property(&mut msg_inner, MessageConst::PROPERTY_REAL_QUEUE_ID);
-        msg_inner.properties_string =
-            MessageDecoder::message_properties_to_string(msg_inner.get_properties());
+        msg_inner.properties_string = MessageDecoder::message_properties_to_string(msg_inner.get_properties());
 
         let mut sys_flag = msg_ext.sys_flag();
         sys_flag |= MessageSysFlag::TRANSACTION_PREPARED_TYPE;
@@ -153,15 +135,12 @@ mod tests {
     #[test]
     fn build_transactional_message_from_half_message_with_valid_message() {
         let msg_ext = MessageExt::default();
-        let msg_inner =
-            TransactionalMessageUtil::build_transactional_message_from_half_message(&msg_ext);
+        let msg_inner = TransactionalMessageUtil::build_transactional_message_from_half_message(&msg_ext);
         assert_eq!(msg_inner.message_ext_inner.msg_id(), msg_ext.msg_id());
         assert_eq!(
             msg_inner.get_topic(),
             &msg_ext
-                .get_property(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_REAL_TOPIC
-                ))
+                .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
                 .unwrap_or_default()
         );
         assert_eq!(msg_inner.get_body(), msg_ext.get_body());

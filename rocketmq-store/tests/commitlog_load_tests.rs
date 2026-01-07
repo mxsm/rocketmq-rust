@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Integration tests for optimized CommitLog loading
 //!
@@ -40,21 +37,13 @@ fn create_test_files(dir: &TempDir, num_files: usize, file_size: u64) {
 #[test]
 fn test_load_empty_directory() {
     let temp_dir = TempDir::new().unwrap();
-    let mut queue = MappedFileQueue::new(
-        temp_dir.path().to_string_lossy().to_string(),
-        1024 * 1024,
-        None,
-    );
+    let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), 1024 * 1024, None);
 
     // Both implementations should succeed on empty directory
     std::env::set_var("ROCKETMQ_SAFE_LOAD", "1");
     assert!(queue.load());
 
-    let mut queue2 = MappedFileQueue::new(
-        temp_dir.path().to_string_lossy().to_string(),
-        1024 * 1024,
-        None,
-    );
+    let mut queue2 = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), 1024 * 1024, None);
     std::env::remove_var("ROCKETMQ_SAFE_LOAD");
     assert!(queue2.load());
 }
@@ -67,22 +56,14 @@ fn test_load_single_file() {
     create_test_files(&temp_dir, 1, file_size);
 
     // Sequential
-    let mut queue1 = MappedFileQueue::new(
-        temp_dir.path().to_string_lossy().to_string(),
-        file_size,
-        None,
-    );
+    let mut queue1 = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), file_size, None);
     std::env::set_var("ROCKETMQ_SAFE_LOAD", "1");
     assert!(queue1.load());
     let files1 = queue1.get_mapped_files();
     assert_eq!(files1.load().len(), 1);
 
     // Optimized
-    let mut queue2 = MappedFileQueue::new(
-        temp_dir.path().to_string_lossy().to_string(),
-        file_size,
-        None,
-    );
+    let mut queue2 = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), file_size, None);
     std::env::remove_var("ROCKETMQ_SAFE_LOAD");
     assert!(queue2.load());
     let files2 = queue2.get_mapped_files();
@@ -105,20 +86,12 @@ fn test_load_multiple_files_ordered() {
     create_test_files(&temp_dir, num_files, file_size);
 
     // Sequential
-    let mut queue1 = MappedFileQueue::new(
-        temp_dir.path().to_string_lossy().to_string(),
-        file_size,
-        None,
-    );
+    let mut queue1 = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), file_size, None);
     std::env::set_var("ROCKETMQ_SAFE_LOAD", "1");
     assert!(queue1.load());
 
     // Optimized
-    let mut queue2 = MappedFileQueue::new(
-        temp_dir.path().to_string_lossy().to_string(),
-        file_size,
-        None,
-    );
+    let mut queue2 = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), file_size, None);
     std::env::remove_var("ROCKETMQ_SAFE_LOAD");
     assert!(queue2.load());
 
@@ -157,11 +130,7 @@ fn test_load_removes_empty_last_file() {
     fs::write(&last_path, vec![]).unwrap();
 
     // Sequential
-    let mut queue1 = MappedFileQueue::new(
-        temp_dir.path().to_string_lossy().to_string(),
-        file_size,
-        None,
-    );
+    let mut queue1 = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), file_size, None);
     std::env::set_var("ROCKETMQ_SAFE_LOAD", "1");
     assert!(queue1.load());
     assert_eq!(queue1.get_mapped_files().load().len(), num_files - 1);
@@ -171,11 +140,7 @@ fn test_load_removes_empty_last_file() {
     fs::write(&last_path, vec![]).unwrap();
 
     // Optimized
-    let mut queue2 = MappedFileQueue::new(
-        temp_dir.path().to_string_lossy().to_string(),
-        file_size,
-        None,
-    );
+    let mut queue2 = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), file_size, None);
     std::env::remove_var("ROCKETMQ_SAFE_LOAD");
     assert!(queue2.load());
     assert_eq!(queue2.get_mapped_files().load().len(), num_files - 1);
@@ -193,20 +158,12 @@ fn test_load_rejects_size_mismatch() {
     fs::write(&file_path, vec![0u8; actual_size as usize]).unwrap();
 
     // Sequential - should fail
-    let mut queue1 = MappedFileQueue::new(
-        temp_dir.path().to_string_lossy().to_string(),
-        expected_size,
-        None,
-    );
+    let mut queue1 = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), expected_size, None);
     std::env::set_var("ROCKETMQ_SAFE_LOAD", "1");
     assert!(!queue1.load());
 
     // Optimized - should also fail
-    let mut queue2 = MappedFileQueue::new(
-        temp_dir.path().to_string_lossy().to_string(),
-        expected_size,
-        None,
-    );
+    let mut queue2 = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), expected_size, None);
     std::env::remove_var("ROCKETMQ_SAFE_LOAD");
     assert!(!queue2.load());
 }
@@ -220,11 +177,7 @@ fn test_parallel_enabled_threshold() {
 
     create_test_files(&temp_dir, num_files, file_size);
 
-    let mut queue = MappedFileQueue::new(
-        temp_dir.path().to_string_lossy().to_string(),
-        file_size,
-        None,
-    );
+    let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), file_size, None);
     std::env::remove_var("ROCKETMQ_SAFE_LOAD");
 
     let start = std::time::Instant::now();
@@ -245,11 +198,7 @@ fn test_load_stress_100_files() {
 
     create_test_files(&temp_dir, num_files, file_size);
 
-    let mut queue = MappedFileQueue::new(
-        temp_dir.path().to_string_lossy().to_string(),
-        file_size,
-        None,
-    );
+    let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), file_size, None);
     std::env::remove_var("ROCKETMQ_SAFE_LOAD");
 
     let start = std::time::Instant::now();
@@ -279,11 +228,7 @@ fn test_load_data_integrity() {
         fs::write(&file_path, data).unwrap();
     }
 
-    let mut queue = MappedFileQueue::new(
-        temp_dir.path().to_string_lossy().to_string(),
-        file_size,
-        None,
-    );
+    let mut queue = MappedFileQueue::new(temp_dir.path().to_string_lossy().to_string(), file_size, None);
     std::env::remove_var("ROCKETMQ_SAFE_LOAD");
     assert!(queue.load());
 

@@ -1,44 +1,43 @@
 [package]
-name = "rocketmq-client-rust"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-homepage.workspace = true
-repository.workspace = true
-license.workspace = true
-keywords = ["rocketmq-rust", "async", "rocketmq-client", "futures"]
-categories = ["api-bindings", "asynchronous"]
-readme = "README.md"
-description = "Rust implementation of Apache rocketmq client"
+name                   = "rocketmq-client-rust"
+version.workspace      = true
+authors.workspace      = true
+edition.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+license.workspace      = true
+keywords               = ["rocketmq-rust", "async", "rocketmq-client", "futures"]
+categories             = ["api-bindings", "asynchronous"]
+readme                 = "README.md"
+description            = "Rust implementation of Apache rocketmq client"
 rust-version.workspace = true
 
 [dependencies]
-rocketmq-rust = { workspace = true }
-rocketmq-common = { workspace = true }
-rocketmq-remoting = { workspace = true }
-rocketmq-runtime = { workspace = true }
+rocketmq-rust            = { workspace = true }
+rocketmq-common          = { workspace = true }
+rocketmq-remoting        = { workspace = true }
+rocketmq-runtime         = { workspace = true }
 rocketmq-error.workspace = true
 
 #json spupport
-serde.workspace = true
+serde.workspace      = true
 serde_json.workspace = true
 
 tokio.workspace = true
 
 trait-variant = { workspace = true }
-num_cpus = { workspace = true }
-rand = { workspace = true }
-lazy_static = { workspace = true }
+num_cpus      = { workspace = true }
+rand          = { workspace = true }
 
 #log
 tracing.workspace = true
 
 parking_lot = { workspace = true }
-once_cell = { workspace = true }
-bytes = { workspace = true }
-dashmap = { workspace = true }
+once_cell   = { workspace = true }
+bytes       = { workspace = true }
+dashmap     = { workspace = true }
 
-futures = { workspace = true }
+futures        = { workspace = true }
 cheetah-string = { workspace = true }
 [[example]]
 name = "simple-producer"

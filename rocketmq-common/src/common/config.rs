@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -45,8 +42,8 @@ impl Display for TopicConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "TopicConfig {{ topic_name: {:?}, read_queue_nums: {}, write_queue_nums: {}, perm: \
-             {}, topic_filter_type: {}, topic_sys_flag: {}, order: {}, attributes: {:?} }}",
+            "TopicConfig {{ topic_name: {:?}, read_queue_nums: {}, write_queue_nums: {}, perm: {}, topic_filter_type: \
+             {}, topic_sys_flag: {}, order: {}, attributes: {:?} }}",
             self.topic_name,
             self.read_queue_nums,
             self.write_queue_nums,
@@ -99,11 +96,7 @@ impl TopicConfig {
         }
     }
 
-    pub fn with_queues(
-        topic_name: impl Into<CheetahString>,
-        read_queue_nums: u32,
-        write_queue_nums: u32,
-    ) -> Self {
+    pub fn with_queues(topic_name: impl Into<CheetahString>, read_queue_nums: u32, write_queue_nums: u32) -> Self {
         Self {
             read_queue_nums,
             write_queue_nums,
@@ -143,12 +136,7 @@ impl TopicConfig {
 
     pub fn encode(&self) -> String {
         let mut sb = String::new();
-        sb.push_str(
-            self.topic_name
-                .clone()
-                .unwrap_or(CheetahString::empty())
-                .as_str(),
-        );
+        sb.push_str(self.topic_name.clone().unwrap_or(CheetahString::empty()).as_str());
         sb.push_str(Self::SEPARATOR);
         sb.push_str(&self.read_queue_nums.to_string());
         sb.push_str(Self::SEPARATOR);
@@ -170,9 +158,7 @@ impl TopicConfig {
             self.topic_name = Some(parts[0].into());
             self.read_queue_nums = parts[1].parse().unwrap_or(Self::DEFAULT_READ_QUEUE_NUMS);
             self.write_queue_nums = parts[2].parse().unwrap_or(Self::DEFAULT_WRITE_QUEUE_NUMS);
-            self.perm = parts[3]
-                .parse()
-                .unwrap_or(PermName::PERM_READ | PermName::PERM_WRITE);
+            self.perm = parts[3].parse().unwrap_or(PermName::PERM_READ | PermName::PERM_WRITE);
             self.topic_filter_type = From::from(parts[4]);
             if parts.len() >= 6 {
                 if let Ok(attrs) = serde_json::from_str(parts[5]) {
@@ -203,10 +189,7 @@ mod tests {
         let config = TopicConfig::default();
         assert_eq!(config.topic_name, None);
         assert_eq!(config.read_queue_nums, TopicConfig::DEFAULT_READ_QUEUE_NUMS);
-        assert_eq!(
-            config.write_queue_nums,
-            TopicConfig::DEFAULT_WRITE_QUEUE_NUMS
-        );
+        assert_eq!(config.write_queue_nums, TopicConfig::DEFAULT_WRITE_QUEUE_NUMS);
         assert_eq!(config.perm, PermName::PERM_READ | PermName::PERM_WRITE);
         assert_eq!(config.topic_filter_type, TopicFilterType::SingleTag);
         assert_eq!(config.topic_sys_flag, 0);

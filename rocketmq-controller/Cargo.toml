@@ -1,77 +1,86 @@
 [package]
-name = "rocketmq-controller"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-homepage.workspace = true
+name                 = "rocketmq-controller"
+version.workspace    = true
+authors.workspace    = true
+edition.workspace    = true
+homepage.workspace   = true
 repository.workspace = true
-license.workspace = true
-readme = "README.md"
-description = "RocketMQ Controller Module - High Availability Raft-based Controller"
-keywords = ["rocketmq", "controller", "raft", "distributed", "messaging"]
-categories = ["network-programming", "asynchronous"]
+license.workspace    = true
+readme               = "README.md"
+description          = "RocketMQ Controller Module - High Availability Raft-based Controller"
+keywords             = ["rocketmq", "controller", "raft", "distributed", "messaging"]
+categories           = ["network-programming", "asynchronous"]
 
 [dependencies]
 # Internal dependencies (rocketmq-rust modules)
-rocketmq-common = { workspace = true }
-rocketmq-error = { workspace = true }
+rocketmq-common   = { workspace = true }
+rocketmq-error    = { workspace = true }
 rocketmq-remoting = { workspace = true }
-rocketmq-runtime = { workspace = true }
-rocketmq-store = { workspace = true }
-rocketmq-rust = { workspace = true }
-rocketmq-macros = { workspace = true }
+rocketmq-runtime  = { workspace = true }
+rocketmq-store    = { workspace = true }
+rocketmq-rust     = { workspace = true }
+rocketmq-macros   = { workspace = true }
 
 # Core async runtime
-tokio = { workspace = true }
+tokio      = { workspace = true }
 tokio-util = { workspace = true }
 
 # Raft consensus algorithm  - MIGRATING TO OPENRAFT
 # Old raft for legacy code (temporary until migration completes)
-raft = { git = "https://github.com/tikv/raft-rs.git", branch = "master" }
+raft     = { git = "https://github.com/tikv/raft-rs.git", rev = "1fd05e0" }
 protobuf = "2.28"
 # New openraft implementation
-openraft = { git = "https://github.com/databendlabs/openraft.git", branch = "release-0.10", features = ["serde", "tokio-rt"] }
-slog = { version = "2.7", features = ["max_level_trace", "release_max_level_info"] }
+openraft = { git = "https://github.com/databendlabs/openraft.git", rev = "a90c841", features = [
+  "serde",
+  "tokio-rt",
+] }
+slog = { version = "2.7", features = [
+  "max_level_trace",
+  "release_max_level_info",
+] }
 
 # gRPC networking
-tonic = { version = "0.14.2", features = ["transport", "codegen"] }
+tonic            = { version = "0.14.2", features = ["transport", "codegen"] }
 tonic-reflection = "0.14"
-tonic-prost = "0.14"
+tonic-prost      = "0.14"
 
 # Serialization
-serde = { workspace = true }
+serde      = { workspace = true }
 serde_json = { workspace = true }
-bincode = "1.3"
+bincode    = "1.3"
 
 # Networking and protocols
-bytes = { workspace = true }
-prost = "0.14"
-prost-types = "0.14"
-futures = "0.3"
+bytes        = { workspace = true }
+prost        = "0.14"
+prost-types  = "0.14"
+futures      = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
 
 cheetah-string = { workspace = true }
 
-clap = { version = "4.5.53", features = ["derive"] }
-
+clap   = { version = "4.5.54", features = ["derive"] }
+config = { workspace = true }
 
 
 # Concurrent data structures
-dashmap = { workspace = true }
+dashmap     = { workspace = true }
 parking_lot = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }
-anyhow = { workspace = true }
+anyhow    = { workspace = true }
 
 # Logging and tracing
-tracing = { workspace = true }
+tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 # Metrics and observability
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
-opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "metrics"], optional = true }
+opentelemetry-otlp = { version = "0.31", features = [
+  "grpc-tonic",
+  "metrics",
+], optional = true }
 
 # Time utilities
 chrono = "0.4"
@@ -86,21 +95,21 @@ rocksdb = { version = "0.24", optional = true }
 tonic-prost-build = "0.14.2"
 
 [dev-dependencies]
-criterion = { version = "0.8", features = ["async_tokio"] }
-tempfile = "3.24"
+criterion  = { version = "0.8", features = ["async_tokio"] }
+tempfile   = "3.24"
 env_logger = "0.11"
-proptest = "1.4"
+proptest   = "1.4"
 
 [[bench]]
-name = "controller_bench"
+name    = "controller_bench"
 harness = false
 
 [features]
-default = ["storage-file"]
+default         = ["storage-file"]
 storage-rocksdb = ["rocksdb"]
-storage-file = []
-metrics = ["opentelemetry-otlp"]
-debug = []
+storage-file    = []
+metrics         = ["opentelemetry-otlp"]
+debug           = []
 
 [[bin]]
 name = "rocketmq-controller-rust"

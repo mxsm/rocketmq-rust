@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -154,8 +151,7 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
         let request_header = DeleteKVConfigRequestHeader::new(namespace, key);
-        let request =
-            RemotingCommand::create_request_command(RequestCode::DeleteKvConfig, request_header);
+        let request = RemotingCommand::create_request_command(RequestCode::DeleteKvConfig, request_header);
 
         let name_server_address_list = self.remoting_client.get_name_server_address_list();
         let mut err_response = None;
@@ -173,9 +169,7 @@ impl MQClientAPIImpl {
         if let Some(err_response) = err_response {
             return Err(mq_client_err!(
                 err_response.code(),
-                err_response
-                    .remark()
-                    .map_or("".to_string(), |s| s.to_string())
+                err_response.remark().map_or("".to_string(), |s| s.to_string())
             ));
         }
         Ok(())
@@ -189,8 +183,7 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
         let request_header = PutKVConfigRequestHeader::new(namespace, key, value);
-        let request =
-            RemotingCommand::create_request_command(RequestCode::PutKvConfig, request_header);
+        let request = RemotingCommand::create_request_command(RequestCode::PutKvConfig, request_header);
 
         let name_server_address_list = self.remoting_client.get_name_server_address_list();
         let mut err_response = None;
@@ -208,9 +201,7 @@ impl MQClientAPIImpl {
         if let Some(err_response) = err_response {
             return Err(mq_client_err!(
                 err_response.code(),
-                err_response
-                    .remark()
-                    .map_or("".to_string(), |s| s.to_string())
+                err_response.remark().map_or("".to_string(), |s| s.to_string())
             ));
         }
         Ok(())
@@ -239,8 +230,7 @@ impl MQClientAPIImpl {
             return Ok(());
         }
         let empty_header = EmptyHeader {};
-        let mut request =
-            RemotingCommand::create_request_command(RequestCode::UpdateNamesrvConfig, empty_header);
+        let mut request = RemotingCommand::create_request_command(RequestCode::UpdateNamesrvConfig, empty_header);
 
         request = request.set_body(body.to_string());
         let mut err_response = None;
@@ -258,9 +248,7 @@ impl MQClientAPIImpl {
         if let Some(err_response) = err_response {
             return Err(mq_client_err!(
                 err_response.code(),
-                err_response
-                    .remark()
-                    .map_or("".to_string(), |s| s.to_string())
+                err_response.remark().map_or("".to_string(), |s| s.to_string())
             ));
         }
         Ok(())
@@ -273,18 +261,14 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<i32> {
         let request_header = AddWritePermOfBrokerRequestHeader::new(broker_name);
-        let request = RemotingCommand::create_request_command(
-            RequestCode::AddWritePermOfBroker,
-            request_header,
-        );
+        let request = RemotingCommand::create_request_command(RequestCode::AddWritePermOfBroker, request_header);
 
         let response = self
             .remoting_client
             .invoke_request(Some(&namesrv_addr), request, timeout_millis)
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
-            let request_header = response
-                .decode_command_custom_header_fast::<AddWritePermOfBrokerResponseHeader>()?;
+            let request_header = response.decode_command_custom_header_fast::<AddWritePermOfBrokerResponseHeader>()?;
             return Ok(request_header.get_add_topic_count());
         }
         Err(mq_client_err!(
@@ -300,18 +284,14 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<i32> {
         let request_header = WipeWritePermOfBrokerRequestHeader::new(broker_name);
-        let request = RemotingCommand::create_request_command(
-            RequestCode::WipeWritePermOfBroker,
-            request_header,
-        );
+        let request = RemotingCommand::create_request_command(RequestCode::WipeWritePermOfBroker, request_header);
 
         let response = self
             .remoting_client
             .invoke_request(Some(&namesrv_addr), request, timeout_millis)
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
-            let request_header = response
-                .decode_command_custom_header_fast::<WipeWritePermOfBrokerResponseHeader>()?;
+            let request_header = response.decode_command_custom_header_fast::<WipeWritePermOfBrokerResponseHeader>()?;
             return Ok(request_header.get_wipe_topic_count());
         }
         Err(mq_client_err!(
@@ -320,14 +300,8 @@ impl MQClientAPIImpl {
         ))
     }
 
-    pub(crate) async fn get_broker_cluster_info(
-        &self,
-        timeout_millis: u64,
-    ) -> RocketMQResult<ClusterInfo> {
-        let request = RemotingCommand::create_request_command(
-            RequestCode::GetBrokerClusterInfo,
-            EmptyHeader {},
-        );
+    pub(crate) async fn get_broker_cluster_info(&self, timeout_millis: u64) -> RocketMQResult<ClusterInfo> {
+        let request = RemotingCommand::create_request_command(RequestCode::GetBrokerClusterInfo, EmptyHeader {});
         let response = self
             .remoting_client
             .invoke_request(None, request, timeout_millis)
@@ -360,8 +334,7 @@ impl MQClientAPIImpl {
     ) -> Self {
         init_remoting_version();
 
-        let mut default_client =
-            RocketmqDefaultClient::new_with_cl(tokio_client_config, client_remoting_processor, tx);
+        let mut default_client = RocketmqDefaultClient::new_with_cl(tokio_client_config, client_remoting_processor, tx);
         if let Some(hook) = rpc_hook {
             default_client.register_rpc_hook(hook);
         }
@@ -413,9 +386,7 @@ impl MQClientAPIImpl {
             .split(";")
             .map(CheetahString::from_slice)
             .collect::<Vec<CheetahString>>();
-        self.remoting_client
-            .update_name_server_address_list(addr_vec)
-            .await;
+        self.remoting_client.update_name_server_address_list(addr_vec).await;
     }
 
     #[inline]
@@ -453,14 +424,8 @@ impl MQClientAPIImpl {
             accept_standard_json_only: None,
             topic_request_header: None,
         };
-        let request = RemotingCommand::create_request_command(
-            RequestCode::GetRouteinfoByTopic,
-            request_header,
-        );
-        let response = self
-            .remoting_client
-            .invoke_request(None, request, timeout_millis)
-            .await;
+        let request = RemotingCommand::create_request_command(RequestCode::GetRouteinfoByTopic, request_header);
+        let response = self.remoting_client.invoke_request(None, request, timeout_millis).await;
         match response {
             Ok(mut result) => {
                 let code = result.code();
@@ -475,10 +440,7 @@ impl MQClientAPIImpl {
                     }
                     ResponseCode::TopicNotExist => {
                         if allow_topic_not_exist {
-                            warn!(
-                                "get Topic [{}] RouteInfoFromNameServer is not exist value",
-                                topic
-                            );
+                            warn!("get Topic [{}] RouteInfoFromNameServer is not exist value", topic);
                         }
                     }
                     _ => {
@@ -520,33 +482,21 @@ impl MQClientAPIImpl {
         T: MessageTrait,
     {
         let begin_start_time = Instant::now();
-        let msg_type = msg.get_property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_MESSAGE_TYPE,
-        ));
+        let msg_type = msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_MESSAGE_TYPE));
         let is_reply = msg_type.is_some() && msg_type.unwrap() == mix_all::REPLY_MESSAGE_FLAG;
         let mut request = if is_reply {
             if *SEND_SMART_MSG {
                 let request_header_v2 =
-                    SendMessageRequestHeaderV2::create_send_message_request_header_v2(
-                        &request_header,
-                    );
-                RemotingCommand::create_request_command(
-                    RequestCode::SendReplyMessageV2,
-                    request_header_v2,
-                )
+                    SendMessageRequestHeaderV2::create_send_message_request_header_v2(&request_header);
+                RemotingCommand::create_request_command(RequestCode::SendReplyMessageV2, request_header_v2)
             } else {
-                RemotingCommand::create_request_command(
-                    RequestCode::SendReplyMessage,
-                    request_header,
-                )
+                RemotingCommand::create_request_command(RequestCode::SendReplyMessage, request_header)
             }
         } else {
             let is_batch_message = msg.as_any().downcast_ref::<MessageBatch>().is_some();
             if *SEND_SMART_MSG || is_batch_message {
                 let request_header_v2 =
-                    SendMessageRequestHeaderV2::create_send_message_request_header_v2(
-                        &request_header,
-                    );
+                    SendMessageRequestHeaderV2::create_send_message_request_header_v2(&request_header);
                 let request_code = if is_batch_message {
                     RequestCode::SendBatchMessage
                 } else {
@@ -575,13 +525,7 @@ impl MQClientAPIImpl {
                     });
                 }
                 let result = self
-                    .send_message_sync(
-                        addr,
-                        broker_name,
-                        msg,
-                        timeout_millis - cost_time_sync,
-                        request,
-                    )
+                    .send_message_sync(addr, broker_name, msg, timeout_millis - cost_time_sync, request)
                     .await?;
                 Ok(Some(result))
             }
@@ -781,12 +725,8 @@ impl MQClientAPIImpl {
                 Ok(response) => {
                     let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
                     if send_callback.is_none() {
-                        let send_result = self.process_send_response(
-                            &current_broker_name,
-                            msg,
-                            &response,
-                            &current_addr,
-                        );
+                        let send_result =
+                            self.process_send_response(&current_broker_name, msg, &response, &current_addr);
                         if let Ok(result) = send_result {
                             if context.is_some() {
                                 let inner = context.as_mut().unwrap();
@@ -801,12 +741,7 @@ impl MQClientAPIImpl {
                         return;
                     }
 
-                    let send_result = self.process_send_response(
-                        &current_broker_name,
-                        msg,
-                        &response,
-                        &current_addr,
-                    );
+                    let send_result = self.process_send_response(&current_broker_name, msg, &response, &current_addr);
                     match send_result {
                         Ok(result) => {
                             if context.is_some() {
@@ -817,29 +752,18 @@ impl MQClientAPIImpl {
                             let duration = (Instant::now() - begin_start_time).as_millis() as u64;
                             send_callback.as_ref().unwrap()(Some(&result), None);
                             producer
-                                .update_fault_item(
-                                    current_broker_name.clone(),
-                                    duration,
-                                    false,
-                                    true,
-                                )
+                                .update_fault_item(current_broker_name.clone(), duration, false, true)
                                 .await;
                             return; // success, return loop
                         }
                         Err(err) => {
                             let duration = (Instant::now() - begin_start_time).as_millis() as u64;
                             producer
-                                .update_fault_item(
-                                    current_broker_name.clone(),
-                                    duration,
-                                    true,
-                                    true,
-                                )
+                                .update_fault_item(current_broker_name.clone(), duration, true, true)
                                 .await;
 
                             // Check if a retry is needed
-                            let current_times =
-                                times.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                            let current_times = times.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
                             if current_times < retry_times_when_send_failed {
                                 // Prepare to retry: Select a new broker
                                 match self
@@ -857,16 +781,13 @@ impl MQClientAPIImpl {
                                         current_addr = new_addr;
                                         current_broker_name = new_broker_name;
                                         warn!(
-                                            "async send msg by retry {} times. topic={}, \
-                                             brokerAddr={}, brokerName={}",
+                                            "async send msg by retry {} times. topic={}, brokerAddr={}, brokerName={}",
                                             current_times + 1,
                                             msg.get_topic(),
                                             current_addr,
                                             current_broker_name
                                         );
-                                        current_request.set_opaque_mut(
-                                            RemotingCommand::create_new_request_id(),
-                                        );
+                                        current_request.set_opaque_mut(RemotingCommand::create_new_request_id());
                                         continue; // continue to retry
                                     }
                                     None => {
@@ -906,8 +827,7 @@ impl MQClientAPIImpl {
                             Some((new_addr, new_broker_name)) => {
                                 current_addr = new_addr;
                                 current_broker_name = new_broker_name;
-                                current_request
-                                    .set_opaque_mut(RemotingCommand::create_new_request_id());
+                                current_request.set_opaque_mut(RemotingCommand::create_new_request_id());
                                 continue;
                             }
                             None => {
@@ -959,18 +879,16 @@ impl MQClientAPIImpl {
         let namespace = self.client_config.get_namespace();
         if let Some(ns) = namespace.as_ref() {
             if !ns.is_empty() {
-                topic =
-                    NamespaceUtil::without_namespace_with_namespace(topic.as_str(), ns.as_str());
+                topic = NamespaceUtil::without_namespace_with_namespace(topic.as_str(), ns.as_str());
             }
         }
-        let message_queue =
-            MessageQueue::from_parts(topic.as_str(), broker_name, response_header.queue_id());
+        let message_queue = MessageQueue::from_parts(topic.as_str(), broker_name, response_header.queue_id());
         let mut uniq_msg_id = MessageClientIDSetter::get_uniq_id(msg);
         let msgs = msg.as_any().downcast_ref::<MessageBatch>();
 
         if let (Some(msgs), true) = (msgs, response_header.batch_uniq_id().is_none()) {
             let mut sb = String::new();
-            for msg in msgs.messages.as_ref().unwrap().iter() {
+            for msg in &msgs.messages {
                 sb.push_str(if sb.is_empty() { "" } else { "," });
                 sb.push_str(MessageClientIDSetter::get_uniq_id(msg).unwrap().as_str());
             }
@@ -981,9 +899,7 @@ impl MQClientAPIImpl {
             .ext_fields()
             .unwrap()
             .get(MessageConst::PROPERTY_MSG_REGION)
-            .map_or(mix_all::DEFAULT_TRACE_REGION_ID.to_string(), |s| {
-                s.to_string()
-            });
+            .map_or(mix_all::DEFAULT_TRACE_REGION_ID.to_string(), |s| s.to_string());
         let trace_on = response
             .ext_fields()
             .unwrap()
@@ -1083,11 +999,7 @@ impl MQClientAPIImpl {
         let mut retry_broker_name = broker_name.clone();
 
         if let Some(topic_publish_info) = topic_publish_info {
-            let mq_chosen = producer.select_one_message_queue(
-                topic_publish_info,
-                Some(&retry_broker_name),
-                false,
-            );
+            let mq_chosen = producer.select_one_message_queue(topic_publish_info, Some(&retry_broker_name), false);
             if let Some(instance) = instance {
                 retry_broker_name = instance
                     .get_broker_name_from_message_queue(mq_chosen.as_ref().unwrap())
@@ -1113,16 +1025,10 @@ impl MQClientAPIImpl {
         heartbeat_data: &HeartbeatData,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<i32> {
-        let request = RemotingCommand::create_request_command(
-            RequestCode::HeartBeat,
-            HeartbeatRequestHeader::default(),
-        )
-        .set_language(self.client_config.language)
-        .set_body(
-            heartbeat_data
-                .encode()
-                .expect("encode HeartbeatData failed"),
-        );
+        let request =
+            RemotingCommand::create_request_command(RequestCode::HeartBeat, HeartbeatRequestHeader::default())
+                .set_language(self.client_config.language)
+                .set_body(heartbeat_data.encode().expect("encode HeartbeatData failed"));
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -1155,13 +1061,7 @@ impl MQClientAPIImpl {
         let response = self
             .remoting_client
             .invoke_request(
-                Some(
-                    mix_all::broker_vip_channel(
-                        self.client_config.vip_channel_enabled,
-                        broker_addr,
-                    )
-                    .as_ref(),
-                ),
+                Some(mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, broker_addr).as_ref()),
                 request,
                 timeout_millis,
             )
@@ -1185,17 +1085,11 @@ impl MQClientAPIImpl {
             consumer_group: CheetahString::from_slice(consumer_group),
             rpc: None,
         };
-        let request = RemotingCommand::create_request_command(
-            RequestCode::GetConsumerListByGroup,
-            request_header,
-        );
+        let request = RemotingCommand::create_request_command(RequestCode::GetConsumerListByGroup, request_header);
         let response = self
             .remoting_client
             .invoke_request(
-                Some(
-                    mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr)
-                        .as_ref(),
-                ),
+                Some(mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr).as_ref()),
                 request,
                 timeout_millis,
             )
@@ -1233,10 +1127,7 @@ impl MQClientAPIImpl {
         request_header: UpdateConsumerOffsetRequestHeader,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let request = RemotingCommand::create_request_command(
-            RequestCode::UpdateConsumerOffset,
-            request_header,
-        );
+        let request = RemotingCommand::create_request_command(RequestCode::UpdateConsumerOffset, request_header);
         self.remoting_client
             .invoke_request_oneway(
                 mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr).as_ref(),
@@ -1253,10 +1144,7 @@ impl MQClientAPIImpl {
         request_header: UpdateConsumerOffsetRequestHeader,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let request = RemotingCommand::create_request_command(
-            RequestCode::UpdateConsumerOffset,
-            request_header,
-        );
+        let request = RemotingCommand::create_request_command(RequestCode::UpdateConsumerOffset, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -1278,17 +1166,11 @@ impl MQClientAPIImpl {
         request_header: QueryConsumerOffsetRequestHeader,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<i64> {
-        let request = RemotingCommand::create_request_command(
-            RequestCode::QueryConsumerOffset,
-            request_header,
-        );
+        let request = RemotingCommand::create_request_command(RequestCode::QueryConsumerOffset, request_header);
         let response = self
             .remoting_client
             .invoke_request(
-                Some(
-                    mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr)
-                        .as_ref(),
-                ),
+                Some(mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr).as_ref()),
                 request,
                 timeout_millis,
             )
@@ -1334,9 +1216,7 @@ impl MQClientAPIImpl {
         };
         match communication_mode {
             CommunicationMode::Sync => {
-                let result_ext = this
-                    .pull_message_sync(&addr, request, timeout_millis)
-                    .await?;
+                let result_ext = this.pull_message_sync(&addr, request, timeout_millis).await?;
                 Ok(Some(result_ext))
             }
             CommunicationMode::Async => {
@@ -1460,8 +1340,7 @@ impl MQClientAPIImpl {
             }),
         };
 
-        let request_command =
-            RemotingCommand::create_request_command(RequestCode::ConsumerSendMsgBack, header);
+        let request_command = RemotingCommand::create_request_command(RequestCode::ConsumerSendMsgBack, header);
         let response = self
             .remoting_client
             .invoke_request(
@@ -1498,8 +1377,7 @@ impl MQClientAPIImpl {
             consumer_group,
             rpc_request_header: None,
         };
-        let request =
-            RemotingCommand::create_request_command(RequestCode::UnregisterClient, request_header);
+        let request = RemotingCommand::create_request_command(RequestCode::UnregisterClient, request_header);
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -1522,15 +1400,9 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
         oneway: bool,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let mut request = RemotingCommand::create_request_command(
-            RequestCode::UnlockBatchMq,
-            UnlockBatchMqRequestHeader::default(),
-        );
-        request.set_body_mut_ref(
-            request_body
-                .encode()
-                .expect("encode UnlockBatchRequestBody failed"),
-        );
+        let mut request =
+            RemotingCommand::create_request_command(RequestCode::UnlockBatchMq, UnlockBatchMqRequestHeader::default());
+        request.set_body_mut_ref(request_body.encode().expect("encode UnlockBatchRequestBody failed"));
         if oneway {
             self.remoting_client
                 .invoke_request_oneway(addr, request, timeout_millis)
@@ -1566,15 +1438,9 @@ impl MQClientAPIImpl {
         request_body: LockBatchRequestBody,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<HashSet<MessageQueue>> {
-        let mut request = RemotingCommand::create_request_command(
-            RequestCode::LockBatchMq,
-            LockBatchMqRequestHeader::default(),
-        );
-        request.set_body_mut_ref(
-            request_body
-                .encode()
-                .expect("encode LockBatchRequestBody failed"),
-        );
+        let mut request =
+            RemotingCommand::create_request_command(RequestCode::LockBatchMq, LockBatchMqRequestHeader::default());
+        request.set_body_mut_ref(request_body.encode().expect("encode LockBatchRequestBody failed"));
         let response = self
             .remoting_client
             .invoke_request(
@@ -1590,9 +1456,7 @@ impl MQClientAPIImpl {
             if let Some(body) = response.body() {
                 LockBatchResponseBody::decode(body.as_ref())
                     .map(|body| body.lock_ok_mq_set)
-                    .map_err(|e| {
-                        client_broker_err!(response.code(), e.to_string(), addr.to_string())
-                    })
+                    .map_err(|e| client_broker_err!(response.code(), e.to_string(), addr.to_string()))
             } else {
                 Err(client_broker_err!(
                     response.code(),
@@ -1617,8 +1481,7 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
         let request =
-            RemotingCommand::create_request_command(RequestCode::EndTransaction, request_header)
-                .set_remark(remark);
+            RemotingCommand::create_request_command(RequestCode::EndTransaction, request_header).set_remark(remark);
 
         self.remoting_client
             .invoke_request_oneway(addr, request, timeout_millis)
@@ -1645,8 +1508,7 @@ impl MQClientAPIImpl {
             }),
         };
 
-        let request =
-            RemotingCommand::create_request_command(RequestCode::GetMaxOffset, request_header);
+        let request = RemotingCommand::create_request_command(RequestCode::GetMaxOffset, request_header);
 
         let response = self
             .remoting_client
@@ -1688,10 +1550,7 @@ impl MQClientAPIImpl {
             pop_share_queue_num,
         };
         let request = RemotingCommand::create_remoting_command(RequestCode::SetMessageRequestMode)
-            .set_body(
-                body.encode()
-                    .expect("encode SetMessageRequestModeRequestBody failed"),
-            );
+            .set_body(body.encode().expect("encode SetMessageRequestModeRequestBody failed"));
         let response = self
             .remoting_client
             .invoke_request(
@@ -1731,9 +1590,7 @@ impl MQClientAPIImpl {
         };
         let request = RemotingCommand::new_request(
             RequestCode::QueryAssignment,
-            request_body
-                .encode()
-                .expect("encode QueryAssignmentRequestBody failed"),
+            request_body.encode().expect("encode QueryAssignmentRequestBody failed"),
         );
         let response = self
             .remoting_client
@@ -1776,18 +1633,14 @@ impl MQClientAPIImpl {
         let offset = request_header.offset;
         let topic = request_header.topic.clone();
         let queue_id = request_header.queue_id;
-        let request = RemotingCommand::create_request_command(
-            RequestCode::ChangeMessageInvisibleTime,
-            request_header,
-        );
+        let request = RemotingCommand::create_request_command(RequestCode::ChangeMessageInvisibleTime, request_header);
         match self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
             .await
         {
             Ok(response) => {
-                let response_header =
-                    response.decode_command_custom_header::<ChangeInvisibleTimeResponseHeader>()?;
+                let response_header = response.decode_command_custom_header::<ChangeInvisibleTimeResponseHeader>()?;
                 let ack_result = if ResponseCode::from(response.code()) == ResponseCode::Success {
                     AckResult {
                         status: AckStatus::Ok,
@@ -1835,8 +1688,7 @@ impl MQClientAPIImpl {
     {
         let topic = request_header.topic.clone();
         let order = request_header.order.unwrap_or_default();
-        let request =
-            RemotingCommand::create_request_command(RequestCode::PopMessage, request_header);
+        let request = RemotingCommand::create_request_command(RequestCode::PopMessage, request_header);
         match self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
@@ -1878,9 +1730,7 @@ impl MQClientAPIImpl {
                 (PopStatus::Found, messages)
             }
             ResponseCode::PollingFull => (PopStatus::PollingFull, vec![]),
-            ResponseCode::PollingTimeout | ResponseCode::PullNotFound => {
-                (PopStatus::PollingNotFound, vec![])
-            }
+            ResponseCode::PollingTimeout | ResponseCode::PullNotFound => (PopStatus::PollingNotFound, vec![]),
             _ => {
                 return Err(client_broker_err!(
                     response.code(),
@@ -1893,8 +1743,7 @@ impl MQClientAPIImpl {
             msg_found_list: Some(msg_found_list),
             ..Default::default()
         };
-        let response_header =
-            response.decode_command_custom_header::<PopMessageResponseHeader>()?;
+        let response_header = response.decode_command_custom_header::<PopMessageResponseHeader>()?;
         pop_result.rest_num = response_header.rest_num;
         if pop_result.pop_status != PopStatus::Found {
             return Ok(pop_result);
@@ -1921,22 +1770,12 @@ impl MQClientAPIImpl {
                 .as_ref()
                 .unwrap_or(&CheetahString::from_slice("")),
         )?;
-        let sort_map = build_queue_offset_sorted_map(
-            topic.as_str(),
-            pop_result.msg_found_list.as_ref().map_or(&[], |v| v),
-        )?;
+        let sort_map =
+            build_queue_offset_sorted_map(topic.as_str(), pop_result.msg_found_list.as_ref().map_or(&[], |v| v))?;
         let mut map = HashMap::with_capacity(5);
-        for message in pop_result
-            .msg_found_list
-            .as_mut()
-            .map_or(&mut vec![], |v| v)
-        {
+        for message in pop_result.msg_found_list.as_mut().map_or(&mut vec![], |v| v) {
             if start_offset_info.is_empty() {
-                let key = CheetahString::from_string(format!(
-                    "{}{}",
-                    message.get_topic(),
-                    message.queue_id() as i64
-                ));
+                let key = CheetahString::from_string(format!("{}{}", message.get_topic(), message.queue_id() as i64));
                 if !map.contains_key(&key) {
                     let extra_info = ExtraInfoUtil::build_extra_info(
                         message.queue_offset(),
@@ -1959,120 +1798,111 @@ impl MQClientAPIImpl {
                     )),
                 );
             } else {
-                let ck = message.get_property(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_POP_CK,
-                ));
+                let ck = message.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK));
                 if ck.is_none() {
                     let dispatch = message
                         .get_property(&CheetahString::from_static_str(
                             MessageConst::PROPERTY_INNER_MULTI_DISPATCH,
                         ))
                         .unwrap_or_default();
-                    let (queue_offset_key, queue_id_key) =
-                        if mix_all::is_lmq(Some(topic.as_str())) && !dispatch.is_empty() {
-                            let queues: Vec<&str> = dispatch
-                                .split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER)
-                                .collect();
-                            let data = message
-                                .get_property(&CheetahString::from_static_str(
-                                    MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET,
-                                ))
-                                .unwrap_or_default();
-                            let queue_offsets: Vec<&str> =
-                                data.split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
-                            let offset = queue_offsets
-                                [queues.iter().position(|&q| q == topic).unwrap()]
+                    let (queue_offset_key, queue_id_key) = if mix_all::is_lmq(Some(topic.as_str()))
+                        && !dispatch.is_empty()
+                    {
+                        let queues: Vec<&str> = dispatch.split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+                        let data = message
+                            .get_property(&CheetahString::from_static_str(
+                                MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET,
+                            ))
+                            .unwrap_or_default();
+                        let queue_offsets: Vec<&str> = data.split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+                        let offset = queue_offsets[queues.iter().position(|&q| q == topic).unwrap()]
                             .parse::<i64>()
                             .unwrap();
-                            let queue_id_key = ExtraInfoUtil::get_start_offset_info_map_key(
-                                topic.as_str(),
-                                mix_all::LMQ_QUEUE_ID as i64,
-                            );
-                            let queue_offset_key = ExtraInfoUtil::get_queue_offset_map_key(
-                                topic.as_str(),
-                                mix_all::LMQ_QUEUE_ID as i64,
-                                offset,
-                            );
-                            let index = sort_map
-                                .get(&queue_id_key)
-                                .unwrap()
-                                .iter()
-                                .position(|&q| q == offset as u64)
-                                .unwrap_or_default();
+                        let queue_id_key =
+                            ExtraInfoUtil::get_start_offset_info_map_key(topic.as_str(), mix_all::LMQ_QUEUE_ID as i64);
+                        let queue_offset_key = ExtraInfoUtil::get_queue_offset_map_key(
+                            topic.as_str(),
+                            mix_all::LMQ_QUEUE_ID as i64,
+                            offset,
+                        );
+                        let index = sort_map
+                            .get(&queue_id_key)
+                            .unwrap()
+                            .iter()
+                            .position(|&q| q == offset as u64)
+                            .unwrap_or_default();
 
-                            let msg_queue_offset = sort_map
-                                .get(&queue_offset_key)
-                                .unwrap()
-                                .get(index)
-                                .cloned()
-                                .unwrap_or_default();
-                            if msg_queue_offset as i64 != offset {
-                                warn!(
-                                    "Queue offset[{}] of msg is strange, not equal to the stored \
-                                     in msg, {:?}",
-                                    msg_queue_offset, message
-                                );
-                            }
-                            let extra_info = ExtraInfoUtil::build_extra_info(
-                                message.queue_offset(),
-                                response_header.pop_time as i64,
-                                response_header.invisible_time as i64,
-                                response_header.revive_qid as i32,
-                                message.get_topic(),
-                                broker_name,
-                                msg_queue_offset as i32,
+                        let msg_queue_offset = sort_map
+                            .get(&queue_offset_key)
+                            .unwrap()
+                            .get(index)
+                            .cloned()
+                            .unwrap_or_default();
+                        if msg_queue_offset as i64 != offset {
+                            warn!(
+                                "Queue offset[{}] of msg is strange, not equal to the stored in msg, {:?}",
+                                msg_queue_offset, message
                             );
-                            message.put_property(
-                                CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK),
-                                CheetahString::from_string(extra_info),
-                            );
-                            (queue_offset_key, queue_id_key)
-                        } else {
-                            let queue_id_key = ExtraInfoUtil::get_start_offset_info_map_key(
-                                message.get_topic(),
-                                message.queue_id() as i64,
-                            );
-                            let queue_offset_key = ExtraInfoUtil::get_queue_offset_map_key(
-                                message.get_topic(),
-                                message.queue_id() as i64,
-                                message.queue_offset(),
-                            );
-                            let queue_offset = message.queue_offset();
-                            let index = sort_map
-                                .get(&queue_id_key)
-                                .unwrap()
-                                .iter()
-                                .position(|&q| q == queue_offset as u64)
-                                .unwrap_or_default();
+                        }
+                        let extra_info = ExtraInfoUtil::build_extra_info(
+                            message.queue_offset(),
+                            response_header.pop_time as i64,
+                            response_header.invisible_time as i64,
+                            response_header.revive_qid as i32,
+                            message.get_topic(),
+                            broker_name,
+                            msg_queue_offset as i32,
+                        );
+                        message.put_property(
+                            CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK),
+                            CheetahString::from_string(extra_info),
+                        );
+                        (queue_offset_key, queue_id_key)
+                    } else {
+                        let queue_id_key = ExtraInfoUtil::get_start_offset_info_map_key(
+                            message.get_topic(),
+                            message.queue_id() as i64,
+                        );
+                        let queue_offset_key = ExtraInfoUtil::get_queue_offset_map_key(
+                            message.get_topic(),
+                            message.queue_id() as i64,
+                            message.queue_offset(),
+                        );
+                        let queue_offset = message.queue_offset();
+                        let index = sort_map
+                            .get(&queue_id_key)
+                            .unwrap()
+                            .iter()
+                            .position(|&q| q == queue_offset as u64)
+                            .unwrap_or_default();
 
-                            let msg_queue_offset = sort_map
-                                .get(&queue_offset_key)
-                                .unwrap()
-                                .get(index)
-                                .cloned()
-                                .unwrap_or_default();
-                            if msg_queue_offset as i64 != queue_offset {
-                                warn!(
-                                    "Queue offset[{}] of msg is strange, not equal to the stored \
-                                     in msg, {:?}",
-                                    msg_queue_offset, message
-                                );
-                            }
-                            let extra_info = ExtraInfoUtil::build_extra_info(
-                                message.queue_offset(),
-                                response_header.pop_time as i64,
-                                response_header.invisible_time as i64,
-                                response_header.revive_qid as i32,
-                                message.get_topic(),
-                                broker_name,
-                                msg_queue_offset as i32,
+                        let msg_queue_offset = sort_map
+                            .get(&queue_offset_key)
+                            .unwrap()
+                            .get(index)
+                            .cloned()
+                            .unwrap_or_default();
+                        if msg_queue_offset as i64 != queue_offset {
+                            warn!(
+                                "Queue offset[{}] of msg is strange, not equal to the stored in msg, {:?}",
+                                msg_queue_offset, message
                             );
-                            message.put_property(
-                                CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK),
-                                CheetahString::from_string(extra_info),
-                            );
-                            (queue_offset_key, queue_id_key)
-                        };
+                        }
+                        let extra_info = ExtraInfoUtil::build_extra_info(
+                            message.queue_offset(),
+                            response_header.pop_time as i64,
+                            response_header.invisible_time as i64,
+                            response_header.revive_qid as i32,
+                            message.get_topic(),
+                            broker_name,
+                            msg_queue_offset as i32,
+                        );
+                        message.put_property(
+                            CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK),
+                            CheetahString::from_string(extra_info),
+                        );
+                        (queue_offset_key, queue_id_key)
+                    };
                     if is_order && !order_count_info.is_empty() {
                         let mut count = order_count_info.get(&queue_offset_key);
                         if count.is_none() {
@@ -2092,11 +1922,7 @@ impl MQClientAPIImpl {
             message.set_topic(
                 NamespaceUtil::without_namespace_with_namespace(
                     topic.as_str(),
-                    self.client_config
-                        .namespace
-                        .clone()
-                        .unwrap_or_default()
-                        .as_str(),
+                    self.client_config.namespace.clone().unwrap_or_default().as_str(),
                 )
                 .into(),
             )
@@ -2111,14 +1937,8 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
         ack_callback: impl AckCallback,
     ) -> rocketmq_error::RocketMQResult<()> {
-        self.ack_message_async_inner(
-            addr,
-            Some(request_header),
-            None,
-            timeout_millis,
-            ack_callback,
-        )
-        .await
+        self.ack_message_async_inner(addr, Some(request_header), None, timeout_millis, ack_callback)
+            .await
     }
 
     pub(self) async fn ack_message_async_inner(
@@ -2185,11 +2005,7 @@ impl MQClientAPIImpl {
             // Make synchronous call with timeout
             let response = self
                 .remoting_client
-                .invoke_request(
-                    Some(&name_server),
-                    request.clone(),
-                    timeout_millis.as_millis() as u64,
-                )
+                .invoke_request(Some(&name_server), request.clone(), timeout_millis.as_millis() as u64)
                 .await?;
             // Check response code
             match ResponseCode::from(response.code()) {
@@ -2202,9 +2018,8 @@ impl MQClientAPIImpl {
                             let properties = if body_str.contains('=') {
                                 mix_all::string_to_properties(&body_str).unwrap_or_default()
                             } else {
-                                SerdeJsonUtils::from_json_str::<
-                                    HashMap<CheetahString, CheetahString>,
-                                >(&body_str).expect("failed to parse JSON")
+                                SerdeJsonUtils::from_json_str::<HashMap<CheetahString, CheetahString>>(&body_str)
+                                    .expect("failed to parse JSON")
                             };
 
                             config_map.insert(name_server.clone(), properties);
@@ -2236,31 +2051,22 @@ fn build_queue_offset_sorted_map(
                 MessageConst::PROPERTY_INNER_MULTI_DISPATCH,
             ))
             .unwrap_or_default();
-        if mix_all::is_lmq(Some(topic))
-            && message_ext.reconsume_times() == 0
-            && !dispatch.is_empty()
-        {
+        if mix_all::is_lmq(Some(topic)) && message_ext.reconsume_times() == 0 && !dispatch.is_empty() {
             // process LMQ
-            let queues: Vec<&str> = dispatch
-                .split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER)
-                .collect();
+            let queues: Vec<&str> = dispatch.split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
             let data = message_ext
                 .get_property(&CheetahString::from_static_str(
                     MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET,
                 ))
                 .unwrap_or_default();
-            let queue_offsets: Vec<&str> =
-                data.split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
+            let queue_offsets: Vec<&str> = data.split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
             // LMQ topic has only 1 queue, which queue id is 0
             key = ExtraInfoUtil::get_start_offset_info_map_key(topic, mix_all::LMQ_QUEUE_ID as i64);
-            sort_map
-                .entry(key)
-                .or_insert_with(|| Vec::with_capacity(4))
-                .push(
-                    queue_offsets[queues.iter().position(|&q| q == topic).unwrap()]
-                        .parse()
-                        .unwrap(),
-                );
+            sort_map.entry(key).or_insert_with(|| Vec::with_capacity(4)).push(
+                queue_offsets[queues.iter().position(|&q| q == topic).unwrap()]
+                    .parse()
+                    .unwrap(),
+            );
             continue;
         }
         // Value of POP_CK is used to determine whether it is a pop retry,
@@ -2268,9 +2074,7 @@ fn build_queue_offset_sorted_map(
         key = ExtraInfoUtil::get_start_offset_info_map_key_with_pop_ck(
             message_ext.get_topic(),
             message_ext
-                .get_property(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_POP_CK,
-                ))
+                .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK))
                 .clone()
                 .as_ref()
                 .map(|item| item.as_str()),

@@ -1,28 +1,25 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use crate::broker_runtime::BrokerRuntimeInner;
 
 use crate::load_balance::message_request_mode_manager::MessageRequestModeManager;
 
 use cheetah_string::CheetahString;
- use rocketmq_client_rust::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
- use rocketmq_client_rust::consumer::rebalance_strategy::allocate_message_queue_averagely::AllocateMessageQueueAveragely;
- use rocketmq_client_rust::consumer::rebalance_strategy::allocate_message_queue_averagely_by_circle::AllocateMessageQueueAveragelyByCircle;
+use rocketmq_client_rust::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
+use rocketmq_client_rust::consumer::rebalance_strategy::allocate_message_queue_averagely::AllocateMessageQueueAveragely;
+use rocketmq_client_rust::consumer::rebalance_strategy::allocate_message_queue_averagely_by_circle::AllocateMessageQueueAveragelyByCircle;
 
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
@@ -38,15 +35,18 @@ use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssi
 use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::protocol::{RemotingDeserializable, RemotingSerializable};
+use rocketmq_remoting::protocol::RemotingDeserializable;
+use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_rust::ArcMut;
 
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_store::base::message_store::MessageStore;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::info;
+use tracing::warn;
 
 /// A processor for handling query assignments in the RocketMQ broker.
 ///
@@ -79,14 +79,10 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
-        info!(
-            "QueryAssignmentProcessor received request code: {:?}",
-            request_code
-        );
+        info!("QueryAssignmentProcessor received request code: {:?}", request_code);
         match request_code {
             RequestCode::QueryAssignment | RequestCode::SetMessageRequestMode => {
-                self.process_request_inner(channel, ctx, request_code, request)
-                    .await
+                self.process_request_inner(channel, ctx, request_code, request).await
             }
             _ => {
                 warn!(
@@ -95,10 +91,7 @@ where
                 );
                 let response = RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::RequestCodeNotSupported,
-                    format!(
-                        "QueryAssignmentProcessor request code {} not supported",
-                        request.code()
-                    ),
+                    format!("QueryAssignmentProcessor request code {} not supported", request.code()),
                 );
                 Ok(Some(response.set_opaque(request.opaque())))
             }
@@ -121,9 +114,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
             CheetahString::from_static_str(allocate_message_queue_averagely_by_circle.get_name()),
             allocate_message_queue_averagely_by_circle,
         );
-        let manager = MessageRequestModeManager::new(Arc::new(
-            broker_runtime_inner.message_store_config().clone(),
-        ));
+        let manager = MessageRequestModeManager::new(Arc::new(broker_runtime_inner.message_store_config().clone()));
         let _ = manager.load();
         Self {
             message_request_mode_manager: manager,
@@ -147,9 +138,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match request_code {
             RequestCode::QueryAssignment => self.query_assignment(channel, ctx, request).await,
-            RequestCode::SetMessageRequestMode => {
-                self.set_message_request_mode(channel, ctx, request).await
-            }
+            RequestCode::SetMessageRequestMode => self.set_message_request_mode(channel, ctx, request).await,
             _ => Ok(None),
         }
     }
@@ -175,40 +164,32 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         if request.get_body().is_none() {
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::SystemError,
-                    "empty body",
-                ),
-            ));
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SystemError,
+                "empty body",
+            )));
         }
         // Safe to unwrap: already checked is_none() above
         let request_body = QueryAssignmentRequestBody::decode(request.get_body().unwrap())?;
 
         // Validate required fields
         if request_body.topic.is_empty() {
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::SystemError,
-                    "topic is empty",
-                ),
-            ));
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SystemError,
+                "topic is empty",
+            )));
         }
         if request_body.consumer_group.is_empty() {
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::SystemError,
-                    "consumerGroup is empty",
-                ),
-            ));
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SystemError,
+                "consumerGroup is empty",
+            )));
         }
         if request_body.client_id.is_empty() {
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::SystemError,
-                    "clientId is empty",
-                ),
-            ));
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SystemError,
+                "clientId is empty",
+            )));
         }
 
         let set_message_request_mode_request_body = self
@@ -216,9 +197,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
             .get_message_request_mode(&request_body.topic, &request_body.consumer_group);
 
         let set_message_request_mode_request_body =
-            if let Some(set_message_request_mode_request_body) =
-                set_message_request_mode_request_body
-            {
+            if let Some(set_message_request_mode_request_body) = set_message_request_mode_request_body {
                 set_message_request_mode_request_body
             } else {
                 let mut body = SetMessageRequestModeRequestBody {
@@ -230,16 +209,10 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
                     // retry topic must be pull mode
                     body.mode = MessageRequestMode::Pull;
                 } else {
-                    body.mode = self
-                        .broker_runtime_inner
-                        .broker_config()
-                        .default_message_request_mode;
+                    body.mode = self.broker_runtime_inner.broker_config().default_message_request_mode;
                 }
                 if body.mode == MessageRequestMode::Pop {
-                    body.pop_share_queue_num = self
-                        .broker_runtime_inner
-                        .broker_config()
-                        .default_pop_share_queue_num;
+                    body.pop_share_queue_num = self.broker_runtime_inner.broker_config().default_pop_share_queue_num;
                 }
                 body
             };
@@ -353,10 +326,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
                     let mut set = HashSet::new();
                     let queue = MessageQueue::from_parts(
                         topic.clone(),
-                        self.broker_runtime_inner
-                            .broker_config()
-                            .broker_name()
-                            .clone(),
+                        self.broker_runtime_inner.broker_config().broker_name().clone(),
                         mix_all::LMQ_QUEUE_ID as i32,
                     );
                     set.insert(queue);
@@ -378,11 +348,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
                     return None;
                 }
 
-                if !self
-                    .broker_runtime_inner
-                    .broker_config()
-                    .server_load_balancer_enable
-                {
+                if !self.broker_runtime_inner.broker_config().server_load_balancer_enable {
                     return mq_set;
                 }
                 // get all consumer ids for the consumer group
@@ -390,12 +356,10 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
                     .broker_runtime_inner
                     .consumer_manager()
                     .get_consumer_group_info(consumer_group);
-                let mut cid_all =
-                    consumer_group_info.map_or_else(Vec::new, |info| info.get_all_client_ids());
+                let mut cid_all = consumer_group_info.map_or_else(Vec::new, |info| info.get_all_client_ids());
                 if cid_all.is_empty() {
                     warn!(
-                        "QueryLoad: no assignment for group[{}] topic[{}], get consumer id list \
-                         failed",
+                        "QueryLoad: no assignment for group[{}] topic[{}], get consumer id list failed",
                         consumer_group, topic
                     );
                     return None;
@@ -417,29 +381,23 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
                 }
                 // Safe to unwrap here: already checked strategy.is_none() above
                 let strategy = strategy.unwrap();
-                let result =
-                    if set_message_request_mode_request_body.mode == MessageRequestMode::Pop {
-                        // allocate message queues for pop mode
-                        self.allocate_for_pop(
-                            strategy,
-                            consumer_group,
-                            client_id,
-                            mq_all.as_slice(),
-                            cid_all.as_slice(),
-                            set_message_request_mode_request_body.pop_share_queue_num,
-                        )
-                    } else {
-                        // allocate message queues for pull mode
-                        match strategy.allocate(
-                            consumer_group,
-                            client_id,
-                            mq_all.as_slice(),
-                            cid_all.as_slice(),
-                        ) {
-                            Ok(value) => Ok(value.into_iter().collect::<HashSet<MessageQueue>>()),
-                            Err(e) => Err(e),
-                        }
-                    };
+                let result = if set_message_request_mode_request_body.mode == MessageRequestMode::Pop {
+                    // allocate message queues for pop mode
+                    self.allocate_for_pop(
+                        strategy,
+                        consumer_group,
+                        client_id,
+                        mq_all.as_slice(),
+                        cid_all.as_slice(),
+                        set_message_request_mode_request_body.pop_share_queue_num,
+                    )
+                } else {
+                    // allocate message queues for pull mode
+                    match strategy.allocate(consumer_group, client_id, mq_all.as_slice(), cid_all.as_slice()) {
+                        Ok(value) => Ok(value.into_iter().collect::<HashSet<MessageQueue>>()),
+                        Err(e) => Err(e),
+                    }
+                };
                 result.ok()
             }
         }
@@ -460,32 +418,22 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
             //each client pop all message queue
             Ok(mq_all
                 .iter()
-                .map(|mq| {
-                    MessageQueue::from_parts(
-                        mq.get_topic_cs().clone(),
-                        mq.get_broker_name().clone(),
-                        -1,
-                    )
-                })
+                .map(|mq| MessageQueue::from_parts(mq.get_topic_cs().clone(), mq.get_broker_name().clone(), -1))
                 .collect::<HashSet<MessageQueue>>())
         } else if cid_all.len() <= mq_all.len() {
             //consumer working in pop mode could share the MessageQueues assigned to
             // the N (N = popWorkGroupSize) consumer following it in the cid list
-            let mut allocate_result =
-                strategy.allocate(consumer_group, current_cid, mq_all, cid_all)?;
+            let mut allocate_result = strategy.allocate(consumer_group, current_cid, mq_all, cid_all)?;
             let index = cid_all.iter().position(|cid| cid == current_cid);
             if let Some(mut index) = index {
                 for _i in 1..=pop_share_queue_num {
                     index += 1;
                     index %= cid_all.len();
-                    let result =
-                        strategy.allocate(consumer_group, &cid_all[index], mq_all, cid_all)?;
+                    let result = strategy.allocate(consumer_group, &cid_all[index], mq_all, cid_all)?;
                     allocate_result.extend(result);
                 }
             }
-            Ok(allocate_result
-                .into_iter()
-                .collect::<HashSet<MessageQueue>>())
+            Ok(allocate_result.into_iter().collect::<HashSet<MessageQueue>>())
         } else {
             //make sure each cid is assigned
             allocate(consumer_group, current_cid, mq_all, cid_all)
@@ -499,21 +447,17 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         if request.get_body().is_none() {
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::SystemError,
-                    "empty body",
-                ),
-            ));
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SystemError,
+                "empty body",
+            )));
         }
         // Safe to unwrap: already checked is_none() above
         let request_body = SetMessageRequestModeRequestBody::decode(request.get_body().unwrap())?;
         if request_body.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
             return Ok(Some(
                 RemotingCommand::create_response_command_with_code(ResponseCode::NoPermission)
-                    .set_remark(CheetahString::from_static_str(
-                        "retry topic is not allowed to set mode",
-                    )),
+                    .set_remark(CheetahString::from_static_str("retry topic is not allowed to set mode")),
             ));
         }
         self.message_request_mode_manager.set_message_request_mode(
@@ -635,10 +579,7 @@ mod tests {
             MessageQueue::from_parts("topic", "broker", 0),
             MessageQueue::from_parts("topic", "broker", 1),
         ];
-        let cid_all = vec![
-            CheetahString::from("consumer1"),
-            CheetahString::from("consumer2"),
-        ];
+        let cid_all = vec![CheetahString::from("consumer1"), CheetahString::from("consumer2")];
 
         let result = allocate(&consumer_group, &current_cid, &mq_all, &cid_all).unwrap();
         assert_eq!(result.len(), 1);
@@ -679,10 +620,7 @@ mod tests {
             MessageQueue::from_parts("topic", "broker", 2),
             MessageQueue::from_parts("topic", "broker", 3),
         ];
-        let cid_all = vec![
-            CheetahString::from("consumer1"),
-            CheetahString::from("consumer2"),
-        ];
+        let cid_all = vec![CheetahString::from("consumer1"), CheetahString::from("consumer2")];
         let strategy = Arc::new(AllocateMessageQueueAveragely);
 
         let result = strategy
@@ -701,10 +639,7 @@ mod tests {
             MessageQueue::from_parts("topic", "broker", 1),
             MessageQueue::from_parts("topic", "broker", 2),
         ];
-        let cid_all = vec![
-            CheetahString::from("consumer1"),
-            CheetahString::from("consumer2"),
-        ];
+        let cid_all = vec![CheetahString::from("consumer1"), CheetahString::from("consumer2")];
         let strategy = Arc::new(AllocateMessageQueueAveragelyByCircle);
 
         let result = strategy

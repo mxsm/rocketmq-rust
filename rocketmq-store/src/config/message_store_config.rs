@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -34,12 +31,7 @@ mod defaults {
     use super::*;
 
     pub fn store_path_root_dir() -> CheetahString {
-        USER_HOME
-            .clone()
-            .join("store")
-            .to_string_lossy()
-            .to_string()
-            .into()
+        USER_HOME.clone().join("store").to_string_lossy().to_string().into()
     }
 
     pub fn mapped_file_size_commit_log() -> usize {
@@ -817,11 +809,7 @@ pub struct MessageStoreConfig {
 
 impl Default for MessageStoreConfig {
     fn default() -> Self {
-        let store_path_root_dir = USER_HOME
-            .clone()
-            .join("store")
-            .to_string_lossy()
-            .to_string();
+        let store_path_root_dir = USER_HOME.clone().join("store").to_string_lossy().to_string();
         Self {
             store_path_root_dir: store_path_root_dir.into(),
             store_path_commit_log: None,
@@ -914,8 +902,7 @@ impl Default for MessageStoreConfig {
             sync_flush_timeout: 1000 * 5,
             put_message_timeout: 0,
             slave_timeout: 0,
-            message_delay_level: "1s 5s 10s 30s 1m 2m 3m 4m 5m 6m 7m 8m 9m 10m 20m 30m 1h 2h"
-                .to_string(),
+            message_delay_level: "1s 5s 10s 30s 1m 2m 3m 4m 5m 6m 7m 8m 9m 10m 20m 30m 1h 2h".to_string(),
             flush_delay_offset_interval: 10_000,
             clean_file_forcibly_enable: false,
             warm_mapped_file_enable: false,
@@ -1024,8 +1011,7 @@ impl MessageStoreConfig {
     }
 
     pub fn get_mapped_file_size_consume_queue(&self) -> i32 {
-        let factor = (self.mapped_file_size_consume_queue as f64 / (CQ_STORE_UNIT_SIZE as f64))
-            .ceil() as i32;
+        let factor = (self.mapped_file_size_consume_queue as f64 / (CQ_STORE_UNIT_SIZE as f64)).ceil() as i32;
         factor * CQ_STORE_UNIT_SIZE
     }
     pub fn is_timer_wheel_enable(&self) -> bool {
@@ -1040,10 +1026,7 @@ impl MessageStoreConfig {
         );
         properties.insert(
             "storePathCommitLog".to_string(),
-            self.store_path_commit_log
-                .clone()
-                .unwrap_or_default()
-                .to_string(),
+            self.store_path_commit_log.clone().unwrap_or_default().to_string(),
         );
         properties.insert(
             "storePathDledgerCommitLog".to_string(),
@@ -1054,17 +1037,11 @@ impl MessageStoreConfig {
         );
         properties.insert(
             "storePathEpochFile".to_string(),
-            self.store_path_epoch_file
-                .clone()
-                .unwrap_or_default()
-                .to_string(),
+            self.store_path_epoch_file.clone().unwrap_or_default().to_string(),
         );
         properties.insert(
             "storePathBrokerIdentity".to_string(),
-            self.store_path_broker_identity
-                .clone()
-                .unwrap_or_default()
-                .to_string(),
+            self.store_path_broker_identity.clone().unwrap_or_default().to_string(),
         );
         properties.insert(
             "readOnlyCommitLogStorePaths".to_string(),
@@ -1089,26 +1066,17 @@ impl MessageStoreConfig {
             "compactionScheduleInternal".to_string(),
             self.compaction_schedule_internal.to_string(),
         );
-        properties.insert(
-            "maxOffsetMapSize".to_string(),
-            self.max_offset_map_size.to_string(),
-        );
+        properties.insert("maxOffsetMapSize".to_string(), self.max_offset_map_size.to_string());
         properties.insert(
             "compactionThreadNum".to_string(),
             self.compaction_thread_num.to_string(),
         );
-        properties.insert(
-            "enableCompaction".to_string(),
-            self.enable_compaction.to_string(),
-        );
+        properties.insert("enableCompaction".to_string(), self.enable_compaction.to_string());
         properties.insert(
             "mappedFileSizeTimerLog".to_string(),
             self.mapped_file_size_timer_log.to_string(),
         );
-        properties.insert(
-            "timerPrecisionMs".to_string(),
-            self.timer_precision_ms.to_string(),
-        );
+        properties.insert("timerPrecisionMs".to_string(), self.timer_precision_ms.to_string());
         properties.insert(
             "timerRollWindowSlot".to_string(),
             self.timer_roll_window_slot.to_string(),
@@ -1137,22 +1105,13 @@ impl MessageStoreConfig {
             "timerInterceptDelayLevel".to_string(),
             self.timer_intercept_delay_level.to_string(),
         );
-        properties.insert(
-            "timerMaxDelaySec".to_string(),
-            self.timer_max_delay_sec.to_string(),
-        );
-        properties.insert(
-            "timerWheelEnable".to_string(),
-            self.timer_wheel_enable.to_string(),
-        );
+        properties.insert("timerMaxDelaySec".to_string(), self.timer_max_delay_sec.to_string());
+        properties.insert("timerWheelEnable".to_string(), self.timer_wheel_enable.to_string());
         properties.insert(
             "disappearTimeAfterStart".to_string(),
             self.disappear_time_after_start.to_string(),
         );
-        properties.insert(
-            "timerStopEnqueue".to_string(),
-            self.timer_stop_enqueue.to_string(),
-        );
+        properties.insert("timerStopEnqueue".to_string(), self.timer_stop_enqueue.to_string());
         properties.insert(
             "timerCheckMetricsWhen".to_string(),
             self.timer_check_metrics_when.clone(),
@@ -1161,14 +1120,8 @@ impl MessageStoreConfig {
             "timerSkipUnknownError".to_string(),
             self.timer_skip_unknown_error.to_string(),
         );
-        properties.insert(
-            "timerWarmEnable".to_string(),
-            self.timer_warm_enable.to_string(),
-        );
-        properties.insert(
-            "timerStopDequeue".to_string(),
-            self.timer_stop_dequeue.to_string(),
-        );
+        properties.insert("timerWarmEnable".to_string(), self.timer_warm_enable.to_string());
+        properties.insert("timerStopDequeue".to_string(), self.timer_stop_dequeue.to_string());
         properties.insert(
             "timerCongestNumEachSlot".to_string(),
             self.timer_congest_num_each_slot.to_string(),
@@ -1181,10 +1134,7 @@ impl MessageStoreConfig {
             "timerProgressLogIntervalMs".to_string(),
             self.timer_progress_log_interval_ms.to_string(),
         );
-        properties.insert(
-            "storeType".to_string(),
-            self.store_type.get_store_type().to_string(),
-        );
+        properties.insert("storeType".to_string(), self.store_type.get_store_type().to_string());
         properties.insert(
             "mappedFileSizeConsumeQueue".to_string(),
             self.mapped_file_size_consume_queue.to_string(),
@@ -1262,26 +1212,14 @@ impl MessageStoreConfig {
             "diskMaxUsedSpaceRatio".to_string(),
             self.disk_max_used_space_ratio.to_string(),
         );
-        properties.insert(
-            "fileReservedTime".to_string(),
-            self.file_reserved_time.to_string(),
-        );
-        properties.insert(
-            "deleteFileBatchMax".to_string(),
-            self.delete_file_batch_max.to_string(),
-        );
+        properties.insert("fileReservedTime".to_string(), self.file_reserved_time.to_string());
+        properties.insert("deleteFileBatchMax".to_string(), self.delete_file_batch_max.to_string());
         properties.insert(
             "putMsgIndexHightWater".to_string(),
             self.put_msg_index_hight_water.to_string(),
         );
-        properties.insert(
-            "maxMessageSize".to_string(),
-            self.max_message_size.to_string(),
-        );
-        properties.insert(
-            "checkCrcOnRecover".to_string(),
-            self.check_crc_on_recover.to_string(),
-        );
+        properties.insert("maxMessageSize".to_string(), self.max_message_size.to_string());
+        properties.insert("checkCrcOnRecover".to_string(), self.check_crc_on_recover.to_string());
         properties.insert(
             "flushCommitLogLeastPages".to_string(),
             self.flush_commit_log_least_pages.to_string(),
@@ -1330,23 +1268,11 @@ impl MessageStoreConfig {
             "accessMessageInMemoryMaxRatio".to_string(),
             self.access_message_in_memory_max_ratio.to_string(),
         );
-        properties.insert(
-            "messageIndexEnable".to_string(),
-            self.message_index_enable.to_string(),
-        );
-        properties.insert(
-            "maxHashSlotNum".to_string(),
-            self.max_hash_slot_num.to_string(),
-        );
+        properties.insert("messageIndexEnable".to_string(), self.message_index_enable.to_string());
+        properties.insert("maxHashSlotNum".to_string(), self.max_hash_slot_num.to_string());
         properties.insert("maxIndexNum".to_string(), self.max_index_num.to_string());
-        properties.insert(
-            "maxMsgsNumBatch".to_string(),
-            self.max_msgs_num_batch.to_string(),
-        );
-        properties.insert(
-            "messageIndexSafe".to_string(),
-            self.message_index_safe.to_string(),
-        );
+        properties.insert("maxMsgsNumBatch".to_string(), self.max_msgs_num_batch.to_string());
+        properties.insert("messageIndexSafe".to_string(), self.message_index_safe.to_string());
         properties.insert("haListenPort".to_string(), self.ha_listen_port.to_string());
         properties.insert(
             "haSendHeartbeatInterval".to_string(),
@@ -1364,31 +1290,16 @@ impl MessageStoreConfig {
             "haMasterAddress".to_string(),
             self.ha_master_address.clone().unwrap_or_default(),
         );
-        properties.insert(
-            "haMaxGapNotInSync".to_string(),
-            self.ha_max_gap_not_in_sync.to_string(),
-        );
-        properties.insert(
-            "brokerRole".to_string(),
-            self.broker_role.get_broker_role().to_string(),
-        );
+        properties.insert("haMaxGapNotInSync".to_string(), self.ha_max_gap_not_in_sync.to_string());
+        properties.insert("brokerRole".to_string(), self.broker_role.get_broker_role().to_string());
         properties.insert(
             "flushDiskType".to_string(),
             self.flush_disk_type.get_flush_disk_type().to_string(),
         );
-        properties.insert(
-            "syncFlushTimeout".to_string(),
-            self.sync_flush_timeout.to_string(),
-        );
-        properties.insert(
-            "putMessageTimeout".to_string(),
-            self.put_message_timeout.to_string(),
-        );
+        properties.insert("syncFlushTimeout".to_string(), self.sync_flush_timeout.to_string());
+        properties.insert("putMessageTimeout".to_string(), self.put_message_timeout.to_string());
         properties.insert("slaveTimeout".to_string(), self.slave_timeout.to_string());
-        properties.insert(
-            "messageDelayLevel".to_string(),
-            self.message_delay_level.clone(),
-        );
+        properties.insert("messageDelayLevel".to_string(), self.message_delay_level.clone());
         properties.insert(
             "flushDelayOffsetInterval".to_string(),
             self.flush_delay_offset_interval.to_string(),
@@ -1401,30 +1312,15 @@ impl MessageStoreConfig {
             "warmMappedFileEnable".to_string(),
             self.warm_mapped_file_enable.to_string(),
         );
-        properties.insert(
-            "offsetCheckInSlave".to_string(),
-            self.offset_check_in_slave.to_string(),
-        );
-        properties.insert(
-            "debugLockEnable".to_string(),
-            self.debug_lock_enable.to_string(),
-        );
-        properties.insert(
-            "duplicationEnable".to_string(),
-            self.duplication_enable.to_string(),
-        );
-        properties.insert(
-            "diskFallRecorded".to_string(),
-            self.disk_fall_recorded.to_string(),
-        );
+        properties.insert("offsetCheckInSlave".to_string(), self.offset_check_in_slave.to_string());
+        properties.insert("debugLockEnable".to_string(), self.debug_lock_enable.to_string());
+        properties.insert("duplicationEnable".to_string(), self.duplication_enable.to_string());
+        properties.insert("diskFallRecorded".to_string(), self.disk_fall_recorded.to_string());
         properties.insert(
             "osPageCacheBusyTimeoutMills".to_string(),
             self.os_page_cache_busy_timeout_mills.to_string(),
         );
-        properties.insert(
-            "defaultQueryMaxNum".to_string(),
-            self.default_query_max_num.to_string(),
-        );
+        properties.insert("defaultQueryMaxNum".to_string(), self.default_query_max_num.to_string());
         properties.insert(
             "transientStorePoolEnable".to_string(),
             self.transient_store_pool_enable.to_string(),
@@ -1457,10 +1353,7 @@ impl MessageStoreConfig {
             "preferredLeaderId".to_string(),
             self.preferred_leader_id.clone().unwrap_or_default(),
         );
-        properties.insert(
-            "enableBatchPush".to_string(),
-            self.enable_batch_push.to_string(),
-        );
+        properties.insert("enableBatchPush".to_string(), self.enable_batch_push.to_string());
         properties.insert(
             "enableScheduleMessageStats".to_string(),
             self.enable_schedule_message_stats.to_string(),
@@ -1484,33 +1377,20 @@ impl MessageStoreConfig {
         );
         properties.insert(
             "scheduleAsyncDeliverMaxResendNum2Blocked".to_string(),
-            self.schedule_async_deliver_max_resend_num2_blocked
-                .to_string(),
+            self.schedule_async_deliver_max_resend_num2_blocked.to_string(),
         );
         properties.insert(
             "maxBatchDeleteFilesNum".to_string(),
             self.max_batch_delete_files_num.to_string(),
         );
-        properties.insert(
-            "dispatchCqThreads".to_string(),
-            self.dispatch_cq_threads.to_string(),
-        );
-        properties.insert(
-            "dispatchCqCacheNum".to_string(),
-            self.dispatch_cq_cache_num.to_string(),
-        );
-        properties.insert(
-            "enableAsyncReput".to_string(),
-            self.enable_async_reput.to_string(),
-        );
+        properties.insert("dispatchCqThreads".to_string(), self.dispatch_cq_threads.to_string());
+        properties.insert("dispatchCqCacheNum".to_string(), self.dispatch_cq_cache_num.to_string());
+        properties.insert("enableAsyncReput".to_string(), self.enable_async_reput.to_string());
         properties.insert(
             "recheckReputOffsetFromCq".to_string(),
             self.recheck_reput_offset_from_cq.to_string(),
         );
-        properties.insert(
-            "maxTopicLength".to_string(),
-            self.max_topic_length.to_string(),
-        );
+        properties.insert("maxTopicLength".to_string(), self.max_topic_length.to_string());
         properties.insert(
             "autoMessageVersionOnTopicLen".to_string(),
             self.auto_message_version_on_topic_len.to_string(),
@@ -1519,10 +1399,7 @@ impl MessageStoreConfig {
             "enabledAppendPropCrc".to_string(),
             self.enabled_append_prop_crc.to_string(),
         );
-        properties.insert(
-            "forceVerifyPropCrc".to_string(),
-            self.force_verify_prop_crc.to_string(),
-        );
+        properties.insert("forceVerifyPropCrc".to_string(), self.force_verify_prop_crc.to_string());
         properties.insert(
             "travelCqFileNumWhenGetMessage".to_string(),
             self.travel_cq_file_num_when_get_message.to_string(),
@@ -1596,14 +1473,8 @@ impl MessageStoreConfig {
             self.pull_batch_max_message_count.to_string(),
         );
         properties.insert("totalReplicas".to_string(), self.total_replicas.to_string());
-        properties.insert(
-            "inSyncReplicas".to_string(),
-            self.in_sync_replicas.to_string(),
-        );
-        properties.insert(
-            "minInSyncReplicas".to_string(),
-            self.min_in_sync_replicas.to_string(),
-        );
+        properties.insert("inSyncReplicas".to_string(), self.in_sync_replicas.to_string());
+        properties.insert("minInSyncReplicas".to_string(), self.min_in_sync_replicas.to_string());
         properties.insert(
             "allAckInSyncStateSet".to_string(),
             self.all_ack_in_sync_state_set.to_string(),
@@ -1628,10 +1499,7 @@ impl MessageStoreConfig {
             "syncMasterFlushOffsetWhenStartup".to_string(),
             self.sync_master_flush_offset_when_startup.to_string(),
         );
-        properties.insert(
-            "maxChecksumRange".to_string(),
-            self.max_checksum_range.to_string(),
-        );
+        properties.insert("maxChecksumRange".to_string(), self.max_checksum_range.to_string());
         properties.insert(
             "replicasPerDiskPartition".to_string(),
             self.replicas_per_disk_partition.to_string(),
@@ -1644,10 +1512,7 @@ impl MessageStoreConfig {
             "maxSlaveResendLength".to_string(),
             self.max_slave_resend_length.to_string(),
         );
-        properties.insert(
-            "syncFromLastFile".to_string(),
-            self.sync_from_last_file.to_string(),
-        );
+        properties.insert("syncFromLastFile".to_string(), self.sync_from_last_file.to_string());
         properties.insert("asyncLearner".to_string(), self.async_learner.to_string());
         properties.insert(
             "maxConsumeQueueScan".to_string(),
@@ -1661,10 +1526,7 @@ impl MessageStoreConfig {
             "coldDataFlowControlEenable".to_string(),
             self.cold_data_flow_control_enable.to_string(),
         );
-        properties.insert(
-            "coldDataScanEnable".to_string(),
-            self.cold_data_scan_enable.to_string(),
-        );
+        properties.insert("coldDataScanEnable".to_string(), self.cold_data_scan_enable.to_string());
         properties.insert(
             "dataReadAheadEnable".to_string(),
             self.data_read_ahead_enable.to_string(),
@@ -1702,18 +1564,9 @@ impl MessageStoreConfig {
             "realTimePersistRocksdbConfig".into(),
             self.real_time_persist_rocksdb_config.to_string(),
         );
-        properties.insert(
-            "enableRocksdbLog".into(),
-            self.enable_rocksdb_log.to_string(),
-        );
-        properties.insert(
-            "topicQueueLockNum".into(),
-            self.topic_queue_lock_num.to_string(),
-        );
-        properties.insert(
-            "maxFilterMessageSize".into(),
-            self.max_filter_message_size.to_string(),
-        );
+        properties.insert("enableRocksdbLog".into(), self.enable_rocksdb_log.to_string());
+        properties.insert("topicQueueLockNum".into(), self.topic_queue_lock_num.to_string());
+        properties.insert("maxFilterMessageSize".into(), self.max_filter_message_size.to_string());
         properties
             .into_iter()
             .map(|(k, v)| (k.into(), v.into()))

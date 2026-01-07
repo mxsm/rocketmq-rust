@@ -1,41 +1,31 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::env;
 
-pub const POOLED_BYTE_BUF_ALLOCATOR_ENABLE: &str =
-    "com.rocketmq.rocketmq-remoting.nettyPooledByteBufAllocatorEnable";
+pub const POOLED_BYTE_BUF_ALLOCATOR_ENABLE: &str = "com.rocketmq.rocketmq-remoting.nettyPooledByteBufAllocatorEnable";
 pub const SOCKET_SNDBUF_SIZE: &str = "com.rocketmq.rocketmq-remoting.socket.sndbuf.size";
 pub const SOCKET_RCVBUF_SIZE: &str = "com.rocketmq.rocketmq-remoting.socket.rcvbuf.size";
 pub const SOCKET_BACKLOG: &str = "com.rocketmq.rocketmq-remoting.socket.backlog";
-pub const CLIENT_ASYNC_SEMAPHORE_VALUE: &str =
-    "com.rocketmq.rocketmq-remoting.clientAsyncSemaphoreValue";
-pub const CLIENT_ONEWAY_SEMAPHORE_VALUE: &str =
-    "com.rocketmq.rocketmq-remoting.clientOnewaySemaphoreValue";
+pub const CLIENT_ASYNC_SEMAPHORE_VALUE: &str = "com.rocketmq.rocketmq-remoting.clientAsyncSemaphoreValue";
+pub const CLIENT_ONEWAY_SEMAPHORE_VALUE: &str = "com.rocketmq.rocketmq-remoting.clientOnewaySemaphoreValue";
 pub const CLIENT_WORKER_SIZE: &str = "com.rocketmq.rocketmq-remoting.client.worker.size";
 pub const CLIENT_CONNECT_TIMEOUT: &str = "com.rocketmq.rocketmq-remoting.client.connect.timeout";
-pub const CLIENT_CHANNEL_MAX_IDLE_SECONDS: &str =
-    "com.rocketmq.rocketmq-remoting.client.channel.maxIdleTimeSeconds";
-pub const CLIENT_CLOSE_SOCKET_IF_TIMEOUT: &str =
-    "com.rocketmq.rocketmq-remoting.client.closeSocketIfTimeout";
-pub const WRITE_BUFFER_HIGH_WATER_MARK_VALUE: &str =
-    "com.rocketmq.rocketmq-remoting.write.buffer.high.water.mark";
-pub const WRITE_BUFFER_LOW_WATER_MARK: &str =
-    "com.rocketmq.rocketmq-remoting.write.buffer.low.water.mark";
+pub const CLIENT_CHANNEL_MAX_IDLE_SECONDS: &str = "com.rocketmq.rocketmq-remoting.client.channel.maxIdleTimeSeconds";
+pub const CLIENT_CLOSE_SOCKET_IF_TIMEOUT: &str = "com.rocketmq.rocketmq-remoting.client.closeSocketIfTimeout";
+pub const WRITE_BUFFER_HIGH_WATER_MARK_VALUE: &str = "com.rocketmq.rocketmq-remoting.write.buffer.high.water.mark";
+pub const WRITE_BUFFER_LOW_WATER_MARK: &str = "com.rocketmq.rocketmq-remoting.write.buffer.low.water.mark";
 
 pub(crate) struct NetSystemConfig {
     pub(crate) pooled_byte_buf_allocator_enable: bool,

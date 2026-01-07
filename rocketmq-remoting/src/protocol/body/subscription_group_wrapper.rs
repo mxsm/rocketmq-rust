@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 
@@ -109,10 +106,9 @@ impl<'de> Deserialize<'de> for SubscriptionGroupWrapper {
                     }
                 }
 
-                let subscription_group_table = subscription_group_table
-                    .ok_or_else(|| de::Error::missing_field("subscriptionGroupTable"))?;
-                let data_version =
-                    data_version.ok_or_else(|| de::Error::missing_field("dataVersion"))?;
+                let subscription_group_table =
+                    subscription_group_table.ok_or_else(|| de::Error::missing_field("subscriptionGroupTable"))?;
+                let data_version = data_version.ok_or_else(|| de::Error::missing_field("dataVersion"))?;
 
                 // Convert HashMap to DashMap with Arc-wrapped values
                 let dash_map = DashMap::new();
@@ -128,11 +124,7 @@ impl<'de> Deserialize<'de> for SubscriptionGroupWrapper {
         }
 
         const FIELDS: &[&str] = &["subscriptionGroupTable", "dataVersion"];
-        deserializer.deserialize_struct(
-            "SubscriptionGroupWrapper",
-            FIELDS,
-            SubscriptionGroupWrapperVisitor,
-        )
+        deserializer.deserialize_struct("SubscriptionGroupWrapper", FIELDS, SubscriptionGroupWrapperVisitor)
     }
 }
 
@@ -150,16 +142,11 @@ impl SubscriptionGroupWrapper {
         }
     }
 
-    pub fn get_subscription_group_table(
-        &self,
-    ) -> &DashMap<CheetahString, Arc<SubscriptionGroupConfig>> {
+    pub fn get_subscription_group_table(&self) -> &DashMap<CheetahString, Arc<SubscriptionGroupConfig>> {
         &self.subscription_group_table
     }
 
-    pub fn set_subscription_group_table(
-        &mut self,
-        table: DashMap<CheetahString, Arc<SubscriptionGroupConfig>>,
-    ) {
+    pub fn set_subscription_group_table(&mut self, table: DashMap<CheetahString, Arc<SubscriptionGroupConfig>>) {
         self.subscription_group_table = table;
     }
 
@@ -188,10 +175,9 @@ mod tests {
     #[test]
     fn get_subscription_group_table_returns_reference() {
         let wrapper = SubscriptionGroupWrapper::new();
-        wrapper.subscription_group_table.insert(
-            "test_group".into(),
-            Arc::new(SubscriptionGroupConfig::default()),
-        );
+        wrapper
+            .subscription_group_table
+            .insert("test_group".into(), Arc::new(SubscriptionGroupConfig::default()));
 
         let table = wrapper.get_subscription_group_table();
         assert_eq!(table.len(), 1);

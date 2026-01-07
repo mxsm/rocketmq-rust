@@ -20,10 +20,7 @@ pub struct BrokerAddrInfo {
 }
 
 impl BrokerAddrInfo {
-    pub fn new(
-        cluster_name: impl Into<CheetahString>,
-        broker_addr: impl Into<CheetahString>,
-    ) -> Self {
+    pub fn new(cluster_name: impl Into<CheetahString>, broker_addr: impl Into<CheetahString>) -> Self {
         Self {
             cluster_name: cluster_name.into(),
             broker_addr: broker_addr.into(),
@@ -176,12 +173,11 @@ mod tests {
     fn broker_status_change_info_display_format() {
         let mut broker_addrs = HashMap::new();
         broker_addrs.insert(1, "192.168.1.1".into());
-        let broker_status_info =
-            BrokerStatusChangeInfo::new(broker_addrs, "192.168.1.2".into(), "192.168.1.3".into());
+        let broker_status_info = BrokerStatusChangeInfo::new(broker_addrs, "192.168.1.2".into(), "192.168.1.3".into());
         assert_eq!(
             format!("{}", broker_status_info),
-            "Broker Addresses: {1: \"192.168.1.1\"}, Offline Broker Address: 192.168.1.2, HA \
-             Broker Address: 192.168.1.3"
+            "Broker Addresses: {1: \"192.168.1.1\"}, Offline Broker Address: 192.168.1.2, HA Broker Address: \
+             192.168.1.3"
         );
     }
 

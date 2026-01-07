@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::LinkedList;
 use std::fmt;
@@ -125,11 +122,7 @@ impl StatsItem {
     pub fn sampling_in_seconds(&self) {
         let current_value = self.value.load(Ordering::Relaxed);
         let current_times = self.times.load(Ordering::Relaxed);
-        Self::sampling_in_seconds_internal(
-            Arc::clone(&self.cs_list_minute),
-            current_value,
-            current_times,
-        );
+        Self::sampling_in_seconds_internal(Arc::clone(&self.cs_list_minute), current_value, current_times);
     }
 
     /// Perform minute-level sampling
@@ -176,11 +169,7 @@ impl StatsItem {
         }
     }
 
-    pub fn sampling_in_minutes(
-        cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>,
-        current_value: u64,
-        current_times: u64,
-    ) {
+    pub fn sampling_in_minutes(cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>, current_value: u64, current_times: u64) {
         let mut cs_list = cs_list.lock();
         if cs_list.is_empty() {
             cs_list.push_back(CallSnapshot::new(
@@ -206,11 +195,7 @@ impl StatsItem {
         }
     }
 
-    pub fn sampling_in_hour(
-        cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>,
-        current_value: u64,
-        current_times: u64,
-    ) {
+    pub fn sampling_in_hour(cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>, current_value: u64, current_times: u64) {
         let mut cs_list = cs_list.lock();
         if cs_list.is_empty() {
             cs_list.push_back(CallSnapshot::new(
@@ -236,11 +221,7 @@ impl StatsItem {
         }
     }
 
-    pub fn print_at_minutes(
-        stats_name: &str,
-        stats_key: &str,
-        cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>,
-    ) {
+    pub fn print_at_minutes(stats_name: &str, stats_key: &str, cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>) {
         let ss = Self::compute_stats_data(cs_list);
         info!(
             "[{}] [{}] Stats In One Minute, {}",
@@ -250,11 +231,7 @@ impl StatsItem {
         );
     }
 
-    pub fn print_at_hour(
-        stats_name: &str,
-        stats_key: &str,
-        cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>,
-    ) {
+    pub fn print_at_hour(stats_name: &str, stats_key: &str, cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>) {
         let ss = Self::compute_stats_data(cs_list);
         info!(
             "[{}] [{}] Stats In One Hour, {}",
@@ -264,11 +241,7 @@ impl StatsItem {
         );
     }
 
-    pub fn print_at_day(
-        stats_name: &str,
-        stats_key: &str,
-        cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>,
-    ) {
+    pub fn print_at_day(stats_name: &str, stats_key: &str, cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>) {
         let ss = Self::compute_stats_data(cs_list);
         info!(
             "[{}] [{}] Stats In One Day, {}",
@@ -440,10 +413,7 @@ mod tests {
 
         // Verify snapshot contains non-zero values
         let snapshot = stats.get_stats_data_in_minute();
-        assert!(
-            snapshot.get_sum() > 0,
-            "Snapshot should capture incremented value"
-        );
+        assert!(snapshot.get_sum() > 0, "Snapshot should capture incremented value");
         assert!(snapshot.get_times() > 0, "Snapshot should capture times");
     }
 

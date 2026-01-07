@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::LinkedList;
 use std::sync::atomic::AtomicBool;
@@ -127,8 +124,7 @@ impl GroupTransferServiceInner {
         for request in read_requests.iter_mut() {
             let mut transfer_ok = false;
             let deadline = request.get_deadline();
-            let all_ack_in_sync_state_set =
-                request.get_ack_nums() == mix_all::ALL_ACK_IN_SYNC_STATE_SET;
+            let all_ack_in_sync_state_set = request.get_ack_nums() == mix_all::ALL_ACK_IN_SYNC_STATE_SET;
             let mut index = 0;
             while !transfer_ok && deadline - Instant::now() > Duration::ZERO {
                 if index > 0
@@ -146,8 +142,7 @@ impl GroupTransferServiceInner {
                 index += 1;
                 //handle only one slave ack, ackNums <= 2 means master + 1 slave
                 if !all_ack_in_sync_state_set && request.get_ack_nums() <= 2 {
-                    transfer_ok =
-                        self.ha_service.get_push_to_slave_max_offset() >= request.get_next_offset();
+                    transfer_ok = self.ha_service.get_push_to_slave_max_offset() >= request.get_next_offset();
                     continue;
                 }
                 if all_ack_in_sync_state_set && self.ha_service.is_auto_switch_enabled() {
@@ -189,9 +184,7 @@ impl ServiceTask for GroupTransferServiceInner {
 
     async fn run(&self, context: &ServiceContext) {
         while !context.is_stopped() {
-            context
-                .wait_for_running(std::time::Duration::from_millis(10))
-                .await;
+            context.wait_for_running(std::time::Duration::from_millis(10)).await;
             self.do_wait_transfer().await;
             self.on_wait_end().await;
         }

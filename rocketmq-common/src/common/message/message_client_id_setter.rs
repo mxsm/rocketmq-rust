@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
@@ -54,9 +51,7 @@ static FIX_STRING: LazyLock<Vec<char>> = LazyLock::new(|| {
     bytes.put(ip.as_slice());
     bytes.put_i16(pid);
     bytes.put_i32(class_loader_hash);
-    let data = bytes_to_string(bytes.freeze().as_ref())
-        .chars()
-        .collect::<Vec<char>>();
+    let data = bytes_to_string(bytes.freeze().as_ref()).chars().collect::<Vec<char>>();
     data
 });
 
@@ -79,16 +74,11 @@ impl MessageClientIDSetter {
 
     fn set_start_time(millis: i64) {
         let dt = Utc.timestamp_millis_opt(millis).unwrap();
-        let cal = Utc
-            .with_ymd_and_hms(dt.year(), dt.month(), 1, 0, 0, 0)
-            .unwrap();
+        let cal = Utc.with_ymd_and_hms(dt.year(), dt.month(), 1, 0, 0, 0).unwrap();
 
         *START_TIME.lock() = cal.timestamp_millis();
 
-        *NEXT_START_TIME.lock() = cal
-            .checked_add_months(Months::new(1))
-            .unwrap()
-            .timestamp_millis();
+        *NEXT_START_TIME.lock() = cal.checked_add_months(Months::new(1)).unwrap().timestamp_millis();
     }
 
     pub fn create_uniq_id() -> String {
@@ -126,9 +116,7 @@ impl MessageClientIDSetter {
         {
             let uniq_id = Self::create_uniq_id();
             message.put_property(
-                CheetahString::from_static_str(
-                    MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
-                ),
+                CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
                 CheetahString::from_string(uniq_id),
             );
         }

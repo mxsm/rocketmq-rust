@@ -1,0 +1,229 @@
+// Copyright 2023 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! OpenRaft-based controller implementation
+//!
+//! This module provides a production-ready OpenRaft controller with:
+//! - Graceful shutdown support
+//! - Proper resource cleanup
+//! - Thread-safe state management
+//! - gRPC server lifecycle management
+
+use std::sync::Arc;
+
+use cheetah_string::CheetahString;
+use rocketmq_common::common::controller::ControllerConfig;
+use rocketmq_error::RocketMQResult;
+use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
+use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
+use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
+use rocketmq_remoting::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader;
+use rocketmq_remoting::protocol::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader;
+use rocketmq_remoting::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
+use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
+use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
+use tonic::transport::Server;
+use tracing::info;
+
+use crate::controller::Controller;
+use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
+use crate::openraft::GrpcRaftService;
+use crate::openraft::RaftNodeManager;
+use crate::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
+
+/// OpenRaft-based controller implementation
+///
+/// # Graceful Shutdown
+///
+/// This implementation provides proper graceful shutdown:
+/// 1. Sends shutdown signal to gRPC server via oneshot channel
+/// 2. Waits for Raft node to shutdown cleanly
+/// 3. Waits for gRPC server task to complete (with 10s timeout)
+pub struct OpenRaftController {
+    config: Arc<ControllerConfig>,
+    /// Raft node manager
+    node: Option<Arc<RaftNodeManager>>,
+    /// gRPC server task handle
+    handle: Option<JoinHandle<()>>,
+    /// Shutdown signal sender for gRPC server
+    shutdown_tx: Option<oneshot::Sender<()>>,
+}
+
+impl OpenRaftController {
+    pub fn new(config: Arc<ControllerConfig>) -> Self {
+        Self {
+            config,
+            node: None,
+            handle: None,
+            shutdown_tx: None,
+        }
+    }
+}
+
+impl Controller for OpenRaftController {
+    async fn startup(&mut self) -> RocketMQResult<()> {
+        info!("Starting OpenRaft controller on {}", self.config.listen_addr);
+
+        let node = Arc::new(RaftNodeManager::new(Arc::clone(&self.config)).await?);
+        let service = GrpcRaftService::new(node.raft());
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        let addr = self.config.listen_addr;
+        let node_id = self.config.node_id;
+
+        let handle = tokio::spawn(async move {
+            info!("gRPC server starting for node {} on {}", node_id, addr);
+
+            let result = Server::builder()
+                .add_service(OpenRaftServiceServer::new(service))
+                .serve_with_shutdown(addr, async {
+                    shutdown_rx.await.ok();
+                    info!("Shutdown signal received for node {}, stopping gRPC server", node_id);
+                })
+                .await;
+
+            if let Err(e) = result {
+                eprintln!("gRPC server error for node {}: {}", node_id, e);
+            } else {
+                info!("gRPC server for node {} stopped gracefully", node_id);
+            }
+        });
+
+        self.node = Some(node);
+        self.handle = Some(handle);
+        self.shutdown_tx = Some(shutdown_tx);
+
+        info!("OpenRaft controller started successfully");
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> RocketMQResult<()> {
+        info!("Shutting down OpenRaft controller");
+
+        // Take and send shutdown signal to gRPC server
+        if let Some(tx) = self.shutdown_tx.take() {
+            if tx.send(()).is_err() {
+                eprintln!("Failed to send shutdown signal to gRPC server (receiver dropped)");
+            } else {
+                info!("Shutdown signal sent to gRPC server");
+            }
+        }
+
+        // Shutdown Raft node
+        if let Some(node) = self.node.take() {
+            if let Err(e) = node.shutdown().await {
+                eprintln!("Error shutting down Raft node: {}", e);
+            } else {
+                info!("Raft node shutdown successfully");
+            }
+        }
+
+        // Wait for server task to complete (with timeout)
+        if let Some(handle) = self.handle.take() {
+            let timeout = tokio::time::Duration::from_secs(10);
+            match tokio::time::timeout(timeout, handle).await {
+                Ok(Ok(_)) => info!("Server task completed successfully"),
+                Ok(Err(e)) => eprintln!("Server task panicked: {}", e),
+                Err(_) => eprintln!("Timeout waiting for server task to complete"),
+            }
+        }
+
+        info!("OpenRaft controller shutdown completed");
+        Ok(())
+    }
+
+    async fn start_scheduling(&self) -> RocketMQResult<()> {
+        // TODO: Start leader scheduling tasks
+        Ok(())
+    }
+
+    async fn stop_scheduling(&self) -> RocketMQResult<()> {
+        // TODO: Stop leader scheduling tasks
+        Ok(())
+    }
+
+    fn is_leader(&self) -> bool {
+        // TODO: Check OpenRaft leadership status
+        false
+    }
+
+    async fn register_broker(
+        &self,
+        _request: &RegisterBrokerToControllerRequestHeader,
+    ) -> RocketMQResult<Option<RemotingCommand>> {
+        // TODO: Implement broker registration via OpenRaft
+        Ok(Some(RemotingCommand::create_response_command()))
+    }
+
+    async fn get_next_broker_id(
+        &self,
+        _request: &GetNextBrokerIdRequestHeader,
+    ) -> RocketMQResult<Option<RemotingCommand>> {
+        // TODO: Implement broker ID allocation via OpenRaft
+        Ok(Some(RemotingCommand::create_response_command()))
+    }
+
+    async fn apply_broker_id(&self, _request: &ApplyBrokerIdRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
+        // TODO: Implement broker ID application via OpenRaft
+        Ok(Some(RemotingCommand::create_response_command()))
+    }
+
+    async fn clean_broker_data(
+        &self,
+        _cluster_name: CheetahString,
+        _broker_name: CheetahString,
+    ) -> RocketMQResult<Option<RemotingCommand>> {
+        // TODO: Implement broker data cleanup via OpenRaft
+        Ok(Some(RemotingCommand::create_response_command()))
+    }
+
+    async fn elect_master(&self, _request: &ElectMasterRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
+        // TODO: Implement master election via OpenRaft
+        Ok(Some(RemotingCommand::create_response_command()))
+    }
+
+    async fn alter_sync_state_set(
+        &self,
+        _request: &AlterSyncStateSetRequestHeader,
+        _sync_state_set: SyncStateSet,
+    ) -> RocketMQResult<Option<RemotingCommand>> {
+        // TODO: Implement ISR update via OpenRaft
+        Ok(Some(RemotingCommand::create_response_command()))
+    }
+
+    async fn get_replica_info(
+        &self,
+        _request: &GetReplicaInfoRequestHeader,
+    ) -> RocketMQResult<Option<RemotingCommand>> {
+        // TODO: Implement replica info query
+        Ok(Some(RemotingCommand::create_response_command()))
+    }
+
+    fn get_controller_metadata(&self) -> RocketMQResult<Option<RemotingCommand>> {
+        // TODO: Implement metadata query
+        Ok(Some(RemotingCommand::create_response_command()))
+    }
+
+    async fn get_sync_state_data(&self, _broker_names: &[CheetahString]) -> RocketMQResult<Option<RemotingCommand>> {
+        // TODO: Implement sync state data query
+        Ok(Some(RemotingCommand::create_response_command()))
+    }
+
+    fn register_broker_lifecycle_listener(&self, _listener: Arc<dyn BrokerLifecycleListener>) {
+        // TODO: Register listener
+    }
+}

@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 
@@ -54,9 +51,7 @@ where
     K: ConsumeMessageServiceTrait,
 {
     pub fn start(&mut self) {
-        if let Some(consume_message_concurrently_service) =
-            &mut self.consume_message_concurrently_service
-        {
+        if let Some(consume_message_concurrently_service) = &mut self.consume_message_concurrently_service {
             let this = consume_message_concurrently_service.clone();
             consume_message_concurrently_service.start(this);
         }
@@ -92,15 +87,12 @@ where
         msg: MessageExt,
         broker_name: Option<CheetahString>,
     ) -> ConsumeMessageDirectlyResult {
-        if let Some(consume_message_concurrently_service) =
-            &self.consume_message_concurrently_service
-        {
+        if let Some(consume_message_concurrently_service) = &self.consume_message_concurrently_service {
             let this = consume_message_concurrently_service.clone();
             consume_message_concurrently_service
                 .consume_message_directly(msg, broker_name)
                 .await
-        } else if let Some(consume_message_orderly_service) = &self.consume_message_orderly_service
-        {
+        } else if let Some(consume_message_orderly_service) = &self.consume_message_orderly_service {
             let this = consume_message_orderly_service.clone();
             consume_message_orderly_service
                 .consume_message_directly(msg, broker_name)
@@ -117,30 +109,15 @@ where
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
     ) {
-        if let Some(consume_message_concurrently_service) =
-            &self.consume_message_concurrently_service
-        {
+        if let Some(consume_message_concurrently_service) = &self.consume_message_concurrently_service {
             let this = consume_message_concurrently_service.clone();
             consume_message_concurrently_service
-                .submit_consume_request(
-                    this,
-                    msgs,
-                    process_queue,
-                    message_queue,
-                    dispatch_to_consume,
-                )
+                .submit_consume_request(this, msgs, process_queue, message_queue, dispatch_to_consume)
                 .await;
-        } else if let Some(consume_message_orderly_service) = &self.consume_message_orderly_service
-        {
+        } else if let Some(consume_message_orderly_service) = &self.consume_message_orderly_service {
             let this = consume_message_orderly_service.clone();
             consume_message_orderly_service
-                .submit_consume_request(
-                    this,
-                    msgs,
-                    process_queue,
-                    message_queue,
-                    dispatch_to_consume,
-                )
+                .submit_consume_request(this, msgs, process_queue, message_queue, dispatch_to_consume)
                 .await;
         }
     }
@@ -155,10 +132,7 @@ where
     }
 
     pub fn get_consume_message_concurrently_service(&self) -> ArcMut<T> {
-        self.consume_message_concurrently_service
-            .as_ref()
-            .unwrap()
-            .clone()
+        self.consume_message_concurrently_service.as_ref().unwrap().clone()
     }
 }
 
@@ -185,16 +159,12 @@ where
     K: ConsumeMessageServiceTrait,
 {
     pub fn start(&mut self) {
-        if let Some(consume_message_pop_concurrently_service) =
-            &mut self.consume_message_pop_concurrently_service
-        {
+        if let Some(consume_message_pop_concurrently_service) = &mut self.consume_message_pop_concurrently_service {
             let this = consume_message_pop_concurrently_service.clone();
             consume_message_pop_concurrently_service.start(this);
         }
 
-        if let Some(consume_message_pop_orderly_service) =
-            &mut self.consume_message_pop_orderly_service
-        {
+        if let Some(consume_message_pop_orderly_service) = &mut self.consume_message_pop_orderly_service {
             let this = consume_message_pop_orderly_service.clone();
             consume_message_pop_orderly_service.start(this);
         }
@@ -225,16 +195,12 @@ where
         msg: MessageExt,
         broker_name: Option<CheetahString>,
     ) -> ConsumeMessageDirectlyResult {
-        if let Some(consume_message_pop_concurrently_service) =
-            &self.consume_message_pop_concurrently_service
-        {
+        if let Some(consume_message_pop_concurrently_service) = &self.consume_message_pop_concurrently_service {
             let this = consume_message_pop_concurrently_service.clone();
             consume_message_pop_concurrently_service
                 .consume_message_directly(msg, broker_name)
                 .await
-        } else if let Some(consume_message_pop_orderly_service) =
-            &self.consume_message_pop_orderly_service
-        {
+        } else if let Some(consume_message_pop_orderly_service) = &self.consume_message_pop_orderly_service {
             let this = consume_message_pop_orderly_service.clone();
             consume_message_pop_orderly_service
                 .consume_message_directly(msg, broker_name)
@@ -260,16 +226,12 @@ where
         process_queue: &PopProcessQueue,
         message_queue: &MessageQueue,
     ) {
-        if let Some(consume_message_pop_concurrently_service) =
-            &self.consume_message_pop_concurrently_service
-        {
+        if let Some(consume_message_pop_concurrently_service) = &self.consume_message_pop_concurrently_service {
             let this = consume_message_pop_concurrently_service.clone();
             consume_message_pop_concurrently_service
                 .submit_pop_consume_request(this, msgs, process_queue, message_queue)
                 .await;
-        } else if let Some(consume_message_pop_orderly_service) =
-            &self.consume_message_pop_orderly_service
-        {
+        } else if let Some(consume_message_pop_orderly_service) = &self.consume_message_pop_orderly_service {
             let this = consume_message_pop_orderly_service.clone();
             consume_message_pop_orderly_service
                 .submit_pop_consume_request(this, msgs, process_queue, message_queue)

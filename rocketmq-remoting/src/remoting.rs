@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 
@@ -101,20 +98,14 @@ pub(crate) mod inner {
     where
         RP: RequestProcessor + Sync + 'static,
     {
-        pub async fn process_message_received(
-            &mut self,
-            ctx: &mut ConnectionHandlerContext,
-            cmd: RemotingCommand,
-        ) {
+        pub async fn process_message_received(&mut self, ctx: &mut ConnectionHandlerContext, cmd: RemotingCommand) {
             match cmd.get_type() {
-                RemotingCommandType::REQUEST => {
-                    match self.process_request_command(ctx, cmd).await {
-                        Ok(_) => {}
-                        Err(e) => {
-                            error!("process request command failed: {}", e);
-                        }
+                RemotingCommandType::REQUEST => match self.process_request_command(ctx, cmd).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        error!("process request command failed: {}", e);
                     }
-                }
+                },
                 RemotingCommandType::RESPONSE => {
                     self.process_response_command(ctx, cmd);
                 }
@@ -128,8 +119,7 @@ pub(crate) mod inner {
         ) -> RocketMQResult<()> {
             let opaque = cmd.opaque();
             let reject_request = self.request_processor.reject_request(cmd.code());
-            const REJECT_REQUEST_MSG: &str =
-                "[REJECT REQUEST]system busy, start flow control for a while";
+            const REJECT_REQUEST_MSG: &str = "[REJECT REQUEST]system busy, start flow control for a while";
             if reject_request.0 {
                 let response = if let Some(response) = reject_request.1 {
                     response
@@ -147,9 +137,7 @@ pub(crate) mod inner {
             }
             let oneway_rpc = cmd.is_oneway_rpc();
             //before handle request hooks
-            let exception = self
-                .do_before_rpc_hooks(ctx.channel(), Some(&mut cmd))
-                .err();
+            let exception = self.do_before_rpc_hooks(ctx.channel(), Some(&mut cmd)).err();
             //handle error if return have
             match handle_error(ctx, oneway_rpc, opaque, exception).await {
                 HandleErrorResult::ReturnMethod => return Ok(()),
@@ -171,9 +159,7 @@ pub(crate) mod inner {
                 result
             };
 
-            let exception = self
-                .do_after_rpc_hooks(ctx.channel(), &cmd, response.as_mut())
-                .err();
+            let exception = self.do_after_rpc_hooks(ctx.channel(), &cmd, response.as_mut()).err();
 
             match handle_error(ctx, oneway_rpc, opaque, exception).await {
                 HandleErrorResult::ReturnMethod => return Ok(()),
@@ -203,11 +189,7 @@ pub(crate) mod inner {
             Ok(())
         }
 
-        fn process_response_command(
-            &mut self,
-            ctx: &mut ConnectionHandlerContext,
-            cmd: RemotingCommand,
-        ) {
+        fn process_response_command(&mut self, ctx: &mut ConnectionHandlerContext, cmd: RemotingCommand) {
             if let Some(future) = self.response_table.remove(&cmd.opaque()) {
                 match future.tx.send(Ok(cmd)) {
                     Ok(_) => {}
@@ -217,8 +199,7 @@ pub(crate) mod inner {
                 }
             } else {
                 warn!(
-                    "receive response, cmd={}, but not matched any request, address={}, \
-                     channelId={}",
+                    "receive response, cmd={}, but not matched any request, address={}, channelId={}",
                     cmd,
                     ctx.channel().remote_address(),
                     ctx.channel().channel_id(),
@@ -270,8 +251,7 @@ pub(crate) mod inner {
                     if oneway_rpc {
                         return HandleErrorResult::ReturnMethod;
                     }
-                    let response =
-                        RemotingCommand::create_response_command_with_code_remark(code, message);
+                    let response = RemotingCommand::create_response_command_with_code_remark(code, message);
                     tokio::select! {
                         result =ctx.connection_mut().send_command(response.set_opaque(opaque)) => match result{
                             Ok(_) =>{},

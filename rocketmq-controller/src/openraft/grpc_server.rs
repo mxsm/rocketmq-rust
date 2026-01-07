@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! gRPC server implementation for OpenRaft network communication
 
@@ -57,9 +54,7 @@ impl OpenRaftService for GrpcRaftService {
         debug!("Received append_entries: {} entries", req.entries.len());
 
         // Convert protobuf to OpenRaft types
-        let vote = req
-            .vote
-            .ok_or_else(|| Status::invalid_argument("Missing vote"))?;
+        let vote = req.vote.ok_or_else(|| Status::invalid_argument("Missing vote"))?;
 
         let raft_vote = openraft::Vote::new(vote.term, vote.node_id);
 
@@ -73,12 +68,10 @@ impl OpenRaftService for GrpcRaftService {
             .into_iter()
             .filter_map(|e| {
                 let log_id = e.log_id?;
-                let payload: crate::typ::ControllerRequest =
-                    serde_json::from_slice(&e.payload).ok()?;
+                let payload: crate::typ::ControllerRequest = serde_json::from_slice(&e.payload).ok()?;
                 Some(openraft::Entry {
                     log_id: crate::typ::LogId {
-                        leader_id: crate::typ::Vote::new(log_id.leader_id, log_id.leader_id)
-                            .leader_id,
+                        leader_id: crate::typ::Vote::new(log_id.leader_id, log_id.leader_id).leader_id,
                         index: log_id.index,
                     },
                     payload: openraft::EntryPayload::Normal(payload),
@@ -119,16 +112,11 @@ impl OpenRaftService for GrpcRaftService {
         }
     }
 
-    async fn vote(
-        &self,
-        request: Request<OpenRaftVoteRequest>,
-    ) -> Result<Response<OpenRaftVoteResponse>, Status> {
+    async fn vote(&self, request: Request<OpenRaftVoteRequest>) -> Result<Response<OpenRaftVoteResponse>, Status> {
         let req = request.into_inner();
         debug!("Received vote request");
 
-        let vote = req
-            .vote
-            .ok_or_else(|| Status::invalid_argument("Missing vote"))?;
+        let vote = req.vote.ok_or_else(|| Status::invalid_argument("Missing vote"))?;
 
         let raft_vote = openraft::Vote::new(vote.term, vote.node_id);
 
@@ -150,12 +138,10 @@ impl OpenRaftService for GrpcRaftService {
                     committed: resp.vote.committed,
                 }),
                 vote_granted: resp.vote_granted,
-                last_log_id: resp
-                    .last_log_id
-                    .map(|id| crate::protobuf::openraft::OpenRaftLogId {
-                        leader_id: id.leader_id.node_id,
-                        index: id.index,
-                    }),
+                last_log_id: resp.last_log_id.map(|id| crate::protobuf::openraft::OpenRaftLogId {
+                    leader_id: id.leader_id.node_id,
+                    index: id.index,
+                }),
             })),
             Err(e) => {
                 error!("Vote failed: {}", e);
@@ -178,8 +164,7 @@ impl OpenRaftService for GrpcRaftService {
 
         // Receive all chunks
         while let Some(chunk_result) = stream.next().await {
-            let chunk =
-                chunk_result.map_err(|e| Status::internal(format!("Stream error: {}", e)))?;
+            let chunk = chunk_result.map_err(|e| Status::internal(format!("Stream error: {}", e)))?;
 
             // Extract vote and meta from first chunk
             if vote.is_none() {
@@ -192,10 +177,7 @@ impl OpenRaftService for GrpcRaftService {
                 if let Some(meta) = chunk.meta {
                     let last_membership: openraft::StoredMembership<crate::typ::TypeConfig> =
                         serde_json::from_slice(&meta.last_membership).map_err(|e| {
-                            Status::invalid_argument(format!(
-                                "Failed to deserialize membership: {}",
-                                e
-                            ))
+                            Status::invalid_argument(format!("Failed to deserialize membership: {}", e))
                         })?;
 
                     snapshot_meta = Some(openraft::SnapshotMeta {
@@ -218,8 +200,7 @@ impl OpenRaftService for GrpcRaftService {
         }
 
         let vote = vote.ok_or_else(|| Status::invalid_argument("Missing vote"))?;
-        let meta =
-            snapshot_meta.ok_or_else(|| Status::invalid_argument("Missing snapshot meta"))?;
+        let meta = snapshot_meta.ok_or_else(|| Status::invalid_argument("Missing snapshot meta"))?;
 
         debug!(
             "Received snapshot: size={} bytes, last_log_id={:?}",
@@ -227,22 +208,19 @@ impl OpenRaftService for GrpcRaftService {
             meta.last_log_id
         );
 
-        // Create install snapshot request with correct fields
-        let install_req = crate::typ::InstallSnapshotRequest {
-            vote,
+        // Create snapshot with Cursor wrapper
+        let snapshot = openraft::Snapshot {
             meta,
-            offset: 0,
-            data: snapshot_data,
-            done: true,
+            snapshot: std::io::Cursor::new(snapshot_data),
         };
 
-        // Install snapshot through Raft
-        match self.raft.install_snapshot(install_req).await {
+        // Install snapshot through Raft using the new API
+        match self.raft.install_full_snapshot(vote, snapshot).await {
             Ok(resp) => Ok(Response::new(OpenRaftSnapshotResponse {
                 vote: Some(crate::protobuf::openraft::OpenRaftVote {
-                    term: resp.vote.leader_id.term,
-                    node_id: resp.vote.leader_id.node_id,
-                    committed: resp.vote.committed,
+                    term: resp.vote.leader_id().term,
+                    node_id: resp.vote.leader_id().node_id,
+                    committed: resp.vote.is_committed(),
                 }),
             })),
             Err(e) => {

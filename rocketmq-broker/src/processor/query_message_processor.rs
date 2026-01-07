@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use rocketmq_common::common::mix_all::UNIQUE_MSG_QUERY_FLAG;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -47,14 +44,10 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
-        info!(
-            "QueryMessageProcessor received request code: {:?}",
-            request_code
-        );
+        info!("QueryMessageProcessor received request code: {:?}", request_code);
         match request_code {
             RequestCode::QueryMessage | RequestCode::ViewMessageById => {
-                self.process_request_inner(channel, ctx, request_code, request)
-                    .await
+                self.process_request_inner(channel, ctx, request_code, request).await
             }
             _ => {
                 warn!(
@@ -63,10 +56,7 @@ where
                 );
                 let response = RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::RequestCodeNotSupported,
-                    format!(
-                        "QueryMessageProcessor request code {} not supported",
-                        request.code()
-                    ),
+                    format!("QueryMessageProcessor request code {} not supported", request.code()),
                 );
                 Ok(Some(response.set_opaque(request.opaque())))
             }
@@ -111,11 +101,8 @@ where
         _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let mut response = RemotingCommand::create_response_command_with_header(
-            QueryMessageResponseHeader::default(),
-        );
-        let mut request_header =
-            request.decode_command_custom_header::<QueryMessageRequestHeader>()?;
+        let mut response = RemotingCommand::create_response_command_with_header(QueryMessageResponseHeader::default());
+        let mut request_header = request.decode_command_custom_header::<QueryMessageRequestHeader>()?;
         response.set_opaque_mut(request.opaque());
         let Some(ext_fields) = request.ext_fields() else {
             return Ok(Some(
@@ -126,10 +113,7 @@ where
         };
         let is_unique_key = ext_fields.get(UNIQUE_MSG_QUERY_FLAG);
         if is_unique_key.is_some_and(|value| value == "true") {
-            request_header.max_num = self
-                .broker_runtime_inner
-                .message_store_config()
-                .default_query_max_num as i32;
+            request_header.max_num = self.broker_runtime_inner.message_store_config().default_query_max_num as i32;
         }
         let message_store = match self.broker_runtime_inner.message_store() {
             Some(store) => store,
@@ -159,13 +143,9 @@ where
             ));
         };
 
-        let response_header = response
-            .read_custom_header_mut::<QueryMessageResponseHeader>()
-            .unwrap();
-        response_header.index_last_update_phyoffset =
-            query_message_result.index_last_update_phyoffset;
-        response_header.index_last_update_timestamp =
-            query_message_result.index_last_update_timestamp;
+        let response_header = response.read_custom_header_mut::<QueryMessageResponseHeader>().unwrap();
+        response_header.index_last_update_phyoffset = query_message_result.index_last_update_phyoffset;
+        response_header.index_last_update_timestamp = query_message_result.index_last_update_timestamp;
 
         if query_message_result.buffer_total_size > 0 {
             let message_data = query_message_result.get_message_data();
@@ -201,8 +181,7 @@ where
             }
         };
 
-        let select_mapped_buffer_result =
-            message_store.select_one_message_by_offset(request_header.offset);
+        let select_mapped_buffer_result = message_store.select_one_message_by_offset(request_header.offset);
         if let Some(result) = select_mapped_buffer_result {
             let message_data = result.get_bytes();
             if let Some(body) = message_data {
@@ -210,13 +189,9 @@ where
             }
             return Ok(Some(response));
         }
-        Ok(Some(
-            response
-                .set_code(ResponseCode::SystemError)
-                .set_remark(format!(
-                    "can not find message by offset: {}",
-                    request_header.offset
-                )),
-        ))
+        Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(format!(
+            "can not find message by offset: {}",
+            request_header.offset
+        ))))
     }
 }

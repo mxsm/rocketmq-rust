@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU32;
@@ -68,11 +65,7 @@ where
 
     async fn run(&self, context: &ServiceContext) {
         while !context.is_stopped() {
-            if !self
-                .broker_runtime_inner
-                .is_isolated()
-                .load(Ordering::SeqCst)
-            {
+            if !self.broker_runtime_inner.is_isolated().load(Ordering::SeqCst) {
                 info!(
                     "broker {} is online",
                     self.broker_runtime_inner
@@ -91,10 +84,7 @@ where
                     }
                 }
                 Err(e) => {
-                    error!(
-                        "prepare for broker online failed, retry later. error: {:?}",
-                        e
-                    );
+                    error!("prepare for broker online failed, retry later. error: {:?}", e);
                 }
             }
         }
@@ -111,40 +101,24 @@ where
             .broker_config()
             .broker_identity
             .broker_cluster_name;
-        let broker_name = &self
-            .broker_runtime_inner
-            .broker_config()
-            .broker_identity
-            .broker_name;
-        let compatible_with_old_name_srv = self
-            .broker_runtime_inner
-            .broker_config()
-            .compatible_with_old_name_srv;
+        let broker_name = &self.broker_runtime_inner.broker_config().broker_identity.broker_name;
+        let compatible_with_old_name_srv = self.broker_runtime_inner.broker_config().compatible_with_old_name_srv;
         let broker_member_group = match self
             .broker_runtime_inner
             .broker_outer_api()
-            .sync_broker_member_group(
-                broker_cluster_name,
-                broker_name,
-                compatible_with_old_name_srv,
-            )
+            .sync_broker_member_group(broker_cluster_name, broker_name, compatible_with_old_name_srv)
             .await
         {
             Ok(value) => value,
             Err(e) => {
                 error!(
-                    "syncBrokerMemberGroup from namesrv error, start service failed, will try \
-                     later, {}",
+                    "syncBrokerMemberGroup from namesrv error, start service failed, will try later, {}",
                     e
                 );
                 return Ok(false);
             }
         };
-        let broker_id = self
-            .broker_runtime_inner
-            .broker_config()
-            .broker_identity
-            .broker_id;
+        let broker_id = self.broker_runtime_inner.broker_config().broker_identity.broker_id;
         if let Some(broker_member_group) = broker_member_group {
             let min_broker_id = self.get_min_broker_id(&broker_member_group.broker_addrs);
             if !broker_member_group.broker_addrs.is_empty() {
@@ -157,10 +131,7 @@ where
                     BrokerRuntimeInner::<MS>::start_service(
                         self.broker_runtime_inner.clone(),
                         min_broker_id,
-                        broker_member_group
-                            .broker_addrs
-                            .get(&min_broker_id)
-                            .cloned(),
+                        broker_member_group.broker_addrs.get(&min_broker_id).cloned(),
                     )
                     .await;
                     return Ok(true);
@@ -170,12 +141,7 @@ where
         info!("no other broker online, will start service directly");
         let broker_addr = self.broker_runtime_inner.get_broker_addr().clone();
 
-        BrokerRuntimeInner::<MS>::start_service(
-            self.broker_runtime_inner.clone(),
-            broker_id,
-            Some(broker_addr),
-        )
-        .await;
+        BrokerRuntimeInner::<MS>::start_service(self.broker_runtime_inner.clone(), broker_id, Some(broker_addr)).await;
         Ok(true)
     }
 
@@ -184,29 +150,16 @@ where
         broker_addr_map: &HashMap<u64 /* brokerId */, CheetahString /* broker address */>,
     ) -> u64 {
         let mut local_broker_addr_map = broker_addr_map.clone();
-        local_broker_addr_map.remove(
-            &self
-                .broker_runtime_inner
-                .broker_config()
-                .broker_identity
-                .broker_id,
-        );
+        local_broker_addr_map.remove(&self.broker_runtime_inner.broker_config().broker_identity.broker_id);
         if !local_broker_addr_map.is_empty() {
             *local_broker_addr_map.keys().min().unwrap()
         } else {
-            self.broker_runtime_inner
-                .broker_config()
-                .broker_identity
-                .broker_id
+            self.broker_runtime_inner.broker_config().broker_identity.broker_id
         }
     }
 
     async fn prepare_for_master_online(&self, broker_member_group: BrokerMemberGroup) -> bool {
-        let mut broker_id_list = broker_member_group
-            .broker_addrs
-            .keys()
-            .copied()
-            .collect::<Vec<u64>>();
+        let mut broker_id_list = broker_member_group.broker_addrs.keys().copied().collect::<Vec<u64>>();
         broker_id_list.sort();
         loop {
             let wait_index = self.wait_broker_index.load(Ordering::SeqCst);
@@ -223,10 +176,7 @@ where
                 return true;
             }
             let wait_broker_id = broker_id_list[wait_index as usize];
-            let broker_addr_to_wait = broker_member_group
-                .broker_addrs
-                .get(&wait_broker_id)
-                .cloned();
+            let broker_addr_to_wait = broker_member_group.broker_addrs.get(&wait_broker_id).cloned();
             if broker_addr_to_wait.is_none() {
                 self.wait_broker_index.fetch_add(1, Ordering::SeqCst);
                 continue;
@@ -252,19 +202,12 @@ where
                 return false;
             }
 
-            let ha_handshake_future = self
-                .wait_for_ha_handshake_complete(broker_addr_to_wait.clone())
-                .await;
-            let is_success = self
-                .future_wait_action(ha_handshake_future, &broker_member_group)
-                .await;
+            let ha_handshake_future = self.wait_for_ha_handshake_complete(broker_addr_to_wait.clone()).await;
+            let is_success = self.future_wait_action(ha_handshake_future, &broker_member_group).await;
             if !is_success {
                 return false;
             }
-            if !self
-                .sync_metadata_reverse(broker_addr_to_wait.clone())
-                .await
-            {
+            if !self.sync_metadata_reverse(broker_addr_to_wait.clone()).await {
                 error!(
                     "syncMetadataReverse to broker {} error, will retry later",
                     broker_addr_to_wait
@@ -286,41 +229,21 @@ where
             &RemotingHelper::parse_host_from_address(Some(broker_addr.as_str())),
             true,
         );
-        if let Some(ha_service) = self
-            .broker_runtime_inner
-            .message_store_unchecked()
-            .get_ha_service()
-        {
+        if let Some(ha_service) = self.broker_runtime_inner.message_store_unchecked().get_ha_service() {
             ha_service.put_group_connection_state_request(request).await;
             tx.await.unwrap_or(false)
         } else {
-            error!(
-                "HAService is null, maybe broker config is wrong. For example, duplicationEnable \
-                 is true"
-            );
+            error!("HAService is null, maybe broker config is wrong. For example, duplicationEnable is true");
             false
         }
     }
-    async fn future_wait_action(
-        &self,
-        result: bool,
-        broker_member_group: &BrokerMemberGroup,
-    ) -> bool {
+    async fn future_wait_action(&self, result: bool, broker_member_group: &BrokerMemberGroup) -> bool {
         match result {
             true => {
-                if self
-                    .broker_runtime_inner
-                    .broker_config()
-                    .broker_identity
-                    .broker_id
-                    != MASTER_ID
-                {
+                if self.broker_runtime_inner.broker_config().broker_identity.broker_id != MASTER_ID {
                     info!("slave preOnline complete, start service");
                     let min_broker_id = self.get_min_broker_id(&broker_member_group.broker_addrs);
-                    let broker_addr = broker_member_group
-                        .broker_addrs
-                        .get(&min_broker_id)
-                        .cloned();
+                    let broker_addr = broker_member_group.broker_addrs.get(&min_broker_id).cloned();
                     BrokerRuntimeInner::<MS>::start_service(
                         self.broker_runtime_inner.clone(),
                         min_broker_id,
@@ -371,25 +294,20 @@ where
                 BrokerRuntimeInner::<MS>::start_service(
                     self.broker_runtime_inner.clone(),
                     min_broker_id,
-                    broker_member_group
-                        .broker_addrs
-                        .get(&mix_all::MASTER_ID)
-                        .cloned(),
+                    broker_member_group.broker_addrs.get(&mix_all::MASTER_ID).cloned(),
                 )
                 .await;
             }
             Some(ref value) => {
                 message_store.update_ha_master_address(value).await;
-                message_store
-                    .update_master_address(&broker_sync_info.master_address.clone().unwrap());
+                message_store.update_master_address(&broker_sync_info.master_address.clone().unwrap());
             }
         }
 
         let ha_handshake_result = self
             .wait_for_ha_handshake_complete(broker_sync_info.master_ha_address.unwrap())
             .await;
-        self.future_wait_action(ha_handshake_result, &broker_member_group)
-            .await
+        self.future_wait_action(ha_handshake_result, &broker_member_group).await
     }
 }
 

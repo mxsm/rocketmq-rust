@@ -41,8 +41,7 @@ impl MessageQueueOpContext {
     }
 
     pub async fn set_last_write_timestamp(&self, timestamp: u64) {
-        self.last_write_timestamp
-            .store(timestamp, Ordering::Release);
+        self.last_write_timestamp.store(timestamp, Ordering::Release);
     }
 
     pub async fn push(&self, msg: String) -> Result<()> {

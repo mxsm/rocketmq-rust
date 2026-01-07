@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use cheetah_string::CheetahString;
 use clap::Parser;
@@ -58,12 +55,9 @@ impl CommandExecute for UpdateOrderConfCommand {
 
         match method.as_str() {
             "put" => {
-                let order_conf =
-                    self.order_conf
-                        .as_ref()
-                        .ok_or_else(|| ToolsError::ValidationFailed {
-                            message: "order_conf is required for 'put' method".to_string(),
-                        })?;
+                let order_conf = self.order_conf.as_ref().ok_or_else(|| ToolsError::ValidationFailed {
+                    message: "order_conf is required for 'put' method".to_string(),
+                })?;
 
                 TopicOperations::create_or_update_order_conf(
                     &mut admin,
@@ -78,32 +72,19 @@ impl CommandExecute for UpdateOrderConfCommand {
                 );
             }
             "get" => {
-                let order_conf = TopicOperations::get_order_conf(
-                    &mut admin,
-                    CheetahString::from(self.topic.clone()),
-                )
-                .await?;
+                let order_conf =
+                    TopicOperations::get_order_conf(&mut admin, CheetahString::from(self.topic.clone())).await?;
 
                 println!("Order config for topic '{}': {}", self.topic, order_conf);
             }
             "delete" => {
-                TopicOperations::delete_order_conf(
-                    &mut admin,
-                    CheetahString::from(self.topic.clone()),
-                )
-                .await?;
+                TopicOperations::delete_order_conf(&mut admin, CheetahString::from(self.topic.clone())).await?;
 
-                println!(
-                    "Successfully deleted order config for topic '{}'",
-                    self.topic
-                );
+                println!("Successfully deleted order config for topic '{}'", self.topic);
             }
             _ => {
                 return Err(ToolsError::ValidationFailed {
-                    message: format!(
-                        "Invalid method '{}'. Allowed values: put, get, delete",
-                        method
-                    ),
+                    message: format!("Invalid method '{}'. Allowed values: put, get, delete", method),
                 }
                 .into());
             }

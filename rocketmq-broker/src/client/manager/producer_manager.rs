@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicI32;
@@ -82,12 +79,8 @@ impl ProducerManager {
     }
 
     /// Appends a producer change listener to be notified of registration events.
-    pub fn append_producer_change_listener(
-        &mut self,
-        producer_change_listener: ArcProducerChangeListener,
-    ) {
-        self.producer_change_listener_vec
-            .push(producer_change_listener);
+    pub fn append_producer_change_listener(&mut self, producer_change_listener: ArcProducerChangeListener) {
+        self.producer_change_listener_vec.push(producer_change_listener);
     }
 }
 
@@ -120,9 +113,7 @@ impl ProducerManager {
                 );
 
                 // Add to map, creating a new vector if this is the first entry for this group
-                map.entry(group.to_string())
-                    .or_default()
-                    .push(producer_info);
+                map.entry(group.to_string()).or_default().push(producer_info);
             }
         }
 
@@ -186,11 +177,7 @@ impl ProducerManager {
             );
 
             // Call listener outside of locks
-            self.call_producer_change_listener(
-                ProducerGroupEvent::ClientUnregister,
-                group,
-                Some(&old),
-            );
+            self.call_producer_change_listener(ProducerGroupEvent::ClientUnregister, group, Some(&old));
 
             //Remove empty group (only if we removed a producer)
             // Re-check if group is still empty to avoid TOCTOU race condition
@@ -200,15 +187,8 @@ impl ProducerManager {
                     .group_channel_table
                     .remove_if(group, |_, channel_map| channel_map.is_empty());
                 if removed.is_some() {
-                    info!(
-                        "unregister a producer group[{}] from groupChannelTable",
-                        group
-                    );
-                    self.call_producer_change_listener(
-                        ProducerGroupEvent::GroupUnregister,
-                        group,
-                        None,
-                    );
+                    info!("unregister a producer group[{}] from groupChannelTable", group);
+                    self.call_producer_change_listener(ProducerGroupEvent::GroupUnregister, group, None);
                 }
             }
         }
@@ -226,11 +206,7 @@ impl ProducerManager {
     /// # Thread Safety
     /// This method is thread-safe. Uses DashMap's atomic operations to ensure consistency.
     #[allow(clippy::mutable_key_type)]
-    pub fn register_producer(
-        &self,
-        group: &CheetahString,
-        client_channel_info: &ClientChannelInfo,
-    ) {
+    pub fn register_producer(&self, group: &CheetahString, client_channel_info: &ClientChannelInfo) {
         // Update group_channel_table
         {
             let channel_table = self.group_channel_table.entry(group.clone()).or_default();
@@ -243,10 +219,7 @@ impl ProducerManager {
             }
 
             // New producer - insert into channel table
-            channel_table.insert(
-                client_channel_info.channel().clone(),
-                client_channel_info.clone(),
-            );
+            channel_table.insert(client_channel_info.channel().clone(), client_channel_info.clone());
         }
         // channel_table lock released here
 
@@ -263,8 +236,7 @@ impl ProducerManager {
             Some(existing_channel) => {
                 // Different channel with same client_id
                 warn!(
-                    "Producer client_id[{}] is registering with a different channel. Old channel: \
-                     {}, New channel: {}",
+                    "Producer client_id[{}] is registering with a different channel. Old channel: {}, New channel: {}",
                     client_id,
                     existing_channel.remote_address(),
                     new_channel.remote_address()
@@ -278,8 +250,7 @@ impl ProducerManager {
         };
 
         if should_update {
-            self.client_channel_table
-                .insert(client_id.clone(), new_channel.clone());
+            self.client_channel_table.insert(client_id.clone(), new_channel.clone());
         }
 
         info!(
@@ -321,10 +292,7 @@ impl ProducerManager {
                 warn!("Channel list is empty. group={}", group);
                 return None;
             }
-            channel_map
-                .iter()
-                .map(|entry| entry.key().clone())
-                .collect()
+            channel_map.iter().map(|entry| entry.key().clone()).collect()
         };
         // Lock released here
 
@@ -392,8 +360,7 @@ impl ProducerManager {
         // All read locks released here
 
         // Use HashSet to avoid duplicate group removals
-        let mut empty_groups: std::collections::HashSet<CheetahString> =
-            std::collections::HashSet::new();
+        let mut empty_groups: std::collections::HashSet<CheetahString> = std::collections::HashSet::new();
 
         // Remove expired channels one by one
         for (group, channel, info) in expired_channels {
@@ -402,8 +369,8 @@ impl ProducerManager {
                 channel_map.remove(&channel);
 
                 warn!(
-                    "ProducerManager#scan_not_active_channel: remove expired channel[{}] from \
-                     ProducerManager groupChannelTable, producer group name: {}, client_id: {}",
+                    "ProducerManager#scan_not_active_channel: remove expired channel[{}] from ProducerManager \
+                     groupChannelTable, producer group name: {}, client_id: {}",
                     channel.remote_address(),
                     group,
                     info.client_id()
@@ -424,11 +391,7 @@ impl ProducerManager {
             }
 
             // Call listener outside of any locks
-            self.call_producer_change_listener(
-                ProducerGroupEvent::ClientUnregister,
-                &group,
-                Some(&info),
-            );
+            self.call_producer_change_listener(ProducerGroupEvent::ClientUnregister, &group, Some(&info));
 
             // Close the expired channel (matching Java's RemotingHelper.closeChannel)
             channel.connection_ref().close();
@@ -442,15 +405,10 @@ impl ProducerManager {
                 .remove_if(&group, |_, channel_map| channel_map.is_empty());
             if removed.is_some() {
                 warn!(
-                    "SCAN: remove expired channel from ProducerManager groupChannelTable, all \
-                     clear, group={}",
+                    "SCAN: remove expired channel from ProducerManager groupChannelTable, all clear, group={}",
                     group
                 );
-                self.call_producer_change_listener(
-                    ProducerGroupEvent::GroupUnregister,
-                    &group,
-                    None,
-                );
+                self.call_producer_change_listener(ProducerGroupEvent::GroupUnregister, &group, None);
             }
         }
     }
@@ -483,8 +441,7 @@ impl ProducerManager {
             return false;
         }
 
-        let mut empty_groups: std::collections::HashSet<CheetahString> =
-            std::collections::HashSet::new();
+        let mut empty_groups: std::collections::HashSet<CheetahString> = std::collections::HashSet::new();
 
         // Remove channels from their groups
         for (group, client_channel_info) in &channels_to_remove {
@@ -492,8 +449,8 @@ impl ProducerManager {
                 channel_map.remove(channel);
 
                 info!(
-                    "Channel Close event: remove channel[{}][{}] from ProducerManager \
-                     groupChannelTable, producer group: {}, client_id: {}",
+                    "Channel Close event: remove channel[{}][{}] from ProducerManager groupChannelTable, producer \
+                     group: {}, client_id: {}",
                     client_channel_info.channel().remote_address(),
                     remote_addr,
                     group,
@@ -509,25 +466,17 @@ impl ProducerManager {
 
         // Remove from clientChannelTable (outside of group_channel_table operations)
         for (_, client_channel_info) in &channels_to_remove {
-            if let Some(entry) = self
-                .client_channel_table
-                .get(client_channel_info.client_id())
-            {
+            if let Some(entry) = self.client_channel_table.get(client_channel_info.client_id()) {
                 if entry.value() == channel {
                     drop(entry); // Release read lock before remove
-                    self.client_channel_table
-                        .remove(client_channel_info.client_id());
+                    self.client_channel_table.remove(client_channel_info.client_id());
                 }
             }
         }
 
         //Call listeners (outside of any locks)
         for (group, client_channel_info) in &channels_to_remove {
-            self.call_producer_change_listener(
-                ProducerGroupEvent::ClientUnregister,
-                group,
-                Some(client_channel_info),
-            );
+            self.call_producer_change_listener(ProducerGroupEvent::ClientUnregister, group, Some(client_channel_info));
         }
 
         // Remove empty groups
@@ -537,15 +486,8 @@ impl ProducerManager {
                 .group_channel_table
                 .remove_if(&group, |_, channel_map| channel_map.is_empty());
             if removed.is_some() {
-                info!(
-                    "unregister a producer group[{}] from groupChannelTable",
-                    group
-                );
-                self.call_producer_change_listener(
-                    ProducerGroupEvent::GroupUnregister,
-                    &group,
-                    None,
-                );
+                info!("unregister a producer group[{}] from groupChannelTable", group);
+                self.call_producer_change_listener(ProducerGroupEvent::GroupUnregister, &group, None);
             }
         }
 

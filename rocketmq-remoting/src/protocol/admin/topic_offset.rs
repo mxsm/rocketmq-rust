@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -67,5 +64,66 @@ impl std::fmt::Display for TopicOffset {
             "TopicOffset{{min_offset={}, max_offset={}, last_update_timestamp={}}}",
             self.min_offset, self.max_offset, self.last_update_timestamp
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_topic_offset_default_and_new() {
+        let offset = TopicOffset::default();
+        assert_eq!(offset.get_min_offset(), 0);
+        assert_eq!(offset.get_max_offset(), 0);
+        assert_eq!(offset.get_last_update_timestamp(), 0);
+
+        let offset = TopicOffset::new();
+        assert_eq!(offset.get_min_offset(), 0);
+        assert_eq!(offset.get_max_offset(), 0);
+        assert_eq!(offset.get_last_update_timestamp(), 0);
+    }
+
+    #[test]
+    fn test_topic_offset_setters_and_getters() {
+        let mut offset = TopicOffset::new();
+        offset.set_min_offset(10);
+        offset.set_max_offset(20);
+        offset.set_last_update_timestamp(1000);
+
+        assert_eq!(offset.get_min_offset(), 10);
+        assert_eq!(offset.get_max_offset(), 20);
+        assert_eq!(offset.get_last_update_timestamp(), 1000);
+    }
+
+    #[test]
+    fn test_topic_offset_serialization_and_deserialization() {
+        let mut offset = TopicOffset::new();
+        offset.set_min_offset(-10);
+        offset.set_max_offset(-20);
+        offset.set_last_update_timestamp(-1000);
+
+        let serialized = serde_json::to_string(&offset).unwrap();
+        let expected = r#"{"minOffset":-10,"maxOffset":-20,"lastUpdateTimestamp":-1000}"#;
+        assert_eq!(serialized, expected);
+
+        let deserialized: TopicOffset = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.get_min_offset(), -10);
+        assert_eq!(deserialized.get_max_offset(), -20);
+        assert_eq!(deserialized.get_last_update_timestamp(), -1000);
+    }
+
+    #[test]
+    fn test_topic_offset_display() {
+        let mut offset = TopicOffset::new();
+        offset.set_min_offset(10);
+        offset.set_max_offset(20);
+        offset.set_last_update_timestamp(1000);
+
+        let display = format!("{}", offset);
+        assert_eq!(
+            display,
+            "TopicOffset{min_offset=10, max_offset=20, last_update_timestamp=1000}"
+        );
     }
 }

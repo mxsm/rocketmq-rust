@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #![allow(unused_variables)]
 
@@ -103,10 +100,7 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
         let queue_lock_manager = QueueLockManager::new();
         PopMessageProcessor {
             ck_message_number: Default::default(),
-            pop_long_polling_service: ArcMut::new(PopLongPollingService::new(
-                broker_runtime_inner.clone(),
-                false,
-            )),
+            pop_long_polling_service: ArcMut::new(PopLongPollingService::new(broker_runtime_inner.clone(), false)),
             pop_buffer_merge_service: ArcMut::new(PopBufferMergeService::new(
                 revive_topic.clone(),
                 queue_lock_manager.clone(),
@@ -131,10 +125,7 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
         let queue_lock_manager = QueueLockManager::new();
         let processor = PopMessageProcessor {
             ck_message_number: Default::default(),
-            pop_long_polling_service: ArcMut::new(PopLongPollingService::new(
-                broker_runtime_inner.clone(),
-                false,
-            )),
+            pop_long_polling_service: ArcMut::new(PopLongPollingService::new(broker_runtime_inner.clone(), false)),
             pop_buffer_merge_service: ArcMut::new(PopBufferMergeService::new(
                 revive_topic.clone(),
                 queue_lock_manager.clone(),
@@ -148,9 +139,7 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
         };
         let mut processor_inner = ArcMut::new(processor);
         let cloned = processor_inner.clone();
-        processor_inner
-            .pop_long_polling_service
-            .set_processor(cloned);
+        processor_inner.pop_long_polling_service.set_processor(cloned);
         processor_inner
     }
 
@@ -172,8 +161,7 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
-        self._process_request(channel, ctx, request_code, request)
-            .await
+        self._process_request(channel, ctx, request_code, request).await
     }
 }
 
@@ -189,20 +177,14 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let begin_time_mills = get_current_millis();
-        request.add_ext_field_if_not_exist(
-            CheetahString::from_static_str(BORN_TIME),
-            begin_time_mills.to_string(),
-        );
+        request.add_ext_field_if_not_exist(CheetahString::from_static_str(BORN_TIME), begin_time_mills.to_string());
 
         if request
             .get_ext_fields()
             .and_then(|fields| fields.get(BORN_TIME).cloned())
             .is_none_or(|old| old == "0")
         {
-            request.add_ext_field(
-                CheetahString::from_static_str(BORN_TIME),
-                begin_time_mills.to_string(),
-            );
+            request.add_ext_field(CheetahString::from_static_str(BORN_TIME), begin_time_mills.to_string());
         }
         let opaque = request.opaque();
         let request_header = request.decode_command_custom_header::<PopMessageRequestHeader>()?;
@@ -216,126 +198,100 @@ where
             );
 
         if request_header.is_timeout_too_much() {
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::PollingTimeout,
-                    format!(
-                        "the broker[{}] pop message is timeout too much",
-                        self.broker_runtime_inner.broker_config().broker_ip1
-                    ),
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::PollingTimeout,
+                format!(
+                    "the broker[{}] pop message is timeout too much",
+                    self.broker_runtime_inner.broker_config().broker_ip1
                 ),
-            ));
+            )));
         }
 
         if !PermName::is_readable(self.broker_runtime_inner.broker_config().broker_permission) {
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::NoPermission,
-                    format!(
-                        "the broker[{}] pop message is forbidden",
-                        self.broker_runtime_inner.broker_config().broker_ip1
-                    ),
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::NoPermission,
+                format!(
+                    "the broker[{}] pop message is forbidden",
+                    self.broker_runtime_inner.broker_config().broker_ip1
                 ),
-            ));
+            )));
         }
 
         if request_header.max_msg_nums > 32 {
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::SystemError,
-                    format!(
-                        "the broker[{}] pop message's num is greater than 32",
-                        self.broker_runtime_inner.broker_config().broker_ip1
-                    ),
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SystemError,
+                format!(
+                    "the broker[{}] pop message's num is greater than 32",
+                    self.broker_runtime_inner.broker_config().broker_ip1
                 ),
-            ));
+            )));
         }
 
-        if !self
-            .broker_runtime_inner
-            .message_store_config()
-            .timer_wheel_enable
-        {
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::SystemError,
-                    format!(
-                        "the broker[{}] pop message is forbidden because timerWheelEnable is false",
-                        self.broker_runtime_inner.broker_config().broker_ip1
-                    ),
+        if !self.broker_runtime_inner.message_store_config().timer_wheel_enable {
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SystemError,
+                format!(
+                    "the broker[{}] pop message is forbidden because timerWheelEnable is false",
+                    self.broker_runtime_inner.broker_config().broker_ip1
                 ),
-            ));
+            )));
         }
         let topic_config = self
             .broker_runtime_inner
             .topic_config_manager()
             .select_topic_config(&request_header.topic);
         if topic_config.is_none() {
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::TopicNotExist,
-                    format!(
-                        "topic[{}] not exist, apply first please! {}",
-                        request_header.topic,
-                        FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
-                    ),
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::TopicNotExist,
+                format!(
+                    "topic[{}] not exist, apply first please! {}",
+                    request_header.topic,
+                    FAQUrl::suggest_todo(FAQUrl::APPLY_TOPIC_URL)
                 ),
-            ));
+            )));
         }
         let topic_config = topic_config.unwrap();
         if !PermName::is_readable(topic_config.perm) {
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::NoPermission,
-                    format!(
-                        "the topic[{}] peeking message is forbidden",
-                        request_header.topic
-                    ),
-                ),
-            ));
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::NoPermission,
+                format!("the topic[{}] peeking message is forbidden", request_header.topic),
+            )));
         }
         if request_header.queue_id >= topic_config.read_queue_nums as i32 {
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::SystemError,
-                    format!(
-                        "the queueId[{}] is illegal, topic[{}]  topicConfig readQueueNums[{}] \
-                         consumer[{}]",
-                        request_header.queue_id,
-                        request_header.topic,
-                        topic_config.read_queue_nums,
-                        channel.remote_address()
-                    ),
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SystemError,
+                format!(
+                    "the queueId[{}] is illegal, topic[{}]  topicConfig readQueueNums[{}] consumer[{}]",
+                    request_header.queue_id,
+                    request_header.topic,
+                    topic_config.read_queue_nums,
+                    channel.remote_address()
                 ),
-            ));
+            )));
         }
         let subscription_group_config = self
             .broker_runtime_inner
             .subscription_group_manager()
             .find_subscription_group_config(&request_header.consumer_group);
         if subscription_group_config.is_none() {
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::SubscriptionGroupNotExist,
-                    format!(
-                        "the consumer group[{}] not online, apply first please! {}",
-                        request_header.consumer_group,
-                        FAQUrl::suggest_todo(FAQUrl::SUBSCRIPTION_GROUP_NOT_EXIST)
-                    ),
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SubscriptionGroupNotExist,
+                format!(
+                    "the consumer group[{}] not online, apply first please! {}",
+                    request_header.consumer_group,
+                    FAQUrl::suggest_todo(FAQUrl::SUBSCRIPTION_GROUP_NOT_EXIST)
                 ),
-            ));
+            )));
         }
         let subscription_group_config = subscription_group_config.unwrap();
         if !subscription_group_config.consume_enable() {
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::NoPermission,
-                    format!(
-                        "the consumer group[{}], not permitted to consume",
-                        request_header.consumer_group
-                    ),
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::NoPermission,
+                format!(
+                    "the consumer group[{}], not permitted to consume",
+                    request_header.consumer_group
                 ),
-            ));
+            )));
         }
 
         let exp = request_header.exp.as_ref();
@@ -352,27 +308,21 @@ where
                         "Parse the consumer's subscription[{:?}] error, group: {}",
                         request_header.exp, request_header.consumer_group
                     );
-                    return Ok(Some(
-                        RemotingCommand::create_response_command_with_code_remark(
-                            ResponseCode::SubscriptionParseFailed,
-                            "parse the consumer's subscription failed",
-                        ),
-                    ));
+                    return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                        ResponseCode::SubscriptionParseFailed,
+                        "parse the consumer's subscription failed",
+                    )));
                 }
             };
-            self.broker_runtime_inner
-                .consumer_manager()
-                .compensate_subscribe_data(
-                    &request_header.consumer_group,
-                    &request_header.topic,
-                    &subscription_data,
-                );
+            self.broker_runtime_inner.consumer_manager().compensate_subscribe_data(
+                &request_header.consumer_group,
+                &request_header.topic,
+                &subscription_data,
+            );
             let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
                 &request_header.topic,
                 &request_header.consumer_group,
-                self.broker_runtime_inner
-                    .broker_config()
-                    .enable_retry_topic_v2,
+                self.broker_runtime_inner.broker_config().enable_retry_topic_v2,
             ));
             let retry_subscription_data = match FilterAPI::build(
                 &retry_topic,
@@ -385,53 +335,45 @@ where
                         "Parse the consumer's subscription[{:?}] error, group: {}",
                         request_header.exp, request_header.consumer_group
                     );
-                    return Ok(Some(
-                        RemotingCommand::create_response_command_with_code_remark(
-                            ResponseCode::SubscriptionParseFailed,
-                            "parse the consumer's subscription failed",
-                        ),
-                    ));
+                    return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                        ResponseCode::SubscriptionParseFailed,
+                        "parse the consumer's subscription failed",
+                    )));
                 }
             };
-            self.broker_runtime_inner
-                .consumer_manager()
-                .compensate_subscribe_data(
-                    &request_header.consumer_group,
-                    &retry_topic,
-                    &retry_subscription_data,
+            self.broker_runtime_inner.consumer_manager().compensate_subscribe_data(
+                &request_header.consumer_group,
+                &retry_topic,
+                &retry_subscription_data,
+            );
+            let message_filter = if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
+                let consumer_filter_data = ConsumerFilterManager::build(
+                    request_header.consumer_group.clone(),
+                    request_header.topic.clone(),
+                    request_header.exp.clone(),
+                    request_header.exp_type.clone(),
+                    get_current_millis(),
                 );
-            let message_filter =
-                if !ExpressionType::is_tag_type(Some(subscription_data.expression_type.as_str())) {
-                    let consumer_filter_data = ConsumerFilterManager::build(
-                        request_header.consumer_group.clone(),
-                        request_header.topic.clone(),
-                        request_header.exp.clone(),
-                        request_header.exp_type.clone(),
-                        get_current_millis(),
+                if consumer_filter_data.is_none() {
+                    warn!(
+                        "Parse the consumer's subscription[{:?}] failed, group: {}",
+                        request_header.exp, request_header.consumer_group
                     );
-                    if consumer_filter_data.is_none() {
-                        warn!(
-                            "Parse the consumer's subscription[{:?}] failed, group: {}",
-                            request_header.exp, request_header.consumer_group
-                        );
-                        return Ok(Some(
-                            RemotingCommand::create_response_command_with_code_remark(
-                                ResponseCode::SubscriptionParseFailed,
-                                "parse the consumer's subscription failed",
-                            ),
-                        ));
-                    }
-                    let consumer_filter_data = consumer_filter_data.unwrap();
-                    let message_filter: Box<dyn MessageFilter> =
-                        Box::new(ExpressionMessageFilter::new(
-                            Some(subscription_data.clone()),
-                            Some(consumer_filter_data),
-                            Arc::new(self.broker_runtime_inner.consumer_filter_manager().clone()),
-                        ));
-                    Some(message_filter)
-                } else {
-                    None
-                };
+                    return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                        ResponseCode::SubscriptionParseFailed,
+                        "parse the consumer's subscription failed",
+                    )));
+                }
+                let consumer_filter_data = consumer_filter_data.unwrap();
+                let message_filter: Box<dyn MessageFilter> = Box::new(ExpressionMessageFilter::new(
+                    Some(subscription_data.clone()),
+                    Some(consumer_filter_data),
+                    Arc::new(self.broker_runtime_inner.consumer_filter_manager().clone()),
+                ));
+                Some(message_filter)
+            } else {
+                None
+            };
             (subscription_data, message_filter)
         } else {
             let subscription_data = match FilterAPI::build(
@@ -441,27 +383,21 @@ where
             ) {
                 Ok(value) => value,
                 Err(_) => {
-                    return Ok(Some(
-                        RemotingCommand::create_response_command_with_code_remark(
-                            ResponseCode::SubscriptionParseFailed,
-                            "parse the consumer's subscription failed",
-                        ),
-                    ));
+                    return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                        ResponseCode::SubscriptionParseFailed,
+                        "parse the consumer's subscription failed",
+                    )));
                 }
             };
-            self.broker_runtime_inner
-                .consumer_manager()
-                .compensate_subscribe_data(
-                    &request_header.consumer_group,
-                    &request_header.topic,
-                    &subscription_data,
-                );
+            self.broker_runtime_inner.consumer_manager().compensate_subscribe_data(
+                &request_header.consumer_group,
+                &request_header.topic,
+                &subscription_data,
+            );
             let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
                 &request_header.topic,
                 &request_header.consumer_group,
-                self.broker_runtime_inner
-                    .broker_config()
-                    .enable_retry_topic_v2,
+                self.broker_runtime_inner.broker_config().enable_retry_topic_v2,
             ));
             let retry_subscription_data = match FilterAPI::build(
                 &retry_topic,
@@ -470,35 +406,29 @@ where
             ) {
                 Ok(value) => value,
                 Err(_) => {
-                    return Ok(Some(
-                        RemotingCommand::create_response_command_with_code_remark(
-                            ResponseCode::SubscriptionParseFailed,
-                            "parse the consumer's subscription failed",
-                        ),
-                    ));
+                    return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                        ResponseCode::SubscriptionParseFailed,
+                        "parse the consumer's subscription failed",
+                    )));
                 }
             };
-            self.broker_runtime_inner
-                .consumer_manager()
-                .compensate_subscribe_data(
-                    &request_header.consumer_group,
-                    &retry_topic,
-                    &retry_subscription_data,
-                );
+            self.broker_runtime_inner.consumer_manager().compensate_subscribe_data(
+                &request_header.consumer_group,
+                &retry_topic,
+                &retry_subscription_data,
+            );
             (subscription_data, None)
         };
 
         let revive_qid = if request_header.order.unwrap_or(false) {
             POP_ORDER_REVIVE_QUEUE
         } else {
-            let revive_queue_num =
-                self.broker_runtime_inner.broker_config().revive_queue_num as i64;
+            let revive_queue_num = self.broker_runtime_inner.broker_config().revive_queue_num as i64;
             let ck_num = self.ck_message_number.fetch_add(1, Ordering::AcqRel);
             ((ck_num % revive_queue_num + revive_queue_num) % revive_queue_num) as i32
         };
-        let mut get_message_result = ArcMut::new(GetMessageResult::new_result_size(
-            request_header.max_msg_nums as usize,
-        ));
+        let mut get_message_result =
+            ArcMut::new(GetMessageResult::new_result_size(request_header.max_msg_nums as usize));
 
         // Due to the design of the fields startOffsetInfo, msgOffsetInfo, and orderCountInfo,
         // a single POP request could only invoke the popMsgFromQueue method once
@@ -509,16 +439,9 @@ where
         //Determine whether to pull a message from the retry queue using a random number and a set
         // probability
         let randomq = rand::rng().random_range(0..100);
-        let need_retry = randomq
-            < self
-                .broker_runtime_inner
-                .broker_config()
-                .pop_from_retry_probability;
+        let need_retry = randomq < self.broker_runtime_inner.broker_config().pop_from_retry_probability;
         let mut need_retry_v1 = false;
-        if self
-            .broker_runtime_inner
-            .broker_config()
-            .enable_retry_topic_v2
+        if self.broker_runtime_inner.broker_config().enable_retry_topic_v2
             && self
                 .broker_runtime_inner
                 .broker_config()
@@ -564,9 +487,7 @@ where
                 let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
                     &request_header.topic,
                     &request_header.consumer_group,
-                    self.broker_runtime_inner
-                        .broker_config()
-                        .enable_retry_topic_v2,
+                    self.broker_runtime_inner.broker_config().enable_retry_topic_v2,
                 ));
                 self.pop_msg_from_topic_by_name(
                     &retry_topic,
@@ -655,9 +576,7 @@ where
                 let retry_topic = CheetahString::from_string(KeyBuilder::build_pop_retry_topic(
                     &request_header.topic,
                     &request_header.consumer_group,
-                    self.broker_runtime_inner
-                        .broker_config()
-                        .enable_retry_topic_v2,
+                    self.broker_runtime_inner.broker_config().enable_retry_topic_v2,
                 ));
                 self.pop_msg_from_topic_by_name(
                     &retry_topic,
@@ -742,11 +661,7 @@ where
 
         match ResponseCode::from(final_response.code()) {
             ResponseCode::Success => {
-                if self
-                    .broker_runtime_inner
-                    .broker_config()
-                    .transfer_msg_by_heap
-                {
+                if self.broker_runtime_inner.broker_config().transfer_msg_by_heap {
                     if let Some(bytes) = self.read_get_message_result(
                         &get_message_result,
                         &request_header.consumer_group,
@@ -759,9 +674,9 @@ where
                     Ok(Some(final_response))
                 } else {
                     //zero copy transfer
-                    if let Some(header_bytes) = final_response.encode_header_with_body_length(
-                        get_message_result.buffer_total_size() as usize,
-                    ) {
+                    if let Some(header_bytes) =
+                        final_response.encode_header_with_body_length(get_message_result.buffer_total_size() as usize)
+                    {
                         channel.connection_mut().send_bytes(header_bytes).await?;
                     }
                     for select_result in get_message_result.message_mapped_list_mut() {
@@ -894,11 +809,7 @@ where
                 false,
             )
             .await;
-        if !self
-            .queue_lock_manager()
-            .try_lock_with_key(lock_key.clone())
-            .await
-        {
+        if !self.queue_lock_manager().try_lock_with_key(lock_key.clone()).await {
             let message_store = match self.broker_runtime_inner.message_store() {
                 Some(store) => store,
                 None => {
@@ -923,9 +834,7 @@ where
                 }
             };
             let result = message_store.get_max_offset_in_queue(topic, queue_id) - offset + rest_num;
-            self.queue_lock_manager()
-                .unlock_with_key(lock_key.clone())
-                .await;
+            self.queue_lock_manager().unlock_with_key(lock_key.clone()).await;
             return result;
         }
         let offset = self
@@ -941,20 +850,14 @@ where
             .await;
         let is_order = request_header.order.unwrap_or(false);
         if is_order {
-            if self
-                .broker_runtime_inner
-                .consumer_order_info_manager()
-                .check_block(
-                    attempt_id,
-                    topic,
-                    &request_header.consumer_group,
-                    queue_id,
-                    request_header.invisible_time,
-                )
-            {
-                self.queue_lock_manager()
-                    .unlock_with_key(lock_key.clone())
-                    .await;
+            if self.broker_runtime_inner.consumer_order_info_manager().check_block(
+                attempt_id,
+                topic,
+                &request_header.consumer_group,
+                queue_id,
+                request_header.invisible_time,
+            ) {
+                self.queue_lock_manager().unlock_with_key(lock_key.clone()).await;
                 return rest_num;
             }
             self.broker_runtime_inner
@@ -970,16 +873,12 @@ where
                         "Message store not initialized, topic={}, group={}",
                         topic, request_header.consumer_group
                     );
-                    self.queue_lock_manager()
-                        .unlock_with_key(lock_key.clone())
-                        .await;
+                    self.queue_lock_manager().unlock_with_key(lock_key.clone()).await;
                     return rest_num;
                 }
             };
             let result = message_store.get_max_offset_in_queue(topic, queue_id) - offset + rest_num;
-            self.queue_lock_manager()
-                .unlock_with_key(lock_key.clone())
-                .await;
+            self.queue_lock_manager().unlock_with_key(lock_key.clone()).await;
             return result;
         }
         let message_store = match self.broker_runtime_inner.message_store() {
@@ -989,9 +888,7 @@ where
                     "Message store not initialized, topic={}, group={}",
                     topic, request_header.consumer_group
                 );
-                self.queue_lock_manager()
-                    .unlock_with_key(lock_key.clone())
-                    .await;
+                self.queue_lock_manager().unlock_with_key(lock_key.clone()).await;
                 return rest_num;
             }
         };
@@ -1001,8 +898,7 @@ where
                 topic,
                 queue_id,
                 offset,
-                request_header.max_msg_nums as i32
-                    - get_message_result.message_mapped_list().len() as i32,
+                request_header.max_msg_nums as i32 - get_message_result.message_mapped_list().len() as i32,
                 message_filter.clone(),
             )
             .await;
@@ -1020,15 +916,13 @@ where
                         GetMessageStatus::OffsetFoundNull
                         | GetMessageStatus::OffsetOverflowBadly
                         | GetMessageStatus::OffsetTooSmall => {
-                            self.broker_runtime_inner
-                                .consumer_offset_manager()
-                                .commit_offset(
-                                    channel.remote_address().to_string().into(),
-                                    &request_header.consumer_group,
-                                    topic,
-                                    queue_id,
-                                    value.next_begin_offset(),
-                                );
+                            self.broker_runtime_inner.consumer_offset_manager().commit_offset(
+                                channel.remote_address().to_string().into(),
+                                &request_header.consumer_group,
+                                topic,
+                                queue_id,
+                                value.next_begin_offset(),
+                            );
                             atomic_offset.store(value.next_begin_offset(), Ordering::Release);
                             match self.broker_runtime_inner.message_store() {
                                 Some(store) => {
@@ -1039,16 +933,14 @@ where
                                             queue_id,
                                             offset,
                                             request_header.max_msg_nums as i32
-                                                - get_message_result.message_mapped_list().len()
-                                                    as i32,
+                                                - get_message_result.message_mapped_list().len() as i32,
                                             message_filter,
                                         )
                                         .await
                                 }
                                 None => {
                                     warn!(
-                                        "Message store not initialized during offset adjustment, \
-                                         topic={}, group={}",
+                                        "Message store not initialized during offset adjustment, topic={}, group={}",
                                         topic, request_header.consumer_group
                                     );
                                     Some(value)
@@ -1080,28 +972,24 @@ where
             Some(result_inner) => {
                 if !result_inner.message_mapped_list().is_empty() {
                     if is_order {
-                        self.broker_runtime_inner
-                            .consumer_order_info_manager()
-                            .update(
-                                request_header.attempt_id.clone().unwrap_or_default(),
-                                is_retry,
-                                topic,
-                                &request_header.consumer_group,
-                                queue_id,
-                                pop_time,
-                                request_header.invisible_time,
-                                result_inner.message_queue_offset().clone(),
-                                order_count_info,
-                            );
-                        self.broker_runtime_inner
-                            .consumer_offset_manager()
-                            .commit_offset(
-                                channel.remote_address().to_string().into(),
-                                &request_header.consumer_group,
-                                topic,
-                                queue_id,
-                                final_offset,
-                            );
+                        self.broker_runtime_inner.consumer_order_info_manager().update(
+                            request_header.attempt_id.clone().unwrap_or_default(),
+                            is_retry,
+                            topic,
+                            &request_header.consumer_group,
+                            queue_id,
+                            pop_time,
+                            request_header.invisible_time,
+                            result_inner.message_queue_offset().clone(),
+                            order_count_info,
+                        );
+                        self.broker_runtime_inner.consumer_offset_manager().commit_offset(
+                            channel.remote_address().to_string().into(),
+                            &request_header.consumer_group,
+                            topic,
+                            queue_id,
+                            final_offset,
+                        );
                     } else if !self
                         .append_check_point(
                             request_header,
@@ -1116,15 +1004,9 @@ where
                         .await
                     {
                         self.queue_lock_manager().unlock_with_key(lock_key).await;
-                        return atomic_rest_num.load(Ordering::Acquire)
-                            + result_inner.message_count() as i64;
+                        return atomic_rest_num.load(Ordering::Acquire) + result_inner.message_count() as i64;
                     }
-                    ExtraInfoUtil::build_start_offset_info(
-                        start_offset_info,
-                        topic,
-                        queue_id,
-                        final_offset,
-                    );
+                    ExtraInfoUtil::build_start_offset_info(start_offset_info, topic, queue_id, final_offset);
                     ExtraInfoUtil::build_msg_offset_info(
                         msg_offset_info,
                         topic,
@@ -1151,15 +1033,13 @@ where
                     ) && result_inner.next_begin_offset() > -1
                     {
                         if is_order {
-                            self.broker_runtime_inner
-                                .consumer_offset_manager()
-                                .commit_offset(
-                                    channel.remote_address().to_string().into(),
-                                    &request_header.consumer_group,
-                                    topic,
-                                    queue_id,
-                                    result_inner.next_begin_offset(),
-                                );
+                            self.broker_runtime_inner.consumer_offset_manager().commit_offset(
+                                channel.remote_address().to_string().into(),
+                                &request_header.consumer_group,
+                                topic,
+                                queue_id,
+                                result_inner.next_begin_offset(),
+                            );
                         } else {
                             self.pop_buffer_merge_service
                                 .mut_from_ref()
@@ -1172,10 +1052,7 @@ where
                                     pop_time,
                                     revive_qid,
                                     result_inner.next_begin_offset() as u64,
-                                    self.broker_runtime_inner
-                                        .broker_config()
-                                        .broker_name()
-                                        .clone(),
+                                    self.broker_runtime_inner.broker_config().broker_name().clone(),
                                 )
                                 .await;
                         }
@@ -1186,11 +1063,7 @@ where
                     result_inner.max_offset() - result_inner.next_begin_offset(),
                     Ordering::AcqRel,
                 );
-                let broker_name = self
-                    .broker_runtime_inner
-                    .broker_config()
-                    .broker_name()
-                    .as_str();
+                let broker_name = self.broker_runtime_inner.broker_config().broker_name().as_str();
                 let message_count = result_inner.message_count();
                 for maped_buffer in result_inner.message_mapped_vec() {
                     if self
@@ -1202,8 +1075,7 @@ where
                         get_message_result.add_message_inner(maped_buffer);
                     } else {
                         let mut bytes = maped_buffer.get_bytes().unwrap_or_default();
-                        let message_ext_list =
-                            message_decoder::decodes_batch(&mut bytes, true, false);
+                        let message_ext_list = message_decoder::decodes_batch(&mut bytes, true, false);
                         //maped_buffer.release();
                         for mut message_ext in message_ext_list {
                             let ck_info = ExtraInfoUtil::build_extra_info_with_offset(
@@ -1219,9 +1091,7 @@ where
                             message_ext
                                 .message
                                 .properties
-                                .entry(CheetahString::from_static_str(
-                                    MessageConst::PROPERTY_POP_CK,
-                                ))
+                                .entry(CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK))
                                 .or_insert(ck_info.into());
 
                             message_ext.set_topic(request_header.topic.clone());
@@ -1302,33 +1172,18 @@ where
         let pop_buffer_merge_service_ref_mut = self.pop_buffer_merge_service.mut_from_ref();
 
         match pop_buffer_merge_service_ref_mut
-            .add_ck(
-                &ck,
-                revive_qid,
-                -1,
-                get_message_tmp_result.next_begin_offset(),
-            )
+            .add_ck(&ck, revive_qid, -1, get_message_tmp_result.next_begin_offset())
             .await
         {
             Ok(_) => true,
             Err(_) => pop_buffer_merge_service_ref_mut
-                .add_ck_just_offset(
-                    ck,
-                    revive_qid,
-                    -1,
-                    get_message_tmp_result.next_begin_offset(),
-                )
+                .add_ck_just_offset(ck, revive_qid, -1, get_message_tmp_result.next_begin_offset())
                 .await
                 .is_ok(),
         }
     }
 
-    fn is_pop_should_stop(
-        &self,
-        topic: &CheetahString,
-        group: &CheetahString,
-        queue_id: i32,
-    ) -> bool {
+    fn is_pop_should_stop(&self, topic: &CheetahString, group: &CheetahString, queue_id: i32) -> bool {
         let broker_config = self.broker_runtime_inner.broker_config();
         broker_config.enable_pop_message_threshold
             && self
@@ -1362,10 +1217,7 @@ where
             }
         }
 
-        let buffer_offset = self
-            .pop_buffer_merge_service
-            .get_latest_offset(lock_key)
-            .await;
+        let buffer_offset = self.pop_buffer_merge_service.get_latest_offset(lock_key).await;
         if buffer_offset < 0 {
             offset
         } else {
@@ -1382,8 +1234,7 @@ where
         init: bool,
     ) -> i64 {
         let mut offset;
-        if init_mode == ConsumeInitMode::MIN || topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
-        {
+        if init_mode == ConsumeInitMode::MIN || topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
             offset = self
                 .broker_runtime_inner
                 .message_store()
@@ -1420,19 +1271,18 @@ where
 
         // whichever initMode
         if init {
-            self.broker_runtime_inner
-                .consumer_offset_manager()
-                .commit_offset("getPopOffset".into(), group, topic, queue_id, offset);
+            self.broker_runtime_inner.consumer_offset_manager().commit_offset(
+                "getPopOffset".into(),
+                group,
+                topic,
+                queue_id,
+                offset,
+            );
         }
         offset
     }
 
-    fn reset_pop_offset(
-        &self,
-        topic: &CheetahString,
-        group: &CheetahString,
-        queue_id: i32,
-    ) -> Option<i64> {
+    fn reset_pop_offset(&self, topic: &CheetahString, group: &CheetahString, queue_id: i32) -> Option<i64> {
         let lock_key = CheetahString::from_string(format!(
             "{}{}{}{}{}",
             topic,
@@ -1450,9 +1300,13 @@ where
                 .consumer_order_info_manager()
                 .clear_block(topic, group, queue_id);
             self.pop_buffer_merge_service.clear_offset_queue(&lock_key);
-            self.broker_runtime_inner
-                .consumer_offset_manager()
-                .commit_offset("ResetPopOffset".into(), group, topic, queue_id, *value)
+            self.broker_runtime_inner.consumer_offset_manager().commit_offset(
+                "ResetPopOffset".into(),
+                group,
+                topic,
+                queue_id,
+                *value,
+            )
         }
         reset_offset
     }
@@ -1466,18 +1320,11 @@ where
     /// # Returns
     /// A reference to the PopLongPollingService instance
     #[inline]
-    pub fn pop_long_polling_service(
-        &self,
-    ) -> Option<&ArcMut<PopLongPollingService<MS, PopMessageProcessor<MS>>>> {
+    pub fn pop_long_polling_service(&self) -> Option<&ArcMut<PopLongPollingService<MS, PopMessageProcessor<MS>>>> {
         Some(&self.pop_long_polling_service)
     }
 
-    pub fn notify_message_arriving(
-        &self,
-        topic: &CheetahString,
-        queue_id: i32,
-        cid: &CheetahString,
-    ) {
+    pub fn notify_message_arriving(&self, topic: &CheetahString, queue_id: i32, cid: &CheetahString) {
         self.pop_long_polling_service
             .notify_message_arriving(topic, queue_id, cid, None, 0, None, None);
     }
@@ -1509,8 +1356,7 @@ where
         _topic: &str,
         _queue_id: i32,
     ) -> Option<Bytes> {
-        let mut bytes_mut =
-            BytesMut::with_capacity(get_message_result.buffer_total_size() as usize);
+        let mut bytes_mut = BytesMut::with_capacity(get_message_result.buffer_total_size() as usize);
         for msg in get_message_result.message_mapped_list() {
             let data = &msg.mapped_file.as_ref().unwrap().get_mapped_file()
                 [msg.start_offset as usize..(msg.start_offset + msg.size as u64) as usize];
@@ -1575,9 +1421,7 @@ impl<MS: MessageStore> PopMessageProcessor<MS> {
             PopAckConstants::SPLIT,
             ck.pop_time,
             PopAckConstants::SPLIT,
-            ck.broker_name
-                .as_ref()
-                .map_or("null".to_string(), |x| x.to_string()),
+            ck.broker_name.as_ref().map_or("null".to_string(), |x| x.to_string()),
             PopAckConstants::SPLIT,
             PopAckConstants::CK_TAG
         )
@@ -1634,8 +1478,7 @@ impl TimedLock {
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
         {
             Ok(_) => {
-                self.lock_time
-                    .store(get_current_millis(), Ordering::Relaxed);
+                self.lock_time.store(get_current_millis(), Ordering::Relaxed);
                 true
             }
             Err(_) => false,
@@ -1670,11 +1513,7 @@ impl QueueLockManager {
     }
 
     #[inline]
-    pub fn build_lock_key(
-        topic: &CheetahString,
-        consumer_group: &CheetahString,
-        queue_id: i32,
-    ) -> String {
+    pub fn build_lock_key(topic: &CheetahString, consumer_group: &CheetahString, queue_id: i32) -> String {
         format!(
             "{}{}{}{}{}",
             topic,
@@ -1685,15 +1524,9 @@ impl QueueLockManager {
         )
     }
 
-    pub async fn try_lock(
-        &self,
-        topic: &CheetahString,
-        consumer_group: &CheetahString,
-        queue_id: i32,
-    ) -> bool {
+    pub async fn try_lock(&self, topic: &CheetahString, consumer_group: &CheetahString, queue_id: i32) -> bool {
         let key = Self::build_lock_key(topic, consumer_group, queue_id);
-        self.try_lock_with_key(CheetahString::from_string(key))
-            .await
+        self.try_lock_with_key(CheetahString::from_string(key)).await
     }
 
     pub async fn try_lock_with_key(&self, key: CheetahString) -> bool {
@@ -1707,12 +1540,7 @@ impl QueueLockManager {
         lock.try_lock()
     }
 
-    pub async fn unlock(
-        &self,
-        topic: &CheetahString,
-        consumer_group: &CheetahString,
-        queue_id: i32,
-    ) {
+    pub async fn unlock(&self, topic: &CheetahString, consumer_group: &CheetahString, queue_id: i32) {
         let key = Self::build_lock_key(topic, consumer_group, queue_id);
         self.unlock_with_key(CheetahString::from_string(key)).await;
     }
@@ -1791,8 +1619,7 @@ mod tests {
             ack_msg,
             ack_offset_list: vec![1, 2, 3],
         };
-        let result =
-            PopMessageProcessor::<LocalFileMessageStore>::gen_batch_ack_unique_id(&batch_ack_msg);
+        let result = PopMessageProcessor::<LocalFileMessageStore>::gen_batch_ack_unique_id(&batch_ack_msg);
         let expected = "test_topic@1@[1, 2, 3]@test_group@789@bAck";
         assert_eq!(result, expected);
     }

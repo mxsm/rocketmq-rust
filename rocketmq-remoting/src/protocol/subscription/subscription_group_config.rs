@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -218,10 +215,7 @@ impl SubscriptionGroupConfig {
     }
 
     #[inline]
-    pub fn set_notify_consumer_ids_changed_enable(
-        &mut self,
-        notify_consumer_ids_changed_enable: bool,
-    ) {
+    pub fn set_notify_consumer_ids_changed_enable(&mut self, notify_consumer_ids_changed_enable: bool) {
         self.notify_consumer_ids_changed_enable = notify_consumer_ids_changed_enable;
     }
 
@@ -236,10 +230,7 @@ impl SubscriptionGroupConfig {
     }
 
     #[inline]
-    pub fn set_subscription_data_set(
-        &mut self,
-        subscription_data_set: Option<HashSet<SimpleSubscriptionData>>,
-    ) {
+    pub fn set_subscription_data_set(&mut self, subscription_data_set: Option<HashSet<SimpleSubscriptionData>>) {
         self.subscription_data_set = subscription_data_set;
     }
 
@@ -310,9 +301,6 @@ mod subscription_group_config_tests {
         assert_eq!(config.group_sys_flag(), 1);
         assert_eq!(config.consume_timeout_minute(), 30);
         assert!(config.subscription_data_set().is_some());
-        assert_eq!(
-            config.attributes(),
-            &HashMap::from([("key".into(), "value".into())])
-        );
+        assert_eq!(config.attributes(), &HashMap::from([("key".into(), "value".into())]));
     }
 }

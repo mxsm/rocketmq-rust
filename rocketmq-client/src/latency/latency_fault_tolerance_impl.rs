@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::any::Any;
 use std::collections::HashSet;
@@ -68,10 +65,7 @@ where
         entry.set_reachable(reachable);
 
         if !reachable {
-            info!(
-                "{} is unreachable, it will not be used until it's reachable",
-                name
-            );
+            info!("{} is unreachable, it will not be used until it's reachable", name);
         }
     }
 
@@ -96,11 +90,7 @@ where
     async fn pick_one_at_least(&self) -> Option<CheetahString> {
         let mut reachable_names: Vec<CheetahString> = Vec::new();
         for entry in self.fault_item_table.iter() {
-            if entry
-                .value()
-                .reachable_flag
-                .load(std::sync::atomic::Ordering::Acquire)
-            {
+            if entry.value().reachable_flag.load(std::sync::atomic::Ordering::Acquire) {
                 reachable_names.push(entry.key().clone());
             }
         }
@@ -118,10 +108,7 @@ where
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                if !this
-                    .start_detector_enable
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                {
+                if !this.start_detector_enable.load(std::sync::atomic::Ordering::Relaxed) {
                     continue;
                 }
 
@@ -136,10 +123,7 @@ where
         let mut remove_set = HashSet::new();
         for entry in self.fault_item_table.iter() {
             let (name, fault_item) = (entry.key(), entry.value());
-            if get_current_millis() as i64
-                - (fault_item
-                    .check_stamp
-                    .load(std::sync::atomic::Ordering::Relaxed) as i64)
+            if get_current_millis() as i64 - (fault_item.check_stamp.load(std::sync::atomic::Ordering::Relaxed) as i64)
                 < 0
             {
                 continue;
@@ -148,12 +132,7 @@ where
                 get_current_millis() + self.detect_interval as u64,
                 std::sync::atomic::Ordering::Release,
             );
-            let broker_addr = self
-                .resolver
-                .as_ref()
-                .unwrap()
-                .resolve(fault_item.name.as_ref())
-                .await;
+            let broker_addr = self.resolver.as_ref().unwrap().resolve(fault_item.name.as_ref()).await;
             if broker_addr.is_none() {
                 remove_set.insert(name.clone());
                 continue;
@@ -166,11 +145,7 @@ where
                 .as_ref()
                 .unwrap()
                 .detect(broker_addr.unwrap().as_str(), self.detect_timeout as u64);
-            if service_ok
-                && fault_item
-                    .reachable_flag
-                    .load(std::sync::atomic::Ordering::Acquire)
-            {
+            if service_ok && fault_item.reachable_flag.load(std::sync::atomic::Ordering::Acquire) {
                 info!("{} is reachable now, then it can be used.", name);
                 fault_item
                     .reachable_flag
@@ -196,8 +171,7 @@ where
     }
 
     fn is_start_detector_enable(&self) -> bool {
-        self.start_detector_enable
-            .load(std::sync::atomic::Ordering::Acquire)
+        self.start_detector_enable.load(std::sync::atomic::Ordering::Acquire)
     }
 
     fn set_resolver(&mut self, resolver: R) {
@@ -249,19 +223,11 @@ impl FaultItem {
     pub fn update_not_available_duration(&self, not_available_duration: u64) {
         let now = get_current_millis();
         if not_available_duration > 0
-            && now + not_available_duration
-                > self
-                    .start_timestamp
-                    .load(std::sync::atomic::Ordering::Relaxed)
+            && now + not_available_duration > self.start_timestamp.load(std::sync::atomic::Ordering::Relaxed)
         {
-            self.start_timestamp.store(
-                now + not_available_duration,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            info!(
-                "{} will be isolated for {} ms.",
-                self.name, not_available_duration
-            );
+            self.start_timestamp
+                .store(now + not_available_duration, std::sync::atomic::Ordering::Relaxed);
+            info!("{} will be isolated for {} ms.", self.name, not_available_duration);
         }
     }
 
@@ -277,14 +243,11 @@ impl FaultItem {
 
     pub fn is_available(&self) -> bool {
         let now = get_current_millis();
-        now >= self
-            .start_timestamp
-            .load(std::sync::atomic::Ordering::Relaxed)
+        now >= self.start_timestamp.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn is_reachable(&self) -> bool {
-        self.reachable_flag
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.reachable_flag.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn set_current_latency(&self, latency: u64) {
@@ -293,13 +256,11 @@ impl FaultItem {
     }
 
     pub fn get_current_latency(&self) -> u64 {
-        self.current_latency
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.current_latency.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn get_start_timestamp(&self) -> u64 {
-        self.start_timestamp
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.start_timestamp.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -319,11 +280,8 @@ impl Ord for FaultItem {
         match self
             .current_latency
             .load(std::sync::atomic::Ordering::Relaxed)
-            .cmp(
-                &other
-                    .current_latency
-                    .load(std::sync::atomic::Ordering::Relaxed),
-            ) {
+            .cmp(&other.current_latency.load(std::sync::atomic::Ordering::Relaxed))
+        {
             Ordering::Equal => (),
             ord => return ord,
         }
@@ -331,11 +289,8 @@ impl Ord for FaultItem {
         match self
             .start_timestamp
             .load(std::sync::atomic::Ordering::Relaxed)
-            .cmp(
-                &other
-                    .start_timestamp
-                    .load(std::sync::atomic::Ordering::Relaxed),
-            ) {
+            .cmp(&other.start_timestamp.load(std::sync::atomic::Ordering::Relaxed))
+        {
             Ordering::Equal => (),
             ord => return ord,
         }
@@ -347,18 +302,10 @@ impl Ord for FaultItem {
 impl PartialEq<Self> for FaultItem {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
-            && self
-                .current_latency
-                .load(std::sync::atomic::Ordering::Relaxed)
-                == other
-                    .current_latency
-                    .load(std::sync::atomic::Ordering::Relaxed)
-            && self
-                .start_timestamp
-                .load(std::sync::atomic::Ordering::Relaxed)
-                == other
-                    .start_timestamp
-                    .load(std::sync::atomic::Ordering::Relaxed)
+            && self.current_latency.load(std::sync::atomic::Ordering::Relaxed)
+                == other.current_latency.load(std::sync::atomic::Ordering::Relaxed)
+            && self.start_timestamp.load(std::sync::atomic::Ordering::Relaxed)
+                == other.start_timestamp.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 

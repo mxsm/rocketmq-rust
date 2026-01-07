@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -73,6 +70,7 @@ use rocketmq_store::base::message_status_enum::PutMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::stats::stats_type::StatsType;
+use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
@@ -106,23 +104,14 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
-        info!(
-            "SendMessageProcessor received request code: {:?}",
-            request_code
-        );
+        debug!("SendMessageProcessor received request code: {:?}", request_code);
         match request_code {
             RequestCode::SendMessage
             | RequestCode::SendMessageV2
             | RequestCode::SendBatchMessage
-            | RequestCode::ConsumerSendMsgBack => {
-                self.process_request_inner(channel, ctx, request_code, request)
-                    .await
-            }
+            | RequestCode::ConsumerSendMsgBack => self.process_request_inner(channel, ctx, request_code, request).await,
             _ => {
-                warn!(
-                    "SendMessageProcessor received unknown request code: {:?}",
-                    request_code
-                );
+                warn!("SendMessageProcessor received unknown request code: {:?}", request_code);
                 let response = RemotingCommand::create_response_command_with_code_remark(
                     ResponseCode::RequestCodeNotSupported,
                     format!("request code {} not supported", request.code()),
@@ -138,11 +127,7 @@ where
             .broker_runtime_inner
             .broker_config()
             .enable_slave_acting_master;
-        let broker_role = self
-            .inner
-            .broker_runtime_inner
-            .message_store_config()
-            .broker_role;
+        let broker_role = self.inner.broker_runtime_inner.message_store_config().broker_role;
         if !enable_slave_acting_master && broker_role == BrokerRole::Slave {
             return (
                 true,
@@ -153,9 +138,7 @@ where
             );
         }
         let message_store = self.inner.broker_runtime_inner.message_store_unchecked();
-        if message_store.is_os_page_cache_busy()
-            || message_store.is_transient_store_pool_deficient()
-        {
+        if message_store.is_os_page_cache_busy() || message_store.is_transient_store_pool_deficient() {
             return (
                 true,
                 Some(RemotingCommand::create_response_command_with_code_remark(
@@ -182,8 +165,7 @@ where
     fn clear_reserved_properties(request_header: &mut SendMessageRequestHeader) {
         let properties = request_header.properties.take();
         if let Some(value) = properties {
-            let delete_properties =
-                message_utils::delete_property(value.as_str(), MessageConst::PROPERTY_POP_CK);
+            let delete_properties = message_utils::delete_property(value.as_str(), MessageConst::PROPERTY_POP_CK);
             request_header.properties = Some(CheetahString::from_string(delete_properties));
         }
     }
@@ -196,11 +178,7 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         match request_code {
-            RequestCode::ConsumerSendMsgBack => {
-                self.inner
-                    .consumer_send_msg_back(&channel, &ctx, request)
-                    .await
-            }
+            RequestCode::ConsumerSendMsgBack => self.inner.consumer_send_msg_back(&channel, &ctx, request).await,
             _ => {
                 let mut request_header = parse_request_header(request, request_code)?;
                 let mapping_context = self
@@ -208,19 +186,16 @@ where
                     .broker_runtime_inner
                     .topic_queue_mapping_manager()
                     .build_topic_queue_mapping_context(&request_header, true);
-                let rewrite_result = TopicQueueMappingManager::rewrite_request_for_static_topic(
-                    &mut request_header,
-                    &mapping_context,
-                );
+                let rewrite_result =
+                    TopicQueueMappingManager::rewrite_request_for_static_topic(&mut request_header, &mapping_context);
                 if rewrite_result.is_some() {
                     return Ok(rewrite_result);
                 }
 
-                let send_message_context =
-                    self.inner
-                        .build_msg_context(&channel, &ctx, &mut request_header, request);
-                self.inner
-                    .execute_send_message_hook_before(&send_message_context);
+                let send_message_context = self
+                    .inner
+                    .build_msg_context(&channel, &ctx, &mut request_header, request);
+                self.inner.execute_send_message_hook_before(&send_message_context);
                 SendMessageProcessor::<MS, TS>::clear_reserved_properties(&mut request_header);
 
                 let execute_send_message_hook_after = {
@@ -313,27 +288,15 @@ where
         }
 
         if request_header.topic.len() > message_limits::MAX_TOPIC_LENGTH {
-            return Ok(Some(
-                response
-                    .set_code(ResponseCode::MessageIllegal)
-                    .set_remark(format!(
-                        "message topic length too long {}",
-                        request_header.topic().len()
-                    )),
-            ));
+            return Ok(Some(response.set_code(ResponseCode::MessageIllegal).set_remark(
+                format!("message topic length too long {}", request_header.topic().len()),
+            )));
         }
 
-        if !request_header.topic.is_empty()
-            && request_header.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX)
-        {
-            return Ok(Some(
-                response
-                    .set_code(ResponseCode::MessageIllegal)
-                    .set_remark(format!(
-                        "batch request does not support retry group  {}",
-                        request_header.topic()
-                    )),
-            ));
+        if !request_header.topic.is_empty() && request_header.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
+            return Ok(Some(response.set_code(ResponseCode::MessageIllegal).set_remark(
+                format!("batch request does not support retry group  {}", request_header.topic()),
+            )));
         }
         let mut message_ext = MessageExtBrokerInner::default();
         message_ext.message_ext_inner.message.topic = request_header.topic().clone();
@@ -347,9 +310,7 @@ where
         message_ext
             .message_ext_inner
             .message
-            .set_properties(string_to_message_properties(
-                request_header.properties.as_ref(),
-            ));
+            .set_properties(string_to_message_properties(request_header.properties.as_ref()));
         message_ext.message_ext_inner.message.body = request.body().cloned();
         message_ext.message_ext_inner.born_timestamp = request_header.born_timestamp;
         message_ext.message_ext_inner.born_host = channel.remote_address();
@@ -375,21 +336,11 @@ where
 
         let mut is_inner_batch = false;
         let mut response_header = SendMessageResponseHeader::default();
-        let batch_uniq_id = MessageClientIDSetter::get_uniq_id(
-            &batch_message
-                .message_ext_broker_inner
-                .message_ext_inner
-                .message,
-        );
+        let batch_uniq_id =
+            MessageClientIDSetter::get_uniq_id(&batch_message.message_ext_broker_inner.message_ext_inner.message);
         if batch_uniq_id.is_some() && QueueTypeUtils::is_batch_cq_arc_mut(Some(&topic_config)) {
-            let sys_flag = batch_message
-                .message_ext_broker_inner
-                .message_ext_inner
-                .sys_flag;
-            batch_message
-                .message_ext_broker_inner
-                .message_ext_inner
-                .sys_flag =
+            let sys_flag = batch_message.message_ext_broker_inner.message_ext_inner.sys_flag;
+            batch_message.message_ext_broker_inner.message_ext_inner.sys_flag =
                 sys_flag | MessageSysFlag::NEED_UNWRAP_FLAG | MessageSysFlag::INNER_BATCH_FLAG;
             batch_message.is_inner_batch = true;
             let inner_num = MessageDecoder::count_inner_msg_num(
@@ -419,17 +370,9 @@ where
             is_inner_batch = true;
         }
         let start = Instant::now();
-        let transaction_id = MessageClientIDSetter::get_uniq_id(
-            &batch_message
-                .message_ext_broker_inner
-                .message_ext_inner
-                .message,
-        );
-        let topic = batch_message
-            .message_ext_broker_inner
-            .message_ext_inner
-            .topic()
-            .clone();
+        let transaction_id =
+            MessageClientIDSetter::get_uniq_id(&batch_message.message_ext_broker_inner.message_ext_inner.message);
+        let topic = batch_message.message_ext_broker_inner.message_ext_inner.topic().clone();
         let put_message_result = if is_inner_batch {
             self.inner
                 .broker_runtime_inner
@@ -502,8 +445,7 @@ where
         let mut message_ext = MessageExtBrokerInner::default();
         message_ext.message_ext_inner.message.topic = request_header.topic().clone();
         message_ext.message_ext_inner.queue_id = queue_id;
-        let mut ori_props =
-            MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
+        let mut ori_props = MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
         if !self
             .handle_retry_and_dlq(
                 &request_header,
@@ -523,9 +465,7 @@ where
         let uniq_key = ori_props.get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX);
         if !uniq_key.is_some_and(|uniq_key_inner| uniq_key_inner.is_empty()) {
             ori_props.insert(
-                CheetahString::from_static_str(
-                    MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
-                ),
+                CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
                 CheetahString::from_string(MessageClientIDSetter::create_uniq_id()),
             );
         }
@@ -572,12 +512,10 @@ where
                 .clone(),
         );
 
-        message_ext.properties_string = MessageDecoder::message_properties_to_string(
-            &message_ext.message_ext_inner.message.properties,
-        );
+        message_ext.properties_string =
+            MessageDecoder::message_properties_to_string(&message_ext.message_ext_inner.message.properties);
         let send_transaction_prepare_message = if tra_flag
-            && !(message_ext.reconsume_times() > 0
-                && message_ext.message_ext_inner.message.get_delay_time_level() > 0)
+            && !(message_ext.reconsume_times() > 0 && message_ext.message_ext_inner.message.get_delay_time_level() > 0)
         {
             if self
                 .inner
@@ -585,14 +523,10 @@ where
                 .broker_config()
                 .reject_transaction_message
             {
-                return Ok(Some(
-                    response
-                        .set_code(ResponseCode::NoPermission)
-                        .set_remark(format!(
-                            "the broker[{}] sending transaction message is forbidden",
-                            self.inner.broker_runtime_inner.broker_config().broker_ip1
-                        )),
-                ));
+                return Ok(Some(response.set_code(ResponseCode::NoPermission).set_remark(format!(
+                    "the broker[{}] sending transaction message is forbidden",
+                    self.inner.broker_runtime_inner.broker_config().broker_ip1
+                ))));
             }
             true
         } else {
@@ -601,8 +535,7 @@ where
 
         let start = Instant::now();
         let topic = message_ext.topic().clone();
-        let transaction_id =
-            MessageClientIDSetter::get_uniq_id(&message_ext.message_ext_inner.message);
+        let transaction_id = MessageClientIDSetter::get_uniq_id(&message_ext.message_ext_inner.message);
         let put_message_result = if send_transaction_prepare_message {
             self.inner
                 .transactional_message_service
@@ -775,11 +708,7 @@ where
         self.inner
             .broker_runtime_inner
             .broker_stats_manager()
-            .inc_topic_put_latency(
-                topic,
-                queue_id,
-                begin_time_millis.elapsed().as_millis() as i32,
-            );
+            .inc_topic_put_latency(topic, queue_id, begin_time_millis.elapsed().as_millis() as i32);
     }
 
     /// Set response header for successful message send
@@ -822,23 +751,14 @@ where
             .append_message_result()
             .expect("append_message_result must exist for successful send");
 
-        let commercial_size_per_msg = self
-            .inner
-            .broker_runtime_inner
-            .broker_config()
-            .commercial_size_per_msg;
-        let commercial_base_count = self
-            .inner
-            .broker_runtime_inner
-            .broker_config()
-            .commercial_base_count;
+        let commercial_size_per_msg = self.inner.broker_runtime_inner.broker_config().commercial_size_per_msg;
+        let commercial_base_count = self.inner.broker_runtime_inner.broker_config().commercial_base_count;
 
         send_message_context.msg_id = response_header.msg_id().clone();
         send_message_context.queue_id = Some(response_header.queue_id());
         send_message_context.queue_offset = Some(response_header.queue_offset());
 
-        let commercial_msg_num =
-            (result.wrote_bytes as f64 / commercial_size_per_msg as f64).ceil() as i32;
+        let commercial_msg_num = (result.wrote_bytes as f64 / commercial_size_per_msg as f64).ceil() as i32;
         let inc_value = commercial_msg_num * commercial_base_count;
 
         send_message_context.commercial_send_stats = StatsType::SendSuccess;
@@ -866,18 +786,13 @@ where
         owner_parent: Option<CheetahString>,
         owner_self: Option<CheetahString>,
     ) {
-        let commercial_size_per_msg = self
-            .inner
-            .broker_runtime_inner
-            .broker_config()
-            .commercial_size_per_msg;
+        let commercial_size_per_msg = self.inner.broker_runtime_inner.broker_config().commercial_size_per_msg;
 
         let msg_num = put_message_result
             .append_message_result()
             .map_or(1, |inner| inner.msg_num)
             .max(1);
-        let commercial_msg_num =
-            (request_body_len as f64 / commercial_size_per_msg as f64).ceil() as i32;
+        let commercial_msg_num = (request_body_len as f64 / commercial_size_per_msg as f64).ceil() as i32;
 
         send_message_context.commercial_send_stats = StatsType::SendFailure;
         send_message_context.commercial_send_times = commercial_msg_num;
@@ -907,31 +822,17 @@ where
         mapping_context: &mut TopicQueueMappingContext,
         _message_type: MessageType,
     ) -> (Option<RemotingCommand>, bool) {
-        let send_ok =
-            self.map_put_status_to_response_code(put_message_result.put_message_status(), response);
+        let send_ok = self.map_put_status_to_response_code(put_message_result.put_message_status(), response);
 
         let binding = HashMap::new();
         let ext_fields = request.ext_fields().unwrap_or(&binding);
-        let owner = ext_fields
-            .get(BrokerStatsManager::COMMERCIAL_OWNER)
-            .cloned();
-        let auth_type = ext_fields
-            .get(BrokerStatsManager::ACCOUNT_AUTH_TYPE)
-            .cloned();
-        let owner_parent = ext_fields
-            .get(BrokerStatsManager::ACCOUNT_OWNER_PARENT)
-            .cloned();
-        let owner_self = ext_fields
-            .get(BrokerStatsManager::ACCOUNT_OWNER_SELF)
-            .cloned();
+        let owner = ext_fields.get(BrokerStatsManager::COMMERCIAL_OWNER).cloned();
+        let auth_type = ext_fields.get(BrokerStatsManager::ACCOUNT_AUTH_TYPE).cloned();
+        let owner_parent = ext_fields.get(BrokerStatsManager::ACCOUNT_OWNER_PARENT).cloned();
+        let owner_self = ext_fields.get(BrokerStatsManager::ACCOUNT_OWNER_SELF).cloned();
 
         if send_ok {
-            self.update_broker_stats_on_success(
-                topic,
-                queue_id_int,
-                &put_message_result,
-                begin_time_millis,
-            );
+            self.update_broker_stats_on_success(topic, queue_id_int, &put_message_result, begin_time_millis);
 
             {
                 let response_header = response
@@ -945,8 +846,7 @@ where
                     transaction_id.clone(),
                 );
 
-                let rewrite_result =
-                    rewrite_response_for_static_topic(response_header, mapping_context);
+                let rewrite_result = rewrite_response_for_static_topic(response_header, mapping_context);
                 if rewrite_result.is_some() {
                     return (rewrite_result, false);
                 }
@@ -995,9 +895,7 @@ where
         request: &RemotingCommand,
         request_header: &SendMessageRequestHeader,
     ) -> RemotingCommand {
-        let mut response = RemotingCommand::create_response_command_with_header(
-            SendMessageResponseHeader::default(),
-        );
+        let mut response = RemotingCommand::create_response_command_with_header(SendMessageResponseHeader::default());
         // set opaque
         response.with_opaque(request.opaque());
         response.add_ext_field(
@@ -1006,26 +904,18 @@ where
         );
         response.add_ext_field(
             MessageConst::PROPERTY_TRACE_SWITCH,
-            CheetahString::from_static_str(
-                if self.inner.broker_runtime_inner.broker_config().trace_on {
-                    "true"
-                } else {
-                    "false"
-                },
-            ),
+            CheetahString::from_static_str(if self.inner.broker_runtime_inner.broker_config().trace_on {
+                "true"
+            } else {
+                "false"
+            }),
         );
         let start_timestamp = self
             .inner
             .broker_runtime_inner
             .broker_config()
             .start_accept_send_request_time_stamp;
-        if self
-            .inner
-            .broker_runtime_inner
-            .message_store_unchecked()
-            .now()
-            < (start_timestamp as u64)
-        {
+        if self.inner.broker_runtime_inner.message_store_unchecked().now() < (start_timestamp as u64) {
             response = response
                 .set_code(RemotingSysResponseCode::SystemError)
                 .set_remark(format!(
@@ -1052,8 +942,7 @@ where
     ) -> bool {
         let mut new_topic = request_header.topic();
         if !new_topic.is_empty() && new_topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
-            let group_name =
-                CheetahString::from_string(KeyBuilder::parse_group(new_topic.as_str()));
+            let group_name = CheetahString::from_string(KeyBuilder::parse_group(new_topic.as_str()));
             let subscription_group_config = self
                 .inner
                 .broker_runtime_inner
@@ -1087,24 +976,20 @@ where
                 .is_lock_all_expired(group_name.as_str())
             {
                 info!(
-                    "Group has unexpired lock record, which show it is ordered message, send it \
-                     to DLQ right now group={}, topic={}, reconsumeTimes={}, maxReconsumeTimes={}.",
+                    "Group has unexpired lock record, which show it is ordered message, send it to DLQ right now \
+                     group={}, topic={}, reconsumeTimes={}, maxReconsumeTimes={}.",
                     group_name, new_topic, reconsume_times, max_reconsume_times
                 );
                 send_retry_message_to_dead_letter_queue_directly = true;
             }
-            if reconsume_times > max_reconsume_times
-                || send_retry_message_to_dead_letter_queue_directly
-            {
+            if reconsume_times > max_reconsume_times || send_retry_message_to_dead_letter_queue_directly {
                 properties.insert(
                     CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL),
                     CheetahString::from_string("-1".to_string()),
                 );
-                let topic_ =
-                    CheetahString::from_string(mix_all::get_dlq_topic(group_name.as_str()));
+                let topic_ = CheetahString::from_string(mix_all::get_dlq_topic(group_name.as_str()));
                 new_topic = &topic_;
-                let queue_id_int =
-                    self.inner.random_queue_id(retry_config::DLQ_NUMS_PER_GROUP) as i32;
+                let queue_id_int = self.inner.random_queue_id(retry_config::DLQ_NUMS_PER_GROUP) as i32;
                 let new_topic_config = self
                     .inner
                     .broker_runtime_inner
@@ -1173,10 +1058,7 @@ where
         }
     }
 
-    pub(crate) fn execute_consume_message_hook_after<'a>(
-        &self,
-        context: &mut ConsumeMessageContext<'a>,
-    ) {
+    pub(crate) fn execute_consume_message_hook_after<'a>(&self, context: &mut ConsumeMessageContext<'a>) {
         for hook in self.consume_message_hook_vec.iter() {
             hook.consume_message_after(context);
         }
@@ -1189,9 +1071,7 @@ where
     ) {
         for hook in self.send_message_hook_vec.iter() {
             if let Some(ref response) = response {
-                if let Ok(ref header) =
-                    response.decode_command_custom_header::<SendMessageResponseHeader>()
-                {
+                if let Ok(ref header) = response.decode_command_custom_header::<SendMessageResponseHeader>() {
                     context.msg_id = header.msg_id().clone();
                     context.queue_id = Some(header.queue_id());
                     context.queue_offset = Some(header.queue_offset());
@@ -1210,56 +1090,40 @@ where
         _ctx: &ConnectionHandlerContext,
         request: &RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let request_header =
-            request.decode_command_custom_header::<ConsumerSendMsgBackRequestHeader>()?;
-        if self
-            .broker_runtime_inner
-            .broker_config()
-            .broker_identity
-            .broker_id
-            != mix_all::MASTER_ID
-        {
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::SystemError,
-                    format!(
-                        "no master available along with {}",
-                        self.broker_runtime_inner.broker_config().broker_ip1
-                    ),
+        let request_header = request.decode_command_custom_header::<ConsumerSendMsgBackRequestHeader>()?;
+        if self.broker_runtime_inner.broker_config().broker_identity.broker_id != mix_all::MASTER_ID {
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SystemError,
+                format!(
+                    "no master available along with {}",
+                    self.broker_runtime_inner.broker_config().broker_ip1
                 ),
-            ));
+            )));
         }
         let subscription_group_config = self
             .broker_runtime_inner
             .subscription_group_manager()
             .find_subscription_group_config(&request_header.group);
         if subscription_group_config.is_none() {
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::SubscriptionNotExist,
-                    format!(
-                        "subscription group not exist, {} {}",
-                        request_header.group,
-                        FAQUrl::suggest_todo(FAQUrl::SUBSCRIPTION_GROUP_NOT_EXIST)
-                    ),
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SubscriptionNotExist,
+                format!(
+                    "subscription group not exist, {} {}",
+                    request_header.group,
+                    FAQUrl::suggest_todo(FAQUrl::SUBSCRIPTION_GROUP_NOT_EXIST)
                 ),
-            ));
+            )));
         }
 
         if !PermName::is_writeable(self.broker_runtime_inner.broker_config().broker_permission) {
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::NoPermission,
-                    format!(
-                        "the broker[{}-{}] sending message is forbidden",
-                        self.broker_runtime_inner
-                            .broker_config()
-                            .broker_identity
-                            .broker_name,
-                        self.broker_runtime_inner.broker_config().broker_ip1
-                    ),
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::NoPermission,
+                format!(
+                    "the broker[{}-{}] sending message is forbidden",
+                    self.broker_runtime_inner.broker_config().broker_identity.broker_name,
+                    self.broker_runtime_inner.broker_config().broker_ip1
                 ),
-            ));
+            )));
         }
 
         // SAFETY: subscription_group_config existence checked above
@@ -1267,14 +1131,10 @@ where
 
         // Early return: no retry queues configured
         if subscription_group_config.retry_queue_nums() <= 0 {
-            return Ok(Some(RemotingCommand::create_remoting_command(
-                ResponseCode::Success,
-            )));
+            return Ok(Some(RemotingCommand::create_remoting_command(ResponseCode::Success)));
         }
-        let mut new_topic =
-            CheetahString::from_string(mix_all::get_retry_topic(request_header.group.as_str()));
-        let mut queue_id_int =
-            rand::rng().random_range(0..subscription_group_config.retry_queue_nums());
+        let mut new_topic = CheetahString::from_string(mix_all::get_retry_topic(request_header.group.as_str()));
+        let mut queue_id_int = rand::rng().random_range(0..subscription_group_config.retry_queue_nums());
         let topic_sys_flag = if request_header.unit_mode {
             TopicSysFlag::build_sys_flag(false, true)
         } else {
@@ -1292,24 +1152,20 @@ where
             )
             .await;
         if topic_config.is_none() {
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::SystemError,
-                    format!("topic {new_topic} not exist"),
-                ),
-            ));
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SystemError,
+                format!("topic {new_topic} not exist"),
+            )));
         }
         // SAFETY: topic_config existence checked above
         let topic_config = topic_config.unwrap();
 
         // Early return: topic not writable
         if !PermName::is_writeable(topic_config.perm) {
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::NoPermission,
-                    format!("the topic[{new_topic}] sending message is forbidden"),
-                ),
-            ));
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::NoPermission,
+                format!("the topic[{new_topic}] sending message is forbidden"),
+            )));
         }
         // Early return: message not found
         let message_store = self
@@ -1317,22 +1173,14 @@ where
             .message_store()
             .ok_or_else(|| RocketMQError::Internal("Message store not initialized".to_string()))?;
 
-        let msg_ext: Option<MessageExt> =
-            message_store.look_message_by_offset(request_header.offset);
+        let msg_ext: Option<MessageExt> = message_store.look_message_by_offset(request_header.offset);
         let Some(mut msg_ext) = msg_ext else {
-            return Ok(Some(
-                RemotingCommand::create_response_command_with_code_remark(
-                    ResponseCode::SystemError,
-                    format!(
-                        "look message by offset failed, the offset is {}",
-                        request_header.offset
-                    ),
-                ),
-            ));
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::SystemError,
+                format!("look message by offset failed, the offset is {}", request_header.offset),
+            )));
         };
-        let retry_topic = msg_ext.get_property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_RETRY_TOPIC,
-        ));
+        let retry_topic = msg_ext.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC));
         if retry_topic.is_none() {
             let topic = msg_ext.get_topic().clone();
             MessageAccessor::put_property(
@@ -1366,12 +1214,10 @@ where
                 )
                 .await;
             if topic_config_inner.is_none() {
-                return Ok(Some(
-                    RemotingCommand::create_response_command_with_code_remark(
-                        ResponseCode::SystemError,
-                        format!("topic {new_topic} not exist"),
-                    ),
-                ));
+                return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    format!("topic {new_topic} not exist"),
+                )));
             }
             msg_ext.set_delay_time_level(0);
             true
@@ -1390,9 +1236,8 @@ where
         msg_inner.set_flag(msg_ext.get_flag());
         MessageAccessor::set_properties(&mut msg_inner, msg_ext.get_properties().clone());
         msg_inner.properties_string = message_properties_to_string(msg_ext.get_properties());
-        msg_inner.tags_code = MessageExtBrokerInner::tags_string_to_tags_code(
-            msg_ext.get_tags().unwrap_or_default().as_str(),
-        );
+        msg_inner.tags_code =
+            MessageExtBrokerInner::tags_string_to_tags_code(msg_ext.get_tags().unwrap_or_default().as_str());
         msg_inner.message_ext_inner.queue_id = queue_id_int;
         msg_inner.message_ext_inner.sys_flag = msg_ext.sys_flag;
         msg_inner.message_ext_inner.born_timestamp = msg_ext.born_timestamp;
@@ -1421,9 +1266,8 @@ where
         let (response, succeeded) = match put_message_result.put_message_status() {
             PutMessageStatus::PutOk => {
                 let mut _back_topic = msg_ext.get_topic().clone();
-                let correct_topic = msg_ext.get_property(&CheetahString::from_static_str(
-                    MessageConst::PROPERTY_RETRY_TOPIC,
-                ));
+                let correct_topic =
+                    msg_ext.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC));
                 if let Some(topic) = correct_topic {
                     _back_topic = topic;
                 }
@@ -1446,18 +1290,11 @@ where
                 false,
             ),
         };
-        if self.has_consume_message_hook()
-            && request_header
-                .origin_msg_id
-                .is_some_and(|ref id| !id.is_empty())
-        {
+        if self.has_consume_message_hook() && request_header.origin_msg_id.is_some_and(|ref id| !id.is_empty()) {
             let namespace = CheetahString::from_string(NamespaceUtil::get_namespace_from_resource(
                 request_header.group.as_str(),
             ));
-            let origin_topic = request_header
-                .origin_topic
-                .as_ref()
-                .unwrap_or(&request_header.group);
+            let origin_topic = request_header.origin_topic.as_ref().unwrap_or(&request_header.group);
 
             let account_auth_type = request
                 .get_ext_fields()
@@ -1520,18 +1357,10 @@ where
             ..Default::default()
         };
         send_message_context.topic(request_header.topic.clone());
-        send_message_context.body_length(
-            request
-                .body()
-                .as_ref()
-                .map_or_else(|| 0, |b| b.len() as i32),
-        );
+        send_message_context.body_length(request.body().as_ref().map_or_else(|| 0, |b| b.len() as i32));
         send_message_context.msg_props(request_header.properties.clone().unwrap_or_default());
-        send_message_context.born_host(CheetahString::from_string(
-            channel.remote_address().to_string(),
-        ));
-        send_message_context
-            .broker_addr(CheetahString::from_string(broker_config.get_broker_addr()));
+        send_message_context.born_host(CheetahString::from_string(channel.remote_address().to_string()));
+        send_message_context.broker_addr(CheetahString::from_string(broker_config.get_broker_addr()));
         send_message_context.queue_id(Some(request_header.queue_id));
         send_message_context.broker_region_id(CheetahString::from_string(region_id.clone()));
         send_message_context.born_time_stamp(request_header.born_timestamp);
@@ -1542,26 +1371,18 @@ where
                 send_message_context.commercial_owner(value.clone());
             }
         }
-        let mut properties =
-            MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
+        let mut properties = MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
         properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_MSG_REGION),
             CheetahString::from_string(region_id),
         );
         properties.insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_TRACE_SWITCH),
-            CheetahString::from_string(
-                self.broker_runtime_inner
-                    .broker_config()
-                    .trace_on
-                    .to_string(),
-            ),
+            CheetahString::from_string(self.broker_runtime_inner.broker_config().trace_on.to_string()),
         );
         request_header.properties = Some(MessageDecoder::message_properties_to_string(&properties));
 
-        if let Some(unique_key) =
-            properties.get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX)
-        {
+        if let Some(unique_key) = properties.get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX) {
             send_message_context.msg_unique_key = CheetahString::from_slice(unique_key);
         } else {
             send_message_context.msg_unique_key = CheetahString::empty();
@@ -1584,14 +1405,11 @@ where
         response: &mut RemotingCommand,
     ) {
         //check broker permission
-        if !PermName::is_writeable(
-            self.broker_runtime_inner
-                .broker_config()
-                .broker_permission(),
-        ) && self
-            .broker_runtime_inner
-            .topic_config_manager()
-            .is_order_topic(request_header.topic.as_str())
+        if !PermName::is_writeable(self.broker_runtime_inner.broker_config().broker_permission())
+            && self
+                .broker_runtime_inner
+                .topic_config_manager()
+                .is_order_topic(request_header.topic.as_str())
         {
             response.with_code(ResponseCode::NoPermission);
             response.with_remark(format!(
@@ -1647,8 +1465,7 @@ where
                 )
                 .await;
 
-            if topic_config.is_none() && request_header.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX)
-            {
+            if topic_config.is_none() && request_header.topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
                 topic_config = self
                     .broker_runtime_inner
                     .topic_config_manager_mut()
@@ -1715,8 +1532,7 @@ fn rewrite_response_for_static_topic(
         ));
     };
 
-    let static_logic_offset =
-        mapping_item.compute_static_queue_offset_loosely(response_header.queue_offset());
+    let static_logic_offset = mapping_item.compute_static_queue_offset_loosely(response_header.queue_offset());
 
     response_header.set_queue_id(mapping_context.global_id.unwrap());
     response_header.set_queue_offset(static_logic_offset);

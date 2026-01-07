@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::time::Duration;
 use std::time::Instant;
@@ -45,10 +42,7 @@ impl<MS: MessageStore> ServiceTask for TransactionalMessageCheckServiceInner<MS>
         info!("Starting transactional check service");
 
         while !context.is_stopped() {
-            let transaction_check_interval = self
-                .broker_runtime_inner
-                .broker_config()
-                .transaction_check_interval;
+            let transaction_check_interval = self.broker_runtime_inner.broker_config().transaction_check_interval;
             context
                 .wait_for_running(Duration::from_millis(transaction_check_interval))
                 .await;
@@ -59,14 +53,8 @@ impl<MS: MessageStore> ServiceTask for TransactionalMessageCheckServiceInner<MS>
 
     #[inline]
     async fn on_wait_end(&self) {
-        let transaction_timeout = self
-            .broker_runtime_inner
-            .broker_config()
-            .transaction_timeout;
-        let transaction_check_max = self
-            .broker_runtime_inner
-            .broker_config()
-            .transaction_check_max;
+        let transaction_timeout = self.broker_runtime_inner.broker_config().transaction_timeout;
+        let transaction_check_max = self.broker_runtime_inner.broker_config().transaction_check_max;
         let begin = Instant::now();
         info!(
             "Transactional check service is running, waiting for {} ms",
@@ -93,9 +81,7 @@ impl<MS: MessageStore> ServiceTask for TransactionalMessageCheckServiceInner<MS>
 
 impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
-        let task_impl = ServiceManager::new(TransactionalMessageCheckServiceInner {
-            broker_runtime_inner,
-        });
+        let task_impl = ServiceManager::new(TransactionalMessageCheckServiceInner { broker_runtime_inner });
         TransactionalMessageCheckService { task_impl }
     }
 }
@@ -110,9 +96,6 @@ impl<MS: MessageStore> TransactionalMessageCheckService<MS> {
     }
 
     pub async fn shutdown_interrupt(&mut self, interrupt: bool) {
-        self.task_impl
-            .shutdown_with_interrupt(interrupt)
-            .await
-            .unwrap();
+        self.task_impl.shutdown_with_interrupt(interrupt).await.unwrap();
     }
 }

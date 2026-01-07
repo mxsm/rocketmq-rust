@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #![allow(unused_variables)]
 
@@ -60,10 +57,7 @@ use crate::processor::pop_message_processor::QueueLockManager;
 
 pub(crate) struct PopBufferMergeService<MS: MessageStore> {
     buffer: DashMap<CheetahString /* mergeKey */, ArcMut<PopCheckPointWrapper>>,
-    commit_offsets: DashMap<
-        CheetahString, /* topic@cid@queueId */
-        QueueWithTime<ArcMut<PopCheckPointWrapper>>,
-    >,
+    commit_offsets: DashMap<CheetahString /* topic@cid@queueId */, QueueWithTime<ArcMut<PopCheckPointWrapper>>>,
     serving: AtomicBool,
     counter: AtomicI32,
     scan_times: u64,
@@ -136,9 +130,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         }
 
         let now = get_current_millis();
-        if point.get_revive_time() - (now as i64)
-            < broker_config.pop_ck_stay_buffer_time_out as i64 + 1500
-        {
+        if point.get_revive_time() - (now as i64) < broker_config.pop_ck_stay_buffer_time_out as i64 + 1500 {
             if broker_config.enable_pop_log {
                 warn!("[PopBuffer]add ck, timeout, {:?}, {}", point, now);
             }
@@ -150,10 +142,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
 
         let current_counter = self.counter.load(Ordering::Acquire);
         if current_counter as i64 > broker_config.pop_ck_max_buffer_size {
-            warn!(
-                "[PopBuffer]add ck, max size, {:?}, {}",
-                point, current_counter
-            );
+            warn!("[PopBuffer]add ck, max size, {:?}, {}", point, current_counter);
             return Err(RocketMQError::StorageOutOfSpace {
                 path: format!(
                     "PopBuffer(current={}, max={})",
@@ -219,10 +208,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             None => true,
             Some(value) => {
                 value.get().lock().await.len()
-                    < self
-                        .broker_runtime_inner
-                        .broker_config()
-                        .pop_ck_offset_max_queue_size as usize
+                    < self.broker_runtime_inner.broker_config().pop_ck_offset_max_queue_size as usize
             }
         }
     }
@@ -273,11 +259,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
     }
 
     pub fn add_ack(&mut self, revive_qid: i32, ack_msg: &dyn AckMessage) -> bool {
-        if !self
-            .broker_runtime_inner
-            .broker_config()
-            .enable_pop_buffer_merge
-        {
+        if !self.broker_runtime_inner.broker_config().enable_pop_buffer_merge {
             return false;
         }
         if !self.serving.load(Ordering::Acquire) {
@@ -295,10 +277,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             Some(wrapper) => wrapper,
             None => {
                 if self.broker_runtime_inner.broker_config().enable_pop_log {
-                    warn!(
-                        "[PopBuffer]add ack fail, rqId={}, no ck, {}",
-                        revive_qid, ack_msg
-                    );
+                    warn!("[PopBuffer]add ack fail, rqId={}, no ck, {}", revive_qid, ack_msg);
                 }
                 return false;
             }
@@ -312,12 +291,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         let pop_time = point.pop_time as u64;
 
         if revive_time > now
-            && (revive_time - now)
-                < self
-                    .broker_runtime_inner
-                    .broker_config()
-                    .pop_ck_stay_buffer_time_out
-                    + 1500
+            && (revive_time - now) < self.broker_runtime_inner.broker_config().pop_ck_stay_buffer_time_out + 1500
         {
             if self.broker_runtime_inner.broker_config().enable_pop_log {
                 warn!(
@@ -331,12 +305,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             return false;
         }
         if now > pop_time
-            && (now - pop_time)
-                > self
-                    .broker_runtime_inner
-                    .broker_config()
-                    .pop_ck_stay_buffer_time_out
-                    - 1500
+            && (now - pop_time) > self.broker_runtime_inner.broker_config().pop_ck_stay_buffer_time_out - 1500
         {
             if self.broker_runtime_inner.broker_config().enable_pop_log {
                 warn!(
@@ -392,12 +361,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         }
     }
 
-    pub async fn get_latest_offset_full(
-        &self,
-        topic: &CheetahString,
-        group: &CheetahString,
-        queue_id: i32,
-    ) -> i64 {
+    pub async fn get_latest_offset_full(&self, topic: &CheetahString, group: &CheetahString, queue_id: i32) -> i64 {
         self.get_latest_offset(&CheetahString::from_string(KeyBuilder::build_polling_key(
             topic, group, queue_id,
         )))
@@ -415,9 +379,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                 break;
             }
             let new_bits = DataConverter::set_bit(bits, index, true);
-            if let Ok(value) =
-                set_bits.compare_exchange(bits, new_bits, Ordering::Acquire, Ordering::Relaxed)
-            {
+            if let Ok(value) = set_bits.compare_exchange(bits, new_bits, Ordering::Acquire, Ordering::Relaxed) {
                 if value == bits {
                     break;
                 }
@@ -426,11 +388,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
     }
 
     fn is_should_running(&self) -> bool {
-        if self
-            .broker_runtime_inner
-            .broker_config()
-            .enable_slave_acting_master
-        {
+        if self.broker_runtime_inner.broker_config().enable_slave_acting_master {
             return true;
         }
         self.master.store(
@@ -494,23 +452,18 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                 if !point_wrapper.is_ck_stored() {
                     continue;
                 }
-                if self
-                    .broker_runtime_inner
-                    .broker_config()
-                    .enable_pop_batch_ack
-                {
+                if self.broker_runtime_inner.broker_config().enable_pop_batch_ack {
                     // Before removing the CheckPoint from memory, store the messages that have been
                     // Acked in it as Ack messages on disk.
                     for i in 0..point.num {
                         // Traverse each bit of the message bit code table in CheckPoint to check
                         // whether it has been Acked and not stored on disk.
-                        if DataConverter::get_bit(
-                            point_wrapper.get_bits().load(Ordering::Relaxed),
-                            i as usize,
-                        ) && !DataConverter::get_bit(
-                            point_wrapper.get_to_store_bits().load(Ordering::Relaxed),
-                            i as usize,
-                        ) {
+                        if DataConverter::get_bit(point_wrapper.get_bits().load(Ordering::Relaxed), i as usize)
+                            && !DataConverter::get_bit(
+                                point_wrapper.get_to_store_bits().load(Ordering::Relaxed),
+                                i as usize,
+                            )
+                        {
                             self.batch_ack_index_list.push(i);
                         }
                     }
@@ -528,13 +481,12 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                     self.batch_ack_index_list.clear();
                 } else {
                     for i in 0..point.num {
-                        if DataConverter::get_bit(
-                            point_wrapper.get_bits().load(Ordering::Relaxed),
-                            i as usize,
-                        ) && !DataConverter::get_bit(
-                            point_wrapper.get_to_store_bits().load(Ordering::Relaxed),
-                            i as usize,
-                        ) && self.put_ack_to_store(point_wrapper, i).await
+                        if DataConverter::get_bit(point_wrapper.get_bits().load(Ordering::Relaxed), i as usize)
+                            && !DataConverter::get_bit(
+                                point_wrapper.get_to_store_bits().load(Ordering::Relaxed),
+                                i as usize,
+                            )
+                            && self.put_ack_to_store(point_wrapper, i).await
                         {
                             count += 1;
                             Self::mark_bit_cas(point_wrapper.get_to_store_bits(), i as usize);
@@ -549,9 +501,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
 
         for key in remove_keys {
             if let Some((_, point_wrapper)) = self.buffer.remove(&key) {
-                let _ = self
-                    .commit_offsets
-                    .remove(point_wrapper.as_ref().get_lock_key());
+                let _ = self.commit_offsets.remove(point_wrapper.as_ref().get_lock_key());
                 self.counter.fetch_sub(1, Ordering::AcqRel);
             }
         }
@@ -569,18 +519,12 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         }
 
         let eclipse = start_time.elapsed().as_millis() as i64;
-        if eclipse
-            > self
-                .broker_runtime_inner
-                .broker_config()
-                .pop_ck_stay_buffer_time_out as i64
-                - 1000
-        {
+        if eclipse > self.broker_runtime_inner.broker_config().pop_ck_stay_buffer_time_out as i64 - 1000 {
             self.serving.store(false, Ordering::Release);
         } else if self.scan_times % self.count_of_second1 == 0 {
             info!(
-                "[PopBuffer]scan, PopBufferEclipse={}, PopBufferToStoreAck={}, \
-                 PopBufferToStoreCk={}, PopBufferSize={}, PopBufferOffsetSize={}",
+                "[PopBuffer]scan, PopBufferEclipse={}, PopBufferToStoreAck={}, PopBufferToStoreCk={}, \
+                 PopBufferSize={}, PopBufferOffsetSize={}",
                 eclipse,
                 count,
                 count_ck,
@@ -592,8 +536,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         self.scan_times += 1;
 
         if self.scan_times >= self.count_of_minute1 {
-            self.counter
-                .store(self.buffer.len() as i32, Ordering::Release);
+            self.counter.store(self.buffer.len() as i32, Ordering::Release);
             self.scan_times = 0;
         }
     }
@@ -635,8 +578,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             let time_diff = current_millis.saturating_sub(value.get_time());
             if time_diff > timeout_threshold {
                 info!(
-                    "[PopBuffer]remove long time not used sub {} of topic {} in buffer, \
-                     unused_time_ms={}",
+                    "[PopBuffer]remove long time not used sub {} of topic {} in buffer, unused_time_ms={}",
                     cid, topic, time_diff
                 );
                 return false;
@@ -744,11 +686,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         }
         let pop_check_point = point_wrapper.get_ck();
         let lock_key = point_wrapper.get_lock_key();
-        if !self
-            .queue_lock_manager
-            .try_lock_with_key(lock_key.clone())
-            .await
-        {
+        if !self.queue_lock_manager.try_lock_with_key(lock_key.clone()).await {
             return false;
         }
         let consumer_offset_manager = self.broker_runtime_inner.consumer_offset_manager();
@@ -772,9 +710,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             pop_check_point.queue_id,
             point_wrapper.next_begin_offset,
         );
-        self.queue_lock_manager
-            .unlock_with_key(lock_key.clone())
-            .await;
+        self.queue_lock_manager.unlock_with_key(lock_key.clone()).await;
         true
     }
 
@@ -812,10 +748,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
 
         let _ = self.put_offset_queue(ArcMut::new(point_wrapper)).await;
     }
-    async fn put_offset_queue(
-        &self,
-        point_wrapper: ArcMut<PopCheckPointWrapper>,
-    ) -> RocketMQResult<()> {
+    async fn put_offset_queue(&self, point_wrapper: ArcMut<PopCheckPointWrapper>) -> RocketMQResult<()> {
         let lock_key = point_wrapper.lock_key.clone();
         let pop_time = point_wrapper.get_ck().pop_time as u64;
 
@@ -830,20 +763,17 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
                 queue
             });
 
-        let queue_ref =
-            self.commit_offsets
-                .get(&lock_key)
-                .ok_or_else(|| RocketMQError::StorageReadFailed {
-                    path: "commit_offsets".to_string(),
-                    reason: "Queue not found after insert".to_string(),
-                })?;
+        let queue_ref = self
+            .commit_offsets
+            .get(&lock_key)
+            .ok_or_else(|| RocketMQError::StorageReadFailed {
+                path: "commit_offsets".to_string(),
+                reason: "Queue not found after insert".to_string(),
+            })?;
 
         let mut guard = queue_ref.get().lock().await;
 
-        let max_size = self
-            .broker_runtime_inner
-            .broker_config()
-            .pop_ck_offset_max_queue_size as usize;
+        let max_size = self.broker_runtime_inner.broker_config().pop_ck_offset_max_queue_size as usize;
 
         if guard.len() >= max_size {
             return Err(RocketMQError::BrokerOperationFailed {
@@ -887,12 +817,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         if put_message_result.remote_put() {
             point_wrapper.set_revive_queue_offset(0);
         } else {
-            point_wrapper.set_revive_queue_offset(
-                put_message_result
-                    .append_message_result()
-                    .unwrap()
-                    .logics_offset,
-            );
+            point_wrapper.set_revive_queue_offset(put_message_result.append_message_result().unwrap().logics_offset);
         }
     }
 
@@ -915,8 +840,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         while !self.buffer.is_empty() || self.get_offset_total_size().await > 0 {
             if start.elapsed() > timeout {
                 warn!(
-                    "[PopBuffer]Shutdown timeout after {:?}, buffer_size={}, offset_size={}, \
-                     forcing exit",
+                    "[PopBuffer]Shutdown timeout after {:?}, buffer_size={}, offset_size={}, forcing exit",
                     timeout,
                     self.buffer.len(),
                     self.get_offset_total_size().await
@@ -934,11 +858,7 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
         Ok(())
     }
 
-    async fn put_batch_ack_to_store(
-        &self,
-        point_wrapper: &PopCheckPointWrapper,
-        index_list: &[u8],
-    ) -> bool {
+    async fn put_batch_ack_to_store(&self, point_wrapper: &PopCheckPointWrapper, index_list: &[u8]) -> bool {
         let point = point_wrapper.get_ck();
         let ack_msg = AckMsg {
             start_offset: point.start_offset,
@@ -953,26 +873,20 @@ impl<MS: MessageStore> PopBufferMergeService<MS> {
             ack_msg,
         };
         for index in index_list {
-            batch_ack_msg
-                .ack_offset_list
-                .push(point.ack_offset_by_index(*index));
+            batch_ack_msg.ack_offset_list.push(point.ack_offset_by_index(*index));
         }
         let mut msg = MessageExtBrokerInner::default();
         msg.set_topic(self.revive_topic.clone());
         msg.set_body(Bytes::from(batch_ack_msg.serialize_json().unwrap()));
         msg.message_ext_inner.queue_id = point_wrapper.revive_queue_id;
-        msg.set_tags(CheetahString::from_static_str(
-            PopAckConstants::BATCH_ACK_TAG,
-        ));
+        msg.set_tags(CheetahString::from_static_str(PopAckConstants::BATCH_ACK_TAG));
         msg.message_ext_inner.born_timestamp = get_current_millis() as i64;
         msg.message_ext_inner.born_host = self.broker_runtime_inner.store_host();
         msg.message_ext_inner.store_host = self.broker_runtime_inner.store_host();
         msg.set_delay_time_ms(point.get_revive_time() as u64);
         msg.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
-            CheetahString::from_string(PopMessageProcessor::<MS>::gen_batch_ack_unique_id(
-                &batch_ack_msg,
-            )),
+            CheetahString::from_string(PopMessageProcessor::<MS>::gen_batch_ack_unique_id(&batch_ack_msg)),
         );
         msg.properties_string = message_decoder::message_properties_to_string(msg.get_properties());
 
@@ -1044,8 +958,7 @@ fn is_ck_done(point_wrapper: &PopCheckPointWrapper) -> bool {
 
 fn is_ck_done_for_finish(point_wrapper: &PopCheckPointWrapper) -> bool {
     let num = point_wrapper.ck.num;
-    let bits = point_wrapper.bits.load(Ordering::Acquire)
-        | point_wrapper.to_store_bits.load(Ordering::Acquire);
+    let bits = point_wrapper.bits.load(Ordering::Acquire) | point_wrapper.to_store_bits.load(Ordering::Acquire);
     for i in 0..num {
         if !DataConverter::get_bit(bits, i as usize) {
             return false;
@@ -1119,12 +1032,10 @@ impl std::fmt::Display for PopCheckPointWrapper {
             f,
             "CkWrap{{rq={}, rqo={}, ck={:?}, bits={}, sBits={}, nbo={}, cks={}, jo={}}}",
             self.revive_queue_id,
-            self.revive_queue_offset
-                .load(std::sync::atomic::Ordering::Relaxed),
+            self.revive_queue_offset.load(std::sync::atomic::Ordering::Relaxed),
             self.ck,
             self.bits.load(std::sync::atomic::Ordering::Relaxed),
-            self.to_store_bits
-                .load(std::sync::atomic::Ordering::Relaxed),
+            self.to_store_bits.load(std::sync::atomic::Ordering::Relaxed),
             self.next_begin_offset,
             self.ck_stored.load(std::sync::atomic::Ordering::Relaxed),
             self.just_offset
@@ -1133,12 +1044,7 @@ impl std::fmt::Display for PopCheckPointWrapper {
 }
 
 impl PopCheckPointWrapper {
-    pub fn new(
-        revive_queue_id: i32,
-        revive_queue_offset: i64,
-        ck: Arc<PopCheckPoint>,
-        next_begin_offset: i64,
-    ) -> Self {
+    pub fn new(revive_queue_id: i32, revive_queue_offset: i64, ck: Arc<PopCheckPoint>, next_begin_offset: i64) -> Self {
         let lock_key = format!(
             "{}{}{}{}{}",
             ck.topic,
@@ -1225,8 +1131,7 @@ impl PopCheckPointWrapper {
 
     #[inline]
     pub fn set_revive_queue_offset(&self, revive_queue_offset: i64) {
-        self.revive_queue_offset
-            .store(revive_queue_offset, Ordering::Release);
+        self.revive_queue_offset.store(revive_queue_offset, Ordering::Release);
     }
 
     #[inline]

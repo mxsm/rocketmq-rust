@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Admin client builder and RAII resource management
 //!
@@ -122,9 +119,7 @@ impl AdminBuilder {
         let instance_name = self
             .instance_name
             .unwrap_or_else(|| format!("tools-{}", get_current_millis()));
-        admin
-            .client_config_mut()
-            .set_instance_name(instance_name.into());
+        admin.client_config_mut().set_instance_name(instance_name.into());
 
         // Note: timeout_millis and unit_name are stored but not currently applied
         // as the corresponding setter methods are not available in ClientConfig
@@ -267,10 +262,7 @@ impl AsMut<DefaultMQAdminExt> for AdminGuard {
 /// ```
 #[inline]
 pub async fn create_admin(namesrv_addr: impl Into<String>) -> RocketMQResult<DefaultMQAdminExt> {
-    AdminBuilder::new()
-        .namesrv_addr(namesrv_addr)
-        .build_and_start()
-        .await
+    AdminBuilder::new().namesrv_addr(namesrv_addr).build_and_start().await
 }
 
 /// Helper function to create an admin client with RAII guard
@@ -283,13 +275,8 @@ pub async fn create_admin(namesrv_addr: impl Into<String>) -> RocketMQResult<Def
 ///     .await
 /// ```
 #[inline]
-pub async fn create_admin_with_guard(
-    namesrv_addr: impl Into<String>,
-) -> RocketMQResult<AdminGuard> {
-    AdminBuilder::new()
-        .namesrv_addr(namesrv_addr)
-        .build_with_guard()
-        .await
+pub async fn create_admin_with_guard(namesrv_addr: impl Into<String>) -> RocketMQResult<AdminGuard> {
+    AdminBuilder::new().namesrv_addr(namesrv_addr).build_with_guard().await
 }
 
 #[cfg(test)]
@@ -321,17 +308,14 @@ mod tests {
 
     #[test]
     fn test_builder_chaining() {
-        let builder = AdminBuilder::new()
-            .namesrv_addr("addr1")
-            .namesrv_addr("addr2"); // Should override
+        let builder = AdminBuilder::new().namesrv_addr("addr1").namesrv_addr("addr2"); // Should override
 
         assert_eq!(builder.namesrv_addr, Some("addr2".to_string()));
     }
 
     #[test]
     fn test_builder_multiple_namesrv() {
-        let builder =
-            AdminBuilder::new().namesrv_addr("127.0.0.1:9876;127.0.0.1:9877;127.0.0.1:9878");
+        let builder = AdminBuilder::new().namesrv_addr("127.0.0.1:9876;127.0.0.1:9877;127.0.0.1:9878");
 
         assert_eq!(
             builder.namesrv_addr,

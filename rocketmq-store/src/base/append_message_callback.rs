@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -109,13 +106,7 @@ pub trait AppendMessageCallback {
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult {
         // Default: fall back to standard append
-        self.do_append(
-            file_from_offset,
-            mapped_file,
-            max_blank,
-            msg,
-            put_message_context,
-        )
+        self.do_append(file_from_offset, mapped_file, max_blank, msg, put_message_context)
     }
 }
 
@@ -160,8 +151,8 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         put_message_context: &PutMessageContext,
     ) -> AppendMessageResult {
         let mut pre_encode_buffer = msg_inner.encoded_buff.take().unwrap(); // Assuming get_encoded_buff returns Option<ByteBuffer>
-        let is_multi_dispatch_msg = self.message_store_config.enable_multi_dispatch
-            && CommitLog::is_multi_dispatch_msg(msg_inner);
+        let is_multi_dispatch_msg =
+            self.message_store_config.enable_multi_dispatch && CommitLog::is_multi_dispatch_msg(msg_inner);
         if is_multi_dispatch_msg {
             unimplemented!("Multi dispatch message is not supported yet");
         }
@@ -170,14 +161,12 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         //physic offset
         let wrote_offset = file_from_offset + mapped_file.get_wrote_position() as i64;
         let addr = msg_inner.message_ext_inner.store_host;
-        let msg_id_supplier =
-            move || -> String { message_utils::build_message_id(addr, wrote_offset) };
+        let msg_id_supplier = move || -> String { message_utils::build_message_id(addr, wrote_offset) };
 
         let mut queue_offset = msg_inner.queue_offset();
         let message_num = get_message_num(&self.topic_config_table, msg_inner);
         // Transaction messages that require special handling
-        if let MessageSysFlag::TRANSACTION_PREPARED_TYPE
-        | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE =
+        if let MessageSysFlag::TRANSACTION_PREPARED_TYPE | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE =
             MessageSysFlag::get_transaction_value(msg_inner.sys_flag())
         {
             queue_offset = 0;
@@ -223,17 +212,13 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         pos += 8 + 4 + 8 + ip_len;
 
         // 11 STORETIMESTAMP refresh store time stamp in lock
-        pre_encode_buffer[pos..(pos + 8)]
-            .copy_from_slice(&msg_inner.store_timestamp().to_be_bytes());
+        pre_encode_buffer[pos..(pos + 8)].copy_from_slice(&msg_inner.store_timestamp().to_be_bytes());
 
         if self.message_store_config.enabled_append_prop_crc {
             // 18 CRC32
             let check_size = msg_len - self.crc32_reserved_length;
             let crc32 = crc32(&pre_encode_buffer[..check_size as usize]);
-            create_crc32(
-                &mut pre_encode_buffer[check_size as usize..msg_len as usize],
-                crc32,
-            );
+            create_crc32(&mut pre_encode_buffer[check_size as usize..msg_len as usize], crc32);
         }
 
         //let bytes = pre_encode_buffer.freeze();
@@ -289,9 +274,8 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         let addr = msg_batch.message_ext_broker_inner.store_host();
         let batch_size = put_message_context.get_batch_size();
         let phy_ops = put_message_context.get_phy_pos().to_vec();
-        let msg_id_supplier = move || -> String {
-            build_batch_message_id(addr, store_host_length, batch_size as usize, &phy_ops)
-        };
+        let msg_id_supplier =
+            move || -> String { build_batch_message_id(addr, store_host_length, batch_size as usize, &phy_ops) };
         let mut total_msg_len = 0;
         let mut msg_num = 0;
         let mut msg_pos = 0;
@@ -308,12 +292,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
                 bytes.clear();
                 bytes.put_i32(max_blank);
                 bytes.put_i32(BLANK_MAGIC_CODE);
-                mapped_file.write_bytes_segment(
-                    bytes.as_ref(),
-                    wrote_offset as usize,
-                    0,
-                    bytes.len(),
-                );
+                mapped_file.write_bytes_segment(bytes.as_ref(), wrote_offset as usize, 0, bytes.len());
                 return AppendMessageResult {
                     status: AppendMessageStatus::EndOfFile,
                     wrote_offset,
@@ -331,12 +310,8 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
             let phy_pos = wrote_offset + total_msg_len as i64 - msg_len as i64;
             messages_byte_buffer[pos..(pos + 8)].copy_from_slice(&phy_pos.to_be_bytes());
             pos += 8 + 4 + 8 + born_host_length;
-            messages_byte_buffer[pos..(pos + 8)].copy_from_slice(
-                &msg_batch
-                    .message_ext_broker_inner
-                    .store_timestamp()
-                    .to_be_bytes(),
-            );
+            messages_byte_buffer[pos..(pos + 8)]
+                .copy_from_slice(&msg_batch.message_ext_broker_inner.store_timestamp().to_be_bytes());
             if enabled_append_prop_crc {
                 let _check_size = msg_len - self.crc32_reserved_length;
             }
@@ -381,19 +356,13 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
     ) -> AppendMessageResult {
         // Extract pre-encoded buffer (still contains metadata we need)
         let pre_encode_buffer = msg_inner.encoded_buff.take().unwrap();
-        let is_multi_dispatch_msg = self.message_store_config.enable_multi_dispatch
-            && CommitLog::is_multi_dispatch_msg(msg_inner);
+        let is_multi_dispatch_msg =
+            self.message_store_config.enable_multi_dispatch && CommitLog::is_multi_dispatch_msg(msg_inner);
 
         if is_multi_dispatch_msg {
             // Fall back to standard implementation for multi-dispatch
             msg_inner.encoded_buff = Some(pre_encode_buffer);
-            return self.do_append(
-                file_from_offset,
-                mapped_file,
-                max_blank,
-                msg_inner,
-                put_message_context,
-            );
+            return self.do_append(file_from_offset, mapped_file, max_blank, msg_inner, put_message_context);
         }
 
         let msg_len = i32::from_be_bytes(pre_encode_buffer[0..4].try_into().unwrap());
@@ -401,15 +370,13 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         // Calculate physical offset
         let wrote_offset = file_from_offset + mapped_file.get_wrote_position() as i64;
         let addr = msg_inner.message_ext_inner.store_host;
-        let msg_id_supplier =
-            move || -> String { message_utils::build_message_id(addr, wrote_offset) };
+        let msg_id_supplier = move || -> String { message_utils::build_message_id(addr, wrote_offset) };
 
         let mut queue_offset = msg_inner.queue_offset();
         let message_num = get_message_num(&self.topic_config_table, msg_inner);
 
         // Handle transaction messages
-        if let MessageSysFlag::TRANSACTION_PREPARED_TYPE
-        | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE =
+        if let MessageSysFlag::TRANSACTION_PREPARED_TYPE | MessageSysFlag::TRANSACTION_ROLLBACK_TYPE =
             MessageSysFlag::get_transaction_value(msg_inner.sys_flag())
         {
             queue_offset = 0;
@@ -494,13 +461,7 @@ impl AppendMessageCallback for DefaultAppendMessageCallback {
         } else {
             // Fall back to standard implementation if direct buffer unavailable
             msg_inner.encoded_buff = Some(pre_encode_buffer);
-            self.do_append(
-                file_from_offset,
-                mapped_file,
-                max_blank,
-                msg_inner,
-                put_message_context,
-            )
+            self.do_append(file_from_offset, mapped_file, max_blank, msg_inner, put_message_context)
         }
     }
 }

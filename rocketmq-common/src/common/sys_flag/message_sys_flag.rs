@@ -77,10 +77,7 @@ mod tests {
     #[test]
     fn reset_transaction_value_resets_correctly() {
         let flag = MessageSysFlag::TRANSACTION_COMMIT_TYPE;
-        let new_flag = MessageSysFlag::reset_transaction_value(
-            flag,
-            MessageSysFlag::TRANSACTION_ROLLBACK_TYPE,
-        );
+        let new_flag = MessageSysFlag::reset_transaction_value(flag, MessageSysFlag::TRANSACTION_ROLLBACK_TYPE);
         assert_eq!(new_flag, MessageSysFlag::TRANSACTION_ROLLBACK_TYPE);
     }
 
@@ -94,10 +91,7 @@ mod tests {
     #[test]
     fn get_compression_type_returns_correct_type() {
         let flag = MessageSysFlag::COMPRESSION_LZ4_TYPE;
-        assert_eq!(
-            MessageSysFlag::get_compression_type(flag),
-            CompressionType::LZ4
-        );
+        assert_eq!(MessageSysFlag::get_compression_type(flag), CompressionType::LZ4);
     }
 
     #[test]
@@ -109,9 +103,6 @@ mod tests {
     #[test]
     fn check_returns_false_when_flag_is_not_set() {
         let flag = 0;
-        assert!(!MessageSysFlag::check(
-            flag,
-            MessageSysFlag::COMPRESSED_FLAG
-        ));
+        assert!(!MessageSysFlag::check(flag, MessageSysFlag::COMPRESSED_FLAG));
     }
 }

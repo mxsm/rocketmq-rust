@@ -6,33 +6,39 @@ edition.workspace = true
 homepage.workspace = true
 repository.workspace = true
 license.workspace = true
-keywords = ["apache-rocketmq", "rocketmq-rust", "apache", "rust", "rocketmq-tools"]
+keywords = [
+  "apache-rocketmq",
+  "rocketmq-rust",
+  "apache",
+  "rust",
+  "rocketmq-tools",
+]
 categories = ["command-line-utilities", "parsing"]
 readme = "README.md"
 description = "Rust implementation of Apache RocketMQ tools"
 rust-version.workspace = true
 
 [dependencies]
-rocketmq-common = { workspace = true }
-rocketmq-remoting = { workspace = true }
-rocketmq-rust = { workspace = true }
+rocketmq-common      = { workspace = true }
+rocketmq-remoting    = { workspace = true }
+rocketmq-rust        = { workspace = true }
 rocketmq-client-rust = { workspace = true }
-rocketmq-error = { workspace = true }
+rocketmq-error       = { workspace = true }
 
-serde.workspace = true
+serde.workspace      = true
 serde_json.workspace = true
-serde_yaml = "0.9"
-tokio = { workspace = true }
-tracing = { workspace = true }
+serde_yaml           = "0.9"
+tokio                = { workspace = true }
+tracing              = { workspace = true }
 
 cheetah-string = { workspace = true }
-clap = { version = "4.5.53", features = ["derive"] }
-clap_complete = "4.5"
-tabled = { version = "0.20.0", features = ["derive"] }
-futures = "0.3.31"
-colored = "3.0"
-indicatif = "0.18"
-dialoguer = "0.12"
+clap           = { version = "4.5.54", features = ["derive"] }
+clap_complete  = "4.5"
+tabled         = { version = "0.20.0", features = ["derive"] }
+futures        = "0.3.31"
+colored        = "3.0"
+indicatif      = "0.18"
+dialoguer      = "0.12"
 
 [[bin]]
 name = "rocketmq-admin-cli-rust"

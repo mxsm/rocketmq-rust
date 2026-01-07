@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -84,34 +81,28 @@ where
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
-        self.process_request_inner(channel, ctx, request_code, request)
-            .await
+        self.process_request_inner(channel, ctx, request_code, request).await
     }
 }
 
 impl<MS: MessageStore> AdminBrokerProcessor<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         let topic_request_handler = TopicRequestHandler::new(broker_runtime_inner.clone());
-        let broker_config_request_handler =
-            BrokerConfigRequestHandler::new(broker_runtime_inner.clone());
+        let broker_config_request_handler = BrokerConfigRequestHandler::new(broker_runtime_inner.clone());
         let consumer_request_handler = ConsumerRequestHandler::new(broker_runtime_inner.clone());
         let offset_request_handler = OffsetRequestHandler::new(broker_runtime_inner.clone());
         let batch_mq_handler = BatchMqHandler::new(broker_runtime_inner.clone());
-        let subscription_group_handler =
-            SubscriptionGroupHandler::new(broker_runtime_inner.clone());
+        let subscription_group_handler = SubscriptionGroupHandler::new(broker_runtime_inner.clone());
 
-        let notify_min_broker_handler =
-            NotifyMinBrokerChangeIdHandler::new(broker_runtime_inner.clone());
+        let notify_min_broker_handler = NotifyMinBrokerChangeIdHandler::new(broker_runtime_inner.clone());
 
         let update_broker_ha_handler = UpdateBrokerHaHandler::new(broker_runtime_inner.clone());
 
-        let reset_master_flusg_offset_handler =
-            ResetMasterFlushOffsetHandler::new(broker_runtime_inner.clone());
+        let reset_master_flusg_offset_handler = ResetMasterFlushOffsetHandler::new(broker_runtime_inner.clone());
 
         let broker_epoch_cache_handler = BrokerEpochCacheHandler::new(broker_runtime_inner.clone());
 
-        let notify_broker_role_change_handler =
-            NotifyBrokerRoleChangeHandler::new(broker_runtime_inner.clone());
+        let notify_broker_role_change_handler = NotifyBrokerRoleChangeHandler::new(broker_runtime_inner.clone());
 
         let message_related_handler = MessageRelatedHandler::new(broker_runtime_inner.clone());
         let producer_request_handler = ProducerRequestHandler::new(broker_runtime_inner.clone());
@@ -215,9 +206,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .update_and_create_subscription_group(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::UpdateAndCreateSubscriptionGroupList => {
-                Ok(get_unknown_cmd_response(request_code))
-            }
+            RequestCode::UpdateAndCreateSubscriptionGroupList => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::GetAllSubscriptionGroupConfig => {
                 self.offset_request_handler
                     .get_all_subscription_group_config(channel, ctx, request_code, request)
@@ -257,9 +246,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             }
             RequestCode::GetAllMessageRequestMode => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::InvokeBrokerToResetOffset => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::InvokeBrokerToGetConsumerStatus => {
-                Ok(get_unknown_cmd_response(request_code))
-            }
+            RequestCode::InvokeBrokerToGetConsumerStatus => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::QueryTopicConsumeByWho => {
                 self.topic_request_handler
                     .query_topic_consume_by_who(channel, ctx, request_code, request)

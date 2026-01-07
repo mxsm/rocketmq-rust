@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use rocketmq_common::common::message::message_ext::MessageExt;
 
@@ -51,10 +48,7 @@ pub trait MQPushConsumer: MQConsumer {
     /// * `MLC` - The type of the message listener closure.
     fn register_message_listener_concurrently_fn<MLCFN>(&mut self, message_listener: MLCFN)
     where
-        MLCFN: Fn(
-                Vec<MessageExt>,
-                ConsumeConcurrentlyContext,
-            ) -> rocketmq_error::RocketMQResult<ConsumeConcurrentlyStatus>
+        MLCFN: Fn(Vec<MessageExt>, ConsumeConcurrentlyContext) -> rocketmq_error::RocketMQResult<ConsumeConcurrentlyStatus>
             + Send
             + Sync;
 
@@ -73,10 +67,7 @@ pub trait MQPushConsumer: MQConsumer {
     /// * `MLO` - The type of the message listener closure.
     async fn register_message_listener_orderly_fn<MLOFN>(&mut self, message_listener: MLOFN)
     where
-        MLOFN: Fn(
-                Vec<MessageExt>,
-                ConsumeOrderlyContext,
-            ) -> rocketmq_error::RocketMQResult<ConsumeOrderlyStatus>
+        MLOFN: Fn(Vec<MessageExt>, ConsumeOrderlyContext) -> rocketmq_error::RocketMQResult<ConsumeOrderlyStatus>
             + Send
             + Sync;
 
@@ -94,11 +85,7 @@ pub trait MQPushConsumer: MQConsumer {
     /// # Returns
     ///
     /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or an error.
-    fn subscribe(
-        &mut self,
-        topic: &str,
-        sub_expression: &str,
-    ) -> rocketmq_error::RocketMQResult<()>;
+    fn subscribe(&mut self, topic: &str, sub_expression: &str) -> rocketmq_error::RocketMQResult<()>;
 
     /// Subscribes to a topic with an optional message selector.
     ///

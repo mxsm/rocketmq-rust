@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
@@ -24,7 +21,9 @@ use crate::base::connection_net_event::ConnectionNetEvent;
 use crate::base::response_future::ResponseFuture;
 use crate::connection::Connection;
 // Import error helpers for convenient error creation
-use crate::error_helpers::{connection_invalid, io_error, remote_error};
+use crate::error_helpers::connection_invalid;
+use crate::error_helpers::io_error;
+use crate::error_helpers::remote_error;
 use crate::net::channel::Channel;
 use crate::net::channel::ChannelInner;
 use crate::protocol::remoting_command::RemotingCommand;
@@ -70,10 +69,7 @@ where
         cmd_handler: ArcMut<RemotingGeneralHandler<PR>>,
         tx: Option<&tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
         notify: broadcast::Receiver<()>,
-    ) -> RocketMQResult<(
-        tokio::sync::mpsc::Sender<SendMessage>,
-        ArcMut<ClientInner<PR>>,
-    )>
+    ) -> RocketMQResult<(tokio::sync::mpsc::Sender<SendMessage>, ArcMut<ClientInner<PR>>)>
     where
         T: tokio::net::ToSocketAddrs,
     {
@@ -85,10 +81,7 @@ where
         let local_addr = stream.local_addr()?;
         let remote_address = stream.peer_addr()?;
         let connection = Connection::new(stream);
-        let channel_inner = ArcMut::new(ChannelInner::new(
-            connection,
-            cmd_handler.response_table.clone(),
-        ));
+        let channel_inner = ArcMut::new(ChannelInner::new(connection, cmd_handler.response_table.clone()));
         let channel = Channel::new(channel_inner, local_addr, remote_address);
         let (tx_, rx) = tokio::sync::mpsc::channel(1024);
         let client = ClientInner {
@@ -110,9 +103,7 @@ where
         });
 
         if let Some(tx) = tx {
-            let _ = tx.send(ConnectionNetEvent::CONNECTED(
-                client_inner.ctx.channel.remote_address(),
-            ));
+            let _ = tx.send(ConnectionNetEvent::CONNECTED(client_inner.ctx.channel.remote_address()));
         }
         Ok((tx_, client_inner))
     }
@@ -138,9 +129,7 @@ where
                 }
             };
             //process request and response
-            self.cmd_handler
-                .process_message_received(&mut self.ctx, cmd)
-                .await;
+            self.cmd_handler.process_message_received(&mut self.ctx, cmd).await;
         }
     }
 
@@ -227,11 +216,7 @@ where
     ) -> RocketMQResult<RemotingCommand> {
         let (tx, rx) = tokio::sync::oneshot::channel::<RocketMQResult<RemotingCommand>>();
 
-        if let Err(err) = self
-            .tx
-            .send((request, Some(tx), Some(timeout_millis)))
-            .await
-        {
+        if let Err(err) = self.tx.send((request, Some(tx), Some(timeout_millis))).await {
             return Err(remote_error(err.to_string()));
         }
         match rx.await {
@@ -357,11 +342,7 @@ where
         for request in requests {
             let (tx, rx) = tokio::sync::oneshot::channel::<RocketMQResult<RemotingCommand>>();
 
-            if let Err(err) = self
-                .tx
-                .send((request, Some(tx), Some(timeout_millis)))
-                .await
-            {
+            if let Err(err) = self.tx.send((request, Some(tx), Some(timeout_millis))).await {
                 return Err(remote_error(err.to_string()));
             }
 

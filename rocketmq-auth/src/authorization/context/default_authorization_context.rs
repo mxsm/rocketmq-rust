@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Default authorization context implementation.
 //!
@@ -70,7 +67,7 @@ impl Clone for SubjectWrapper {
 
 /// Default authorization context containing all information needed for authorization decisions.
 ///
-/// This struct mirrors the Java `DefaultAuthorizationContext` class and contains:
+/// This struct contains:
 /// - Subject: who is performing the action (user, role, service account)
 /// - Resource: what is being accessed (topic, group, cluster)
 /// - Actions: what operations are being performed (PUB, SUB, CREATE, etc.)
@@ -315,13 +312,7 @@ mod tests {
         let subject_key = "user:alice";
         let subject_type = SubjectType::User;
         let resource = Resource::of_topic("test-topic");
-        let context = DefaultAuthorizationContext::of(
-            subject_key,
-            subject_type,
-            resource,
-            Action::Pub,
-            "192.168.1.1",
-        );
+        let context = DefaultAuthorizationContext::of(subject_key, subject_type, resource, Action::Pub, "192.168.1.1");
 
         assert_eq!(context.subject_key(), Some("user:alice"));
         assert_eq!(context.subject_type(), Some(SubjectType::User));
@@ -336,13 +327,8 @@ mod tests {
         let subject_type = SubjectType::User;
         let resource = Resource::of_topic("test-topic");
         let actions = vec![Action::Pub, Action::Sub];
-        let context = DefaultAuthorizationContext::of_multi_actions(
-            subject_key,
-            subject_type,
-            resource,
-            actions,
-            "10.0.0.1",
-        );
+        let context =
+            DefaultAuthorizationContext::of_multi_actions(subject_key, subject_type, resource, actions, "10.0.0.1");
 
         assert_eq!(context.actions().len(), 2);
         assert!(context.actions().contains(&Action::Pub));
@@ -366,10 +352,7 @@ mod tests {
 
         assert_eq!(context.subject_key(), Some("user:charlie"));
         assert_eq!(context.rpc_code(), Some("310"));
-        assert_eq!(
-            context.ext_info().get("region"),
-            Some(&"us-west".to_string())
-        );
+        assert_eq!(context.ext_info().get("region"), Some(&"us-west".to_string()));
     }
 
     #[test]
@@ -387,10 +370,7 @@ mod tests {
         assert_eq!(context.actions().len(), 1);
         assert_eq!(context.source_ip(), Some("203.0.113.1"));
         assert_eq!(context.rpc_code(), Some("500"));
-        assert_eq!(
-            context.ext_info().get("environment"),
-            Some(&"production".to_string())
-        );
+        assert_eq!(context.ext_info().get("environment"), Some(&"production".to_string()));
     }
 
     #[test]
@@ -398,13 +378,7 @@ mod tests {
         let subject_key = "user:eve";
         let subject_type = SubjectType::User;
         let resource = Resource::of_topic("my-topic");
-        let context = DefaultAuthorizationContext::of(
-            subject_key,
-            subject_type,
-            resource,
-            Action::Get,
-            "10.10.10.10",
-        );
+        let context = DefaultAuthorizationContext::of(subject_key, subject_type, resource, Action::Get, "10.10.10.10");
 
         let resource_key = context.resource_key();
         assert!(resource_key.is_some());

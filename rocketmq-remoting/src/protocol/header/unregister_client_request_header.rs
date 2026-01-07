@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use cheetah_string::CheetahString;
 use rocketmq_macros::RequestHeaderCodecV2;
@@ -54,24 +51,18 @@ mod tests {
         };
         let map = header.to_map().unwrap();
         assert_eq!(
-            map.get(&CheetahString::from_static_str("consumerGroup"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("consumerGroup")).unwrap(),
             "test_consumer_group"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("clientId"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("clientId")).unwrap(),
             "test_client_id"
         );
         assert_eq!(
-            map.get(&CheetahString::from_static_str("producerGroup"))
-                .unwrap(),
+            map.get(&CheetahString::from_static_str("producerGroup")).unwrap(),
             "test_producer_group"
         );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("rpcRequestHeader")),
-            None
-        );
+        assert_eq!(map.get(&CheetahString::from_static_str("rpcRequestHeader")), None);
     }
 
     #[test]
@@ -89,17 +80,10 @@ mod tests {
             CheetahString::from_static_str("producerGroup"),
             CheetahString::from_static_str("test_producer_group"),
         );
-        let header: UnregisterClientRequestHeader =
-            <UnregisterClientRequestHeader as FromMap>::from(&map).unwrap();
-        assert_eq!(
-            header.consumer_group.as_deref(),
-            Some("test_consumer_group")
-        );
+        let header: UnregisterClientRequestHeader = <UnregisterClientRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.consumer_group.as_deref(), Some("test_consumer_group"));
         assert_eq!(header.client_id, "test_client_id");
-        assert_eq!(
-            header.producer_group.as_deref(),
-            Some("test_producer_group")
-        );
+        assert_eq!(header.producer_group.as_deref(), Some("test_producer_group"));
     }
 
     #[test]
@@ -110,8 +94,7 @@ mod tests {
             CheetahString::from_static_str("test_client_id"),
         );
 
-        let header: UnregisterClientRequestHeader =
-            <UnregisterClientRequestHeader as FromMap>::from(&map).unwrap();
+        let header: UnregisterClientRequestHeader = <UnregisterClientRequestHeader as FromMap>::from(&map).unwrap();
         assert_eq!(header.client_id, "test_client_id");
         assert!(header.rpc_request_header.is_some());
     }
@@ -120,10 +103,7 @@ mod tests {
     fn un_register_client_request_header_deserialize_from_json() {
         let data = r#"{"clientID":"test_client_id","consumerGroup":"test_consumer_group"}"#;
         let header: UnregisterClientRequestHeader = serde_json::from_str(data).unwrap();
-        assert_eq!(
-            header.client_id,
-            CheetahString::from_static_str("test_client_id")
-        );
+        assert_eq!(header.client_id, CheetahString::from_static_str("test_client_id"));
         assert_eq!(header.consumer_group.as_deref(), None);
         assert!(header.rpc_request_header.is_some());
     }

@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! NameServer Bootstrap Module
 //!
@@ -180,10 +177,7 @@ impl NameServerBootstrap {
         self.name_server_runtime.shutdown_rx = Some(shutdown_rx);
         self.name_server_runtime.initialize().await?;
 
-        tokio::join!(
-            self.name_server_runtime.start(),
-            wait_for_signal_inner(shutdown_tx)
-        );
+        tokio::join!(self.name_server_runtime.start(), wait_for_signal_inner(shutdown_tx));
 
         info!("NameServer shutdown completed");
         Ok(())
@@ -300,10 +294,7 @@ impl NameServerRuntime {
         // KVConfigManager is now always initialized
         self.inner.kvconfig_manager_mut().load().map_err(|e| {
             error!("KV config load failed: {}", e);
-            RocketMQError::storage_read_failed(
-                "kv_config",
-                format!("Configuration load error: {}", e),
-            )
+            RocketMQError::storage_read_failed("kv_config", format!("Configuration load error: {}", e))
         })?;
         debug!("KV configuration loaded successfully");
         Ok(())
@@ -323,10 +314,7 @@ impl NameServerRuntime {
     ///
     /// Schedules periodic broker health checks to detect and remove inactive brokers
     fn start_schedule_service(&self) {
-        let scan_not_active_broker_interval = self
-            .inner
-            .name_server_config()
-            .scan_not_active_broker_interval;
+        let scan_not_active_broker_interval = self.inner.name_server_config().scan_not_active_broker_interval;
         let mut name_server_runtime_inner = self.inner.clone();
 
         self.scheduled_task_manager.add_fixed_rate_task_async(
@@ -334,9 +322,7 @@ impl NameServerRuntime {
             Duration::from_millis(scan_not_active_broker_interval),
             async move |_ctx| {
                 debug!("Running scheduled broker health check");
-                if let Some(route_info_manager) =
-                    name_server_runtime_inner.route_info_manager.as_mut()
-                {
+                if let Some(route_info_manager) = name_server_runtime_inner.route_info_manager.as_mut() {
                     route_info_manager.scan_not_active_broker();
                 }
                 Ok(())
@@ -404,11 +390,8 @@ impl NameServerRuntime {
             "127.0.0.1".to_string()
         });
 
-        let namesrv = CheetahString::from_string(format!(
-            "{}:{}",
-            local_address,
-            self.inner.server_config().listen_port
-        ));
+        let namesrv =
+            CheetahString::from_string(format!("{}:{}", local_address, self.inner.server_config().listen_port));
 
         debug!("NameServer address: {}", namesrv);
 
@@ -478,9 +461,7 @@ impl NameServerRuntime {
         self.scheduled_task_manager.cancel_all();
 
         info!("Phase 3/4: Shutting down route info manager...");
-        self.inner
-            .route_info_manager_mut()
-            .shutdown_unregister_service();
+        self.inner.route_info_manager_mut().shutdown_unregister_service();
 
         info!(
             "Phase 4/4: Waiting for server task (timeout: {}s)...",
@@ -534,10 +515,7 @@ impl NameServerRuntime {
                 }
                 Ok(Err(e)) => {
                     error!("Server task panicked: {}", e);
-                    Err(RocketMQError::Internal(format!(
-                        "Server task panicked: {}",
-                        e
-                    )))
+                    Err(RocketMQError::Internal(format!("Server task panicked: {}", e)))
                 }
                 Err(_) => {
                     warn!(
@@ -565,25 +543,19 @@ impl NameServerRuntime {
     fn init_processors(&self) -> NameServerRequestProcessor {
         let client_request_processor = ClientRequestProcessor::new(self.inner.clone());
         let default_request_processor =
-            crate::processor::default_request_processor::DefaultRequestProcessor::new(
-                self.inner.clone(),
-            );
+            crate::processor::default_request_processor::DefaultRequestProcessor::new(self.inner.clone());
 
         let mut name_server_request_processor = NameServerRequestProcessor::new();
 
         // Register topic route query processor
         name_server_request_processor.register_processor(
             RequestCode::GetRouteinfoByTopic,
-            NameServerRequestProcessorWrapper::ClientRequestProcessor(ArcMut::new(
-                client_request_processor,
-            )),
+            NameServerRequestProcessorWrapper::ClientRequestProcessor(ArcMut::new(client_request_processor)),
         );
 
         // Register default processor for all other requests
         name_server_request_processor.register_default_processor(
-            NameServerRequestProcessorWrapper::DefaultRequestProcessor(ArcMut::new(
-                default_request_processor,
-            )),
+            NameServerRequestProcessorWrapper::DefaultRequestProcessor(ArcMut::new(default_request_processor)),
         );
 
         debug!("Request processor pipeline configured");
@@ -600,8 +572,8 @@ impl Drop for NameServerRuntime {
         // Warn if not properly shut down
         if current_state != RuntimeState::Stopped {
             warn!(
-                "NameServerRuntime dropped without proper shutdown (current state: {}). This may \
-                 indicate a panic or abnormal termination.",
+                "NameServerRuntime dropped without proper shutdown (current state: {}). This may indicate a panic or \
+                 abnormal termination.",
                 current_state
             );
         }
@@ -766,16 +738,12 @@ impl NameServerRuntimeInner {
 
     #[inline]
     pub fn kvconfig_manager(&self) -> &KVConfigManager {
-        self.kvconfig_manager
-            .as_ref()
-            .expect("KVConfigManager not initialized")
+        self.kvconfig_manager.as_ref().expect("KVConfigManager not initialized")
     }
 
     #[inline]
     pub fn kvconfig_manager_mut(&mut self) -> &mut KVConfigManager {
-        self.kvconfig_manager
-            .as_mut()
-            .expect("KVConfigManager not initialized")
+        self.kvconfig_manager.as_mut().expect("KVConfigManager not initialized")
     }
 
     #[inline]

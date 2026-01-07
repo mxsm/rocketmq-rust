@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 
@@ -33,10 +30,7 @@ impl MessageAccessor {
     /// * `msg` - A mutable reference to a message implementing the `MessageTrait`.
     /// * `properties` - A `HashMap` containing the properties to set.
     #[inline]
-    pub fn set_properties<T: MessageTrait>(
-        msg: &mut T,
-        properties: HashMap<CheetahString, CheetahString>,
-    ) {
+    pub fn set_properties<T: MessageTrait>(msg: &mut T, properties: HashMap<CheetahString, CheetahString>) {
         msg.set_properties(properties);
     }
 
@@ -88,9 +82,7 @@ impl MessageAccessor {
     /// * `Option<String>` - The transfer flag value if it exists.
     #[inline]
     pub fn get_transfer_flag<T: MessageTrait>(msg: &T) -> Option<CheetahString> {
-        msg.get_property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_TRANSFER_FLAG,
-        ))
+        msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_TRANSFER_FLAG))
     }
 
     /// Sets the correction flag of a message.
@@ -118,9 +110,7 @@ impl MessageAccessor {
     /// * `Option<String>` - The correction flag value if it exists.
     #[inline]
     pub fn get_correction_flag<T: MessageTrait>(msg: &T) -> Option<CheetahString> {
-        msg.get_property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_CORRECTION_FLAG,
-        ))
+        msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRECTION_FLAG))
     }
 
     /// Sets the origin message ID of a message.
@@ -161,10 +151,7 @@ impl MessageAccessor {
     /// * `flag` - The MQ2 flag value.
     #[inline]
     pub fn set_mq2_flag<T: MessageTrait>(msg: &mut T, flag: CheetahString) {
-        msg.put_property(
-            CheetahString::from_static_str(MessageConst::PROPERTY_MQ2_FLAG),
-            flag,
-        );
+        msg.put_property(CheetahString::from_static_str(MessageConst::PROPERTY_MQ2_FLAG), flag);
     }
 
     /// Gets the MQ2 flag of a message.
@@ -178,9 +165,7 @@ impl MessageAccessor {
     /// * `Option<String>` - The MQ2 flag value if it exists.
     #[inline]
     pub fn get_mq2_flag<T: MessageTrait>(msg: &T) -> Option<CheetahString> {
-        msg.get_property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_MQ2_FLAG,
-        ))
+        msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_MQ2_FLAG))
     }
 
     /// Sets the reconsume time of a message.
@@ -208,9 +193,7 @@ impl MessageAccessor {
     /// * `Option<String>` - The reconsume time value if it exists.
     #[inline]
     pub fn get_reconsume_time<T: MessageTrait>(msg: &T) -> Option<CheetahString> {
-        msg.get_property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_RECONSUME_TIME,
-        ))
+        msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_RECONSUME_TIME))
     }
 
     /// Sets the maximum reconsume times of a message.
@@ -220,10 +203,7 @@ impl MessageAccessor {
     /// * `msg` - A mutable reference to a message implementing the `MessageTrait`.
     /// * `max_reconsume_times` - The maximum reconsume times value.
     #[inline]
-    pub fn set_max_reconsume_times<T: MessageTrait>(
-        msg: &mut T,
-        max_reconsume_times: CheetahString,
-    ) {
+    pub fn set_max_reconsume_times<T: MessageTrait>(msg: &mut T, max_reconsume_times: CheetahString) {
         msg.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_MAX_RECONSUME_TIMES),
             max_reconsume_times,
@@ -284,8 +264,7 @@ impl MessageAccessor {
     where
         M: MessageTrait,
     {
-        let mut new_message =
-            Message::new_body(message.get_topic().clone(), message.get_body().cloned());
+        let mut new_message = Message::new_body(message.get_topic().clone(), message.get_body().cloned());
         new_message.set_flag(message.get_flag());
         new_message.set_properties(message.get_properties().clone());
         new_message

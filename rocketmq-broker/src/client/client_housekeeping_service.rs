@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
 
@@ -74,12 +71,8 @@ where
     }
 
     fn scan_exception_channel(&self) {
-        self.broker_runtime_inner
-            .producer_manager()
-            .scan_not_active_channel();
-        self.broker_runtime_inner
-            .consumer_manager()
-            .scan_not_active_channel();
+        self.broker_runtime_inner.producer_manager().scan_not_active_channel();
+        self.broker_runtime_inner.consumer_manager().scan_not_active_channel();
     }
 }
 
@@ -100,9 +93,7 @@ where
         self.broker_runtime_inner
             .consumer_manager()
             .do_channel_close_event(remote_addr, channel);
-        self.broker_runtime_inner
-            .broker_stats_manager()
-            .inc_channel_close_num()
+        self.broker_runtime_inner.broker_stats_manager().inc_channel_close_num()
     }
 
     fn on_channel_exception(&self, remote_addr: &str, channel: &Channel) {
@@ -124,9 +115,7 @@ where
         self.broker_runtime_inner
             .consumer_manager()
             .do_channel_close_event(remote_addr, channel);
-        self.broker_runtime_inner
-            .broker_stats_manager()
-            .inc_channel_idle_num()
+        self.broker_runtime_inner.broker_stats_manager().inc_channel_idle_num()
     }
 
     fn on_channel_active(&self, _remote_addr: &str, _channel: &Channel) {

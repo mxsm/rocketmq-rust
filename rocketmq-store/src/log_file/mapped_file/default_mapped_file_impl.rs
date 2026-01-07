@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::fs;
 use std::fs::File;
@@ -322,8 +319,7 @@ impl MappedFile for DefaultMappedFile {
             message,
             put_message_context,
         );
-        self.wrote_position
-            .fetch_add(result.wrote_bytes, Ordering::AcqRel);
+        self.wrote_position.fetch_add(result.wrote_bytes, Ordering::AcqRel);
         self.store_timestamp
             .store(result.store_timestamp as u64, Ordering::Release);
 
@@ -360,8 +356,7 @@ impl MappedFile for DefaultMappedFile {
             put_message_context,
             enabled_append_prop_crc,
         );
-        self.wrote_position
-            .fetch_add(result.wrote_bytes, Ordering::AcqRel);
+        self.wrote_position.fetch_add(result.wrote_bytes, Ordering::AcqRel);
         self.store_timestamp
             .store(result.store_timestamp as u64, Ordering::Release);
         result
@@ -382,9 +377,7 @@ impl MappedFile for DefaultMappedFile {
         if pos + size > self.file_size as usize {
             return None;
         }
-        Some(Bytes::copy_from_slice(
-            &self.get_mapped_file()[pos..pos + size],
-        ))
+        Some(Bytes::copy_from_slice(&self.get_mapped_file()[pos..pos + size]))
     }
 
     #[inline]
@@ -395,20 +388,16 @@ impl MappedFile for DefaultMappedFile {
         if max_readable_position < end_position || end_position > self.file_size as usize {
             return None;
         }
-        Some(Bytes::copy_from_slice(
-            &self.get_mapped_file()[pos..end_position],
-        ))
+        Some(Bytes::copy_from_slice(&self.get_mapped_file()[pos..end_position]))
     }
 
     fn append_message_offset_length(&self, data: &[u8], offset: usize, length: usize) -> bool {
         let current_pos = self.wrote_position.load(Ordering::Acquire) as usize;
         if current_pos + length <= self.file_size as usize {
-            let mut mapped_file =
-                &mut self.get_mapped_file_mut()[current_pos..current_pos + length];
+            let mut mapped_file = &mut self.get_mapped_file_mut()[current_pos..current_pos + length];
             if let Some(data_slice) = data.get(offset..offset + length) {
                 if mapped_file.write_all(data_slice).is_ok() {
-                    self.wrote_position
-                        .fetch_add(length as i32, Ordering::AcqRel);
+                    self.wrote_position.fetch_add(length as i32, Ordering::AcqRel);
                     return true;
                 } else {
                     error!("append_message_offset_length write_all error");
@@ -424,8 +413,7 @@ impl MappedFile for DefaultMappedFile {
         let current_pos = self.wrote_position.load(Ordering::Relaxed) as usize;
 
         if current_pos + length <= self.file_size as usize {
-            let mut mapped_file =
-                &mut self.get_mapped_file_mut()[current_pos..current_pos + length];
+            let mut mapped_file = &mut self.get_mapped_file_mut()[current_pos..current_pos + length];
             if let Some(data_slice) = data.get(offset..offset + length) {
                 if mapped_file.write_all(data_slice).is_ok() {
                     return true;
@@ -478,8 +466,7 @@ impl MappedFile for DefaultMappedFile {
         }
 
         // Update write position atomically
-        self.wrote_position
-            .fetch_add(bytes_written as i32, Ordering::AcqRel);
+        self.wrote_position.fetch_add(bytes_written as i32, Ordering::AcqRel);
 
         // Record metrics
         if let Some(metrics) = &self.metrics {
@@ -557,22 +544,20 @@ impl MappedFile for DefaultMappedFile {
                         let flushed_pos = self.flushed_position.load(Ordering::Acquire);
                         let flush_size = value - flushed_pos;
 
-                        let flush_result =
-                            if flush_size > 0 && flush_size < (self.file_size as i32) / 2 {
-                                self.flush_range(flushed_pos as usize, value as usize)
+                        let flush_result = if flush_size > 0 && flush_size < (self.file_size as i32) / 2 {
+                            self.flush_range(flushed_pos as usize, value as usize)
+                        } else {
+                            // Full flush for large updates
+                            if let Err(e) = self.mmapped_file.flush() {
+                                error!("Error occurred when force data to disk: {:?}", e);
+                                0
                             } else {
-                                // Full flush for large updates
-                                if let Err(e) = self.mmapped_file.flush() {
-                                    error!("Error occurred when force data to disk: {:?}", e);
-                                    0
-                                } else {
-                                    value - flushed_pos
-                                }
-                            };
+                                value - flushed_pos
+                            }
+                        };
 
                         if flush_result > 0 {
-                            self.last_flush_time
-                                .store(get_current_millis(), Ordering::Relaxed);
+                            self.last_flush_time.store(get_current_millis(), Ordering::Relaxed);
 
                             if let Some(metrics) = &self.metrics {
                                 let flush_duration = flush_start.elapsed();
@@ -594,8 +579,7 @@ impl MappedFile for DefaultMappedFile {
                     "in flush, hold failed, flush offset = {}",
                     self.flushed_position.load(Ordering::Relaxed)
                 );
-                self.flushed_position
-                    .store(self.get_read_position(), Ordering::Release);
+                self.flushed_position.store(self.get_read_position(), Ordering::Release);
             }
         }
         self.get_flushed_position()
@@ -652,8 +636,7 @@ impl MappedFile for DefaultMappedFile {
             }
         } else {
             warn!(
-                "selectMappedBuffer request pos invalid, request pos: {}, size:{}, \
-                 fileFromOffset: {}",
+                "selectMappedBuffer request pos invalid, request pos: {}, size:{}, fileFromOffset: {}",
                 pos, size, self.file_from_offset
             );
             None
@@ -718,8 +701,7 @@ impl MappedFile for DefaultMappedFile {
             }
         } else {
             warn!(
-                "selectMappedBuffer request pos invalid, request pos: {}, size:{}, \
-                 fileFromOffset: {}",
+                "selectMappedBuffer request pos invalid, request pos: {}, size:{}, fileFromOffset: {}",
                 pos, size, self.file_from_offset
             );
             None
@@ -775,14 +757,12 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn set_flushed_position(&self, flushed_position: i32) {
-        self.flushed_position
-            .store(flushed_position, Ordering::SeqCst)
+        self.flushed_position.store(flushed_position, Ordering::SeqCst)
     }
 
     #[inline]
     fn get_wrote_position(&self) -> i32 {
-        self.wrote_position
-            .load(std::sync::atomic::Ordering::Acquire)
+        self.wrote_position.load(std::sync::atomic::Ordering::Acquire)
     }
 
     #[inline]
@@ -808,8 +788,7 @@ impl MappedFile for DefaultMappedFile {
 
     #[inline]
     fn set_committed_position(&self, committed_position: i32) {
-        self.committed_position
-            .store(committed_position, Ordering::SeqCst)
+        self.committed_position.store(committed_position, Ordering::SeqCst)
     }
 
     #[inline]
@@ -1112,9 +1091,7 @@ impl DefaultMappedFile {
 }
 
 impl ReferenceResource for DefaultMappedFile {
-    fn base(
-        &self,
-    ) -> &crate::log_file::mapped_file::reference_resource_counter::ReferenceResourceBase {
+    fn base(&self) -> &crate::log_file::mapped_file::reference_resource_counter::ReferenceResourceBase {
         self.reference_resource.base()
     }
 
@@ -1292,8 +1269,7 @@ impl DefaultMappedFile {
                 put_message_context,
             );
 
-            self.wrote_position
-                .fetch_add(result.wrote_bytes, Ordering::AcqRel);
+            self.wrote_position.fetch_add(result.wrote_bytes, Ordering::AcqRel);
             self.store_timestamp
                 .store(result.store_timestamp as u64, Ordering::Release);
 
@@ -1382,10 +1358,7 @@ impl DefaultMappedFile {
     /// // ...
     /// ```
     pub fn metrics_summary(&self) -> String {
-        self.metrics
-            .as_ref()
-            .map(|m| m.summary())
-            .unwrap_or_default()
+        self.metrics.as_ref().map(|m| m.summary()).unwrap_or_default()
     }
 }
 
@@ -1425,10 +1398,7 @@ mod tests {
         let (_temp_dir, mut mapped_file) = create_test_file();
 
         mapped_file.set_flush_strategy(FlushStrategy::Sync);
-        assert!(matches!(
-            mapped_file.get_flush_strategy(),
-            FlushStrategy::Sync
-        ));
+        assert!(matches!(mapped_file.get_flush_strategy(), FlushStrategy::Sync));
     }
 
     #[test]

@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -121,15 +118,11 @@ use crate::transaction::queue::transactional_message_bridge::TransactionalMessag
 use crate::transaction::transaction_metrics_flush_service::TransactionMetricsFlushService;
 use crate::transaction::transactional_message_check_service::TransactionalMessageCheckService;
 
-type DefaultServerProcessor = BrokerRequestProcessor<
-    LocalFileMessageStore,
-    DefaultTransactionalMessageService<LocalFileMessageStore>,
->;
+type DefaultServerProcessor =
+    BrokerRequestProcessor<LocalFileMessageStore, DefaultTransactionalMessageService<LocalFileMessageStore>>;
 
-type FasterServerProcessor = BrokerRequestProcessor<
-    LocalFileMessageStore,
-    DefaultTransactionalMessageService<LocalFileMessageStore>,
->;
+type FasterServerProcessor =
+    BrokerRequestProcessor<LocalFileMessageStore, DefaultTransactionalMessageService<LocalFileMessageStore>>;
 
 pub(crate) struct BrokerRuntime {
     #[cfg(feature = "local_file_store")]
@@ -138,8 +131,6 @@ pub(crate) struct BrokerRuntime {
     shutdown_hook: Option<BrokerShutdownHook>,
     consumer_ids_change_listener: Arc<Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>>,
     topic_queue_mapping_clean_service: TopicQueueMappingCleanService,
-    // receiver for shutdown signal
-    pub(crate) shutdown_rx: Option<tokio::sync::broadcast::Receiver<()>>,
     scheduled_task_manager: ScheduledTaskManager,
 }
 
@@ -158,9 +149,7 @@ impl BrokerRuntime {
         //server_config: Arc<ServerConfig>,
     ) -> Self {
         let broker_address = format!("{}:{}", broker_config.broker_ip1, broker_config.listen_port);
-        let store_host = broker_address
-            .parse::<SocketAddr>()
-            .expect("parse store_host failed");
+        let store_host = broker_address.parse::<SocketAddr>().expect("parse store_host failed");
         let runtime = RocketMQRuntime::new_multi(10, "broker-thread");
         let broker_outer_api = BrokerOuterAPI::new(Arc::new(TokioClientConfig::default()));
 
@@ -174,13 +163,10 @@ impl BrokerRuntime {
             broker_config.get_broker_addr().into(),
         );
         let producer_manager = ProducerManager::new();
-        let consumer_ids_change_listener: Arc<
-            Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
-        > = Arc::new(Box::new(DefaultConsumerIdsChangeListener {}));
-        let consumer_manager = ConsumerManager::new_with_broker_stats(
-            consumer_ids_change_listener.clone(),
-            broker_config.clone(),
-        );
+        let consumer_ids_change_listener: Arc<Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>> =
+            Arc::new(Box::new(DefaultConsumerIdsChangeListener {}));
+        let consumer_manager =
+            ConsumerManager::new_with_broker_stats(consumer_ids_change_listener.clone(), broker_config.clone());
 
         let should_start_time = Arc::new(AtomicU64::new(0));
         let pop_inflight_message_counter = PopInflightMessageCounter::new(should_start_time);
@@ -200,10 +186,7 @@ impl BrokerRuntime {
                 None,
             ),
             subscription_group_manager: None,
-            consumer_filter_manager: Some(ConsumerFilterManager::new(
-                broker_config,
-                message_store_config,
-            )),
+            consumer_filter_manager: Some(ConsumerFilterManager::new(broker_config, message_store_config)),
 
             consumer_order_info_manager: None,
             message_store: None,
@@ -261,17 +244,13 @@ impl BrokerRuntime {
         inner.escape_bridge = Some(EscapeBridge::new(inner.clone()));
         inner.subscription_group_manager = Some(SubscriptionGroupManager::new(inner.clone()));
         inner.consumer_order_info_manager = Some(ConsumerOrderInfoManager::new(inner.clone()));
-        inner
-            .producer_manager
-            .set_broker_stats_manager(stats_manager.clone());
+        inner.producer_manager.set_broker_stats_manager(stats_manager.clone());
         inner
             .consumer_manager
             .set_broker_stats_manager(Arc::downgrade(&stats_manager));
         inner.broker_stats_manager = Some(stats_manager);
-        inner.schedule_message_service =
-            Some(ArcMut::new(ScheduleMessageService::new(inner.clone())));
-        inner.client_housekeeping_service =
-            Some(Arc::new(ClientHousekeepingService::new(inner.clone())));
+        inner.schedule_message_service = Some(ArcMut::new(ScheduleMessageService::new(inner.clone())));
+        inner.client_housekeeping_service = Some(Arc::new(ClientHousekeepingService::new(inner.clone())));
         inner.slave_synchronize = Some(SlaveSynchronize::new(inner.clone()));
         inner.broker_pre_online_service = Some(BrokerPreOnlineService::new(inner.clone()));
         Self {
@@ -280,7 +259,6 @@ impl BrokerRuntime {
             shutdown_hook: None,
             consumer_ids_change_listener,
             topic_queue_mapping_clean_service: TopicQueueMappingCleanService,
-            shutdown_rx: None,
             scheduled_task_manager: Default::default(),
         }
     }
@@ -361,9 +339,7 @@ impl BrokerRuntime {
             ack_message_processor.shutdown();
         }
 
-        if let Some(transactional_message_service) =
-            self.inner.transactional_message_service.as_mut()
-        {
+        if let Some(transactional_message_service) = self.inner.transactional_message_service.as_mut() {
             transactional_message_service.shutdown().await;
         }
 
@@ -399,14 +375,10 @@ impl BrokerRuntime {
             schedule_message_service.persist();
             schedule_message_service.shutdown().await;
         }
-        if let Some(transactional_message_check_service) =
-            self.inner.transactional_message_check_service.as_mut()
-        {
+        if let Some(transactional_message_check_service) = self.inner.transactional_message_check_service.as_mut() {
             transactional_message_check_service.shutdown().await;
         }
-        if let Some(transaction_metrics_flush_service) =
-            self.inner.transaction_metrics_flush_service.as_mut()
-        {
+        if let Some(transaction_metrics_flush_service) = self.inner.transaction_metrics_flush_service.as_mut() {
             transaction_metrics_flush_service.shutdown();
         }
         if let Some(escape_bridge) = self.inner.escape_bridge.as_mut() {
@@ -424,9 +396,7 @@ impl BrokerRuntime {
             broker_pre_online_service.shutdown().await;
         }
 
-        if let Some(cold_data_pull_request_hold_service) =
-            self.inner.cold_data_pull_request_hold_service.as_mut()
-        {
+        if let Some(cold_data_pull_request_hold_service) = self.inner.cold_data_pull_request_hold_service.as_mut() {
             cold_data_pull_request_hold_service.shutdown();
         }
 
@@ -532,9 +502,7 @@ impl BrokerRuntime {
             self.inner.broker_config.clone(),
             self.inner.consumer_filter_manager.clone().unwrap(),
         ));
-        self.inner
-            .message_store_unchecked_mut()
-            .add_first_dispatcher(filter);
+        self.inner.message_store_unchecked_mut().add_first_dispatcher(filter);
         flag
     }
 
@@ -555,12 +523,7 @@ impl BrokerRuntime {
             }
         }
 
-        if self
-            .inner
-            .broker_config
-            .timer_wheel_config
-            .timer_wheel_enable
-        {
+        if self.inner.broker_config.timer_wheel_config.timer_wheel_enable {
             if let Some(timer_message_store) = &mut self.inner.timer_message_store {
                 info!("Timer wheel is enabled, load timer message store");
                 result &= timer_message_store.load();
@@ -605,15 +568,9 @@ impl BrokerRuntime {
         let broker_runtime_inner = ArcMut::clone(&self.inner);
         if let Some(ref mut message_store) = self.inner.message_store {
             let message_store_clone = message_store.clone();
-            message_store.set_put_message_hook(Box::new(CheckBeforePutMessageHook::new(
-                message_store_clone,
-                config,
-            )));
-            message_store.set_put_message_hook(Box::new(BatchCheckBeforePutMessageHook::new(
-                topic_config_table,
-            )));
-            message_store
-                .set_put_message_hook(Box::new(ScheduleMessageHook::new(broker_runtime_inner)))
+            message_store.set_put_message_hook(Box::new(CheckBeforePutMessageHook::new(message_store_clone, config)));
+            message_store.set_put_message_hook(Box::new(BatchCheckBeforePutMessageHook::new(topic_config_table)));
+            message_store.set_put_message_hook(Box::new(ScheduleMessageHook::new(broker_runtime_inner)))
         }
     }
 
@@ -628,19 +585,11 @@ impl BrokerRuntime {
 
     fn init_processor(&mut self) -> (DefaultServerProcessor, FasterServerProcessor) {
         let send_message_processor = SendMessageProcessor::new(
-            self.inner
-                .transactional_message_service
-                .as_ref()
-                .unwrap()
-                .clone(),
+            self.inner.transactional_message_service.as_ref().unwrap().clone(),
             self.inner.clone(),
         );
         let reply_message_processor = ReplyMessageProcessor::new(
-            self.inner
-                .transactional_message_service
-                .as_ref()
-                .unwrap()
-                .clone(),
+            self.inner.transactional_message_service.as_ref().unwrap().clone(),
             self.inner.clone(),
         );
         let pull_message_result_handler = ArcMut::new(DefaultPullMessageResultHandler::new(
@@ -664,9 +613,7 @@ impl BrokerRuntime {
             .message_store
             .as_mut()
             .unwrap()
-            .set_message_arriving_listener(Some(Arc::new(Box::new(
-                NotifyMessageArrivingListener::new(inner),
-            ))));
+            .set_message_arriving_listener(Some(Arc::new(Box::new(NotifyMessageArrivingListener::new(inner)))));
 
         let pop_message_processor = PopMessageProcessor::new_arc_mut(self.inner.clone());
         self.inner.pop_message_processor = Some(pop_message_processor.clone());
@@ -675,8 +622,7 @@ impl BrokerRuntime {
             pop_message_processor.clone(),
         ));
         self.inner.ack_message_processor = Some(ack_message_processor.clone());
-        let query_assignment_processor =
-            ArcMut::new(QueryAssignmentProcessor::new(self.inner.clone()));
+        let query_assignment_processor = ArcMut::new(QueryAssignmentProcessor::new(self.inner.clone()));
         self.inner.query_assignment_processor = Some(query_assignment_processor.clone());
 
         let notification_processor = NotificationProcessor::new(self.inner.clone());
@@ -750,9 +696,7 @@ impl BrokerRuntime {
         //pollingInfoProcessor
         broker_request_processor.register_processor(
             RequestCode::PollingInfo as i32,
-            BrokerProcessorType::PollingInfo(ArcMut::new(PollingInfoProcessor::new(
-                self.inner.clone(),
-            ))),
+            BrokerProcessorType::PollingInfo(ArcMut::new(PollingInfoProcessor::new(self.inner.clone()))),
         );
 
         //ReplyMessageProcessor
@@ -822,17 +766,12 @@ impl BrokerRuntime {
         broker_request_processor.register_processor(
             RequestCode::EndTransaction as i32,
             BrokerProcessorType::EndTransaction(ArcMut::new(EndTransactionProcessor::new(
-                self.inner
-                    .transactional_message_service
-                    .as_ref()
-                    .unwrap()
-                    .clone(),
+                self.inner.transactional_message_service.as_ref().unwrap().clone(),
                 self.inner.clone(),
             ))),
         );
         let admin_broker_processor = ArcMut::new(AdminBrokerProcessor::new(self.inner.clone()));
-        broker_request_processor
-            .register_default_processor(BrokerProcessorType::AdminBroker(admin_broker_processor));
+        broker_request_processor.register_default_processor(BrokerProcessorType::AdminBroker(admin_broker_processor));
 
         (broker_request_processor.clone(), broker_request_processor)
     }
@@ -857,16 +796,13 @@ impl BrokerRuntime {
 
         //need to optimize
         let consumer_offset_manager_inner = self.inner.clone();
-        let flush_consumer_offset_interval =
-            self.inner.broker_config.flush_consumer_offset_interval;
+        let flush_consumer_offset_interval = self.inner.broker_config.flush_consumer_offset_interval;
 
         self.scheduled_task_manager.add_fixed_rate_task_async(
             Duration::from_secs(10),
             Duration::from_millis(flush_consumer_offset_interval),
             async move |_ctx| {
-                consumer_offset_manager_inner
-                    .consumer_offset_manager
-                    .persist();
+                consumer_offset_manager_inner.consumer_offset_manager.persist();
                 Ok(())
             },
         );
@@ -882,8 +818,7 @@ impl BrokerRuntime {
                 } else {
                     warn!("ConsumerFilterManager is not initialized");
                 }
-                if let Some(consumer_order_info_manager_) = &mut _inner.consumer_order_info_manager
-                {
+                if let Some(consumer_order_info_manager_) = &mut _inner.consumer_order_info_manager {
                     consumer_order_info_manager_.persist();
                 } else {
                     warn!("ConsumerOrderInfoManager is not initialized");
@@ -945,10 +880,7 @@ impl BrokerRuntime {
                     Duration::from_secs(10),
                     Duration::from_secs(3),
                     async move |_ctx| {
-                        if get_current_millis()
-                            - inner_clone.last_sync_time_ms.load(Ordering::Relaxed)
-                            > 10_000
-                        {
+                        if get_current_millis() - inner_clone.last_sync_time_ms.load(Ordering::Relaxed) > 10_000 {
                             if let Some(slave_synchronize) = &inner_clone.slave_synchronize {
                                 slave_synchronize.sync_all().await;
                             }
@@ -983,26 +915,18 @@ impl BrokerRuntime {
 
         if let Some(ref namesrv_address) = self.inner.broker_config.namesrv_addr.clone() {
             self.update_namesrv_addr().await;
-            info!(
-                "Set user specified name remoting_server address: {}",
-                namesrv_address
-            );
+            info!("Set user specified name remoting_server address: {}", namesrv_address);
             let mut broker_runtime = self.inner.clone();
-            self.broker_runtime
-                .as_ref()
-                .unwrap()
-                .get_handle()
-                .spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(10)).await;
-                    loop {
-                        let current_execution_time = tokio::time::Instant::now();
-                        broker_runtime.update_namesrv_addr_inner().await;
-                        let next_execution_time = current_execution_time + Duration::from_secs(60);
-                        let delay = next_execution_time
-                            .saturating_duration_since(tokio::time::Instant::now());
-                        tokio::time::sleep(delay).await;
-                    }
-                });
+            self.broker_runtime.as_ref().unwrap().get_handle().spawn(async move {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                loop {
+                    let current_execution_time = tokio::time::Instant::now();
+                    broker_runtime.update_namesrv_addr_inner().await;
+                    let next_execution_time = current_execution_time + Duration::from_secs(60);
+                    let delay = next_execution_time.saturating_duration_since(tokio::time::Instant::now());
+                    tokio::time::sleep(delay).await;
+                }
+            });
         }
     }
 
@@ -1018,9 +942,10 @@ impl BrokerRuntime {
                 self.inner.transactional_message_service = Some(service);
             }
         }
-        self.inner.transactional_message_check_listener = Some(
-            DefaultTransactionalMessageCheckListener::new(Broker2Client, self.inner.clone()),
-        );
+        self.inner.transactional_message_check_listener = Some(DefaultTransactionalMessageCheckListener::new(
+            Broker2Client,
+            self.inner.clone(),
+        ));
         self.inner.transactional_message_check_service =
             Some(TransactionalMessageCheckService::new(self.inner.clone()));
         self.inner.transaction_metrics_flush_service = Some(TransactionMetricsFlushService);
@@ -1051,9 +976,7 @@ impl BrokerRuntime {
 
         let (request_processor, fast_request_processor) = self.init_processor();
 
-        let mut server = RocketMQServer::new(Arc::new(
-            self.inner.broker_config.broker_server_config.clone(),
-        ));
+        let mut server = RocketMQServer::new(Arc::new(self.inner.broker_config.broker_server_config.clone()));
         //start nomarl broker remoting_server
         let client_housekeeping_service_main = self
             .inner
@@ -1061,15 +984,10 @@ impl BrokerRuntime {
             .clone()
             .map(|item| item as Arc<dyn ChannelEventListener>);
         let client_housekeeping_service_fast = client_housekeeping_service_main.clone();
-        tokio::spawn(async move {
-            server
-                .run(request_processor, client_housekeeping_service_main)
-                .await
-        });
+        tokio::spawn(async move { server.run(request_processor, client_housekeeping_service_main).await });
         //start fast broker remoting_server
         let mut fast_server_config = self.inner.broker_config.broker_server_config.clone();
-        fast_server_config.listen_port =
-            self.inner.broker_config.broker_server_config.listen_port - 2;
+        fast_server_config.listen_port = self.inner.broker_config.broker_server_config.listen_port - 2;
         let mut fast_server = RocketMQServer::new(Arc::new(fast_server_config));
         tokio::spawn(async move {
             fast_server
@@ -1088,9 +1006,7 @@ impl BrokerRuntime {
             notification_processor.start();
         }
 
-        if let Some(topic_queue_mapping_clean_service) =
-            self.inner.topic_queue_mapping_clean_service.as_mut()
-        {
+        if let Some(topic_queue_mapping_clean_service) = self.inner.topic_queue_mapping_clean_service.as_mut() {
             topic_queue_mapping_clean_service.start();
         }
 
@@ -1118,9 +1034,7 @@ impl BrokerRuntime {
             broker_pre_online_service.start().await
         }
 
-        if let Some(cold_data_pull_request_hold_service) =
-            self.inner.cold_data_pull_request_hold_service.as_mut()
-        {
+        if let Some(cold_data_pull_request_hold_service) = self.inner.cold_data_pull_request_hold_service.as_mut() {
             cold_data_pull_request_hold_service.start();
         }
         if let Some(cold_data_cg_ctr_service) = self.inner.cold_data_cg_ctr_service.as_mut() {
@@ -1138,13 +1052,10 @@ impl BrokerRuntime {
 
     pub async fn start(&mut self) {
         self.inner.should_start_time.store(
-            (get_current_millis() as i64
-                + self.inner.message_store_config.disappear_time_after_start) as u64,
+            (get_current_millis() as i64 + self.inner.message_store_config.disappear_time_after_start) as u64,
             Ordering::Release,
         );
-        if self.inner.message_store_config.total_replicas > 1
-            && self.inner.broker_config.enable_slave_acting_master
-        {
+        if self.inner.message_store_config.total_replicas > 1 && self.inner.broker_config.enable_slave_acting_master {
             self.inner.is_isolated.store(true, Ordering::Release);
         }
 
@@ -1155,31 +1066,19 @@ impl BrokerRuntime {
             && !self.inner.message_store_config.enable_dledger_commit_log
             && !self.inner.broker_config.duplication_enable
         {
-            let is_master =
-                self.inner.broker_config.broker_identity.broker_id == mix_all::MASTER_ID;
+            let is_master = self.inner.broker_config.broker_identity.broker_id == mix_all::MASTER_ID;
             self.inner.change_special_service_status(is_master).await;
             self.register_broker_all(true, false, true).await;
         }
 
         //start register broker to name server scheduled task
         let broker_runtime_inner = self.inner.clone();
-        let period = Duration::from_millis(
-            10000.max(
-                60000.min(
-                    broker_runtime_inner
-                        .broker_config
-                        .register_name_server_period,
-                ),
-            ),
-        );
+        let period =
+            Duration::from_millis(10000.max(60000.min(broker_runtime_inner.broker_config.register_name_server_period)));
         let initial_delay = Duration::from_secs(10);
-        self.scheduled_task_manager.add_fixed_rate_task_async(
-            initial_delay,
-            period,
-            async move |_ctx| {
-                let start_time = broker_runtime_inner
-                    .should_start_time
-                    .load(Ordering::Relaxed);
+        self.scheduled_task_manager
+            .add_fixed_rate_task_async(initial_delay, period, async move |_ctx| {
+                let start_time = broker_runtime_inner.should_start_time.load(Ordering::Relaxed);
                 if get_current_millis() < start_time {
                     info!("Register to namesrv after {}", start_time);
                     return Ok(());
@@ -1190,21 +1089,14 @@ impl BrokerRuntime {
                 }
                 let this = broker_runtime_inner.clone();
                 broker_runtime_inner
-                    .register_broker_all_inner(
-                        this,
-                        true,
-                        false,
-                        broker_runtime_inner.broker_config.force_register,
-                    )
+                    .register_broker_all_inner(this, true, false, broker_runtime_inner.broker_config.force_register)
                     .await;
                 Ok(())
-            },
-        );
+            });
 
         if self.inner.broker_config.enable_slave_acting_master {
             self.schedule_send_heartbeat();
-            let sync_broker_member_group_period =
-                self.inner.broker_config.sync_broker_member_group_period;
+            let sync_broker_member_group_period = self.inner.broker_config.sync_broker_member_group_period;
             let inner_ = self.inner.clone();
             self.scheduled_task_manager.add_fixed_rate_task_async(
                 Duration::from_millis(1000),
@@ -1227,25 +1119,15 @@ impl BrokerRuntime {
         let inner = self.inner.clone();
         let period = Duration::from_secs(5);
         let initial_delay = Duration::from_secs(10);
-        self.scheduled_task_manager.add_fixed_rate_task_async(
-            initial_delay,
-            period,
-            async move |_ctx| {
+        self.scheduled_task_manager
+            .add_fixed_rate_task_async(initial_delay, period, async move |_ctx| {
                 inner.broker_outer_api.refresh_metadata();
                 Ok(())
-            },
-        );
+            });
         info!(
-            "Rocketmq Broker({} ----Rust) start success",
+            "RocketMQ Broker({}) started successfully",
             self.inner.broker_config.broker_identity.broker_name
         );
-        tokio::select! {
-            _ = self.shutdown_rx.as_mut().unwrap().recv() => {
-                info!("Broker Shutdown received, initiating graceful shutdown...");
-                self.shutdown().await;
-                info!("Broker Shutdown complete");
-            }
-        }
     }
 
     pub(crate) fn schedule_send_heartbeat(&mut self) {
@@ -1268,10 +1150,7 @@ impl BrokerRuntime {
     pub(crate) async fn start_service_without_condition(&mut self) {
         info!(
             "{} start service",
-            self.inner
-                .broker_config
-                .broker_identity
-                .get_canonical_name()
+            self.inner.broker_config.broker_identity.get_canonical_name()
         );
         let is_master = self.inner.broker_config.broker_identity.broker_id == mix_all::MASTER_ID;
         self.inner.change_special_service_status(is_master).await;
@@ -1281,19 +1160,9 @@ impl BrokerRuntime {
     }
 
     /// Register broker to name remoting_server
-    pub(crate) async fn register_broker_all(
-        &mut self,
-        check_order_config: bool,
-        oneway: bool,
-        force_register: bool,
-    ) {
+    pub(crate) async fn register_broker_all(&mut self, check_order_config: bool, oneway: bool, force_register: bool) {
         self.inner
-            .register_broker_all_inner(
-                self.inner.clone(),
-                check_order_config,
-                oneway,
-                force_register,
-            )
+            .register_broker_all_inner(self.inner.clone(), check_order_config, oneway, force_register)
             .await;
     }
 
@@ -1303,17 +1172,11 @@ impl BrokerRuntime {
         oneway: bool,
         topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
     ) {
-        let cluster_name = self
-            .inner
-            .broker_config
-            .broker_identity
-            .broker_cluster_name
-            .clone();
+        let cluster_name = self.inner.broker_config.broker_identity.broker_cluster_name.clone();
         let broker_name = self.inner.broker_config.broker_identity.broker_name.clone();
         let broker_addr = CheetahString::from_string(format!(
             "{}:{}",
-            self.inner.broker_config.broker_ip1,
-            self.inner.broker_config.broker_server_config.listen_port
+            self.inner.broker_config.broker_ip1, self.inner.broker_config.broker_server_config.listen_port
         ));
         let broker_id = self.inner.broker_config.broker_identity.broker_id;
         //  let weak = Arc::downgrade(&self.inner.broker_outer_api);
@@ -1372,25 +1235,22 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
         let mut topic_config_table = HashMap::new();
         for topic_config in topic_config_list.iter() {
-            let register_topic_config =
-                if !PermName::is_writeable(this.broker_config().broker_permission)
-                    || !PermName::is_readable(this.broker_config().broker_permission)
-                {
-                    TopicConfig {
-                        perm: topic_config.perm & this.broker_config().broker_permission,
-                        ..topic_config.as_ref().clone()
-                    }
-                } else {
-                    topic_config.as_ref().clone()
-                };
+            let register_topic_config = if !PermName::is_writeable(this.broker_config().broker_permission)
+                || !PermName::is_readable(this.broker_config().broker_permission)
+            {
+                TopicConfig {
+                    perm: topic_config.perm & this.broker_config().broker_permission,
+                    ..topic_config.as_ref().clone()
+                }
+            } else {
+                topic_config.as_ref().clone()
+            };
             topic_config_table.insert(
                 register_topic_config.topic_name.as_ref().unwrap().clone(),
                 register_topic_config,
             );
         }
-        serialize_wrapper
-            .topic_config_serialize_wrapper
-            .topic_config_table = topic_config_table;
+        serialize_wrapper.topic_config_serialize_wrapper.topic_config_table = topic_config_table;
         let topic_queue_mapping_info_map = DashMap::new();
         for topic_config in topic_config_list {
             if let Some(ref value) = this
@@ -1399,9 +1259,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             {
                 topic_queue_mapping_info_map.insert(
                     topic_config.topic_name.as_ref().unwrap().clone(),
-                    ArcMut::new(TopicQueueMappingDetail::clone_as_mapping_info(
-                        value.as_ref(),
-                    )),
+                    ArcMut::new(TopicQueueMappingDetail::clone_as_mapping_info(value.as_ref())),
                 );
             }
         }
@@ -1416,25 +1274,17 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
     ) {
         if this.shutdown.load(Ordering::Acquire) {
-            info!(
-                "BrokerRuntimeInner#do_register_broker_all: broker has shutdown, no need to \
-                 register any more."
-            );
+            info!("BrokerRuntimeInner#do_register_broker_all: broker has shutdown, no need to register any more.");
             return;
         }
 
-        let cluster_name = this
-            .broker_config
-            .broker_identity
-            .broker_cluster_name
-            .clone();
+        let cluster_name = this.broker_config.broker_identity.broker_cluster_name.clone();
         let broker_name = this.broker_config.broker_identity.broker_name.clone();
         let broker_addr = CheetahString::from_string(format!(
             "{}:{}",
             this.broker_config.broker_ip1, this.broker_config.broker_server_config.listen_port
         ));
         let broker_id = this.broker_config.broker_identity.broker_id;
-        //let weak = Arc::downgrade(&self.broker_out_api);
         let result = this
             .broker_outer_api
             .register_broker_all(
@@ -1456,8 +1306,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 this.clone(),
             )
             .await;
-        this.handle_register_broker_result(result, check_order_config)
-            .await;
+        this.handle_register_broker_result(result, check_order_config).await;
     }
 
     pub(self) async fn handle_register_broker_result(
@@ -1486,20 +1335,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 }
 
-/*struct ProducerStateGetter {
-    topic_config_manager: TopicConfigManager,
-    producer_manager: Arc<ProducerManager>,
-}*/
 struct ProducerStateGetter<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 impl<MS: MessageStore> StateGetter for ProducerStateGetter<MS> {
-    fn online(
-        &self,
-        instance_id: &CheetahString,
-        group: &CheetahString,
-        topic: &CheetahString,
-    ) -> bool {
+    fn online(&self, instance_id: &CheetahString, group: &CheetahString, topic: &CheetahString) -> bool {
         if self
             .broker_runtime_inner
             .topic_config_manager()
@@ -1510,41 +1350,28 @@ impl<MS: MessageStore> StateGetter for ProducerStateGetter<MS> {
                 .producer_manager
                 .group_online(&NamespaceUtil::wrap_namespace(instance_id, group))
         } else {
-            self.broker_runtime_inner
-                .producer_manager
-                .group_online(group)
+            self.broker_runtime_inner.producer_manager.group_online(group)
         }
     }
 }
 
-/*struct ConsumerStateGetter {
-    topic_config_manager: TopicConfigManager,
-    consumer_manager: Arc<ConsumerManager>,
-}*/
 struct ConsumerStateGetter<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
 impl<MS: MessageStore> StateGetter for ConsumerStateGetter<MS> {
-    fn online(
-        &self,
-        instance_id: &CheetahString,
-        group: &CheetahString,
-        topic: &CheetahString,
-    ) -> bool {
+    fn online(&self, instance_id: &CheetahString, group: &CheetahString, topic: &CheetahString) -> bool {
         if self
             .broker_runtime_inner
             .topic_config_manager()
             .topic_config_table()
             .contains_key(topic)
         {
-            let topic_full_name =
-                CheetahString::from_string(NamespaceUtil::wrap_namespace(instance_id, topic));
+            let topic_full_name = CheetahString::from_string(NamespaceUtil::wrap_namespace(instance_id, topic));
             self.broker_runtime_inner
                 .consumer_manager
                 .find_subscription_data(
-                    CheetahString::from_string(NamespaceUtil::wrap_namespace(instance_id, group))
-                        .as_ref(),
+                    CheetahString::from_string(NamespaceUtil::wrap_namespace(instance_id, group)).as_ref(),
                     topic_full_name.as_ref(),
                 )
                 .is_some()
@@ -1645,9 +1472,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn subscription_group_manager_unchecked_mut(
-        &mut self,
-    ) -> &mut SubscriptionGroupManager<MS> {
+    pub fn subscription_group_manager_unchecked_mut(&mut self) -> &mut SubscriptionGroupManager<MS> {
         unsafe { self.subscription_group_manager.as_mut().unwrap_unchecked() }
     }
 
@@ -1667,9 +1492,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn consumer_order_info_manager_unchecked_mut(
-        &mut self,
-    ) -> &mut ConsumerOrderInfoManager<MS> {
+    pub fn consumer_order_info_manager_unchecked_mut(&mut self) -> &mut ConsumerOrderInfoManager<MS> {
         unsafe { self.consumer_order_info_manager.as_mut().unwrap_unchecked() }
     }
 
@@ -1689,9 +1512,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn schedule_message_service_unchecked_mut(
-        &mut self,
-    ) -> &mut ArcMut<ScheduleMessageService<MS>> {
+    pub fn schedule_message_service_unchecked_mut(&mut self) -> &mut ArcMut<ScheduleMessageService<MS>> {
         unsafe { self.schedule_message_service.as_mut().unwrap_unchecked() }
     }
 
@@ -1722,15 +1543,12 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn broker_stats_manager_mut(&mut self) -> &mut BrokerStatsManager {
-        /* &mut self.broker_stats_manager */
         unimplemented!("broker_stats_manager_mut")
     }
 
     #[inline]
-    pub fn topic_queue_mapping_clean_service_mut(
-        &mut self,
-    ) -> &mut Option<TopicQueueMappingCleanService> {
-        &mut self.topic_queue_mapping_clean_service
+    pub fn topic_queue_mapping_clean_service_mut(&mut self) -> Option<&mut TopicQueueMappingCleanService> {
+        self.topic_queue_mapping_clean_service.as_mut()
     }
 
     #[inline]
@@ -1738,19 +1556,9 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         &mut self.update_master_haserver_addr_periodically
     }
 
-    /*    #[inline]
-    pub fn should_start_time_mut(&mut self) -> &mut AtomicU64 {
-        &mut self.should_start_time
-    }*/
-
-    /*    #[inline]
-    pub fn is_isolated_mut(&mut self) -> &mut AtomicBool {
-        &mut self.is_isolated
-    }*/
-
     #[inline]
-    pub fn pull_request_hold_service_mut(&mut self) -> &mut Option<PullRequestHoldService<MS>> {
-        &mut self.pull_request_hold_service
+    pub fn pull_request_hold_service_mut(&mut self) -> Option<&mut PullRequestHoldService<MS>> {
+        self.pull_request_hold_service.as_mut()
     }
 
     #[inline]
@@ -1764,21 +1572,13 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn transactional_message_service_mut(
-        &mut self,
-    ) -> &mut Option<ArcMut<DefaultTransactionalMessageService<MS>>> {
+    pub fn transactional_message_service_mut(&mut self) -> &mut Option<ArcMut<DefaultTransactionalMessageService<MS>>> {
         &mut self.transactional_message_service
     }
 
     #[inline]
-    pub fn transactional_message_service_unchecked_mut(
-        &mut self,
-    ) -> &mut DefaultTransactionalMessageService<MS> {
-        unsafe {
-            self.transactional_message_service
-                .as_mut()
-                .unwrap_unchecked()
-        }
+    pub fn transactional_message_service_unchecked_mut(&mut self) -> &mut DefaultTransactionalMessageService<MS> {
+        unsafe { self.transactional_message_service.as_mut().unwrap_unchecked() }
     }
 
     #[inline]
@@ -1789,27 +1589,17 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn transactional_message_check_service_mut(
-        &mut self,
-    ) -> Option<&mut TransactionalMessageCheckService<MS>> {
+    pub fn transactional_message_check_service_mut(&mut self) -> Option<&mut TransactionalMessageCheckService<MS>> {
         self.transactional_message_check_service.as_mut()
     }
 
     #[inline]
-    pub fn transactional_message_check_service_unchecked_mut(
-        &mut self,
-    ) -> &mut TransactionalMessageCheckService<MS> {
-        unsafe {
-            self.transactional_message_check_service
-                .as_mut()
-                .unwrap_unchecked()
-        }
+    pub fn transactional_message_check_service_unchecked_mut(&mut self) -> &mut TransactionalMessageCheckService<MS> {
+        unsafe { self.transactional_message_check_service.as_mut().unwrap_unchecked() }
     }
 
     #[inline]
-    pub fn transaction_metrics_flush_service_mut(
-        &mut self,
-    ) -> Option<&mut TransactionMetricsFlushService> {
+    pub fn transaction_metrics_flush_service_mut(&mut self) -> Option<&mut TransactionMetricsFlushService> {
         self.transaction_metrics_flush_service.as_mut()
     }
 
@@ -1839,13 +1629,13 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn replicas_manager(&self) -> &Option<ReplicasManager> {
-        &self.replicas_manager
+    pub fn replicas_manager(&self) -> Option<&ReplicasManager> {
+        self.replicas_manager.as_ref()
     }
 
     #[inline]
-    pub fn replicas_manager_mut(&mut self) -> &mut Option<ReplicasManager> {
-        &mut self.replicas_manager
+    pub fn replicas_manager_mut(&mut self) -> Option<&mut ReplicasManager> {
+        self.replicas_manager.as_mut()
     }
 
     #[inline]
@@ -1939,8 +1729,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn broker_stats(&self) -> &Option<BrokerStats<MS>> {
-        &self.broker_stats
+    pub fn broker_stats(&self) -> Option<&BrokerStats<MS>> {
+        self.broker_stats.as_ref()
     }
 
     #[inline]
@@ -2000,11 +1790,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn topic_queue_mapping_clean_service_unchecked(&self) -> &TopicQueueMappingCleanService {
-        unsafe {
-            self.topic_queue_mapping_clean_service
-                .as_ref()
-                .unwrap_unchecked()
-        }
+        unsafe { self.topic_queue_mapping_clean_service.as_ref().unwrap_unchecked() }
     }
 
     #[inline]
@@ -2023,8 +1809,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn pull_request_hold_service(&self) -> &Option<PullRequestHoldService<MS>> {
-        &self.pull_request_hold_service
+    pub fn pull_request_hold_service(&self) -> Option<&PullRequestHoldService<MS>> {
+        self.pull_request_hold_service.as_ref()
     }
 
     #[inline]
@@ -2043,16 +1829,12 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn transactional_message_check_listener(
-        &self,
-    ) -> &Option<DefaultTransactionalMessageCheckListener<MS>> {
+    pub fn transactional_message_check_listener(&self) -> &Option<DefaultTransactionalMessageCheckListener<MS>> {
         &self.transactional_message_check_listener
     }
 
     #[inline]
-    pub fn transactional_message_check_service(
-        &self,
-    ) -> &Option<TransactionalMessageCheckService<MS>> {
+    pub fn transactional_message_check_service(&self) -> &Option<TransactionalMessageCheckService<MS>> {
         &self.transactional_message_check_service
     }
 
@@ -2128,37 +1910,23 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         self.message_store_config = Arc::new(message_store_config);
     }
 
-    /*    #[inline]
-    pub fn set_server_config(&mut self, server_config: ServerConfig) {
-        self.server_config = Arc::new(server_config);
-    }*/
-
     #[inline]
     pub fn set_topic_config_manager(&mut self, topic_config_manager: TopicConfigManager<MS>) {
         self.topic_config_manager = Some(topic_config_manager);
     }
 
     #[inline]
-    pub fn set_topic_queue_mapping_manager(
-        &mut self,
-        topic_queue_mapping_manager: TopicQueueMappingManager,
-    ) {
+    pub fn set_topic_queue_mapping_manager(&mut self, topic_queue_mapping_manager: TopicQueueMappingManager) {
         self.topic_queue_mapping_manager = topic_queue_mapping_manager;
     }
 
     #[inline]
-    pub fn set_consumer_offset_manager(
-        &mut self,
-        consumer_offset_manager: ConsumerOffsetManager<MS>,
-    ) {
+    pub fn set_consumer_offset_manager(&mut self, consumer_offset_manager: ConsumerOffsetManager<MS>) {
         self.consumer_offset_manager = consumer_offset_manager;
     }
 
     #[inline]
-    pub fn set_subscription_group_manager(
-        &mut self,
-        subscription_group_manager: SubscriptionGroupManager<MS>,
-    ) {
+    pub fn set_subscription_group_manager(&mut self, subscription_group_manager: SubscriptionGroupManager<MS>) {
         self.subscription_group_manager = Some(subscription_group_manager);
     }
 
@@ -2168,10 +1936,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn set_consumer_order_info_manager(
-        &mut self,
-        consumer_order_info_manager: ConsumerOrderInfoManager<MS>,
-    ) {
+    pub fn set_consumer_order_info_manager(&mut self, consumer_order_info_manager: ConsumerOrderInfoManager<MS>) {
         self.consumer_order_info_manager = Some(consumer_order_info_manager);
     }
 
@@ -2186,10 +1951,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn set_schedule_message_service(
-        &mut self,
-        schedule_message_service: ScheduleMessageService<MS>,
-    ) {
+    pub fn set_schedule_message_service(&mut self, schedule_message_service: ScheduleMessageService<MS>) {
         self.schedule_message_service = Some(ArcMut::new(schedule_message_service));
     }
 
@@ -2214,10 +1976,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn set_broadcast_offset_manager(
-        &mut self,
-        broadcast_offset_manager: BroadcastOffsetManager,
-    ) {
+    pub fn set_broadcast_offset_manager(&mut self, broadcast_offset_manager: BroadcastOffsetManager) {
         self.broadcast_offset_manager = broadcast_offset_manager;
     }
 
@@ -2235,10 +1994,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn set_update_master_haserver_addr_periodically(
-        &mut self,
-        update_master_haserver_addr_periodically: bool,
-    ) {
+    pub fn set_update_master_haserver_addr_periodically(&mut self, update_master_haserver_addr_periodically: bool) {
         self.update_master_haserver_addr_periodically = update_master_haserver_addr_periodically;
     }
 
@@ -2253,10 +2009,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn set_pull_request_hold_service(
-        &mut self,
-        pull_request_hold_service: PullRequestHoldService<MS>,
-    ) {
+    pub fn set_pull_request_hold_service(&mut self, pull_request_hold_service: PullRequestHoldService<MS>) {
         self.pull_request_hold_service = Some(pull_request_hold_service);
     }
 
@@ -2269,14 +2022,6 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     pub fn set_broker_member_group(&mut self, broker_member_group: BrokerMemberGroup) {
         self.broker_member_group = broker_member_group;
     }
-
-    /*    #[inline]
-    pub fn set_transactional_message_service(
-        &mut self,
-        transactional_message_service: DefaultTransactionalMessageService<MS>,
-    ) {
-        self.transactional_message_service = Some(transactional_message_service);
-    }*/
 
     pub fn get_min_broker_id_in_group(&self) -> u64 {
         self.broker_config.broker_identity.broker_id
@@ -2307,10 +2052,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn set_topic_route_info_manager(
-        &mut self,
-        topic_route_info_manager: TopicRouteInfoManager<MS>,
-    ) {
+    pub fn set_topic_route_info_manager(&mut self, topic_route_info_manager: TopicRouteInfoManager<MS>) {
         self.topic_route_info_manager = Some(topic_route_info_manager);
     }
 
@@ -2320,10 +2062,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     #[inline]
-    pub fn set_pop_inflight_message_counter(
-        &mut self,
-        pop_inflight_message_counter: PopInflightMessageCounter,
-    ) {
+    pub fn set_pop_inflight_message_counter(&mut self, pop_inflight_message_counter: PopInflightMessageCounter) {
         self.pop_inflight_message_counter = pop_inflight_message_counter;
     }
 
@@ -2371,10 +2110,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             } else {
                 topic_config.as_ref().clone()
             };
-            topic_config_table.insert(
-                new_topic_config.topic_name.as_ref().unwrap().clone(),
-                new_topic_config,
-            );
+            topic_config_table.insert(new_topic_config.topic_name.as_ref().unwrap().clone(), new_topic_config);
         }
 
         // Handle split registration logic
@@ -2403,46 +2139,28 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             .map(|kv| {
                 (
                     kv.key().clone(),
-                    ArcMut::new(TopicQueueMappingDetail::clone_as_mapping_info(
-                        kv.value().as_ref(),
-                    )),
+                    ArcMut::new(TopicQueueMappingDetail::clone_as_mapping_info(kv.value().as_ref())),
                 )
             })
             .collect();
 
         let topic_config_wrapper = this
             .topic_config_manager()
-            .build_serialize_wrapper_with_topic_queue_map(
-                topic_config_table,
-                topic_queue_mapping_info_map,
-            );
+            .build_serialize_wrapper_with_topic_queue_map(topic_config_table, topic_queue_mapping_info_map);
 
         if self.broker_config.enable_split_registration
             || force_register
             || need_register(
-                self.broker_config
-                    .broker_identity
-                    .broker_cluster_name
-                    .clone()
-                    .as_str(),
+                self.broker_config.broker_identity.broker_cluster_name.clone().as_str(),
                 self.broker_config.broker_ip1.clone().as_str(),
-                self.broker_config
-                    .broker_identity
-                    .broker_name
-                    .clone()
-                    .as_str(),
+                self.broker_config.broker_identity.broker_name.clone().as_str(),
                 self.broker_config.broker_identity.broker_id,
                 self.broker_config.register_broker_timeout_mills,
                 self.broker_config.is_in_broker_container,
             )
         {
-            BrokerRuntimeInner::<MS>::do_register_broker_all(
-                this,
-                check_order_config,
-                oneway,
-                topic_config_wrapper,
-            )
-            .await;
+            BrokerRuntimeInner::<MS>::do_register_broker_all(this, check_order_config, oneway, topic_config_wrapper)
+                .await;
         }
     }
 
@@ -2452,18 +2170,13 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         oneway: bool,
         topic_config_wrapper: TopicConfigAndMappingSerializeWrapper,
     ) {
-        let cluster_name = this
-            .broker_config
-            .broker_identity
-            .broker_cluster_name
-            .clone();
+        let cluster_name = this.broker_config.broker_identity.broker_cluster_name.clone();
         let broker_name = this.broker_config.broker_identity.broker_name.clone();
         let broker_addr = CheetahString::from_string(format!(
             "{}:{}",
             this.broker_config.broker_ip1, this.broker_config.broker_server_config.listen_port
         ));
         let broker_id = this.broker_config.broker_identity.broker_id;
-        //  let weak = Arc::downgrade(&self.inner.broker_outer_api);
         let this_ = this.clone();
         this.broker_outer_api
             .register_broker_all(
@@ -2510,11 +2223,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         let compatible_with_old_name_srv = this.broker_config.compatible_with_old_name_srv;
         let broker_member_group = this
             .broker_outer_api
-            .sync_broker_member_group(
-                broker_cluster_name,
-                broker_name,
-                compatible_with_old_name_srv,
-            )
+            .sync_broker_member_group(broker_cluster_name, broker_name, compatible_with_old_name_srv)
             .await;
 
         if let Err(ref e) = broker_member_group {
@@ -2522,13 +2231,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             return;
         }
         let broker_member_group = broker_member_group.unwrap();
-        if broker_member_group.is_none()
-            || broker_member_group
-                .as_ref()
-                .unwrap()
-                .broker_addrs
-                .is_empty()
-        {
+        if broker_member_group.is_none() || broker_member_group.as_ref().unwrap().broker_addrs.is_empty() {
             warn!(
                 "Couldn't find any broker member from namesrv in {}/{}",
                 broker_cluster_name, broker_name
@@ -2536,10 +2239,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             return;
         }
         fn calc_alive_broker_num_in_group(
-            broker_addr_table: &HashMap<
-                u64,           /* brokerId */
-                CheetahString, /* broker address */
-            >,
+            broker_addr_table: &HashMap<u64 /* brokerId */, CheetahString /* broker address */>,
             broker_id: u64,
         ) -> usize {
             if broker_addr_table.contains_key(&broker_id) {
@@ -2556,22 +2256,13 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             ) as i32);
         if !this.is_isolated.load(Ordering::Acquire) {
             let min_broker_id = broker_member_group.minimum_broker_id();
-            let min_broker_addr = broker_member_group
-                .broker_addrs
-                .get(&min_broker_id)
-                .cloned();
+            let min_broker_addr = broker_member_group.broker_addrs.get(&min_broker_id).cloned();
             BrokerRuntimeInner::update_min_broker(this, min_broker_id, min_broker_addr).await;
         }
     }
 
-    pub async fn update_min_broker(
-        this: &ArcMut<Self>,
-        min_broker_id: u64,
-        min_broker_addr: Option<CheetahString>,
-    ) {
-        if this.broker_config.enable_slave_acting_master
-            && this.broker_config.broker_identity.broker_id != MASTER_ID
-        {
+    pub async fn update_min_broker(this: &ArcMut<Self>, min_broker_id: u64, min_broker_addr: Option<CheetahString>) {
+        if this.broker_config.enable_slave_acting_master && this.broker_config.broker_identity.broker_id != MASTER_ID {
             let mut this_clone = this.clone();
             if let Ok(lock) = this.lock.try_lock() {
                 let min_broker_id_in_group = this.min_broker_id_in_group.load(Ordering::SeqCst);
@@ -2581,12 +2272,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                         offline_broker_addr = this.min_broker_addr_in_group.lock().await.clone();
                     }
                     this_clone
-                        .on_min_broker_change(
-                            min_broker_id,
-                            min_broker_addr,
-                            offline_broker_addr,
-                            None,
-                        )
+                        .on_min_broker_change(min_broker_id, min_broker_addr, offline_broker_addr, None)
                         .await;
                 }
                 drop(lock);
@@ -2618,15 +2304,11 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         self.query_assignment_processor.as_ref()
     }
 
-    pub fn query_assignment_processor_mut(
-        &mut self,
-    ) -> Option<&mut ArcMut<QueryAssignmentProcessor<MS>>> {
+    pub fn query_assignment_processor_mut(&mut self) -> Option<&mut ArcMut<QueryAssignmentProcessor<MS>>> {
         self.query_assignment_processor.as_mut()
     }
 
-    pub fn query_assignment_processor_unchecked_mut(
-        &mut self,
-    ) -> &mut ArcMut<QueryAssignmentProcessor<MS>> {
+    pub fn query_assignment_processor_unchecked_mut(&mut self) -> &mut ArcMut<QueryAssignmentProcessor<MS>> {
         unsafe { self.query_assignment_processor.as_mut().unwrap_unchecked() }
     }
 
@@ -2635,8 +2317,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             plugin.status_changed(should_start);
         }
         self.change_schedule_service_status(should_start);
-        self.change_transaction_check_service_status(should_start)
-            .await;
+        self.change_transaction_check_service_status(should_start).await;
 
         if let Some(ack_message_processor) = &mut self.ack_message_processor {
             info!("Set PopReviveService Status to {}", should_start);
@@ -2655,8 +2336,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                 schedule_message_service.stop();
             }
 
-            self.is_schedule_service_start
-                .store(should_start, Ordering::Release);
+            self.is_schedule_service_start.store(should_start, Ordering::Release);
 
             if let Some(timer) = &mut self.timer_message_store {
                 timer.sync_last_read_time_ms();
@@ -2666,24 +2346,14 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
     }
 
     pub async fn change_transaction_check_service_status(&mut self, should_start: bool) {
-        if self
-            .is_transaction_check_service_start
-            .load(Ordering::Relaxed)
-            != should_start
-        {
+        if self.is_transaction_check_service_start.load(Ordering::Relaxed) != should_start {
             info!("TransactionCheckService status changed to {}", should_start);
             if should_start {
-                if let Some(transactional_message_check_service) =
-                    &mut self.transactional_message_check_service
-                {
+                if let Some(transactional_message_check_service) = &mut self.transactional_message_check_service {
                     transactional_message_check_service.start().await;
                 }
-            } else if let Some(transactional_message_check_service) =
-                &mut self.transactional_message_check_service
-            {
-                transactional_message_check_service
-                    .shutdown_interrupt(true)
-                    .await;
+            } else if let Some(transactional_message_check_service) = &mut self.transactional_message_check_service {
+                transactional_message_check_service.shutdown_interrupt(true).await;
             }
 
             self.is_transaction_check_service_start
@@ -2703,8 +2373,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             min_broker_addr
         );
 
-        this.min_broker_id_in_group
-            .store(min_broker_id, Ordering::SeqCst);
+        this.min_broker_id_in_group.store(min_broker_id, Ordering::SeqCst);
         let mut guard = this.min_broker_addr_in_group.lock().await;
         *guard = min_broker_addr;
         drop(guard);
@@ -2727,18 +2396,13 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         let mut min_broker_addr_in_group_old = self.min_broker_addr_in_group.lock().await;
         info!(
             "Min broker changed, old: {}-{:?}, new {}-{:?}",
-            min_broker_id_in_group_old,
-            min_broker_addr_in_group_old,
-            min_broker_id,
-            min_broker_addr
+            min_broker_id_in_group_old, min_broker_addr_in_group_old, min_broker_id, min_broker_addr
         );
-        self.min_broker_id_in_group
-            .store(min_broker_id, Ordering::SeqCst);
+        self.min_broker_id_in_group.store(min_broker_id, Ordering::SeqCst);
         *min_broker_addr_in_group_old = min_broker_addr.clone();
         drop(min_broker_addr_in_group_old);
         self.change_special_service_status(
-            self.broker_config.broker_identity.broker_id
-                == self.min_broker_id_in_group.load(Ordering::SeqCst),
+            self.broker_config.broker_identity.broker_id == self.min_broker_id_in_group.load(Ordering::SeqCst),
         )
         .await;
         if offline_broker_addr.is_some()
@@ -2750,15 +2414,12 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
         if min_broker_id == MASTER_ID && min_broker_addr.is_some() {
             //master online
-            self.on_master_on_line(min_broker_addr, master_ha_addr)
-                .await;
+            self.on_master_on_line(min_broker_addr, master_ha_addr).await;
         }
 
         // notify PullRequest on hold to pull from master.
         if self.min_broker_id_in_group.load(Ordering::SeqCst) == MASTER_ID {
-            self.pull_request_hold_service_unchecked()
-                .notify_master_online()
-                .await;
+            self.pull_request_hold_service_unchecked().notify_master_online().await;
         }
     }
 
@@ -2767,9 +2428,8 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
         min_broker_addr: Option<CheetahString>,
         master_ha_addr: Option<CheetahString>,
     ) {
-        let need_sync_master_flush_offset =
-            self.message_store_unchecked().get_master_flushed_offset() == 0
-                && self.message_store_config.all_ack_in_sync_state_set;
+        let need_sync_master_flush_offset = self.message_store_unchecked().get_master_flushed_offset() == 0
+            && self.message_store_config.all_ack_in_sync_state_set;
         if master_ha_addr.is_none() || need_sync_master_flush_offset {
             match self
                 .broker_outer_api
@@ -2788,9 +2448,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
                     if master_ha_addr.is_none() {
                         let message_store = self.message_store_unchecked();
                         if let Some(master_ha_address) = &broker_sync_info.master_ha_address {
-                            message_store
-                                .update_ha_master_address(master_ha_address.as_str())
-                                .await;
+                            message_store.update_ha_master_address(master_ha_address.as_str()).await;
                         }
                         if let Some(master_address) = &broker_sync_info.master_address {
                             message_store.update_master_address(master_address);
@@ -2818,9 +2476,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
             }
         }
         self.slave_synchronize_mut_unchecked().set_master_addr(None);
-        self.message_store_unchecked_mut()
-            .update_ha_master_address("")
-            .await
+        self.message_store_unchecked_mut().update_ha_master_address("").await
     }
 
     async fn send_heartbeat(&self) {

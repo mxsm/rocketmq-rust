@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //! Production implementation of Authorization Metadata Manager.
 //!
@@ -188,8 +185,8 @@ impl AuthorizationMetadataManagerImpl {
         // Ok(Self::new(Arc::new(auth_provider), Some(Arc::new(authn_provider))))
 
         Err(AuthorizationError::ConfigurationError(
-            "AuthorizationMetadataManagerImpl::from_config requires factory implementation. Use \
-             new() constructor with explicit providers instead."
+            "AuthorizationMetadataManagerImpl::from_config requires factory implementation. Use new() constructor \
+             with explicit providers instead."
                 .to_string(),
         ))
     }
@@ -288,10 +285,7 @@ impl AuthorizationMetadataManagerImpl {
             }
             Some(mut old_acl) => {
                 // ACL exists, merge policies and update
-                debug!(
-                    "ACL already exists for subject {}, merging policies",
-                    subject_key
-                );
+                debug!("ACL already exists for subject {}, merging policies", subject_key);
                 old_acl.update_policies(acl.policies().clone());
                 self.authorization_provider.update_acl(old_acl).await
             }
@@ -429,16 +423,12 @@ impl AuthorizationMetadataManagerImpl {
         let policy_type = policy_type.unwrap_or(PolicyType::Custom);
 
         // Step 3: Get existing ACL
-        let mut acl = self
-            .authorization_provider
-            .get_acl(subject)
-            .await?
-            .ok_or_else(|| {
-                AuthorizationError::InternalError(format!(
-                    "The ACL for subject '{}' does not exist",
-                    subject.subject_key()
-                ))
-            })?;
+        let mut acl = self.authorization_provider.get_acl(subject).await?.ok_or_else(|| {
+            AuthorizationError::InternalError(format!(
+                "The ACL for subject '{}' does not exist",
+                subject.subject_key()
+            ))
+        })?;
 
         // Step 4: Delete policy entry or entire ACL
         if let Some(resource) = resource {
@@ -490,10 +480,7 @@ impl AuthorizationMetadataManagerImpl {
     ///     println!("Found ACL with {} policies", acl.policies().len());
     /// }
     /// ```
-    pub async fn get_acl<S: Subject + Send + Sync>(
-        &self,
-        subject: &S,
-    ) -> ManagerResult<Option<Acl>> {
+    pub async fn get_acl<S: Subject + Send + Sync>(&self, subject: &S) -> ManagerResult<Option<Acl>> {
         // Step 1: Verify subject exists
         self.verify_subject_by_ref(subject).await?;
 
@@ -543,7 +530,6 @@ impl AuthorizationMetadataManagerImpl {
     /// Initialize ACL by setting default policy types.
     ///
     /// Sets PolicyType to CUSTOM for any policy without an explicit type.
-    /// This matches the Java implementation's `initAcl` method.
     fn init_acl(acl: &mut Acl) {
         let mut policies = acl.policies().clone();
         for policy in policies.iter_mut() {
@@ -561,17 +547,13 @@ impl AuthorizationMetadataManagerImpl {
     /// - Subject type is valid (not None/Unknown)
     /// - Policies list is not empty
     /// - Each policy is structurally valid
-    ///
-    /// This matches the Java implementation's `validate(Acl)` method.
     fn validate_acl(&self, acl: &Acl) -> ManagerResult<()> {
         // Validate subject type (currently only User is supported)
         // SubjectType enum doesn't have Unknown variant in Rust
 
         // Validate policies exist
         if acl.policies().is_empty() {
-            return Err(AuthorizationError::InvalidContext(
-                "The policies is empty.".to_string(),
-            ));
+            return Err(AuthorizationError::InvalidContext("The policies is empty.".to_string()));
         }
 
         // Validate each policy
@@ -587,8 +569,6 @@ impl AuthorizationMetadataManagerImpl {
     /// Validates:
     /// - Policy entries list is not empty
     /// - Each entry is structurally valid
-    ///
-    /// This matches the Java implementation's `validate(Policy)` method.
     fn validate_policy(&self, policy: &Policy) -> ManagerResult<()> {
         // Validate entries exist
         if policy.entries().is_empty() {
@@ -615,8 +595,6 @@ impl AuthorizationMetadataManagerImpl {
     /// - Actions do not include Action::ANY
     /// - Environment (if present) has valid IP addresses
     /// - Decision is set
-    ///
-    /// This matches the Java implementation's `validate(PolicyEntry)` method.
     fn validate_policy_entry(&self, entry: &PolicyEntry) -> ManagerResult<()> {
         // Validate resource
         let resource = entry.resource();
@@ -636,9 +614,7 @@ impl AuthorizationMetadataManagerImpl {
 
         // Validate actions
         if entry.actions().is_empty() {
-            return Err(AuthorizationError::InvalidContext(
-                "The actions is empty.".to_string(),
-            ));
+            return Err(AuthorizationError::InvalidContext("The actions is empty.".to_string()));
         }
 
         // Check for Action::ANY (should not be allowed in ACL entries)
@@ -665,8 +641,6 @@ impl AuthorizationMetadataManagerImpl {
     /// Validates:
     /// - Source IPs are not blank
     /// - Source IPs are valid IP addresses or CIDR blocks
-    ///
-    /// This matches the validation logic in Java's `validate(PolicyEntry)` method.
     fn validate_environment(&self, environment: &Environment) -> ManagerResult<()> {
         let source_ips = environment.source_ips();
         // source_ips() returns &Vec<String>
@@ -728,9 +702,6 @@ impl AuthorizationMetadataManagerImpl {
     ///
     /// For USER subjects, checks with authentication provider (when available).
     /// For other subject types, assumes existence.
-    ///
-    /// This matches the Java implementation's subject validation logic in
-    /// `createAcl`, `updateAcl`, and `deleteAcl` methods.
     async fn verify_subject_exists(&self, acl: &Acl) -> ManagerResult<()> {
         if acl.subject_type() == SubjectType::User {
             // TODO: When AuthenticationMetadataProvider is available:
@@ -763,10 +734,7 @@ impl AuthorizationMetadataManagerImpl {
     /// Verify that a subject exists by reference.
     ///
     /// Similar to `verify_subject_exists` but works with Subject trait references.
-    async fn verify_subject_by_ref<S: Subject + Send + Sync>(
-        &self,
-        subject: &S,
-    ) -> ManagerResult<()> {
+    async fn verify_subject_by_ref<S: Subject + Send + Sync>(&self, subject: &S) -> ManagerResult<()> {
         if subject.subject_type() == SubjectType::User {
             // TODO: When AuthenticationMetadataProvider is available:
             // Extract username from subject_key and validate
@@ -781,24 +749,16 @@ impl AuthorizationMetadataManagerImpl {
     }
 
     /// Get the authorization provider reference.
-    ///
-    /// This is used internally to access the provider. In Java, this would
-    /// throw IllegalStateException if provider is null.
     #[allow(dead_code)]
     fn get_authorization_provider(&self) -> &Arc<LocalAuthorizationMetadataProvider> {
         &self.authorization_provider
     }
 
     /// Get the authentication provider reference.
-    ///
-    /// This is used internally to access the provider. In Java, this would
-    /// throw IllegalStateException if provider is null.
     #[allow(dead_code)]
     fn get_authentication_provider(&self) -> ManagerResult<&Arc<dyn std::any::Any + Send + Sync>> {
         self.authentication_provider.as_ref().ok_or_else(|| {
-            AuthorizationError::NotInitialized(
-                "The authenticationMetadataProvider is not configured.".to_string(),
-            )
+            AuthorizationError::NotInitialized("The authenticationMetadataProvider is not configured.".to_string())
         })
     }
 }
@@ -833,41 +793,25 @@ mod tests {
     #[test]
     fn test_is_valid_ip_or_cidr() {
         // Valid IPv4
-        assert!(AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr(
-            "192.168.0.1"
-        ));
-        assert!(AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr(
-            "10.0.0.0"
-        ));
+        assert!(AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr("192.168.0.1"));
+        assert!(AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr("10.0.0.0"));
 
         // Valid IPv4 CIDR
-        assert!(AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr(
-            "192.168.0.0/24"
-        ));
-        assert!(AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr(
-            "10.0.0.0/8"
-        ));
+        assert!(AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr("192.168.0.0/24"));
+        assert!(AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr("10.0.0.0/8"));
 
         // Valid IPv6
-        assert!(AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr(
-            "2001:db8::1"
-        ));
+        assert!(AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr("2001:db8::1"));
         assert!(AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr("::1"));
 
         // Valid IPv6 CIDR
-        assert!(AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr(
-            "2001:db8::/32"
-        ));
+        assert!(AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr("2001:db8::/32"));
 
         // Invalid IPs
-        assert!(!AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr(
-            "invalid"
-        ));
+        assert!(!AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr("invalid"));
         assert!(!AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr(
             "256.256.256.256"
         ));
-        assert!(!AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr(
-            "192.168.0.0/33"
-        )); // Invalid prefix
+        assert!(!AuthorizationMetadataManagerImpl::is_valid_ip_or_cidr("192.168.0.0/33")); // Invalid prefix
     }
 }

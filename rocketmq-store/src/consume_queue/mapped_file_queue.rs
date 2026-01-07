@@ -1,19 +1,16 @@
-//  Licensed to the Apache Software Foundation (ASF) under one
-//  or more contributor license agreements.  See the NOTICE file
-//  distributed with this work for additional information
-//  regarding copyright ownership.  The ASF licenses this file
-//  to you under the Apache License, Version 2.0 (the
-//  "License"); you may not use this file except in compliance
-//  with the License.  You may obtain a copy of the License at
+// Copyright 2023 The RocketMQ Rust Authors
 //
-//    http://www.apache.org/licenses/LICENSE-2.0
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//  Unless required by applicable law or agreed to in writing,
-//  software distributed under the License is distributed on an
-//  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-//  KIND, either express or implied.  See the License for the
-//  specific language governing permissions and limitations
-//  under the License.
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::fs;
 use std::path::Path;
@@ -99,10 +96,7 @@ impl MappedFileQueue {
         //list dir files
         let dir = Path::new(&self.store_path);
         if let Ok(ls) = fs::read_dir(dir) {
-            let files: Vec<_> = ls
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .collect();
+            let files: Vec<_> = ls.filter_map(Result::ok).map(|entry| entry.path()).collect();
             return self.do_load(files);
         }
         true
@@ -122,9 +116,7 @@ impl MappedFileQueue {
 
         let mut result = true;
         let committed_where = self.get_committed_where();
-        if let Some(mapped_file) =
-            self.find_mapped_file_by_offset(committed_where, committed_where == 0)
-        {
+        if let Some(mapped_file) = self.find_mapped_file_by_offset(committed_where, committed_where == 0) {
             let offset = mapped_file.commit(commit_least_pages);
             let whered = mapped_file.get_file_from_offset() + offset as u64;
             result = whered == self.get_committed_where() as u64;
@@ -146,12 +138,10 @@ impl MappedFileQueue {
 
             for cur in iter {
                 if let Some(pre_file) = pre {
-                    if cur.get_file_from_offset() - pre_file.get_file_from_offset()
-                        != self.mapped_file_size
-                    {
+                    if cur.get_file_from_offset() - pre_file.get_file_from_offset() != self.mapped_file_size {
                         error!(
-                            "[BUG] The mappedFile queue's data is damaged, the adjacent \
-                             mappedFile's offset don't match. pre file {}, cur file {}",
+                            "[BUG] The mappedFile queue's data is damaged, the adjacent mappedFile's offset don't \
+                             match. pre file {}, cur file {}",
                             pre_file.get_file_name(),
                             cur.get_file_name()
                         );
@@ -233,8 +223,7 @@ impl MappedFileQueue {
         let mapped_file_last = self.get_last_mapped_file();
 
         if let Some(ref current_file) = mapped_file_last {
-            let usage_ratio =
-                current_file.get_wrote_position() as f64 / self.mapped_file_size as f64;
+            let usage_ratio = current_file.get_wrote_position() as f64 / self.mapped_file_size as f64;
             if usage_ratio >= 0.8 && !current_file.is_full() {
                 // Pre-allocate next file in background
                 let next_offset = current_file.get_file_from_offset() + self.mapped_file_size;
@@ -261,24 +250,19 @@ impl MappedFileQueue {
     #[inline]
     fn trigger_pre_allocation(&self, next_offset: u64) {
         if let Some(ref service) = self.allocate_mapped_file_service {
-            let next_file_path =
-                PathBuf::from(self.store_path.clone()).join(offset_to_file_name(next_offset));
+            let next_file_path = PathBuf::from(self.store_path.clone()).join(offset_to_file_name(next_offset));
 
             // Submit async request (non-blocking)
-            let _drop = service.submit_request(
-                next_file_path.to_string_lossy().to_string(),
-                self.mapped_file_size,
-            );
+            let _drop = service.submit_request(next_file_path.to_string_lossy().to_string(), self.mapped_file_size);
             std::mem::drop(_drop);
         }
     }
 
     #[inline]
     pub fn try_create_mapped_file(&mut self, create_offset: u64) -> Option<Arc<DefaultMappedFile>> {
-        let next_file_path =
-            PathBuf::from(self.store_path.clone()).join(offset_to_file_name(create_offset));
-        let next_next_file_path = PathBuf::from(self.store_path.clone())
-            .join(offset_to_file_name(create_offset + self.mapped_file_size));
+        let next_file_path = PathBuf::from(self.store_path.clone()).join(offset_to_file_name(create_offset));
+        let next_next_file_path =
+            PathBuf::from(self.store_path.clone()).join(offset_to_file_name(create_offset + self.mapped_file_size));
         self.do_create_mapped_file(next_file_path, next_next_file_path)
     }
 
@@ -298,8 +282,7 @@ impl MappedFileQueue {
     ) -> Option<Arc<DefaultMappedFile>> {
         let is_first = self.mapped_files.load().is_empty();
 
-        let mut arc_file =
-            self.create_mapped_file_internal(next_file_path.clone(), next_next_file_path)?;
+        let mut arc_file = self.create_mapped_file_internal(next_file_path.clone(), next_next_file_path)?;
 
         if is_first {
             if let Some(file) = Arc::get_mut(&mut arc_file) {
@@ -333,10 +316,9 @@ impl MappedFileQueue {
                 }) {
                     Ok(pre_allocated) => {
                         // Trigger pre-allocation of N+2 file
-                        std::mem::drop(service.submit_request(
-                            next_file_path.to_string_lossy().to_string(),
-                            self.mapped_file_size,
-                        ));
+                        std::mem::drop(
+                            service.submit_request(next_file_path.to_string_lossy().to_string(), self.mapped_file_size),
+                        );
                         // Return Arc directly
                         return Some(pre_allocated);
                     }
@@ -366,14 +348,12 @@ impl MappedFileQueue {
 
     #[inline]
     pub fn set_flushed_where(&self, flushed_where: i64) {
-        self.flushed_where
-            .store(flushed_where as u64, Ordering::SeqCst);
+        self.flushed_where.store(flushed_where as u64, Ordering::SeqCst);
     }
 
     #[inline]
     pub fn set_committed_where(&self, committed_where: i64) {
-        self.committed_where
-            .store(committed_where as u64, Ordering::SeqCst);
+        self.committed_where.store(committed_where as u64, Ordering::SeqCst);
     }
 
     /// Truncate dirty files beyond the specified offset
@@ -389,10 +369,8 @@ impl MappedFileQueue {
             if file_tail_offset as i64 > offset {
                 if offset >= mapped_file.get_file_from_offset() as i64 {
                     mapped_file.set_wrote_position((offset % self.mapped_file_size as i64) as i32);
-                    mapped_file
-                        .set_committed_position((offset % self.mapped_file_size as i64) as i32);
-                    mapped_file
-                        .set_flushed_position((offset % self.mapped_file_size as i64) as i32);
+                    mapped_file.set_committed_position((offset % self.mapped_file_size as i64) as i32);
+                    mapped_file.set_flushed_position((offset % self.mapped_file_size as i64) as i32);
                 } else {
                     mapped_file.destroy(1000);
                     will_remove_files.push(mapped_file.clone());
@@ -473,8 +451,7 @@ impl MappedFileQueue {
         self.check_self();
 
         for (i, mapped_file) in mfs.iter().enumerate().take(mfs_length) {
-            let live_max_timestamp =
-                mapped_file.get_last_modified_timestamp() as i64 + expired_time;
+            let live_max_timestamp = mapped_file.get_last_modified_timestamp() as i64 + expired_time;
 
             if get_current_millis() as i64 >= live_max_timestamp || clean_immediately {
                 if mapped_file.destroy(interval_forcibly as u64) {
@@ -486,9 +463,7 @@ impl MappedFileQueue {
                     }
 
                     if delete_files_interval > 0 && (i + 1) < mfs_length {
-                        std::thread::sleep(std::time::Duration::from_millis(
-                            delete_files_interval as u64,
-                        ));
+                        std::thread::sleep(std::time::Duration::from_millis(delete_files_interval as u64));
                     }
                 } else {
                     break;
@@ -522,19 +497,17 @@ impl MappedFileQueue {
         for mapped_file in mfs.iter().take(mfs_length) {
             let mut destroy = false;
 
-            if let Some(result) = mapped_file
-                .select_mapped_buffer((self.mapped_file_size - unit_size as u64) as i32, unit_size)
+            if let Some(result) =
+                mapped_file.select_mapped_buffer((self.mapped_file_size - unit_size as u64) as i32, unit_size)
             {
                 if let Some(ref buffer) = result.bytes {
                     if buffer.len() >= 8 {
-                        let max_offset_in_logic_queue =
-                            i64::from_be_bytes(buffer[0..8].try_into().unwrap_or([0u8; 8]));
+                        let max_offset_in_logic_queue = i64::from_be_bytes(buffer[0..8].try_into().unwrap_or([0u8; 8]));
                         destroy = max_offset_in_logic_queue < offset;
 
                         if destroy {
                             info!(
-                                "physic min offset {}, logics in current mappedFile max offset \
-                                 {}, delete it",
+                                "physic min offset {}, logics in current mappedFile max offset {}, delete it",
                                 offset, max_offset_in_logic_queue
                             );
                         }
@@ -572,8 +545,8 @@ impl MappedFileQueue {
     pub fn reset_offset(&mut self, offset: i64) -> bool {
         // Check if offset is reasonable
         if let Some(mapped_file_last) = self.get_last_mapped_file() {
-            let last_offset = mapped_file_last.get_file_from_offset() as i64
-                + mapped_file_last.get_wrote_position() as i64;
+            let last_offset =
+                mapped_file_last.get_file_from_offset() as i64 + mapped_file_last.get_wrote_position() as i64;
             let diff = last_offset - offset;
             let max_diff = (self.mapped_file_size * 2) as i64;
 
@@ -642,9 +615,7 @@ impl MappedFileQueue {
         }
 
         if let Some(mapped_file_last) = self.get_last_mapped_file() {
-            if mapped_file_last.get_wrote_position() + msg_size
-                > mapped_file_last.get_file_size() as i32
-            {
+            if mapped_file_last.get_wrote_position() + msg_size > mapped_file_last.get_file_size() as i32 {
                 return true;
             }
         }
@@ -692,8 +663,7 @@ impl MappedFileQueue {
         let committed = self.get_flushed_where();
         if committed != 0 {
             if let Some(mapped_file) = self.get_last_mapped_file() {
-                return (mapped_file.get_file_from_offset() as i64
-                    + mapped_file.get_wrote_position() as i64)
+                return (mapped_file.get_file_from_offset() as i64 + mapped_file.get_wrote_position() as i64)
                     - committed;
             }
         }
@@ -900,12 +870,7 @@ impl MappedFileQueue {
     /// // Swap buffers for files older than 10 minutes
     /// queue.swap_map(3, 1000 * 60 * 10, 1000 * 60 * 5);
     /// ```
-    pub fn swap_map(
-        &self,
-        reserve_num: i32,
-        force_swap_interval_ms: i64,
-        normal_swap_interval_ms: i64,
-    ) {
+    pub fn swap_map(&self, reserve_num: i32, force_swap_interval_ms: i64, normal_swap_interval_ms: i64) {
         let files = self.mapped_files.load();
 
         if files.is_empty() {
@@ -1029,10 +994,7 @@ impl MappedFileQueue {
     ///
     /// # Returns
     /// Vector of mapped files, or None if insufficient files
-    fn copy_mapped_files(
-        &self,
-        reserved_mapped_files: usize,
-    ) -> Option<Vec<Arc<DefaultMappedFile>>> {
+    fn copy_mapped_files(&self, reserved_mapped_files: usize) -> Option<Vec<Arc<DefaultMappedFile>>> {
         let files = self.mapped_files.load();
 
         if files.len() <= reserved_mapped_files {
@@ -1092,11 +1054,7 @@ impl MappedFileQueue {
                 let last_offset = last.get_file_from_offset() as i64 + self.mapped_file_size as i64;
 
                 if offset < first_offset || offset >= last_offset {
-                    return if return_first_on_not_found {
-                        Some(first)
-                    } else {
-                        None
-                    };
+                    return if return_first_on_not_found { Some(first) } else { None };
                 }
 
                 // Try direct index calculation (O(1) access)
@@ -1107,8 +1065,7 @@ impl MappedFileQueue {
                 if let Some(file) = files.get(index).cloned() {
                     let file_offset = file.get_file_from_offset() as i64;
                     // Must check both lower and upper bounds
-                    if offset >= file_offset && offset < file_offset + self.mapped_file_size as i64
-                    {
+                    if offset >= file_offset && offset < file_offset + self.mapped_file_size as i64 {
                         return Some(file);
                     }
                 }
@@ -1116,8 +1073,7 @@ impl MappedFileQueue {
                 // Fall back to linear search if direct indexing fails
                 for file in files.iter() {
                     let file_offset = file.get_file_from_offset() as i64;
-                    if offset >= file_offset && offset < file_offset + self.mapped_file_size as i64
-                    {
+                    if offset >= file_offset && offset < file_offset + self.mapped_file_size as i64 {
                         return Some(file.clone());
                     }
                 }
@@ -1140,8 +1096,7 @@ impl MappedFileQueue {
 
     #[inline]
     pub fn set_store_timestamp(&self, store_timestamp: u64) {
-        self.store_timestamp
-            .store(store_timestamp, Ordering::Release);
+        self.store_timestamp.store(store_timestamp, Ordering::Release);
     }
 
     #[inline]
@@ -1153,9 +1108,7 @@ impl MappedFileQueue {
     pub fn flush(&self, flush_least_pages: i32) -> bool {
         let mut result = true;
         let flushed_where = self.get_flushed_where();
-        if let Some(mapped_file) =
-            self.find_mapped_file_by_offset(flushed_where, flushed_where == 0)
-        {
+        if let Some(mapped_file) = self.find_mapped_file_by_offset(flushed_where, flushed_where == 0) {
             let tmp_time_stamp = mapped_file.get_store_timestamp();
             let offset = mapped_file.flush(flush_least_pages);
             let whered = mapped_file.get_file_from_offset() + offset as u64;
@@ -1220,16 +1173,12 @@ impl MappedFileQueue {
             let mapped_file = &mfs[i];
 
             if mapped_file.get_start_timestamp() < 0 {
-                if let Some(select_result) = mapped_file.select_mapped_buffer(0, CQ_STORE_UNIT_SIZE)
-                {
+                if let Some(select_result) = mapped_file.select_mapped_buffer(0, CQ_STORE_UNIT_SIZE) {
                     if let Some(ref buffer) = select_result.bytes {
                         if buffer.len() >= 12 {
-                            let physical_offset =
-                                i64::from_be_bytes(buffer[0..8].try_into().unwrap());
-                            let message_size =
-                                i32::from_be_bytes(buffer[8..12].try_into().unwrap());
-                            let message_store_time =
-                                commit_log.pickup_store_timestamp(physical_offset, message_size);
+                            let physical_offset = i64::from_be_bytes(buffer[0..8].try_into().unwrap());
+                            let message_size = i32::from_be_bytes(buffer[8..12].try_into().unwrap());
+                            let message_store_time = commit_log.pickup_store_timestamp(physical_offset, message_size);
                             if message_store_time > 0 {
                                 mapped_file.set_start_timestamp(message_store_time);
                             }
@@ -1240,17 +1189,12 @@ impl MappedFileQueue {
 
             if i < mfs_len - 1 && mapped_file.get_stop_timestamp() < 0 {
                 let last_unit_offset = self.mapped_file_size as i32 - CQ_STORE_UNIT_SIZE;
-                if let Some(select_result) =
-                    mapped_file.select_mapped_buffer(last_unit_offset, CQ_STORE_UNIT_SIZE)
-                {
+                if let Some(select_result) = mapped_file.select_mapped_buffer(last_unit_offset, CQ_STORE_UNIT_SIZE) {
                     if let Some(ref buffer) = select_result.bytes {
                         if buffer.len() >= 12 {
-                            let physical_offset =
-                                i64::from_be_bytes(buffer[0..8].try_into().unwrap());
-                            let message_size =
-                                i32::from_be_bytes(buffer[8..12].try_into().unwrap());
-                            let message_store_time =
-                                commit_log.pickup_store_timestamp(physical_offset, message_size);
+                            let physical_offset = i64::from_be_bytes(buffer[0..8].try_into().unwrap());
+                            let message_size = i32::from_be_bytes(buffer[8..12].try_into().unwrap());
+                            let message_store_time = commit_log.pickup_store_timestamp(physical_offset, message_size);
                             if message_store_time > 0 {
                                 mapped_file.set_stop_timestamp(message_store_time);
                             }
