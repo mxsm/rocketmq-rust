@@ -241,7 +241,7 @@ impl Default for ControllerConfig {
             metrics_in_delta: false,
             config_black_list: "configBlackList;configStorePath".to_string(),
             node_id: 1,
-            listen_addr: "127.0.0.1:9876".parse().unwrap(),
+            listen_addr: "127.0.0.1:60109".parse().unwrap(),
             raft_peers: Vec::new(),
             election_timeout_ms: 1000,
             heartbeat_interval_ms: 300,
@@ -418,7 +418,7 @@ impl ControllerConfig {
 
     /// Test config helper
     pub fn test_config() -> Self {
-        Self::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap())
+        Self::default().with_node_info(1, "127.0.0.1:60109".parse().unwrap())
     }
 
     /// Check if a configuration key is in the blacklist
