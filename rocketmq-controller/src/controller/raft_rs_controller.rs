@@ -134,8 +134,4 @@ impl Controller for RaftRsController {
     fn register_broker_lifecycle_listener(&self, _listener: Arc<dyn BrokerLifecycleListener>) {
         // TODO: Register listener
     }
-
-    fn get_runtime(&self) -> Arc<RocketMQRuntime> {
-        self.runtime.clone()
-    }
 }

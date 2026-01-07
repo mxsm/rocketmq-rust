@@ -17,6 +17,7 @@
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
@@ -47,8 +48,8 @@ pub enum RaftController {
 
 impl RaftController {
     /// Create a new OpenRaft-based controller
-    pub fn new_open_raft(runtime: Arc<RocketMQRuntime>) -> Self {
-        Self::OpenRaft(ArcMut::new(OpenRaftController::new(runtime)))
+    pub fn new_open_raft(config: Arc<ControllerConfig>) -> Self {
+        Self::OpenRaft(ArcMut::new(OpenRaftController::new(config)))
     }
 
     /// Create a new raft-rs based controller
@@ -174,13 +175,6 @@ impl Controller for RaftController {
         match self {
             Self::OpenRaft(controller) => controller.register_broker_lifecycle_listener(listener),
             Self::RaftRs(controller) => controller.register_broker_lifecycle_listener(listener),
-        }
-    }
-
-    fn get_runtime(&self) -> Arc<RocketMQRuntime> {
-        match self {
-            Self::OpenRaft(controller) => controller.get_runtime(),
-            Self::RaftRs(controller) => controller.get_runtime(),
         }
     }
 }

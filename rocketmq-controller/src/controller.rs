@@ -124,7 +124,6 @@ use rocketmq_remoting::protocol::header::controller::get_next_broker_id_request_
 use rocketmq_remoting::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
 use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_runtime::RocketMQRuntime;
 
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 
@@ -482,28 +481,6 @@ pub trait Controller: Send + Sync {
     /// controller.register_broker_lifecycle_listener(Arc::new(MyListener));
     /// ```
     fn register_broker_lifecycle_listener(&self, listener: Arc<dyn BrokerLifecycleListener>);
-
-    // ==================== Runtime Access ====================
-
-    /// Get the runtime used by this controller
-    ///
-    /// Returns a reference to the underlying Tokio runtime, allowing upper
-    /// layers to spawn tasks or access network resources.
-    ///
-    /// # Returns
-    ///
-    /// Arc to the RocketMQRuntime instance
-    ///
-    /// # Use Cases
-    ///
-    /// - Spawning background tasks
-    /// - Accessing network layer
-    /// - Resource management
-    ///
-    /// # Lifetime
-    ///
-    /// The returned runtime is valid for the lifetime of the controller.
-    fn get_runtime(&self) -> Arc<RocketMQRuntime>;
 }
 
 // ==================== Mock Controller for Testing ====================
@@ -620,9 +597,9 @@ impl Controller for MockController {
         // No-op
     }
 
-    fn get_runtime(&self) -> Arc<RocketMQRuntime> {
+    /*    fn get_runtime(&self) -> Arc<RocketMQRuntime> {
         unimplemented!("MockController does not provide runtime in tests")
-    }
+    }*/
 }
 
 #[cfg(test)]

@@ -14,30 +14,19 @@
 
 use std::sync::Arc;
 
+use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_controller::Controller;
 use rocketmq_controller::RaftController;
 use rocketmq_runtime::RocketMQRuntime;
 
 #[tokio::test]
 async fn test_open_raft_controller_lifecycle() {
-    // Use spawn_blocking to create runtime outside async context
-    let runtime = tokio::task::spawn_blocking(|| Arc::new(RocketMQRuntime::new_multi(4, "test-runtime")))
-        .await
-        .unwrap();
-
-    let controller = RaftController::new_open_raft(runtime.clone());
+    let config = Arc::new(ControllerConfig::test_config());
+    let controller = RaftController::new_open_raft(config);
 
     assert!(controller.startup().await.is_ok());
     assert!(!controller.is_leader()); // Default is false
     assert!(controller.shutdown().await.is_ok());
-
-    // Drop controller first, then runtime in blocking context
-    drop(controller);
-    tokio::task::spawn_blocking(move || {
-        drop(runtime);
-    })
-    .await
-    .unwrap();
 }
 
 #[tokio::test]
@@ -65,9 +54,10 @@ async fn test_raft_controller_wrapper() {
     let runtime = tokio::task::spawn_blocking(|| Arc::new(RocketMQRuntime::new_multi(4, "test-runtime")))
         .await
         .unwrap();
+    let config = Arc::new(ControllerConfig::test_config());
 
     // Test OpenRaft variant
-    let open_raft_controller = RaftController::new_open_raft(runtime.clone());
+    let open_raft_controller = RaftController::new_open_raft(config.clone());
     assert!(open_raft_controller.startup().await.is_ok());
     assert!(!open_raft_controller.is_leader());
     assert!(open_raft_controller.shutdown().await.is_ok());
