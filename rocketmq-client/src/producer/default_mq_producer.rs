@@ -655,13 +655,12 @@ impl MQProducer for DefaultMQProducer {
     {
         let topic_build = self.with_namespace(msg.get_topic().as_str());
         msg.set_topic(topic_build);
-        let result = self
+        Ok(self
             .default_mqproducer_impl
             .as_mut()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send_with_timeout(&mut msg, timeout)
-            .await?;
-        Ok(result)
+            .await?)
     }
 
     async fn send_with_callback<M, F>(&mut self, mut msg: M, send_callback: F) -> rocketmq_error::RocketMQResult<()>
