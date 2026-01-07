@@ -13,10 +13,17 @@
 // limitations under the License.
 
 //! OpenRaft-based controller implementation
+//!
+//! This module provides a production-ready OpenRaft controller with:
+//! - Graceful shutdown support
+//! - Proper resource cleanup
+//! - Thread-safe state management
+//! - gRPC server lifecycle management
 
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use parking_lot::Mutex;
 use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
@@ -27,7 +34,10 @@ use rocketmq_remoting::protocol::header::controller::get_next_broker_id_request_
 use rocketmq_remoting::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
 use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tonic::transport::Server;
+use tracing::info;
 
 use crate::controller::Controller;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
@@ -36,35 +46,133 @@ use crate::openraft::RaftNodeManager;
 use crate::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
 
 /// OpenRaft-based controller implementation
+///
+/// # Graceful Shutdown
+///
+/// This implementation provides proper graceful shutdown:
+/// 1. Sends shutdown signal to gRPC server via oneshot channel
+/// 2. Waits for Raft node to shutdown cleanly
+/// 3. Waits for gRPC server task to complete (with 10s timeout)
+///
+/// # Thread Safety
+///
+/// Internal state is protected by `Arc<Mutex<>>` to allow `&self` access
+/// while maintaining mutability for lifecycle operations.
 pub struct OpenRaftController {
     config: Arc<ControllerConfig>,
+    /// Raft node manager (protected for thread-safe access)
+    node: Arc<Mutex<Option<Arc<RaftNodeManager>>>>,
+
+    /// gRPC server task handle
+    handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+
+    /// Shutdown signal sender for gRPC server
+    shutdown_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
 }
 
 impl OpenRaftController {
     pub fn new(config: Arc<ControllerConfig>) -> Self {
-        Self { config }
+        Self {
+            config,
+            node: Arc::new(Mutex::new(None)),
+            handle: Arc::new(Mutex::new(None)),
+            shutdown_tx: Arc::new(Mutex::new(None)),
+        }
     }
 }
 
 impl Controller for OpenRaftController {
     async fn startup(&self) -> RocketMQResult<()> {
+        info!("Starting OpenRaft controller on {}", self.config.listen_addr);
+
         let node = Arc::new(RaftNodeManager::new(Arc::clone(&self.config)).await?);
         let service = GrpcRaftService::new(node.raft());
-        let server = Server::builder()
-            .add_service(OpenRaftServiceServer::new(service))
-            .serve(self.config.listen_addr);
 
-        let node_id_for_error = self.config.node_id;
-        tokio::spawn(async move {
-            if let Err(e) = server.await {
-                eprintln!("gRPC server error for node {}: {}", node_id_for_error, e);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        let addr = self.config.listen_addr;
+        let node_id = self.config.node_id;
+
+        let handle = tokio::spawn(async move {
+            info!("gRPC server starting for node {} on {}", node_id, addr);
+
+            let result = Server::builder()
+                .add_service(OpenRaftServiceServer::new(service))
+                .serve_with_shutdown(addr, async {
+                    shutdown_rx.await.ok();
+                    info!("Shutdown signal received for node {}, stopping gRPC server", node_id);
+                })
+                .await;
+
+            if let Err(e) = result {
+                eprintln!("gRPC server error for node {}: {}", node_id, e);
+            } else {
+                info!("gRPC server for node {} stopped gracefully", node_id);
             }
         });
+
+        {
+            let mut node_guard = self.node.lock();
+            *node_guard = Some(node);
+        }
+        {
+            let mut handle_guard = self.handle.lock();
+            *handle_guard = Some(handle);
+        }
+        {
+            let mut shutdown_tx_guard = self.shutdown_tx.lock();
+            *shutdown_tx_guard = Some(shutdown_tx);
+        }
+
+        info!("OpenRaft controller started successfully");
         Ok(())
     }
 
     async fn shutdown(&self) -> RocketMQResult<()> {
-        // TODO: Shutdown OpenRaft node
+        info!("Shutting down OpenRaft controller");
+
+        // Take and send shutdown signal to gRPC server
+        {
+            let mut shutdown_tx_guard = self.shutdown_tx.lock();
+            if let Some(tx) = shutdown_tx_guard.take() {
+                if tx.send(()).is_err() {
+                    eprintln!("Failed to send shutdown signal to gRPC server (receiver dropped)");
+                } else {
+                    info!("Shutdown signal sent to gRPC server");
+                }
+            }
+        }
+
+        // Shutdown Raft node
+        let node = {
+            let mut node_guard = self.node.lock();
+            node_guard.take()
+        };
+
+        if let Some(node) = node {
+            if let Err(e) = node.shutdown().await {
+                eprintln!("Error shutting down Raft node: {}", e);
+            } else {
+                info!("Raft node shutdown successfully");
+            }
+        }
+
+        // Wait for server task to complete (with timeout)
+        let handle = {
+            let mut handle_guard = self.handle.lock();
+            handle_guard.take()
+        };
+
+        if let Some(handle) = handle {
+            let timeout = tokio::time::Duration::from_secs(10);
+            match tokio::time::timeout(timeout, handle).await {
+                Ok(Ok(_)) => info!("Server task completed successfully"),
+                Ok(Err(e)) => eprintln!("Server task panicked: {}", e),
+                Err(_) => eprintln!("Timeout waiting for server task to complete"),
+            }
+        }
+
+        info!("OpenRaft controller shutdown completed");
         Ok(())
     }
 
