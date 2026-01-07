@@ -923,7 +923,7 @@ impl MQProducer for DefaultMQProducer {
         msg.set_topic(self.with_namespace(msg.get_topic()));
         self.default_mqproducer_impl
             .as_mut()
-            .unwrap()
+            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send_oneway_with_selector(msg, Arc::new(selector), arg)
             .await
     }
