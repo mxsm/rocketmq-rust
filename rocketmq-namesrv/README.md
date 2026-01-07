@@ -14,44 +14,90 @@ Here is the rust implementation of the **name server** for [Apache RocketMQ](htt
 
 **Run the following command to see usage：**
 
-- **windows platform**
+```shell
+cargo run --bin rocketmq-namesrv-rust -- --help
 
-  ```cmd
-  cargo run --bin rocketmq-namesrv-rust -- --help
-  
-  RocketMQ Name remoting_server(Rust)
-  
-  Usage: rocketmq-namesrv-rust.exe [OPTIONS]
-  
-  Options:
-    -p, --port <PORT>                rocketmq name remoting_server port [default: 9876]
-    -i, --ip <IP>                    rocketmq name remoting_server ip [default: 0.0.0.0]
-    -c, --config-file <CONFIG FILE>  Name server config properties file
-    -h, --help                       Print help
-    -V, --version                    Print version
-  ```
+Apache RocketMQ Name Server - Rust implementation providing lightweight service discovery and routing
 
-- **Linux platform**
+Usage: rocketmq-namesrv-rust [OPTIONS]
 
-  ```shell
-  $ cargo run --bin rocketmq-namesrv-rust -- --help
-  
-  RocketMQ Name remoting_server(Rust)
-  
-  Usage: rocketmq-namesrv-rust [OPTIONS]
-  
-  Options:
-    -p, --port <PORT>                rocketmq name remoting_server port [default: 9876]
-    -i, --ip <IP>                    rocketmq name remoting_server ip [default: 0.0.0.0]
-    -c, --config-file <CONFIG FILE>  Name server config properties file
-    -h, --help                       Print help
-    -V, --version                    Print version
-  ```
+Options:
+  -c, --configFile <FILE>
+          Name server config properties file
 
-Run the following command to start the name server
+  -p, --printConfigItem
+          Print all config items and exit
+
+      --listenPort <PORT>
+          Name server listen port (default: 9876)
+
+      --bindAddress <ADDRESS>
+          Name server bind address (default: 0.0.0.0)
+
+      --rocketmqHome <PATH>
+          RocketMQ home directory
+
+      --kvConfigPath <PATH>
+          KV config file path
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+```
+
+### Usage Examples
+
+**Start with default configuration:**
 
 ```shell
 cargo run --bin rocketmq-namesrv-rust
+```
+
+**Start with configuration file:**
+
+```shell
+cargo run --bin rocketmq-namesrv-rust -- -c /path/to/namesrv.toml
+```
+
+**Print all configuration items:**
+
+```shell
+cargo run --bin rocketmq-namesrv-rust -- -p
+```
+
+**Override specific parameters:**
+
+```shell
+cargo run --bin rocketmq-namesrv-rust -- --listenPort 19876 --bindAddress 127.0.0.1
+```
+
+**Combined usage (config file + overrides):**
+
+```shell
+cargo run --bin rocketmq-namesrv-rust -- -c config.toml --listenPort 19876 --rocketmqHome /opt/rocketmq
+```
+
+### Configuration Priority
+
+Configuration values are applied in the following order (later values override earlier ones):
+
+1. Default values
+2. Configuration file (specified with `-c`)
+3. Command line arguments
+
+### Testing
+
+Run the feature test script to validate the parameter parsing:
+
+```shell
+# Windows
+.\scripts\test_namesrv_features.ps1
+
+# Linux/Mac
+chmod +x scripts/test_namesrv_features.sh
+./scripts/test_namesrv_features.sh
 ```
 
 ## Feature

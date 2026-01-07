@@ -115,6 +115,7 @@ pub mod raft_rs_controller;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
 use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
@@ -123,9 +124,7 @@ use rocketmq_remoting::protocol::header::controller::get_next_broker_id_request_
 use rocketmq_remoting::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
 use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_runtime::RocketMQRuntime;
 
-use crate::error::Result as RocketMQResult;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 
 /// Core Controller trait defining the API for RocketMQ controller implementations
@@ -178,10 +177,10 @@ pub trait Controller: Send + Sync {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let controller = RaftController::new(config).await?;
+    /// let mut controller = RaftController::new(config).await?;
     /// controller.startup().await?;
     /// ```
-    async fn startup(&self) -> RocketMQResult<()>;
+    async fn startup(&mut self) -> RocketMQResult<()>;
 
     /// Shutdown the controller gracefully
     ///
@@ -198,7 +197,7 @@ pub trait Controller: Send + Sync {
     ///
     /// Returns error if graceful shutdown fails. The controller may still be
     /// in an inconsistent state, requiring external intervention.
-    async fn shutdown(&self) -> RocketMQResult<()>;
+    async fn shutdown(&mut self) -> RocketMQResult<()>;
 
     /// Start scheduling controller events
     ///
@@ -482,28 +481,6 @@ pub trait Controller: Send + Sync {
     /// controller.register_broker_lifecycle_listener(Arc::new(MyListener));
     /// ```
     fn register_broker_lifecycle_listener(&self, listener: Arc<dyn BrokerLifecycleListener>);
-
-    // ==================== Runtime Access ====================
-
-    /// Get the runtime used by this controller
-    ///
-    /// Returns a reference to the underlying Tokio runtime, allowing upper
-    /// layers to spawn tasks or access network resources.
-    ///
-    /// # Returns
-    ///
-    /// Arc to the RocketMQRuntime instance
-    ///
-    /// # Use Cases
-    ///
-    /// - Spawning background tasks
-    /// - Accessing network layer
-    /// - Resource management
-    ///
-    /// # Lifetime
-    ///
-    /// The returned runtime is valid for the lifetime of the controller.
-    fn get_runtime(&self) -> Arc<RocketMQRuntime>;
 }
 
 // ==================== Mock Controller for Testing ====================
@@ -543,11 +520,11 @@ impl Default for MockController {
 }
 
 impl Controller for MockController {
-    async fn startup(&self) -> RocketMQResult<()> {
+    async fn startup(&mut self) -> RocketMQResult<()> {
         Ok(())
     }
 
-    async fn shutdown(&self) -> RocketMQResult<()> {
+    async fn shutdown(&mut self) -> RocketMQResult<()> {
         Ok(())
     }
 
@@ -620,9 +597,9 @@ impl Controller for MockController {
         // No-op
     }
 
-    fn get_runtime(&self) -> Arc<RocketMQRuntime> {
+    /*    fn get_runtime(&self) -> Arc<RocketMQRuntime> {
         unimplemented!("MockController does not provide runtime in tests")
-    }
+    }*/
 }
 
 #[cfg(test)]
@@ -631,7 +608,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_controller_lifecycle() {
-        let controller = MockController::new();
+        let mut controller = MockController::new();
         assert!(controller.startup().await.is_ok());
         assert!(controller.is_leader());
         assert!(controller.shutdown().await.is_ok());

@@ -17,6 +17,7 @@
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
 use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
@@ -28,7 +29,6 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RocketMQRuntime;
 
 use crate::controller::Controller;
-use crate::error::Result as RocketMQResult;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 
 /// Raft-rs (TiKV) based controller implementation
@@ -44,12 +44,12 @@ impl RaftRsController {
 }
 
 impl Controller for RaftRsController {
-    async fn startup(&self) -> RocketMQResult<()> {
+    async fn startup(&mut self) -> RocketMQResult<()> {
         // TODO: Initialize raft-rs node
         Ok(())
     }
 
-    async fn shutdown(&self) -> RocketMQResult<()> {
+    async fn shutdown(&mut self) -> RocketMQResult<()> {
         // TODO: Shutdown raft-rs node
         Ok(())
     }
@@ -133,9 +133,5 @@ impl Controller for RaftRsController {
 
     fn register_broker_lifecycle_listener(&self, _listener: Arc<dyn BrokerLifecycleListener>) {
         // TODO: Register listener
-    }
-
-    fn get_runtime(&self) -> Arc<RocketMQRuntime> {
-        self.runtime.clone()
     }
 }

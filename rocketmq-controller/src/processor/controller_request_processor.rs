@@ -87,6 +87,7 @@ use std::sync::Arc;
 
 use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
 use crate::manager::ControllerManager;
+use crate::Controller;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -96,7 +97,6 @@ use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
-
 // Note: These types need to be implemented in their respective modules
 // Placeholder imports that need actual implementation:
 // - SyncStateSet in rocketmq-remoting::protocol::body
@@ -271,14 +271,14 @@ impl ControllerRequestProcessor {
         use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
 
         // Decode request header
-        let _request_header = request
+        let request_header = request
             .decode_command_custom_header::<AlterSyncStateSetRequestHeader>()
             .map_err(|e| {
                 RocketMQError::request_header_error(format!("Failed to decode AlterSyncStateSetRequestHeader: {:?}", e))
             })?;
 
         // Decode request body (SyncStateSet)
-        let _sync_state_set = if let Some(body) = request.body() {
+        let sync_state_set = if let Some(body) = request.body() {
             SyncStateSet::decode(body)?
         } else {
             return Err(RocketMQError::request_body_invalid(
@@ -287,33 +287,10 @@ impl ControllerRequestProcessor {
             ));
         };
 
-        // TODO: Forward to controller with timeout
-        // This requires implementing Controller::alter_sync_state_set() method
-        //
-        // Expected implementation (once Controller trait is ready):
-        // ```
-        // use std::time::Duration;
-        //
-        // use tokio::time::timeout;
-        //
-        // let controller = self.controller_manager.get_controller();
-        // let future = controller.alter_sync_state_set(&request_header, sync_state_set);
-        //
-        // match timeout(Duration::from_secs(WAIT_TIMEOUT_SECONDS), future).await {
-        //     Ok(Ok(response)) => Ok(Some(response)),
-        //     Ok(Err(e)) => Err(e),
-        //     Err(_) => Err(RocketMQError::Timeout {
-        //         operation: "alter_sync_state_set",
-        //         timeout_ms: (WAIT_TIMEOUT_SECONDS * 1000),
-        //     }),
-        // }
-        // ```
-
-        Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-            rocketmq_remoting::code::response_code::ResponseCode::SystemError,
-            "Controller::alter_sync_state_set() not implemented yet. See ALIGNMENT_REPORT_ALTER_SYNC_STATE_SET.md for \
-             implementation details.",
-        )))
+        self.controller_manager
+            .controller()
+            .alter_sync_state_set(&request_header, sync_state_set)
+            .await
     }
 
     /// Handle ELECT_MASTER request

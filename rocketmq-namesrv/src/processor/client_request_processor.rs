@@ -28,7 +28,7 @@ use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
-use tracing::info;
+use tracing::debug;
 use tracing::warn;
 
 use crate::bootstrap::NameServerRuntimeInner;
@@ -54,7 +54,7 @@ impl RequestProcessor for ClientRequestProcessor {
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_code = RequestCode::from(request.code());
-        info!(
+        debug!(
             "Name server ClientRequestProcessor Received request code: {:?}",
             request_code
         );

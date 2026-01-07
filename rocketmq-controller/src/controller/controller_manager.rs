@@ -36,7 +36,6 @@ use rocketmq_remoting::remoting::RemotingService;
 use rocketmq_remoting::remoting_server::rocketmq_tokio_server::RocketMQServer;
 use rocketmq_remoting::request_processor::default_request_processor::DefaultRemotingRequestProcessor;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
-use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
@@ -88,8 +87,8 @@ pub struct ControllerManager {
     config: Arc<ControllerConfig>,
 
     /// Raft controller for consensus and leader election
-    /// Note: Stored as Arc because ProcessorManager also needs it
-    raft_arc: Arc<RaftController>,
+    /// Note: Uses ArcMut to allow mutable access via &self
+    raft_controller: ArcMut<RaftController>,
 
     /// Metadata store for broker and topic information
     metadata: Arc<MetadataStore>,
@@ -143,12 +142,12 @@ impl ControllerManager {
         info!("Creating controller manager with config: {:?}", config);
 
         // Initialize RocketMQ runtime for Raft controller
-        let runtime = Arc::new(RocketMQRuntime::new_multi(2, "controller-runtime"));
+        //let runtime = Arc::new(RocketMQRuntime::new_multi(2, "controller-runtime"));
 
         // Initialize Raft controller for leader election
         // This MUST succeed before proceeding
         // Using OpenRaft implementation by default
-        let raft_arc = Arc::new(RaftController::new_open_raft(runtime));
+        let raft_arc = ArcMut::new(RaftController::new_open_raft(Arc::clone(&config)));
 
         // Initialize metadata store
         // This MUST succeed before proceeding
@@ -197,7 +196,7 @@ impl ControllerManager {
 
         Ok(Self {
             config,
-            raft_arc,
+            raft_controller: raft_arc,
             metadata,
             heartbeat_manager,
             processor,
@@ -374,7 +373,7 @@ impl ControllerManager {
         info!("Starting controller manager...");
 
         // Start Raft controller first (critical for leader election)
-        if let Err(e) = self.raft_arc.startup().await {
+        if let Err(e) = self.raft_controller.mut_from_ref().startup().await {
             self.running.store(false, Ordering::SeqCst);
             return Err(ControllerError::Internal(format!(
                 "Failed to start Raft controller: {}",
@@ -496,7 +495,7 @@ impl ControllerManager {
         }
 
         // Shutdown Raft controller last (it coordinates distributed operations)
-        if let Err(e) = self.raft_arc.shutdown().await {
+        if let Err(e) = self.raft_controller.mut_from_ref().shutdown().await {
             error!("Failed to shutdown Raft: {}", e);
         } else {
             info!("Raft controller shut down");
@@ -516,7 +515,7 @@ impl ControllerManager {
     ///
     /// true if this node is the Raft leader, false otherwise
     pub fn is_leader(&self) -> bool {
-        self.raft_arc.is_leader()
+        self.raft_controller.is_leader()
     }
 
     /// Check if the controller manager is running
@@ -547,7 +546,7 @@ impl ControllerManager {
     ///
     /// A reference to the Raft controller
     pub fn raft(&self) -> &RaftController {
-        &self.raft_arc
+        &self.raft_controller
     }
 
     /// Get the metadata store
@@ -616,6 +615,10 @@ impl ControllerManager {
     /// A clone of the Arc-wrapped remoting client for making outbound RPC calls
     pub fn remoting_client(&self) -> ArcMut<RocketmqDefaultClient> {
         self.remoting_client.clone()
+    }
+
+    pub fn controller(&self) -> &ArcMut<RaftController> {
+        &self.raft_controller
     }
 }
 

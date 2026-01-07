@@ -13,10 +13,18 @@
 // limitations under the License.
 
 //! OpenRaft-based controller implementation
+//!
+//! This module provides a production-ready OpenRaft controller with:
+//! - Graceful shutdown support
+//! - Proper resource cleanup
+//! - Thread-safe state management
+//! - gRPC server lifecycle management
 
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::controller::ControllerConfig;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
 use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
@@ -25,32 +33,116 @@ use rocketmq_remoting::protocol::header::controller::get_next_broker_id_request_
 use rocketmq_remoting::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
 use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_runtime::RocketMQRuntime;
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
+use tonic::transport::Server;
+use tracing::info;
 
 use crate::controller::Controller;
-use crate::error::Result as RocketMQResult;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
+use crate::openraft::GrpcRaftService;
+use crate::openraft::RaftNodeManager;
+use crate::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
 
 /// OpenRaft-based controller implementation
+///
+/// # Graceful Shutdown
+///
+/// This implementation provides proper graceful shutdown:
+/// 1. Sends shutdown signal to gRPC server via oneshot channel
+/// 2. Waits for Raft node to shutdown cleanly
+/// 3. Waits for gRPC server task to complete (with 10s timeout)
 pub struct OpenRaftController {
-    runtime: Arc<RocketMQRuntime>,
-    // TODO: Add OpenRaft specific fields
+    config: Arc<ControllerConfig>,
+    /// Raft node manager
+    node: Option<Arc<RaftNodeManager>>,
+    /// gRPC server task handle
+    handle: Option<JoinHandle<()>>,
+    /// Shutdown signal sender for gRPC server
+    shutdown_tx: Option<oneshot::Sender<()>>,
 }
 
 impl OpenRaftController {
-    pub fn new(runtime: Arc<RocketMQRuntime>) -> Self {
-        Self { runtime }
+    pub fn new(config: Arc<ControllerConfig>) -> Self {
+        Self {
+            config,
+            node: None,
+            handle: None,
+            shutdown_tx: None,
+        }
     }
 }
 
 impl Controller for OpenRaftController {
-    async fn startup(&self) -> RocketMQResult<()> {
-        // TODO: Initialize OpenRaft node
+    async fn startup(&mut self) -> RocketMQResult<()> {
+        info!("Starting OpenRaft controller on {}", self.config.listen_addr);
+
+        let node = Arc::new(RaftNodeManager::new(Arc::clone(&self.config)).await?);
+        let service = GrpcRaftService::new(node.raft());
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        let addr = self.config.listen_addr;
+        let node_id = self.config.node_id;
+
+        let handle = tokio::spawn(async move {
+            info!("gRPC server starting for node {} on {}", node_id, addr);
+
+            let result = Server::builder()
+                .add_service(OpenRaftServiceServer::new(service))
+                .serve_with_shutdown(addr, async {
+                    shutdown_rx.await.ok();
+                    info!("Shutdown signal received for node {}, stopping gRPC server", node_id);
+                })
+                .await;
+
+            if let Err(e) = result {
+                eprintln!("gRPC server error for node {}: {}", node_id, e);
+            } else {
+                info!("gRPC server for node {} stopped gracefully", node_id);
+            }
+        });
+
+        self.node = Some(node);
+        self.handle = Some(handle);
+        self.shutdown_tx = Some(shutdown_tx);
+
+        info!("OpenRaft controller started successfully");
         Ok(())
     }
 
-    async fn shutdown(&self) -> RocketMQResult<()> {
-        // TODO: Shutdown OpenRaft node
+    async fn shutdown(&mut self) -> RocketMQResult<()> {
+        info!("Shutting down OpenRaft controller");
+
+        // Take and send shutdown signal to gRPC server
+        if let Some(tx) = self.shutdown_tx.take() {
+            if tx.send(()).is_err() {
+                eprintln!("Failed to send shutdown signal to gRPC server (receiver dropped)");
+            } else {
+                info!("Shutdown signal sent to gRPC server");
+            }
+        }
+
+        // Shutdown Raft node
+        if let Some(node) = self.node.take() {
+            if let Err(e) = node.shutdown().await {
+                eprintln!("Error shutting down Raft node: {}", e);
+            } else {
+                info!("Raft node shutdown successfully");
+            }
+        }
+
+        // Wait for server task to complete (with timeout)
+        if let Some(handle) = self.handle.take() {
+            let timeout = tokio::time::Duration::from_secs(10);
+            match tokio::time::timeout(timeout, handle).await {
+                Ok(Ok(_)) => info!("Server task completed successfully"),
+                Ok(Err(e)) => eprintln!("Server task panicked: {}", e),
+                Err(_) => eprintln!("Timeout waiting for server task to complete"),
+            }
+        }
+
+        info!("OpenRaft controller shutdown completed");
         Ok(())
     }
 
@@ -133,9 +225,5 @@ impl Controller for OpenRaftController {
 
     fn register_broker_lifecycle_listener(&self, _listener: Arc<dyn BrokerLifecycleListener>) {
         // TODO: Register listener
-    }
-
-    fn get_runtime(&self) -> Arc<RocketMQRuntime> {
-        self.runtime.clone()
     }
 }

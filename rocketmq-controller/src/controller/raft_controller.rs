@@ -17,6 +17,8 @@
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use rocketmq_common::common::controller::ControllerConfig;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
 use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
@@ -31,7 +33,6 @@ use rocketmq_rust::ArcMut;
 use crate::controller::open_raft_controller::OpenRaftController;
 use crate::controller::raft_rs_controller::RaftRsController;
 use crate::controller::Controller;
-use crate::error::Result as RocketMQResult;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 
 /// Unified controller wrapper supporting multiple Raft implementations
@@ -47,8 +48,8 @@ pub enum RaftController {
 
 impl RaftController {
     /// Create a new OpenRaft-based controller
-    pub fn new_open_raft(runtime: Arc<RocketMQRuntime>) -> Self {
-        Self::OpenRaft(ArcMut::new(OpenRaftController::new(runtime)))
+    pub fn new_open_raft(config: Arc<ControllerConfig>) -> Self {
+        Self::OpenRaft(ArcMut::new(OpenRaftController::new(config)))
     }
 
     /// Create a new raft-rs based controller
@@ -58,14 +59,14 @@ impl RaftController {
 }
 
 impl Controller for RaftController {
-    async fn startup(&self) -> RocketMQResult<()> {
+    async fn startup(&mut self) -> RocketMQResult<()> {
         match self {
             Self::OpenRaft(controller) => controller.startup().await,
             Self::RaftRs(controller) => controller.startup().await,
         }
     }
 
-    async fn shutdown(&self) -> RocketMQResult<()> {
+    async fn shutdown(&mut self) -> RocketMQResult<()> {
         match self {
             Self::OpenRaft(controller) => controller.shutdown().await,
             Self::RaftRs(controller) => controller.shutdown().await,
@@ -174,13 +175,6 @@ impl Controller for RaftController {
         match self {
             Self::OpenRaft(controller) => controller.register_broker_lifecycle_listener(listener),
             Self::RaftRs(controller) => controller.register_broker_lifecycle_listener(listener),
-        }
-    }
-
-    fn get_runtime(&self) -> Arc<RocketMQRuntime> {
-        match self {
-            Self::OpenRaft(controller) => controller.get_runtime(),
-            Self::RaftRs(controller) => controller.get_runtime(),
         }
     }
 }
