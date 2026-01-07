@@ -385,10 +385,11 @@ impl ControllerRequestProcessor {
         let request_header = request.decode_command_custom_header_fast::<BrokerHeartbeatRequestHeader>()?;
 
         if let Some(broker_id) = &request_header.broker_id {
-            let heartbeat_timeout_mills = request_header
-                .heartbeat_timeout_mills
-                .ok_or(RocketMQError::Internal("request_header.broker_id is none".to_string()))?
-                as u64;
+            let heartbeat_timeout_mills = request_header.heartbeat_timeout_mills.ok_or(RocketMQError::Internal(
+                "in fn handle_broker_heartbeat, request_header
+                .heartbeat_timeout_mills is none"
+                    .to_string(),
+            ))? as u64;
             self.heartbeat_manager.on_broker_heartbeat(
                 &request_header.cluster_name,
                 &request_header.broker_name,
