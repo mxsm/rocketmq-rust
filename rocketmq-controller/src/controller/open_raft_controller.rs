@@ -17,6 +17,7 @@
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
 use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
@@ -28,7 +29,6 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_runtime::RocketMQRuntime;
 
 use crate::controller::Controller;
-use crate::error::Result as RocketMQResult;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 
 /// OpenRaft-based controller implementation
