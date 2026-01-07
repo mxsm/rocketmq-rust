@@ -383,35 +383,34 @@ impl ControllerRequestProcessor {
         request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header_fast::<BrokerHeartbeatRequestHeader>()?;
-        if request_header.broker_id.is_none() {
+
+        if let Some(broker_id) = &request_header.broker_id {
+            let heartbeat_timeout_mills = request_header
+                .heartbeat_timeout_mills
+                .ok_or(RocketMQError::Internal("request_header.broker_id is none".to_string()))?
+                as u64;
+            self.heartbeat_manager.on_broker_heartbeat(
+                &request_header.cluster_name,
+                &request_header.broker_name,
+                &request_header.broker_addr,
+                *broker_id,
+                Some(heartbeat_timeout_mills),
+                ctx.channel().clone(),
+                request_header.epoch,
+                request_header.max_offset,
+                request_header.confirm_offset,
+                request_header.election_priority,
+            );
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::Success,
+                "Heart beat success",
+            )));
+        } else {
             return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
                 ResponseCode::ControllerInvalidRequest,
                 "Heart beat with empty brokerId",
             )));
         }
-        let broker_id = request_header
-            .broker_id
-            .ok_or(RocketMQError::Internal("request_header.broker_id is none".to_string()))?;
-        let heartbeat_timeout_mills = request_header
-            .heartbeat_timeout_mills
-            .ok_or(RocketMQError::Internal("request_header.broker_id is none".to_string()))?
-            as u64;
-        self.heartbeat_manager.on_broker_heartbeat(
-            &request_header.cluster_name,
-            &request_header.broker_name,
-            &request_header.broker_addr,
-            broker_id,
-            Some(heartbeat_timeout_mills),
-            ctx.channel().clone(),
-            request_header.epoch,
-            request_header.max_offset,
-            request_header.confirm_offset,
-            request_header.election_priority,
-        );
-        return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
-            ResponseCode::Success,
-            "Heart beat success",
-        )));
     }
 
     /// Handle GET_SYNC_STATE_DATA request
