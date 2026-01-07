@@ -1069,7 +1069,7 @@ impl MQProducer for DefaultMQProducer {
         let batch = self.batch(msgs)?;
         self.default_mqproducer_impl
             .as_mut()
-            .unwrap()
+            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .async_send_batch_to_queue_with_callback_timeout(batch, mq, Some(Arc::new(f)), timeout)
             .await
     }
