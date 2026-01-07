@@ -402,15 +402,15 @@ impl ControllerRequestProcessor {
                 request_header.confirm_offset,
                 request_header.election_priority,
             );
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            Ok(Some(RemotingCommand::create_response_command_with_code_remark(
                 ResponseCode::Success,
                 "Heart beat success",
-            )));
+            )))
         } else {
-            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+            Ok(Some(RemotingCommand::create_response_command_with_code_remark(
                 ResponseCode::ControllerInvalidRequest,
                 "Heart beat with empty brokerId",
-            )));
+            )))
         }
     }
 
