@@ -378,8 +378,8 @@ impl ControllerRequestProcessor {
     /// Result containing acknowledgment
     async fn handle_broker_heartbeat(
         &mut self,
-        _channel: Channel,
-        ctx: ConnectionHandlerContext,
+        channel: Channel,
+        _ctx: ConnectionHandlerContext,
         request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header_fast::<BrokerHeartbeatRequestHeader>()?;
@@ -396,7 +396,7 @@ impl ControllerRequestProcessor {
                 &request_header.broker_addr,
                 *broker_id,
                 Some(heartbeat_timeout_mills),
-                ctx.channel().clone(),
+                channel,
                 request_header.epoch,
                 request_header.max_offset,
                 request_header.confirm_offset,
