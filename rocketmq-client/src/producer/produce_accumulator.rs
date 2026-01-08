@@ -225,68 +225,6 @@ impl MessageAccumulation {
     ) -> rocketmq_error::RocketMQResult<bool> {
         unimplemented!()
     }
-
-    /*    fn ready_to_send(&self, hold_size: i32, hold_ms: u128) -> bool {
-        self.messages_size.load(Ordering::SeqCst) > hold_size
-            || SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_millis()
-                >= self.create_time + hold_ms
-    }
-
-
-
-    pub fn add_with_callback(
-        &mut self,
-        msg: Message,
-        send_callback: SendCallback,
-    ) -> rocketmq_error::RocketMQResult<bool, ()> {
-        if self.closed.load(Ordering::SeqCst) {
-            return Err(());
-        }
-        self.count += 1;
-        self.messages.push_back(msg);
-        self.send_callbacks.push_back(send_callback);
-        self.messages_size
-            .fetch_add(msg.get_body().len() as i32, Ordering::SeqCst);
-
-        Ok(true)
-    }
-
-    fn batch(&self) -> MessageBatch {
-        // Implementation for creating a message batch from the accumulated messages
-        MessageBatch {}
-    }
-
-    fn split_send_results(&mut self, send_result: SendResult) {
-        // Implementation for splitting send results
-    }
-
-    pub fn send(&mut self) -> rocketmq_error::RocketMQResult<(), ()> {
-        if self.closed.swap(true, Ordering::SeqCst) {
-            return Ok(());
-        }
-        let message_batch = self.batch();
-        let send_result = self
-            .default_mq_producer
-            .send_direct(message_batch, None, None)?;
-        self.split_send_results(send_result);
-        Ok(())
-    }
-
-    pub fn send_with_callback(&mut self, send_callback: SendCallback) -> rocketmq_error::RocketMQResult<(), ()> {
-        if self.closed.swap(true, Ordering::SeqCst) {
-            return Ok(());
-        }
-        let message_batch = self.batch();
-        let size = self.messages_size.load(Ordering::SeqCst);
-
-        self.default_mq_producer
-            .send_direct(message_batch, None, Some(send_callback))?;
-
-        Ok(())
-    }*/
 }
 
 #[derive(Default)]
