@@ -10,53 +10,177 @@ This module is mainly the implementation of the [Apache RocketMQ](https://github
 
 1. rust toolchain MSRV is 1.75.(stable,nightly)
 
-### Run Borker
+### Run Broker
 
 **Run the following command to see usage：**
 
-- **windows platform**
+```shell
+cargo run --bin rocketmq-broker-rust -- --help
+```
 
-  ```shell
-  cargo run --bin rocketmq-broker-rust -- --help
-  
-  RocketMQ Broker Server(Rust)
-  
-  Usage: rocketmq-broker-rust.exe [OPTIONS]
-  
-  Options:
-    -c, --config-file <FILE>      Broker config properties file
-    -m, --print-important-config  Print important config item
-    -n, --namesrv-addr <IP>       Name server address list, eg: '192.168.0.1:9876;192.168.0.2:9876' [default: 127.0.0.1:9876]
-    -p, --print-config-item       Print all config item
-    -h, --help                    Print help
-    -V, --version                 Print version
-  ```
-
-  
-
-- **Linux platform**
-
-  ```shell
-  $ cargo run --bin rocketmq-broker-rust -- --help
-  
-  RocketMQ Broker Server(Rust)
-  
-  Usage: rocketmq-broker-rust [OPTIONS]
-  
-  Options:
-    -c, --config-file <FILE>      Broker config properties file
-    -m, --print-important-config  Print important config item
-    -n, --namesrv-addr <IP>       Name server address list, eg: '192.168.0.1:9876;192.168.0.2:9876' [default: 127.0.0.1:9876]
-    -p, --print-config-item       Print all config item
-    -h, --help                    Print help
-    -V, --version                 Print version
-  ```
-
-Run the following command to start the name server
+**Output:**
 
 ```
+Apache RocketMQ Broker Server implemented in Rust
+For more information: https://github.com/mxsm/rocketmq-rust
+
+Usage: rocketmq-broker-rust [OPTIONS]
+
+Options:
+  -c, --configFile <FILE>
+          Broker config properties file path
+
+          If not specified, will try to load from:
+
+          1. $ROCKETMQ_HOME/conf/broker.toml (if ROCKETMQ_HOME is set)
+
+          2. Default configuration values
+
+  -p, --printConfigItem
+          Print all configuration items and exit
+
+          Prints all broker configuration properties including:
+
+          - Broker configuration
+
+          - Netty server configuration
+
+          - Netty client configuration
+
+          - Message store configuration
+
+          - Authentication configuration
+
+  -m, --printImportantConfig
+          Print important configuration items and exit
+
+          Prints only the important configuration items that are most
+
+          commonly used for broker setup and troubleshooting.
+
+  -n, --namesrvAddr <ADDR>
+          Name server address list
+
+          Format: '192.168.0.1:9876' or '192.168.0.1:9876;192.168.0.2:9876'
+
+          Multiple addresses should be separated by semicolon (;)
+
+          Can also be set via NAMESRV_ADDR environment variable
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+```
+
+**Run the following command to start the broker:**
+
+```shell
 cargo run --bin rocketmq-broker-rust
 ```
+
+### Usage Examples
+
+#### 1. Start with default configuration
+
+```shell
+# Set ROCKETMQ_HOME environment variable first
+# Windows
+set ROCKETMQ_HOME=D:\rocketmq
+
+# Linux/macOS
+export ROCKETMQ_HOME=/opt/rocketmq
+
+# Then start broker
+cargo run --bin rocketmq-broker-rust
+```
+
+#### 2. Start with custom configuration file
+
+```shell
+cargo run --bin rocketmq-broker-rust -- -c ./conf/broker.toml
+```
+
+#### 3. Start with custom name server address
+
+```shell
+# Single name server
+cargo run --bin rocketmq-broker-rust -- -n 192.168.1.100:9876
+
+# Multiple name servers
+cargo run --bin rocketmq-broker-rust -- -n "192.168.1.100:9876;192.168.1.101:9876"
+```
+
+#### 4. Print all configuration items
+
+```shell
+cargo run --bin rocketmq-broker-rust -- -p
+```
+
+#### 5. Print important configuration items only
+
+```shell
+cargo run --bin rocketmq-broker-rust -- -m
+```
+
+#### 6. Using environment variables
+
+```shell
+# Set name server via environment variable
+# Windows
+set NAMESRV_ADDR=192.168.1.100:9876
+
+# Linux/macOS
+export NAMESRV_ADDR=192.168.1.100:9876
+
+# Then start broker (will use the environment variable)
+cargo run --bin rocketmq-broker-rust
+```
+
+### Configuration
+
+#### Configuration Priority
+
+The broker uses the following configuration priority (highest to lowest):
+
+1. **Command-line arguments** (`-c`, `-n`)
+2. **Environment variables** (`NAMESRV_ADDR`)
+3. **Configuration file** (`broker.toml`)
+4. **Default values**
+
+#### Environment Variables
+
+- `ROCKETMQ_HOME`: RocketMQ installation directory (required)
+- `NAMESRV_ADDR`: Name server address (optional), format: `127.0.0.1:9876` or `192.168.0.1:9876;192.168.0.2:9876`
+
+#### Configuration File
+
+If no configuration file is specified via `-c`, the broker will try to load from:
+- `$ROCKETMQ_HOME/conf/broker.toml`
+
+Example `broker.toml`:
+
+```toml
+[broker_identity]
+broker_name = "broker-a"
+broker_cluster_name = "DefaultCluster"
+broker_id = 0
+
+namesrv_addr = "127.0.0.1:9876"
+broker_ip1 = "127.0.0.1"
+listen_port = 10911
+store_path_root_dir = "./store"
+enable_controller_mode = false
+```
+
+#### Exit Codes
+
+- **0**: Normal exit (when using `-p` or `-m` flags)
+- **-1**: Invalid command-line arguments
+- **-2**: `ROCKETMQ_HOME` environment variable not set
+- **-3**: Failed to parse configuration file
+- **-4**: Invalid broker configuration
 
 ## Feature
 
