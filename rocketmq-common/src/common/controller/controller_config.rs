@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::env;
+use std::fs::File;
+use std::io::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -453,6 +456,147 @@ impl ControllerConfig {
 
         Ok(())
     }
+
+    /// Update configuration from a map of properties
+    ///
+    /// # Arguments
+    ///
+    /// * `properties` - A map of configuration keys to values
+    ///
+    /// # Returns
+    ///
+    /// A Result indicating success or failure
+    pub fn update(&mut self, properties: &HashMap<String, String>) -> Result<(), String> {
+        for (key, value) in properties {
+            match key.as_str() {
+                "rocketmqHome" => self.rocketmq_home = value.clone(),
+                "controllerType" => self.controller_type = value.clone(),
+                "scanNotActiveBrokerInterval" => {
+                    self.scan_not_active_broker_interval = value
+                        .parse()
+                        .map_err(|e| format!("Invalid scanNotActiveBrokerInterval: {}", e))?;
+                }
+                "controllerThreadPoolNums" => {
+                    self.controller_thread_pool_nums = value
+                        .parse()
+                        .map_err(|e| format!("Invalid controllerThreadPoolNums: {}", e))?;
+                }
+                "controllerRequestThreadPoolQueueCapacity" => {
+                    self.controller_request_thread_pool_queue_capacity = value
+                        .parse()
+                        .map_err(|e| format!("Invalid controllerRequestThreadPoolQueueCapacity: {}", e))?;
+                }
+                "mappedFileSize" => {
+                    self.mapped_file_size = value.parse().map_err(|e| format!("Invalid mappedFileSize: {}", e))?;
+                }
+                "controllerStorePath" => {
+                    self.controller_store_path = value.clone();
+                }
+                "electMasterMaxRetryCount" => {
+                    self.elect_master_max_retry_count = value
+                        .parse()
+                        .map_err(|e| format!("Invalid electMasterMaxRetryCount: {}", e))?;
+                }
+                "enableElectUncleanMaster" => {
+                    self.enable_elect_unclean_master = value
+                        .parse()
+                        .map_err(|e| format!("Invalid enableElectUncleanMaster: {}", e))?;
+                }
+                "isProcessReadEvent" => {
+                    self.is_process_read_event = value
+                        .parse()
+                        .map_err(|e| format!("Invalid isProcessReadEvent: {}", e))?;
+                }
+                "notifyBrokerRoleChanged" => {
+                    self.notify_broker_role_changed = value
+                        .parse()
+                        .map_err(|e| format!("Invalid notifyBrokerRoleChanged: {}", e))?;
+                }
+                "scanInactiveMasterInterval" => {
+                    self.scan_inactive_master_interval = value
+                        .parse()
+                        .map_err(|e| format!("Invalid scanInactiveMasterInterval: {}", e))?;
+                }
+                "metricsExporterType" => {
+                    let exporter_type: MetricsExporterType = value
+                        .parse()
+                        .map_err(|_| format!("Invalid metricsExporterType: {}", value))?;
+
+                    self.metrics_exporter_type = exporter_type;
+                }
+                "metricsGrpcExporterTarget" => self.metrics_grpc_exporter_target = value.clone(),
+                "metricsGrpcExporterHeader" => self.metrics_grpc_exporter_header = value.clone(),
+                "metricGrpcExporterTimeOutInMills" => {
+                    self.metric_grpc_exporter_time_out_in_mills = value
+                        .parse()
+                        .map_err(|e| format!("Invalid metricGrpcExporterTimeOutInMills: {}", e))?;
+                }
+                "metricGrpcExporterIntervalInMills" => {
+                    self.metric_grpc_exporter_interval_in_mills = value
+                        .parse()
+                        .map_err(|e| format!("Invalid metricGrpcExporterIntervalInMills: {}", e))?;
+                }
+                "metricLoggingExporterIntervalInMills" => {
+                    self.metric_logging_exporter_interval_in_mills = value
+                        .parse()
+                        .map_err(|e| format!("Invalid metricLoggingExporterIntervalInMills: {}", e))?;
+                }
+                "metricsPromExporterPort" => {
+                    self.metrics_prom_exporter_port = value
+                        .parse()
+                        .map_err(|e| format!("Invalid metricsPromExporterPort: {}", e))?;
+                }
+                "metricsPromExporterHost" => self.metrics_prom_exporter_host = value.clone(),
+                "metricsLabel" => self.metrics_label = value.clone(),
+                "metricsInDelta" => {
+                    self.metrics_in_delta = value.parse().map_err(|e| format!("Invalid metricsInDelta: {}", e))?;
+                }
+                "configBlackList" => self.config_black_list = value.clone(),
+                "electionTimeoutMs" => {
+                    self.election_timeout_ms =
+                        value.parse().map_err(|e| format!("Invalid electionTimeoutMs: {}", e))?;
+                }
+                "heartbeatIntervalMs" => {
+                    self.heartbeat_interval_ms = value
+                        .parse()
+                        .map_err(|e| format!("Invalid heartbeatIntervalMs: {}", e))?;
+                }
+                "storagePath" => self.storage_path = value.clone(),
+                "enableElectUncleanMasterLocal" => {
+                    self.enable_elect_unclean_master_local = value
+                        .parse()
+                        .map_err(|e| format!("Invalid enableElectUncleanMasterLocal: {}", e))?;
+                }
+                _ => return Err(format!("Unknown configuration key: {}", key)),
+            }
+        }
+
+        // Validate the updated configuration
+        self.validate()
+    }
+
+    /// Persist the configuration to disk
+    ///
+    /// # Returns
+    ///
+    /// A Result indicating success or failure
+    pub fn persist(&self) -> Result<(), String> {
+        // Ensure the directory exists
+        if let Some(parent) = self.config_store_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create config directory: {}", e))?;
+        }
+
+        // Serialize the configuration to JSON
+        let json = serde_json::to_string_pretty(self).map_err(|e| format!("Failed to serialize config: {}", e))?;
+
+        // Write to file
+        let mut file =
+            File::create(&self.config_store_path).map_err(|e| format!("Failed to create config file: {}", e))?;
+        file.write_all(json.as_bytes())
+            .map_err(|e| format!("Failed to write config file: {}", e))?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -526,5 +670,56 @@ mod tests {
         assert_eq!(config.metrics_prom_exporter_host, "localhost");
         assert_eq!(config.metrics_prom_exporter_port, 9090);
         assert_eq!(config.metrics_label, "instance_id:test,uid:123");
+    }
+
+    #[test]
+    fn test_config_update() {
+        let mut config = ControllerConfig::default();
+
+        let mut properties = HashMap::new();
+        properties.insert("scanNotActiveBrokerInterval".to_string(), "10000".to_string());
+        properties.insert("controllerThreadPoolNums".to_string(), "32".to_string());
+        properties.insert("enableElectUncleanMaster".to_string(), "true".to_string());
+
+        let result = config.update(&properties);
+        assert!(result.is_ok());
+        assert_eq!(config.scan_not_active_broker_interval, 10000);
+        assert_eq!(config.controller_thread_pool_nums, 32);
+        assert!(config.enable_elect_unclean_master);
+    }
+
+    #[test]
+    fn test_config_update_invalid() {
+        let mut config = ControllerConfig::default();
+
+        let mut properties = HashMap::new();
+        properties.insert("scanNotActiveBrokerInterval".to_string(), "invalid".to_string());
+
+        let result = config.update(&properties);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_update_unknown_key() {
+        let mut config = ControllerConfig::default();
+
+        let mut properties = HashMap::new();
+        properties.insert("unknownKey".to_string(), "value".to_string());
+
+        let result = config.update(&properties);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_persist() {
+        let config = ControllerConfig {
+            config_store_path: PathBuf::from("/tmp/test_controller_config.json"),
+            ..Default::default()
+        };
+
+        let result = config.persist();
+        assert!(result.is_ok());
+
+        std::fs::remove_file("/tmp/test_controller_config.json").ok();
     }
 }

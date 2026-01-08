@@ -421,9 +421,94 @@ impl ControllerRequestProcessor {
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
-        _request: &mut RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        unimplemented!("unimplemented handle_update_controller_config")
+        use rocketmq_error::RocketMQError;
+        use rocketmq_remoting::code::response_code::ResponseCode;
+
+        // Parse request body as properties map
+        let properties = if let Some(body) = request.body() {
+            self.parse_properties_from_string(body).map_err(|e| {
+                RocketMQError::broker_operation_failed(
+                    "UPDATE_CONTROLLER_CONFIG",
+                    ResponseCode::ControllerInvalidRequest.to_i32(),
+                    format!("Failed to parse config properties: {:?}", e),
+                )
+            })?
+        } else {
+            return Err(RocketMQError::broker_operation_failed(
+                "UPDATE_CONTROLLER_CONFIG",
+                ResponseCode::ControllerInvalidRequest.to_i32(),
+                "Request body is empty".to_string(),
+            ));
+        };
+
+        // Validate blacklist configs
+        if self.validate_blacklist_config_exist(&properties) {
+            let error_msg = "Cannot update blacklisted configurations".to_string();
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::NoPermission,
+                error_msg,
+            )));
+        }
+
+        // Check if this controller is the leader
+        if !self.controller_manager.controller().is_leader() {
+            let error_msg = "Only leader controller can handle configuration updates".to_string();
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::ControllerNotLeader,
+                error_msg,
+            )));
+        }
+
+        let mut controller_config = self.controller_manager.controller_config().clone();
+
+        // Update configuration
+        match controller_config.update(&properties) {
+            Ok(_) => {
+                // Persist the updated configuration
+                if let Err(e) = controller_config.persist() {
+                    let error_msg = format!("Failed to persist configuration: {}", e);
+                    return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                        ResponseCode::SystemError,
+                        error_msg,
+                    )));
+                }
+                Ok(Some(RemotingCommand::create_response_command()))
+            }
+            Err(e) => {
+                let error_msg = format!("Failed to update configuration: {}", e);
+                Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::ControllerInvalidRequest,
+                    error_msg,
+                )))
+            }
+        }
+    }
+
+    /// Helper function to parse properties from string format
+    ///
+    /// # Arguments
+    ///
+    /// * `body` - Request body containing properties in "key=value" format
+    ///
+    /// # Returns
+    ///
+    /// Result containing parsed properties map
+    fn parse_properties_from_string(&self, body: &[u8]) -> RocketMQResult<std::collections::HashMap<String, String>> {
+        let content = String::from_utf8_lossy(body);
+        let mut properties = std::collections::HashMap::new();
+
+        for line in content.lines() {
+            if let Some((key, value)) = line.split_once('=') {
+                let trimmed_key = key.trim();
+                if !trimmed_key.is_empty() {
+                    properties.insert(trimmed_key.to_string(), value.trim().to_string());
+                }
+            }
+        }
+
+        Ok(properties)
     }
 
     /// Handle GET_CONTROLLER_CONFIG request
@@ -573,6 +658,8 @@ impl RequestProcessor for ControllerRequestProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rocketmq_common::common::controller::ControllerConfig;
+    use std::collections::HashMap;
 
     #[test]
     fn test_config_blacklist() {
@@ -586,5 +673,74 @@ mod tests {
         assert!(blacklist.contains("configBlackList"));
         assert!(blacklist.contains("configStorePath"));
         assert!(blacklist.contains("rocketmqHome"));
+    }
+
+    #[test]
+    fn test_parse_properties_from_string() {
+        // Test parse_properties_from_string method
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let controller_manager = rt.block_on(async {
+            crate::controller::controller_manager::ControllerManager::new(ControllerConfig::default())
+                .await
+                .unwrap()
+        });
+        let processor = ControllerRequestProcessor::new(rocketmq_rust::ArcMut::new(controller_manager));
+
+        // Test valid properties
+        let body =
+            "scanNotActiveBrokerInterval=10000\ncontrollerThreadPoolNums=32\nenableElectUncleanMaster=true".as_bytes();
+        let properties = processor.parse_properties_from_string(body).unwrap();
+
+        assert_eq!(
+            properties.get("scanNotActiveBrokerInterval"),
+            Some(&"10000".to_string())
+        );
+        assert_eq!(properties.get("controllerThreadPoolNums"), Some(&"32".to_string()));
+        assert_eq!(properties.get("enableElectUncleanMaster"), Some(&"true".to_string()));
+
+        // Test empty body
+        let empty_body = "".as_bytes();
+        let empty_properties = processor.parse_properties_from_string(empty_body).unwrap();
+        assert!(empty_properties.is_empty());
+
+        // Test body with whitespace
+        let body_with_whitespace =
+            "  scanNotActiveBrokerInterval  =  10000  \n  controllerThreadPoolNums  =  32  ".as_bytes();
+        let properties_with_whitespace = processor.parse_properties_from_string(body_with_whitespace).unwrap();
+
+        assert_eq!(
+            properties_with_whitespace.get("scanNotActiveBrokerInterval"),
+            Some(&"10000".to_string())
+        );
+        assert_eq!(
+            properties_with_whitespace.get("controllerThreadPoolNums"),
+            Some(&"32".to_string())
+        );
+    }
+
+    #[test]
+    fn test_validate_blacklist_config_exist() {
+        // Test validate_blacklist_config_exist method
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let controller_manager = rt.block_on(async {
+            crate::controller::controller_manager::ControllerManager::new(ControllerConfig::default())
+                .await
+                .unwrap()
+        });
+        let processor = ControllerRequestProcessor::new(rocketmq_rust::ArcMut::new(controller_manager));
+
+        // Test with blacklisted config
+        let mut properties_with_blacklist = HashMap::new();
+        properties_with_blacklist.insert("configBlackList".to_string(), "newBlacklist".to_string());
+        assert!(processor.validate_blacklist_config_exist(&properties_with_blacklist));
+
+        // Test with non-blacklisted config
+        let mut properties_without_blacklist = HashMap::new();
+        properties_without_blacklist.insert("scanNotActiveBrokerInterval".to_string(), "10000".to_string());
+        assert!(!processor.validate_blacklist_config_exist(&properties_without_blacklist));
+
+        // Test with empty properties
+        let empty_properties = HashMap::new();
+        assert!(!processor.validate_blacklist_config_exist(&empty_properties));
     }
 }
