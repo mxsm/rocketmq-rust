@@ -26,26 +26,26 @@
 🚀 A high-performance, reliable, and feature-rich **unofficial Rust implementation** of [Apache RocketMQ](https://github.com/apache/rocketmq), designed to bring enterprise-grade message middleware to the Rust ecosystem.
 
 <p align="center">
-  <a href="#-overview" style="text-decoration: none;">
+  <a href="#overview">
     <img src="https://img.shields.io/badge/📖_Overview-4A90E2?style=flat-square&labelColor=2C5F9E&color=4A90E2" alt="Overview">
   </a>
-  <a href="#-quick-start" style="text-decoration: none;">
+  <a href="#quick-start">
     <img src="https://img.shields.io/badge/🚀_Quick_Start-50C878?style=flat-square&labelColor=2D7A4F&color=50C878" alt="Quick Start">
   </a>
-  <a href="#-documentation" style="text-decoration: none;">
+  <a href="#documentation">
     <img src="https://img.shields.io/badge/📚_Documentation-FF8C42?style=flat-square&labelColor=CC6A2F&color=FF8C42" alt="Documentation">
   </a>
-  <a href="#-components--crates" style="text-decoration: none;">
+  <a href="#components--crates">
     <img src="https://img.shields.io/badge/📦_Components-9B59B6?style=flat-square&labelColor=6C3483&color=9B59B6" alt="Components">
   </a>
   <br/>
-  <a href="#-roadmap" style="text-decoration: none;">
+  <a href="#roadmap">
     <img src="https://img.shields.io/badge/🗺️_Roadmap-E74C3C?style=flat-square&labelColor=B03A2E&color=E74C3C" alt="Roadmap">
   </a>
-  <a href="#-contributing" style="text-decoration: none;">
+  <a href="#contributing">
     <img src="https://img.shields.io/badge/🤝_Contributing-F39C12?style=flat-square&labelColor=B9770E&color=F39C12" alt="Contributing">
   </a>
-  <a href="#-community--support" style="text-decoration: none;">
+  <a href="#community--support">
     <img src="https://img.shields.io/badge/👥_Community-8E44AD?style=flat-square&labelColor=633974&color=8E44AD" alt="Community">
   </a>
 </p>
