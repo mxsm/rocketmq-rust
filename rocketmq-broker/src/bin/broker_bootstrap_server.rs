@@ -155,13 +155,10 @@ fn parse_config_file(args: &Args) -> Result<(BrokerConfig, MessageStoreConfig)> 
 /// Extract properties from BrokerConfig for system property mapping
 fn extract_properties_from_config(_broker_config: &BrokerConfig) -> HashMap<String, String> {
     // Extract relevant properties for system env mapping
-    let properties = HashMap::new();
-
-    // Add custom properties if they exist in config
     // This is where Java's properties file entries would be mapped
     // Currently returning empty map as Rust config uses typed structs
 
-    properties
+    HashMap::new()
 }
 
 /// Apply command line arguments to broker configuration

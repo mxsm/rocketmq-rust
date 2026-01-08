@@ -273,17 +273,17 @@ impl Args {
 
 impl fmt::Display for Args {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Broker Arguments:\n")?;
-        write!(
+        writeln!(f, "Broker Arguments:")?;
+        writeln!(
             f,
-            "  Config File: {}\n",
+            "  Config File: {}",
             self.config_file
                 .as_ref()
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "None".to_string())
         )?;
-        write!(f, "  Print Config Item: {}\n", self.print_config_item)?;
-        write!(f, "  Print Important Config: {}\n", self.print_important_config)?;
+        writeln!(f, "  Print Config Item: {}", self.print_config_item)?;
+        writeln!(f, "  Print Important Config: {}", self.print_important_config)?;
         write!(
             f,
             "  Name Server Address: {}",
