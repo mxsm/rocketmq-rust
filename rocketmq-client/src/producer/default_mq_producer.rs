@@ -588,7 +588,11 @@ impl MQProducer for DefaultMQProducer {
     async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
         let producer_group = self.with_namespace(self.producer_config.producer_group.clone().as_str());
         self.set_producer_group(producer_group);
-        self.default_mqproducer_impl.as_mut().unwrap().start().await?;
+        self.default_mqproducer_impl
+            .as_mut()
+            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .start()
+            .await?;
         if let Some(ref mut produce_accumulator) = self.producer_config.produce_accumulator {
             produce_accumulator.start();
         }
