@@ -43,7 +43,7 @@ pub async fn main() -> RocketMQResult<()> {
         let message = Message::with_tags(TOPIC, TAG, "Hello RocketMQ".as_bytes());
 
         let send_result = producer.send_with_timeout(message, 2000).await?;
-        println!("send result: {}", send_result);
+        println!("send result: {:?}", send_result);
     }
     producer.shutdown().await;
 
