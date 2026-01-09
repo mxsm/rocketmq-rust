@@ -787,6 +787,34 @@ dependencies = [
 
 [[package]]
 name = "criterion"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2b12d017a929603d80db1831cd3a24082f8137ce19c69e6447f54f5fc8d692f"
+dependencies = [
+ "anes",
+ "cast",
+ "ciborium",
+ "clap",
+ "criterion-plot 0.5.0",
+ "futures",
+ "is-terminal",
+ "itertools 0.10.5",
+ "num-traits",
+ "once_cell",
+ "oorandom",
+ "plotters",
+ "rayon",
+ "regex",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "tinytemplate",
+ "tokio",
+ "walkdir",
+]
+
+[[package]]
+name = "criterion"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d883447757bb0ee46f233e9dc22eb84d93a9508c9b868687b274fc431d886bf"
@@ -796,7 +824,7 @@ dependencies = [
  "cast",
  "ciborium",
  "clap",
- "criterion-plot",
+ "criterion-plot 0.8.1",
  "futures",
  "itertools 0.13.0",
  "num-traits",
@@ -810,6 +838,16 @@ dependencies = [
  "tinytemplate",
  "tokio",
  "walkdir",
+]
+
+[[package]]
+name = "criterion-plot"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b50826342786a51a89e2da3a28f1c32b06e387201bc2d19791f622c673706b1"
+dependencies = [
+ "cast",
+ "itertools 0.10.5",
 ]
 
 [[package]]
@@ -1960,6 +1998,15 @@ name = "is_terminal_polyfill"
 version = "1.70.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
+
+[[package]]
+name = "itertools"
+version = "0.10.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
+dependencies = [
+ "either",
+]
 
 [[package]]
 name = "itertools"
@@ -3485,7 +3532,7 @@ dependencies = [
  "cfg-if",
  "cheetah-string",
  "clap",
- "criterion",
+ "criterion 0.8.1",
  "crossbeam-skiplist",
  "dashmap",
  "dirs",
@@ -3533,6 +3580,7 @@ version = "0.8.0"
 dependencies = [
  "bytes",
  "cheetah-string",
+ "criterion 0.5.1",
  "dashmap",
  "futures",
  "num_cpus",
@@ -3563,7 +3611,7 @@ dependencies = [
  "chrono-tz",
  "config",
  "crc",
- "criterion",
+ "criterion 0.8.1",
  "dashmap",
  "dirs",
  "flate2",
@@ -3610,7 +3658,7 @@ dependencies = [
  "chrono",
  "clap",
  "config",
- "criterion",
+ "criterion 0.8.1",
  "dashmap",
  "env_logger",
  "futures",
@@ -3689,7 +3737,7 @@ dependencies = [
 name = "rocketmq-macros"
 version = "0.8.0"
 dependencies = [
- "criterion",
+ "criterion 0.8.1",
  "proc-macro2",
  "quote",
  "syn 2.0.114",
@@ -3703,7 +3751,7 @@ dependencies = [
  "cheetah-string",
  "clap",
  "config",
- "criterion",
+ "criterion 0.8.1",
  "dashmap",
  "futures",
  "hashbrown 0.16.1",
@@ -3733,7 +3781,7 @@ dependencies = [
  "bytemuck",
  "bytes",
  "cheetah-string",
- "criterion",
+ "criterion 0.8.1",
  "dashmap",
  "flate2",
  "flume",
@@ -3793,7 +3841,7 @@ dependencies = [
  "arc-swap",
  "bytes",
  "cheetah-string",
- "criterion",
+ "criterion 0.8.1",
  "dashmap",
  "dirs",
  "futures-util",
