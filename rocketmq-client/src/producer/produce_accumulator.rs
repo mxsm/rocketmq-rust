@@ -22,8 +22,10 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread::Builder;
+use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use parking_lot::Mutex as SyncMutex;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -44,8 +46,8 @@ pub struct ProduceAccumulator {
     currently_hold_size: AtomicU64,
     instance_name: String,
     currently_hold_size_lock: Arc<parking_lot::Mutex<()>>,
-    sync_send_batchs: Arc<Mutex<HashMap<AggregateKey, ArcMut<MessageAccumulation>>>>,
-    async_send_batchs: Arc<Mutex<HashMap<AggregateKey, ArcMut<MessageAccumulation>>>>,
+    sync_send_batchs: Arc<Mutex<HashMap<AggregateKey, Arc<SyncMutex<MessageAccumulation>>>>>,
+    async_send_batchs: Arc<Mutex<HashMap<AggregateKey, Arc<SyncMutex<MessageAccumulation>>>>>,
 }
 
 impl ProduceAccumulator {
@@ -57,9 +59,13 @@ impl ProduceAccumulator {
             instance_name: instance_name.to_string(),
             guard_thread_for_async_send: GuardForAsyncSendService {
                 service_name: instance_name.to_string(),
+                stopped: Arc::new(AtomicBool::new(false)),
+                thread_handle: None,
             },
             guard_thread_for_sync_send: GuardForSyncSendService {
                 service_name: instance_name.to_string(),
+                stopped: Arc::new(AtomicBool::new(false)),
+                thread_handle: None,
             },
             ..Default::default()
         }
@@ -68,8 +74,10 @@ impl ProduceAccumulator {
 
 impl ProduceAccumulator {
     pub fn start(&mut self) {
-        self.guard_thread_for_sync_send.start();
-        self.guard_thread_for_async_send.start();
+        self.guard_thread_for_sync_send
+            .start(self.sync_send_batchs.clone(), self.hold_ms);
+        self.guard_thread_for_async_send
+            .start(self.async_send_batchs.clone(), self.hold_size, self.hold_ms);
     }
     pub fn shutdown(&mut self) {
         self.guard_thread_for_sync_send.shutdown();
@@ -94,7 +102,31 @@ impl ProduceAccumulator {
         mq: Option<MessageQueue>,
         default_mq_producer: DefaultMQProducer,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>> {
-        unimplemented!("send")
+        let partition_key = AggregateKey::new_from_message_queue(&message, mq);
+
+        let batch = self
+            .get_or_create_sync_send_batch(partition_key.clone(), &default_mq_producer)
+            .await;
+
+        // Lock the batch for exclusive access
+        let add_result = {
+            let mut batch_guard = batch.lock();
+            batch_guard.add(message, None)?
+        }; // batch_guard dropped here
+
+        // Try to add message to batch
+        match add_result {
+            true => {
+                // Message added successfully
+                // TODO: Implement actual send logic
+                Ok(None)
+            }
+            false => {
+                // Batch is closed, remove it and return error
+                self.sync_send_batchs.lock().await.remove(&partition_key);
+                Err(crate::mq_client_err!("Batch is closed, please retry"))
+            }
+        }
     }
 
     pub(crate) async fn send_callback<M>(
@@ -108,22 +140,65 @@ impl ProduceAccumulator {
         M: MessageTrait + Send + Sync + 'static,
     {
         let partition_key = AggregateKey::new_from_message_queue(&message, mq);
-        loop {
-            let batch = self.get_or_create_async_send_batch(partition_key.clone(), &default_mq_producer);
-            /*if batch.add(message.clone(), send_callback.clone()) {
+
+        let batch = self
+            .get_or_create_async_send_batch(partition_key.clone(), &default_mq_producer)
+            .await;
+
+        // Lock the batch for exclusive access
+        let add_result = {
+            let mut batch_guard = batch.lock();
+            batch_guard.add(message, send_callback)?
+        }; // batch_guard dropped here
+
+        // Try to add message to batch
+        match add_result {
+            true => {
+                // Message added successfully
+                Ok(())
+            }
+            false => {
+                // Batch is closed, remove it and return error
                 self.async_send_batchs.lock().await.remove(&partition_key);
-            } else {
-                return Ok(());
-            }*/
+                Err(crate::mq_client_err!("Batch is closed, please retry"))
+            }
         }
     }
 
-    fn get_or_create_async_send_batch(
-        &mut self,
+    async fn get_or_create_sync_send_batch(
+        &self,
         aggregate_key: AggregateKey,
         default_mq_producer: &DefaultMQProducer,
-    ) -> ArcMut<MessageAccumulation> {
-        unimplemented!("getOrCreateAsyncSendBatch")
+    ) -> Arc<SyncMutex<MessageAccumulation>> {
+        let mut batches = self.sync_send_batchs.lock().await;
+
+        batches
+            .entry(aggregate_key.clone())
+            .or_insert_with(|| {
+                Arc::new(SyncMutex::new(MessageAccumulation::new(
+                    aggregate_key,
+                    ArcMut::new(default_mq_producer.clone()),
+                )))
+            })
+            .clone()
+    }
+
+    async fn get_or_create_async_send_batch(
+        &self,
+        aggregate_key: AggregateKey,
+        default_mq_producer: &DefaultMQProducer,
+    ) -> Arc<SyncMutex<MessageAccumulation>> {
+        let mut batches = self.async_send_batchs.lock().await;
+
+        batches
+            .entry(aggregate_key.clone())
+            .or_insert_with(|| {
+                Arc::new(SyncMutex::new(MessageAccumulation::new(
+                    aggregate_key,
+                    ArcMut::new(default_mq_producer.clone()),
+                )))
+            })
+            .clone()
     }
 }
 
@@ -218,65 +293,204 @@ impl MessageAccumulation {
         }
     }
 
+    /// Check if batch is ready to send based on size or time thresholds
+    fn ready_to_send(&self, hold_size: usize, hold_ms: u64) -> bool {
+        // Condition 1: Size threshold
+        let current_size = self.messages_size.load(Ordering::Acquire);
+        if current_size >= hold_size as i32 {
+            return true;
+        }
+
+        // Condition 2: Time threshold
+        let elapsed = get_current_millis() - self.create_time;
+        if elapsed >= hold_ms {
+            return true;
+        }
+
+        false
+    }
+
     pub fn add<M: MessageTrait + Send + Sync + 'static>(
         &mut self,
         msg: M,
         send_callback: Option<SendMessageCallback>,
     ) -> rocketmq_error::RocketMQResult<bool> {
-        unimplemented!()
+        // Check if batch is already closed
+        if self.closed.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+
+        // Calculate message body size
+        let body_size = msg.get_body().map(|b| b.len()).unwrap_or(0) as i32;
+
+        // Add message to batch
+        self.messages.push(Box::new(msg));
+
+        // Add callback if provided
+        if let Some(callback) = send_callback {
+            self.send_callbacks.push(callback);
+        }
+
+        // Update message size counter
+        if body_size > 0 {
+            self.messages_size.fetch_add(body_size, Ordering::AcqRel);
+        }
+
+        // Increment count
+        self.count += 1;
+
+        Ok(true)
     }
 }
 
 #[derive(Default)]
 struct GuardForSyncSendService {
     service_name: String,
+    stopped: Arc<AtomicBool>,
+    thread_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl GuardForSyncSendService {
     pub fn new(service_name: &str) -> Self {
         Self {
             service_name: service_name.to_string(),
+            stopped: Arc::new(AtomicBool::new(false)),
+            thread_handle: None,
         }
     }
 
-    pub fn start(&mut self) {
+    pub fn start(
+        &mut self,
+        batches: Arc<Mutex<HashMap<AggregateKey, Arc<SyncMutex<MessageAccumulation>>>>>,
+        hold_ms: u32,
+    ) {
         let service_name = self.service_name.clone();
-        Builder::new()
-            .name(service_name)
-            .spawn(|| {
-                // Implementation for starting the guard thread
+        let stopped = self.stopped.clone();
+        let sleep_time = std::cmp::max(1, hold_ms / 2) as u64;
+
+        let handle = Builder::new()
+            .name(service_name.clone())
+            .spawn(move || {
+                tracing::info!("{} service started", service_name);
+
+                // Create a dedicated Tokio runtime for this thread
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create Tokio runtime");
+
+                while !stopped.load(Ordering::Acquire) {
+                    // Sleep interval
+                    std::thread::sleep(Duration::from_millis(sleep_time));
+
+                    // Process batches
+                    rt.block_on(async {
+                        let mut batches_guard = batches.lock().await;
+                        batches_guard.retain(|_key, batch| {
+                            // Check if batch has messages
+                            let batch_guard = batch.lock();
+                            let messages_size = batch_guard.messages_size.load(Ordering::Acquire);
+                            if messages_size == 0 {
+                                batch_guard.closed.store(true, Ordering::Release);
+                                false // Remove empty batch
+                            } else {
+                                true // Keep batch
+                            }
+                        });
+                    });
+                }
+
+                tracing::info!("{} service ended", service_name);
             })
             .expect("Failed to start guard thread");
+
+        self.thread_handle = Some(handle);
     }
 
     pub fn shutdown(&mut self) {
-        // Implementation for shutting down the guard thread
+        self.stopped.store(true, Ordering::Release);
+        if let Some(handle) = self.thread_handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 
 #[derive(Default)]
 struct GuardForAsyncSendService {
     service_name: String,
+    stopped: Arc<AtomicBool>,
+    thread_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl GuardForAsyncSendService {
     pub fn new(service_name: &str) -> Self {
         Self {
             service_name: service_name.to_string(),
+            stopped: Arc::new(AtomicBool::new(false)),
+            thread_handle: None,
         }
     }
 
-    pub fn start(&mut self) {
+    pub fn start(
+        &mut self,
+        batches: Arc<Mutex<HashMap<AggregateKey, Arc<SyncMutex<MessageAccumulation>>>>>,
+        hold_size: usize,
+        hold_ms: u32,
+    ) {
         let service_name = self.service_name.clone();
-        Builder::new()
-            .name(service_name)
-            .spawn(|| {
-                // Implementation for starting the guard thread
+        let stopped = self.stopped.clone();
+        let sleep_time = std::cmp::max(1, hold_ms / 2) as u64;
+
+        let handle = Builder::new()
+            .name(service_name.clone())
+            .spawn(move || {
+                tracing::info!("{} service started", service_name);
+
+                // Create a dedicated Tokio runtime for this thread
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create Tokio runtime");
+
+                while !stopped.load(Ordering::Acquire) {
+                    // Sleep interval
+                    std::thread::sleep(Duration::from_millis(sleep_time));
+
+                    // Process batches
+                    rt.block_on(async {
+                        let mut batches_guard = batches.lock().await;
+                        batches_guard.retain(|_key, batch| {
+                            let batch_guard = batch.lock();
+
+                            // Check if batch is ready to send
+                            if batch_guard.ready_to_send(hold_size, hold_ms as u64) {
+                                // TODO: Implement actual send logic
+                                tracing::debug!("Batch ready to send, but send logic not yet implemented");
+                            }
+
+                            // Check if batch should be removed
+                            let messages_size = batch_guard.messages_size.load(Ordering::Acquire);
+                            if messages_size == 0 {
+                                batch_guard.closed.store(true, Ordering::Release);
+                                false // Remove empty batch
+                            } else {
+                                true // Keep batch
+                            }
+                        });
+                    });
+                }
+
+                tracing::info!("{} service ended", service_name);
             })
             .expect("Failed to start guard thread");
+
+        self.thread_handle = Some(handle);
     }
 
     pub fn shutdown(&mut self) {
-        // Implementation for shutting down the guard thread
+        self.stopped.store(true, Ordering::Release);
+        if let Some(handle) = self.thread_handle.take() {
+            let _ = handle.join();
+        }
     }
 }
