@@ -362,8 +362,7 @@ impl ControllerRequestProcessor {
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        // This is a read-only operation, no timeout needed
-        unimplemented!("unimplemented handle_get_metadata_info")
+        self.controller_manager.controller().get_controller_metadata().await
     }
 
     /// Handle BROKER_HEARTBEAT request
