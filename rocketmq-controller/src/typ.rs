@@ -81,6 +81,14 @@ pub enum ControllerRequest {
         write_queue_nums: i32,
         perm: i32,
     },
+    /// Apply for a specific broker ID
+    ApplyBrokerId {
+        cluster_name: String,
+        broker_name: String,
+        broker_addr: String,
+        applied_broker_id: u64,
+        register_check_code: String,
+    },
 }
 
 impl std::fmt::Display for ControllerRequest {
@@ -94,6 +102,11 @@ impl std::fmt::Display for ControllerRequest {
             }
             Self::UpdateConfig { key, .. } => write!(f, "UpdateConfig({})", key),
             Self::UpdateTopic { topic_name, .. } => write!(f, "UpdateTopic({})", topic_name),
+            Self::ApplyBrokerId {
+                broker_name,
+                applied_broker_id,
+                ..
+            } => write!(f, "ApplyBrokerId({}, id={})", broker_name, applied_broker_id),
         }
     }
 }
@@ -117,6 +130,13 @@ pub enum ControllerResponse {
         master_addr: Option<String>,
         master_epoch: Option<i32>,
         sync_state_set_epoch: Option<i32>,
+    },
+    /// Response for broker ID application
+    ApplyBrokerId {
+        success: bool,
+        error: Option<String>,
+        cluster_name: String,
+        broker_name: String,
     },
     /// Generic success response
     Success,
