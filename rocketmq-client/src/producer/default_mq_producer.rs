@@ -813,7 +813,7 @@ impl MQProducer for DefaultMQProducer {
         mut msg: M,
         selector: S,
         arg: T,
-    ) -> rocketmq_error::RocketMQResult<SendResult>
+    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -832,13 +832,11 @@ impl MQProducer for DefaultMQProducer {
             )
             .await?;
         let mq = self.client_config.queue_with_namespace(mq);
-        let result = if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
+        if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
             self.send_by_accumulator(msg, Some(mq), None).await
         } else {
             self.send_direct(msg, Some(mq), None).await
-        }?;
-
-        Ok(result.expect("SendResult should not be None"))
+        }
     }
 
     async fn send_with_selector_timeout<M, S, T>(

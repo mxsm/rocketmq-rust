@@ -59,7 +59,10 @@ pub async fn main() -> RocketMQResult<()> {
                 order_id,
             )
             .await?;
-        println!("send result: {}", send_result);
+        println!(
+            "send result: {}",
+            send_result.expect("send_with_selector should return a result for synchronous sends")
+        );
     }
     producer.shutdown().await;
 
