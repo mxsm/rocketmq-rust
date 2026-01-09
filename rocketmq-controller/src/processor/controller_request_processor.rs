@@ -477,7 +477,11 @@ impl ControllerRequestProcessor {
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        unimplemented!("unimplemented handle_get_controller_config")
+        let controller_config = self.controller_manager.controller_config();
+        let config_string = controller_config.to_properties_string();
+
+        let response = RemotingCommand::create_response_command().set_body(config_string.into_bytes());
+        Ok(Some(response))
     }
 
     /// Handle CLEAN_BROKER_DATA request
