@@ -157,10 +157,10 @@ impl Controller for RaftController {
         }
     }
 
-    fn get_controller_metadata(&self) -> RocketMQResult<Option<RemotingCommand>> {
+    async fn get_controller_metadata(&self) -> RocketMQResult<Option<RemotingCommand>> {
         match self {
-            Self::OpenRaft(controller) => controller.get_controller_metadata(),
-            Self::RaftRs(controller) => controller.get_controller_metadata(),
+            Self::OpenRaft(controller) => controller.get_controller_metadata().await,
+            Self::RaftRs(controller) => controller.get_controller_metadata().await,
         }
     }
 

@@ -49,7 +49,7 @@ pub static REBALANCE_LOCK_INTERVAL: Lazy<u64> = Lazy::new(|| {
 });
 
 #[derive(Clone)]
-pub(crate) struct ProcessQueue {
+pub struct ProcessQueue {
     pub(crate) tree_map_lock: Arc<RwLock<()>>,
     pub(crate) msg_tree_map: Arc<RwLock<std::collections::BTreeMap<i64, ArcMut<MessageExt>>>>,
     pub(crate) msg_count: Arc<AtomicU64>,
@@ -67,8 +67,14 @@ pub(crate) struct ProcessQueue {
     pub(crate) msg_acc_cnt: Arc<AtomicI64>,
 }
 
+impl Default for ProcessQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProcessQueue {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         ProcessQueue {
             tree_map_lock: Arc::new(RwLock::new(())),
             msg_tree_map: Arc::new(RwLock::new(std::collections::BTreeMap::new())),

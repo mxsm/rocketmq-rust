@@ -24,12 +24,12 @@ use crate::consumer::consumer_impl::message_request::MessageRequest;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 
 #[derive(Clone)]
-pub(crate) struct PullRequest {
-    pub(crate) consumer_group: CheetahString,
-    pub(crate) message_queue: MessageQueue,
-    pub(crate) process_queue: Arc<ProcessQueue>,
-    pub(crate) next_offset: i64,
-    pub(crate) previously_locked: bool,
+pub struct PullRequest {
+    pub consumer_group: CheetahString,
+    pub message_queue: MessageQueue,
+    pub process_queue: Arc<ProcessQueue>,
+    pub next_offset: i64,
+    pub previously_locked: bool,
 }
 
 impl PullRequest {

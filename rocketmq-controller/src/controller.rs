@@ -435,7 +435,7 @@ pub trait Controller: Send + Sync {
     /// # Note
     ///
     /// This is a read-only operation that does not go through Raft consensus.
-    fn get_controller_metadata(&self) -> RocketMQResult<Option<RemotingCommand>>;
+    async fn get_controller_metadata(&self) -> RocketMQResult<Option<RemotingCommand>>;
 
     /// Get sync state data for specified brokers
     ///
@@ -585,7 +585,7 @@ impl Controller for MockController {
         Ok(Some(RemotingCommand::create_response_command()))
     }
 
-    fn get_controller_metadata(&self) -> RocketMQResult<Option<RemotingCommand>> {
+    async fn get_controller_metadata(&self) -> RocketMQResult<Option<RemotingCommand>> {
         Ok(Some(RemotingCommand::create_response_command()))
     }
 
