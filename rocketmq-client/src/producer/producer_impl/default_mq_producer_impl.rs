@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
@@ -22,6 +21,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rand::random;
 use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::message::message_batch::MessageBatch;
@@ -53,7 +53,6 @@ use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
 use tokio::runtime::Handle;
-use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
 use tracing::warn;
 
@@ -90,7 +89,7 @@ use crate::producer::transaction_send_result::TransactionSendResult;
 pub struct DefaultMQProducerImpl {
     client_config: ClientConfig,
     producer_config: Arc<ProducerConfig>,
-    topic_publish_info_table: Arc<RwLock<HashMap<CheetahString /* topic */, TopicPublishInfo>>>,
+    topic_publish_info_table: Arc<DashMap<CheetahString /* topic */, TopicPublishInfo>>,
     send_message_hook_list: ArcMut<Vec<Box<dyn SendMessageHook>>>,
     end_transaction_hook_list: Arc<Vec<Arc<Box<dyn EndTransactionHook>>>>,
     check_forbidden_hook_list: Vec<Arc<Box<dyn CheckForbiddenHook>>>,
@@ -119,7 +118,7 @@ impl DefaultMQProducerImpl {
             Semaphore::new(producer_config.back_pressure_for_async_send_num().max(10) as usize);
         let semaphore_async_send_size =
             Semaphore::new(producer_config.back_pressure_for_async_send_size().max(1024 * 1024) as usize);
-        let topic_publish_info_table = Arc::new(RwLock::new(HashMap::new()));
+        let topic_publish_info_table = Arc::new(DashMap::new());
         DefaultMQProducerImpl {
             client_config: client_config.clone(),
             producer_config: Arc::new(producer_config),
@@ -1188,19 +1187,16 @@ impl DefaultMQProducerImpl {
     }
 
     async fn try_to_find_topic_publish_info(&self, topic: &CheetahString) -> Option<TopicPublishInfo> {
-        let mut write_guard = self.topic_publish_info_table.write().await;
-        let mut topic_publish_info = write_guard.get(topic).cloned();
+        let mut topic_publish_info = self.topic_publish_info_table.get(topic).map(|v| v.clone());
         if topic_publish_info.is_none() || !topic_publish_info.as_ref().unwrap().ok() {
-            write_guard.insert(topic.clone(), TopicPublishInfo::new());
-            drop(write_guard);
+            self.topic_publish_info_table.insert(topic.clone(), TopicPublishInfo::new());
             self.client_instance
                 .as_ref()
                 .unwrap()
                 .mut_from_ref()
                 .update_topic_route_info_from_name_server_topic(topic)
                 .await;
-            let write_guard = self.topic_publish_info_table.write().await;
-            topic_publish_info = write_guard.get(topic).cloned();
+            topic_publish_info = self.topic_publish_info_table.get(topic).map(|v| v.clone());
         }
 
         let topic_publish_info_ref = topic_publish_info.as_ref().unwrap();
@@ -1214,7 +1210,7 @@ impl DefaultMQProducerImpl {
             .mut_from_ref()
             .update_topic_route_info_from_name_server_default(topic, true, Some(&self.producer_config))
             .await;
-        self.topic_publish_info_table.write().await.get(topic).cloned()
+        self.topic_publish_info_table.get(topic).map(|v| v.clone())
     }
 
     fn make_sure_state_ok(&self) -> rocketmq_error::RocketMQResult<()> {
@@ -1872,31 +1868,14 @@ impl DefaultMQProducerImpl {
 
 impl MQProducerInner for DefaultMQProducerImpl {
     fn get_publish_topic_list(&self) -> HashSet<CheetahString> {
-        let handle = Handle::current();
-        let topic_publish_info_table = self.topic_publish_info_table.clone();
-        thread::spawn(move || {
-            handle.block_on(async move { topic_publish_info_table.read().await.keys().cloned().collect() })
-        })
-        .join()
-        .unwrap()
+        self.topic_publish_info_table.iter().map(|entry| entry.key().clone()).collect()
     }
 
     fn is_publish_topic_need_update(&self, topic: &CheetahString) -> bool {
-        let handle = Handle::current();
-        let topic = topic.clone();
-        let topic_publish_info_table = self.topic_publish_info_table.clone();
-        thread::spawn(move || {
-            handle.block_on(async move {
-                let guard = topic_publish_info_table.read().await;
-                let topic_publish_info = guard.get(topic.as_str());
-                if topic_publish_info.is_none() {
-                    return true;
-                }
-                !topic_publish_info.unwrap().ok()
-            })
-        })
-        .join()
-        .unwrap_or(false)
+        if let Some(topic_publish_info) = self.topic_publish_info_table.get(topic) {
+            return !topic_publish_info.ok();
+        }
+        true
     }
 
     fn get_check_listener(&self) -> Arc<Box<dyn TransactionListener>> {
@@ -1964,15 +1943,7 @@ impl MQProducerInner for DefaultMQProducerImpl {
         if topic.is_empty() || info.is_none() {
             return;
         }
-        let handle = Handle::current();
-        let topic_publish_info_table = self.topic_publish_info_table.clone();
-        let _ = thread::spawn(move || {
-            handle.block_on(async move {
-                let mut write_guard = topic_publish_info_table.write().await;
-                write_guard.insert(topic, info.unwrap());
-            })
-        })
-        .join();
+        self.topic_publish_info_table.insert(topic, info.unwrap());
     }
 
     fn is_unit_mode(&self) -> bool {
@@ -2183,7 +2154,7 @@ impl DefaultMQProducerImpl {
 
 pub(crate) struct DefaultServiceDetector {
     client_instance: ArcMut<MQClientInstance>,
-    topic_publish_info_table: Arc<RwLock<HashMap<CheetahString /* topic */, TopicPublishInfo>>>,
+    topic_publish_info_table: Arc<DashMap<CheetahString /* topic */, TopicPublishInfo>>,
 }
 
 impl ServiceDetector for DefaultServiceDetector {
@@ -2223,18 +2194,7 @@ impl ServiceDetector for DefaultServiceDetector {
 
 impl DefaultServiceDetector {
     fn pick_topic(&self) -> Option<CheetahString> {
-        let handle = Handle::current();
-        let table = self.topic_publish_info_table.clone();
-
-        thread::spawn(move || {
-            handle.block_on(async move {
-                let read_guard = table.read().await;
-                read_guard.iter().next().map(|(k, _)| k.clone())
-            })
-        })
-        .join()
-        .ok()
-        .flatten()
+        self.topic_publish_info_table.iter().next().map(|entry| entry.key().clone())
     }
 }
 
