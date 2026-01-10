@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::path::PathBuf;
 
 use clap::Parser;
@@ -42,26 +41,16 @@ impl CommandExecute for UpdateTopicListSubCommand {
             .set_instance_name(get_current_millis().to_string().into());
         default_mq_admin_ext.start().await?;
 
-        let file_name = self
-            .file
-            .to_str()
-            .ok_or(RocketMQError::Internal(
-                "UpdateTopicListSubCommand received 'None' file name".to_string(),
-            ))?
-            .trim();
-
-        let file_path = Path::new(file_name);
-
-        if !file_path.is_file() {
+        if !self.file.is_file() {
             return Err(RocketMQError::Internal(
                 "the file path doesn't point to a valid file".to_string(),
             ));
         }
 
         let mut topic_config_list_bytes = vec![];
-        File::open(file_path)
+        File::open(&self.file)
             .await
-            .map_err(|_e| RocketMQError::Internal("open file error".to_string()))?
+            .map_err(|e| RocketMQError::Internal(format!("open file error {}", e)))?
             .read_to_end(&mut topic_config_list_bytes)
             .await?;
         let topic_configs =
