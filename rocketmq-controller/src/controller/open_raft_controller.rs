@@ -25,9 +25,11 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_error::RocketMQResult;
+use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
 use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
+use rocketmq_remoting::protocol::header::controller::apply_broker_id_response_header::ApplyBrokerIdResponseHeader;
 use rocketmq_remoting::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader;
 use rocketmq_remoting::protocol::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader;
 use rocketmq_remoting::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
@@ -177,9 +179,134 @@ impl Controller for OpenRaftController {
         Ok(Some(RemotingCommand::create_response_command()))
     }
 
-    async fn apply_broker_id(&self, _request: &ApplyBrokerIdRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
-        // TODO: Implement broker ID application via OpenRaft
-        Ok(Some(RemotingCommand::create_response_command()))
+    async fn apply_broker_id(&self, request: &ApplyBrokerIdRequestHeader) -> RocketMQResult<Option<RemotingCommand>> {
+        // Validate the requested broker ID
+        if request.applied_broker_id < 0 {
+            tracing::warn!(
+                "Invalid broker ID {} requested by broker {} in cluster {}",
+                request.applied_broker_id,
+                request.broker_name,
+                request.cluster_name
+            );
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::ControllerBrokerIdInvalid,
+                format!(
+                    "Invalid broker ID: {}. Broker ID must be non-negative.",
+                    request.applied_broker_id
+                ),
+            )));
+        }
+
+        // Check if we have a Raft node
+        let Some(node) = &self.node else {
+            tracing::error!("OpenRaft node not initialized");
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::ControllerNotLeader,
+                "Controller not initialized".to_string(),
+            )));
+        };
+
+        // Check if this node is the leader
+        match node.is_leader().await {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::info!(
+                    "This node is not the leader, cannot apply broker ID for {}",
+                    request.broker_name
+                );
+                return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::ControllerNotLeader,
+                    "This controller is not the leader".to_string(),
+                )));
+            }
+            Err(e) => {
+                tracing::error!("Failed to check leader status: {}", e);
+                return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    format!("Failed to check leader status: {}", e),
+                )));
+            }
+        }
+
+        tracing::info!(
+            "Processing ApplyBrokerId request: cluster={}, broker={}, broker_id={}",
+            request.cluster_name,
+            request.broker_name,
+            request.applied_broker_id
+        );
+
+        // Create the Raft request
+        let raft_request = crate::typ::ControllerRequest::ApplyBrokerId {
+            cluster_name: request.cluster_name.to_string(),
+            broker_name: request.broker_name.to_string(),
+            broker_addr: String::new(),
+            applied_broker_id: request.applied_broker_id as u64,
+            register_check_code: request.register_check_code.to_string(),
+        };
+
+        // Submit to Raft for consensus
+        match node.client_write(raft_request).await {
+            Ok(response) => {
+                // Check the response from state machine
+                match response.data {
+                    crate::typ::ControllerResponse::ApplyBrokerId {
+                        success,
+                        error,
+                        cluster_name,
+                        broker_name,
+                    } => {
+                        if success {
+                            tracing::info!(
+                                "Successfully applied broker ID {} to broker {} in cluster {}",
+                                request.applied_broker_id,
+                                broker_name,
+                                cluster_name
+                            );
+
+                            let response_header = ApplyBrokerIdResponseHeader {
+                                cluster_name: Some(cluster_name.into()),
+                                broker_name: Some(broker_name.into()),
+                            };
+
+                            Ok(Some(
+                                RemotingCommand::create_response_command().set_command_custom_header(response_header),
+                            ))
+                        } else {
+                            let error_msg = error.unwrap_or_else(|| "Unknown error".to_string());
+                            tracing::warn!(
+                                "Failed to apply broker ID {} to broker {}: {}",
+                                request.applied_broker_id,
+                                broker_name,
+                                error_msg
+                            );
+
+                            Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                                ResponseCode::ControllerBrokerIdInvalid,
+                                error_msg,
+                            )))
+                        }
+                    }
+                    _ => {
+                        tracing::error!("Unexpected response type from state machine");
+                        Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                            ResponseCode::SystemError,
+                            "Unexpected response from state machine".to_string(),
+                        )))
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Failed to apply broker ID {} via Raft consensus: {}",
+                    request.applied_broker_id,
+                    e
+                );
+                Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                    ResponseCode::SystemError,
+                    format!("Raft consensus failed: {}", e),
+                )))
+            }
+        }
     }
 
     async fn clean_broker_data(
