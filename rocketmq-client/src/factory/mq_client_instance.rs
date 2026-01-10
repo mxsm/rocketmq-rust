@@ -302,7 +302,9 @@ impl MQClientInstance {
                     error!("Failed to start pull message service: {:?}", e);
                 }
                 // Start rebalance service
-                self.rebalance_service.start(this).await;
+                if let Err(e) = self.rebalance_service.start(this).await {
+                    error!("Failed to start rebalance service: {:?}", e);
+                }
                 // Start push service
 
                 self.default_producer
@@ -344,7 +346,9 @@ impl MQClientInstance {
         }
 
         info!("MQClientInstance[{}] shutting down rebalance service", self.client_id);
-        self.rebalance_service.shutdown();
+        if let Err(e) = self.rebalance_service.shutdown(3000).await {
+            warn!("Failed to shutdown rebalance service: {:?}", e);
+        }
 
         info!(
             "MQClientInstance[{}] shutting down pull message service",
@@ -1030,7 +1034,7 @@ impl MQClientInstance {
         Ok(())
     }
 
-    pub async fn do_rebalance(&mut self) -> bool {
+    pub async fn do_rebalance(&mut self) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         let mut balanced = true;
         let consumer_table = self.consumer_table.read().await;
         for (key, value) in consumer_table.iter() {
@@ -1042,10 +1046,11 @@ impl MQClientInstance {
                 }
                 Err(e) => {
                     error!("doRebalance for consumer group [{}] exception:{}", key, e.to_string());
+                    balanced = false;
                 }
             }
         }
-        balanced
+        Ok(balanced)
     }
 
     pub fn rebalance_later(&mut self, delay_millis: u64) {
