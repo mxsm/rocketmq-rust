@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -24,6 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageTrait;
@@ -45,8 +45,8 @@ pub struct ProduceAccumulator {
     currently_hold_size: AtomicU64,
     instance_name: String,
     currently_hold_size_lock: Arc<parking_lot::Mutex<()>>,
-    sync_send_batchs: Arc<Mutex<HashMap<AggregateKey, Arc<Mutex<MessageAccumulation>>>>>,
-    async_send_batchs: Arc<Mutex<HashMap<AggregateKey, Arc<Mutex<MessageAccumulation>>>>>,
+    sync_send_batchs: Arc<DashMap<AggregateKey, Arc<Mutex<MessageAccumulation>>>>,
+    async_send_batchs: Arc<DashMap<AggregateKey, Arc<Mutex<MessageAccumulation>>>>,
 }
 
 impl ProduceAccumulator {
@@ -116,7 +116,7 @@ impl ProduceAccumulator {
         // Check if add failed (batch closed)
         if !add_result {
             // Batch is closed, cannot retry because message is already consumed
-            self.sync_send_batchs.lock().await.remove(&partition_key);
+            self.sync_send_batchs.remove(&partition_key);
             return Err(crate::mq_client_err!("Batch is closed, cannot add message"));
         }
 
@@ -152,7 +152,7 @@ impl ProduceAccumulator {
 
             if should_send {
                 // Try to remove and send the batch
-                let batch_to_send = self.sync_send_batchs.lock().await.remove(&partition_key);
+                let batch_to_send = self.sync_send_batchs.remove(&partition_key).map(|(_, v)| v);
 
                 if let Some(batch_arc) = batch_to_send {
                     // Send the batch (without holding the lock)
@@ -199,7 +199,7 @@ impl ProduceAccumulator {
 
                 if should_send {
                     // Remove batch from map
-                    let batch_to_send = self.async_send_batchs.lock().await.remove(&partition_key);
+                    let batch_to_send = self.async_send_batchs.remove(&partition_key).map(|(_, v)| v);
 
                     if let Some(batch_arc) = batch_to_send {
                         // Send the batch (without holding the lock)
@@ -210,7 +210,7 @@ impl ProduceAccumulator {
             }
             false => {
                 // Batch is closed, remove it and return error
-                self.async_send_batchs.lock().await.remove(&partition_key);
+                self.async_send_batchs.remove(&partition_key);
                 Err(crate::mq_client_err!("Batch is closed, please retry"))
             }
         }
@@ -221,9 +221,7 @@ impl ProduceAccumulator {
         aggregate_key: AggregateKey,
         default_mq_producer: &DefaultMQProducer,
     ) -> Arc<Mutex<MessageAccumulation>> {
-        let mut batches = self.sync_send_batchs.lock().await;
-
-        batches
+        self.sync_send_batchs
             .entry(aggregate_key.clone())
             .or_insert_with(|| {
                 Arc::new(Mutex::new(MessageAccumulation::new(
@@ -239,9 +237,7 @@ impl ProduceAccumulator {
         aggregate_key: AggregateKey,
         default_mq_producer: &DefaultMQProducer,
     ) -> Arc<Mutex<MessageAccumulation>> {
-        let mut batches = self.async_send_batchs.lock().await;
-
-        batches
+        self.async_send_batchs
             .entry(aggregate_key.clone())
             .or_insert_with(|| {
                 Arc::new(Mutex::new(MessageAccumulation::new(
@@ -535,7 +531,7 @@ impl GuardForSyncSendService {
         }
     }
 
-    pub fn start(&mut self, batches: Arc<Mutex<HashMap<AggregateKey, Arc<Mutex<MessageAccumulation>>>>>, hold_ms: u32) {
+    pub fn start(&mut self, batches: Arc<DashMap<AggregateKey, Arc<Mutex<MessageAccumulation>>>>, hold_ms: u32) {
         let service_name = self.service_name.clone();
         let stopped = self.stopped.clone();
         let sleep_time = std::cmp::max(1, hold_ms / 2) as u64;
@@ -548,11 +544,12 @@ impl GuardForSyncSendService {
             while !stopped.load(Ordering::Acquire) {
                 interval.tick().await;
 
-                // Process batches
-                let mut batches_guard = batches.lock().await;
+                // Process batches - DashMap provides concurrent iteration
+                // Collect empty batches to remove
                 let mut to_remove = Vec::new();
-
-                for (key, batch) in batches_guard.iter() {
+                for item in batches.iter() {
+                    let key = item.key();
+                    let batch = item.value();
                     let batch_guard = batch.lock().await;
                     let messages_size = batch_guard.messages_size.load(Ordering::Acquire);
                     if messages_size == 0 {
@@ -561,8 +558,9 @@ impl GuardForSyncSendService {
                     }
                 }
 
+                // Remove empty batches
                 for key in to_remove {
-                    batches_guard.remove(&key);
+                    batches.remove(&key);
                 }
             }
 
@@ -598,7 +596,7 @@ impl GuardForAsyncSendService {
 
     pub fn start(
         &mut self,
-        batches: Arc<Mutex<HashMap<AggregateKey, Arc<Mutex<MessageAccumulation>>>>>,
+        batches: Arc<DashMap<AggregateKey, Arc<Mutex<MessageAccumulation>>>>,
         hold_size: usize,
         hold_ms: u32,
     ) {
@@ -614,41 +612,41 @@ impl GuardForAsyncSendService {
             while !stopped.load(Ordering::Acquire) {
                 interval.tick().await;
 
-                // Process batches
-                let mut batches_guard = batches.lock().await;
+                // Process batches - DashMap provides concurrent access
+                // Collect ready batches
                 let mut to_send = Vec::new();
-
-                // Collect batches that are ready to send
-                for (key, batch) in batches_guard.iter() {
+                for item in batches.iter() {
+                    let key = item.key();
+                    let batch = item.value();
                     let batch_guard = batch.lock().await;
                     if batch_guard.ready_to_send(hold_size, hold_ms as u64) {
                         to_send.push(key.clone());
                     }
                 }
 
-                // Remove and send ready batches
+                // Remove ready batches (they will be sent by main logic)
                 for key in to_send {
-                    if let Some(batch) = batches_guard.remove(&key) {
+                    if let Some((_, batch)) = batches.remove(&key) {
                         let batch_guard = batch.lock().await;
-                        // Note: We can't access accumulator here, so we skip send
-                        // This will be handled by the retain logic below
                         tracing::debug!("Batch ready to send via guard thread");
                     }
                 }
 
                 // Remove empty batches
-                let mut to_remove = Vec::new();
-                for (key, batch) in batches_guard.iter() {
+                let mut to_remove_empty = Vec::new();
+                for item in batches.iter() {
+                    let key = item.key();
+                    let batch = item.value();
                     let batch_guard = batch.lock().await;
                     let messages_size = batch_guard.messages_size.load(Ordering::Acquire);
                     if messages_size == 0 {
                         batch_guard.closed.store(true, Ordering::Release);
-                        to_remove.push(key.clone());
+                        to_remove_empty.push(key.clone());
                     }
                 }
 
-                for key in to_remove {
-                    batches_guard.remove(&key);
+                for key in to_remove_empty {
+                    batches.remove(&key);
                 }
             }
 
