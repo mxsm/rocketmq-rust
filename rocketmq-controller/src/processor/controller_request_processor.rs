@@ -340,7 +340,18 @@ impl ControllerRequestProcessor {
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        unimplemented!("unimplemented handle_get_replica_info")
+        use rocketmq_remoting::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
+
+        let request_header = _request
+            .decode_command_custom_header::<GetReplicaInfoRequestHeader>()
+            .map_err(|e| {
+                RocketMQError::request_header_error(format!("Failed to decode GetReplicaInfoRequestHeader: {:?}", e))
+            })?;
+
+        self.controller_manager
+            .controller()
+            .get_replica_info(&request_header)
+            .await
     }
 
     /// Handle GET_METADATA_INFO request
