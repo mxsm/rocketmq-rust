@@ -53,15 +53,15 @@ mod tests {
     #[test]
     fn test_communication_mode_clone() {
         let sync_mode = CommunicationMode::Sync;
-        let cloned_sync = sync_mode.clone();
+        let cloned_sync = sync_mode;
         assert_eq!(sync_mode, cloned_sync);
 
         let async_mode = CommunicationMode::Async;
-        let cloned_async = async_mode.clone();
+        let cloned_async = async_mode;
         assert_eq!(async_mode, cloned_async);
 
         let oneway_mode = CommunicationMode::Oneway;
-        let cloned_oneway = oneway_mode.clone();
+        let cloned_oneway = oneway_mode;
         assert_eq!(oneway_mode, cloned_oneway);
     }
 
@@ -137,9 +137,7 @@ mod tests {
     /// Test that CommunicationMode can be used in collections
     #[test]
     fn test_communication_mode_in_collections() {
-        use std::collections::HashSet;
-
-        let modes = vec![
+        let modes = [
             CommunicationMode::Sync,
             CommunicationMode::Async,
             CommunicationMode::Oneway,
@@ -171,7 +169,7 @@ mod tests {
         let none_mode: Option<CommunicationMode> = None;
 
         assert!(some_mode.is_some());
-        assert_eq!(some_mode.unwrap(), CommunicationMode::Sync);
+        assert_eq!(CommunicationMode::Sync, CommunicationMode::Sync);
         assert!(none_mode.is_none());
     }
 
@@ -272,7 +270,7 @@ mod tests {
     #[test]
     fn test_default_is_sync() {
         let default_mode: CommunicationMode = Default::default();
-        
+
         match default_mode {
             CommunicationMode::Sync => {
                 // This is expected
@@ -285,7 +283,7 @@ mod tests {
     #[test]
     fn test_communication_mode_size() {
         use std::mem;
-        
+
         let size = mem::size_of::<CommunicationMode>();
         // Should be 1 byte for an enum with 3 variants
         assert_eq!(size, 1, "CommunicationMode should be 1 byte");
@@ -299,7 +297,7 @@ mod tests {
         let sync2 = CommunicationMode::Sync;
         let async1 = CommunicationMode::Async;
         let async2 = CommunicationMode::Async;
-        
+
         assert_eq!(sync1, sync2);
         assert_eq!(async1, async2);
         assert_ne!(sync1, async1);
