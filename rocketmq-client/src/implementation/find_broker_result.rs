@@ -293,7 +293,9 @@ mod tests {
         let none_result: Option<FindBrokerResult> = None;
 
         assert!(some_result.is_some());
-        assert_eq!(some_result.unwrap().broker_addr.as_str(), "broker:10911");
+        if let Some(result) = some_result {
+            assert_eq!(result.broker_addr.as_str(), "broker:10911");
+        }
         assert!(none_result.is_none());
     }
 
@@ -309,14 +311,16 @@ mod tests {
         let err_result: Result<FindBrokerResult, &str> = Err("Broker not found");
 
         assert!(ok_result.is_ok());
-        assert_eq!(ok_result.unwrap().broker_addr.as_str(), "success:10911");
+        if let Ok(result) = ok_result {
+            assert_eq!(result.broker_addr.as_str(), "success:10911");
+        }
         assert!(err_result.is_err());
     }
 
     /// Test in Vec collection
     #[test]
     fn test_find_broker_result_in_vec() {
-        let results = vec![
+        let results = [
             FindBrokerResult {
                 broker_addr: CheetahString::from_static_str("broker1:10911"),
                 slave: false,
@@ -343,7 +347,7 @@ mod tests {
     /// Test filtering master brokers
     #[test]
     fn test_find_broker_result_filter_masters() {
-        let results = vec![
+        let results = [
             FindBrokerResult {
                 broker_addr: CheetahString::from_static_str("master1:10911"),
                 slave: false,
@@ -371,7 +375,7 @@ mod tests {
     /// Test filtering slave brokers
     #[test]
     fn test_find_broker_result_filter_slaves() {
-        let results = vec![
+        let results = [
             FindBrokerResult {
                 broker_addr: CheetahString::from_static_str("master:10911"),
                 slave: false,
