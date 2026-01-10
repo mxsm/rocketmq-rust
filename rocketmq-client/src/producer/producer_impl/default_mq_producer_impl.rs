@@ -1689,7 +1689,7 @@ impl DefaultMQProducerImpl {
     {
         // Ensure transactional messages do not support delayed delivery
         self.ensure_not_delayed_for_transactional(&msg)?;
-        
+
         // ignore DelayTimeLevel parameter
         if msg.get_delay_time_level() != 0 {
             MessageAccessor::clear_property(&mut msg, MessageConst::PROPERTY_DELAY_TIME_LEVEL);
@@ -2079,7 +2079,7 @@ impl DefaultMQProducerImpl {
                 // 2. Shutdown async sender executor
                 // Note: We don't explicitly shutdown the runtime as it might be shared
                 // The runtime will be cleaned up when all references are dropped
-                
+
                 // 3. Stop fault strategy detector
                 self.mq_fault_strategy.shutdown();
 
@@ -2092,22 +2092,17 @@ impl DefaultMQProducerImpl {
 
                 // 5. Update state
                 self.service_state = ServiceState::ShutdownAlready;
-                
-                tracing::info!(
-                    "The producer [{}] shutdown OK",
-                    self.producer_config.producer_group()
-                );
+
+                tracing::info!("The producer [{}] shutdown OK", self.producer_config.producer_group());
                 Ok(())
             }
             ServiceState::ShutdownAlready => {
                 // Already shutdown, idempotent
                 Ok(())
             }
-            ServiceState::StartFailed => {
-                Err(mq_client_err!(
-                    "The producer service state is StartFailed, cannot shutdown properly"
-                ))
-            }
+            ServiceState::StartFailed => Err(mq_client_err!(
+                "The producer service state is StartFailed, cannot shutdown properly"
+            )),
         }
     }
 
@@ -2163,21 +2158,24 @@ impl DefaultMQProducerImpl {
     }
 
     /// Ensure transactional messages do not support delayed delivery
-    fn ensure_not_delayed_for_transactional<M>(
-        &self,
-        msg: &M,
-    ) -> rocketmq_error::RocketMQResult<()>
+    fn ensure_not_delayed_for_transactional<M>(&self, msg: &M) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait,
     {
-        if msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL)).is_some()
-            || msg.get_property(&CheetahString::from_static_str("TIMER_DELAY_MS")).is_some()
-            || msg.get_property(&CheetahString::from_static_str("TIMER_DELAY_SEC")).is_some()
-            || msg.get_property(&CheetahString::from_static_str("TIMER_DELIVER_MS")).is_some()
+        if msg
+            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL))
+            .is_some()
+            || msg
+                .get_property(&CheetahString::from_static_str("TIMER_DELAY_MS"))
+                .is_some()
+            || msg
+                .get_property(&CheetahString::from_static_str("TIMER_DELAY_SEC"))
+                .is_some()
+            || msg
+                .get_property(&CheetahString::from_static_str("TIMER_DELIVER_MS"))
+                .is_some()
         {
-            return Err(mq_client_err!(
-                "Transactional messages do not support delayed delivery"
-            ));
+            return Err(mq_client_err!("Transactional messages do not support delayed delivery"));
         }
         Ok(())
     }
@@ -2199,24 +2197,22 @@ impl ServiceDetector for DefaultServiceDetector {
         // Use a blocking approach to detect broker availability
         let client_instance = self.client_instance.clone();
         let endpoint = endpoint.to_string();
-        
+
         // Spawn a blocking task to perform the detection
         let handle = Handle::current();
         let result = thread::spawn(move || {
             handle.block_on(async move {
                 // Create a message queue for the detection request
                 let mq = MessageQueue::from_parts(topic.as_str(), "", 0);
-                
+
                 // Try to get max offset from the broker with timeout
-                matches!(tokio::time::timeout(
-                    Duration::from_millis(timeout_millis),
-                    async {
-                        client_instance
-                            .mq_client_api_impl
-                            .as_ref()
-                    },
+                matches!(
+                    tokio::time::timeout(Duration::from_millis(timeout_millis), async {
+                        client_instance.mq_client_api_impl.as_ref()
+                    },)
+                    .await,
+                    Ok(Some(_))
                 )
-                .await, Ok(Some(_)))
             })
         })
         .join();
@@ -2229,7 +2225,7 @@ impl DefaultServiceDetector {
     fn pick_topic(&self) -> Option<CheetahString> {
         let handle = Handle::current();
         let table = self.topic_publish_info_table.clone();
-        
+
         thread::spawn(move || {
             handle.block_on(async move {
                 let read_guard = table.read().await;
