@@ -588,11 +588,11 @@ impl MQProducer for DefaultMQProducer {
     async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
         let producer_group = self.with_namespace(self.producer_config.producer_group.clone().as_str());
         self.set_producer_group(producer_group);
-        self.default_mqproducer_impl
+        let default_mqproducer_impl = self
+            .default_mqproducer_impl
             .as_mut()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
-            .start()
-            .await?;
+            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?;
+        default_mqproducer_impl.start().await?;
         if let Some(ref mut produce_accumulator) = self.producer_config.produce_accumulator {
             produce_accumulator.start();
         }
@@ -603,11 +603,10 @@ impl MQProducer for DefaultMQProducer {
                 self.client_config.trace_topic.clone().unwrap().as_str(),
                 self.producer_config.rpc_hook.clone(),
             );
-            dispatcher.set_host_producer(self.default_mqproducer_impl.as_ref().unwrap().clone());
+            dispatcher.set_host_producer(default_mqproducer_impl.clone());
             dispatcher.set_namespace_v2(self.client_config.namespace_v2.clone());
             let dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>> = Arc::new(Box::new(dispatcher));
             self.producer_config.trace_dispatcher = Some(dispatcher.clone());
-            let default_mqproducer_impl = self.default_mqproducer_impl.as_mut().unwrap();
             default_mqproducer_impl
                 .register_send_message_hook(Box::new(SendMessageTraceHookImpl::new(dispatcher.clone())));
             default_mqproducer_impl
