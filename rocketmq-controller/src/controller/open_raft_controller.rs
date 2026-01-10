@@ -70,14 +70,14 @@ pub struct OpenRaftController {
 
 impl OpenRaftController {
     pub fn new(config: Arc<ControllerConfig>) -> Self {
-        let replicas_info_manager = Arc::new(ReplicasInfoManager::new(config.clone()));
+        let replica_info_manager = Arc::new(ReplicasInfoManager::new(config.clone()));
 
         Self {
             config,
             node: None,
             handle: None,
             shutdown_tx: None,
-            replica_info_manager: replicas_info_manager,
+            replica_info_manager,
         }
     }
 }
