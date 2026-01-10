@@ -557,7 +557,7 @@ impl GuardForSyncSendService {
                         to_remove.push(key.clone());
                     }
                 }
-                
+
                 // Remove empty batches
                 for key in to_remove {
                     batches.remove(&key);
@@ -644,7 +644,7 @@ impl GuardForAsyncSendService {
                         to_remove_empty.push(key.clone());
                     }
                 }
-                
+
                 for key in to_remove_empty {
                     batches.remove(&key);
                 }

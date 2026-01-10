@@ -13,7 +13,7 @@
 // limitations under the License.
 
 //! ProduceAccumulator Performance Benchmark
-//! 
+//!
 //! This benchmark tests the performance improvements from:
 //! - P0/P1: tokio::Mutex + Notify (vs parking_lot::Mutex + polling)
 //! - P2: DashMap (vs Arc<Mutex<HashMap>>)
@@ -24,7 +24,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::black_box;
+use criterion::criterion_group;
+use criterion::criterion_main;
+use criterion::BenchmarkId;
+use criterion::Criterion;
+use criterion::Throughput;
 use dashmap::DashMap;
 use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
@@ -67,12 +72,8 @@ impl TestBatch {
 }
 
 /// Benchmark: HashMap with Mutex (Before optimization)
-async fn bench_hashmap_mutex_concurrent_insert(
-    num_keys: usize,
-    operations_per_key: usize,
-) -> Duration {
-    let map: Arc<Mutex<HashMap<TestKey, Arc<Mutex<TestBatch>>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+async fn bench_hashmap_mutex_concurrent_insert(num_keys: usize, operations_per_key: usize) -> Duration {
+    let map: Arc<Mutex<HashMap<TestKey, Arc<Mutex<TestBatch>>>>> = Arc::new(Mutex::new(HashMap::new()));
 
     let start = std::time::Instant::now();
 
@@ -148,13 +149,8 @@ async fn bench_dashmap_concurrent_insert(num_keys: usize, operations_per_key: us
 }
 
 /// Benchmark: Concurrent reads and writes with HashMap
-async fn bench_hashmap_mutex_mixed_ops(
-    num_keys: usize,
-    read_ops: usize,
-    write_ops: usize,
-) -> Duration {
-    let map: Arc<Mutex<HashMap<TestKey, Arc<Mutex<TestBatch>>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+async fn bench_hashmap_mutex_mixed_ops(num_keys: usize, read_ops: usize, write_ops: usize) -> Duration {
+    let map: Arc<Mutex<HashMap<TestKey, Arc<Mutex<TestBatch>>>>> = Arc::new(Mutex::new(HashMap::new()));
 
     // Pre-populate
     {
@@ -212,11 +208,7 @@ async fn bench_hashmap_mutex_mixed_ops(
 }
 
 /// Benchmark: Concurrent reads and writes with DashMap
-async fn bench_dashmap_mixed_ops(
-    num_keys: usize,
-    read_ops: usize,
-    write_ops: usize,
-) -> Duration {
+async fn bench_dashmap_mixed_ops(num_keys: usize, read_ops: usize, write_ops: usize) -> Duration {
     let map: Arc<DashMap<TestKey, Arc<Mutex<TestBatch>>>> = Arc::new(DashMap::new());
 
     // Pre-populate
@@ -280,26 +272,16 @@ fn bench_concurrent_insert(c: &mut Criterion) {
         group.throughput(Throughput::Elements(total_ops as u64));
 
         // Benchmark HashMap with Mutex
-        group.bench_with_input(
-            BenchmarkId::new("HashMap_Mutex", num_keys),
-            num_keys,
-            |b, &num_keys| {
-                b.to_async(&rt).iter(|| async move {
-                    bench_hashmap_mutex_concurrent_insert(num_keys, operations_per_key).await
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("HashMap_Mutex", num_keys), num_keys, |b, &num_keys| {
+            b.to_async(&rt)
+                .iter(|| async move { bench_hashmap_mutex_concurrent_insert(num_keys, operations_per_key).await });
+        });
 
         // Benchmark DashMap
-        group.bench_with_input(
-            BenchmarkId::new("DashMap", num_keys),
-            num_keys,
-            |b, &num_keys| {
-                b.to_async(&rt).iter(|| async move {
-                    bench_dashmap_concurrent_insert(num_keys, operations_per_key).await
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("DashMap", num_keys), num_keys, |b, &num_keys| {
+            b.to_async(&rt)
+                .iter(|| async move { bench_dashmap_concurrent_insert(num_keys, operations_per_key).await });
+        });
     }
 
     group.finish();
@@ -317,16 +299,14 @@ fn bench_mixed_operations(c: &mut Criterion) {
 
     // Benchmark HashMap with Mutex
     group.bench_function("HashMap_Mutex", |b| {
-        b.to_async(&rt).iter(|| async {
-            bench_hashmap_mutex_mixed_ops(num_keys, read_ops, write_ops).await
-        });
+        b.to_async(&rt)
+            .iter(|| async { bench_hashmap_mutex_mixed_ops(num_keys, read_ops, write_ops).await });
     });
 
     // Benchmark DashMap
     group.bench_function("DashMap", |b| {
-        b.to_async(&rt).iter(|| async {
-            bench_dashmap_mixed_ops(num_keys, read_ops, write_ops).await
-        });
+        b.to_async(&rt)
+            .iter(|| async { bench_dashmap_mixed_ops(num_keys, read_ops, write_ops).await });
     });
 
     group.finish();
@@ -348,16 +328,14 @@ fn bench_multi_topic_scenario(c: &mut Criterion) {
 
     // Benchmark HashMap with Mutex
     group.bench_function("HashMap_Mutex", |b| {
-        b.to_async(&rt).iter(|| async {
-            bench_hashmap_mutex_concurrent_insert(num_keys, messages_per_key).await
-        });
+        b.to_async(&rt)
+            .iter(|| async { bench_hashmap_mutex_concurrent_insert(num_keys, messages_per_key).await });
     });
 
     // Benchmark DashMap
     group.bench_function("DashMap", |b| {
-        b.to_async(&rt).iter(|| async {
-            bench_dashmap_concurrent_insert(num_keys, messages_per_key).await
-        });
+        b.to_async(&rt)
+            .iter(|| async { bench_dashmap_concurrent_insert(num_keys, messages_per_key).await });
     });
 
     group.finish();
@@ -377,16 +355,14 @@ fn bench_high_contention(c: &mut Criterion) {
 
     // Benchmark HashMap with Mutex
     group.bench_function("HashMap_Mutex_1key", |b| {
-        b.to_async(&rt).iter(|| async {
-            bench_hashmap_mutex_concurrent_insert(num_keys, operations_per_key).await
-        });
+        b.to_async(&rt)
+            .iter(|| async { bench_hashmap_mutex_concurrent_insert(num_keys, operations_per_key).await });
     });
 
     // Benchmark DashMap
     group.bench_function("DashMap_1key", |b| {
-        b.to_async(&rt).iter(|| async {
-            bench_dashmap_concurrent_insert(num_keys, operations_per_key).await
-        });
+        b.to_async(&rt)
+            .iter(|| async { bench_dashmap_concurrent_insert(num_keys, operations_per_key).await });
     });
 
     group.finish();
