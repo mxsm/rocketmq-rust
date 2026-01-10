@@ -298,7 +298,9 @@ impl MQClientInstance {
                 self.start_scheduled_task(this.clone());
                 // Start pull service
                 let instance = this.clone();
-                self.pull_message_service.start(instance).await;
+                if let Err(e) = self.pull_message_service.start(instance).await {
+                    error!("Failed to start pull message service: {:?}", e);
+                }
                 // Start rebalance service
                 self.rebalance_service.start(this).await;
                 // Start push service
@@ -348,7 +350,9 @@ impl MQClientInstance {
             "MQClientInstance[{}] shutting down pull message service",
             self.client_id
         );
-        self.pull_message_service.shutdown();
+        if let Err(e) = self.pull_message_service.shutdown_default().await {
+            warn!("Failed to shutdown pull message service: {:?}", e);
+        }
 
         info!("MQClientInstance[{}] persisting all consumer offsets", self.client_id);
         self.persist_all_consumer_offset().await;
