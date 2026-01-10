@@ -33,7 +33,6 @@ pub mod consume_message_directly_result;
 pub mod consume_queue_data;
 pub mod consume_status;
 pub mod consumer_offset_serialize_wrapper;
-pub mod controller;
 pub mod elect_master_response_body;
 pub mod epoch_entry_cache;
 pub mod group_list;

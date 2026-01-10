@@ -67,6 +67,7 @@ use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
 use rocketmq_remoting::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
+use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
 use rocketmq_remoting::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
 use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
@@ -2036,6 +2037,32 @@ impl MQClientAPIImpl {
             }
         }
         Ok(Some(config_map))
+    }
+
+    pub async fn get_controller_metadata(
+        &self,
+        controller_address: CheetahString,
+        timeout_millis: Duration,
+    ) -> RocketMQResult<GetMetaDataResponseHeader> {
+        let request = RemotingCommand::create_remoting_command(RequestCode::ControllerGetMetadataInfo);
+        let response = self
+            .remoting_client
+            .invoke_request(
+                Some(&controller_address),
+                request.clone(),
+                timeout_millis.as_millis() as u64,
+            )
+            .await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => match response.decode_command_custom_header_fast::<GetMetaDataResponseHeader>() {
+                Ok(header) => Ok(header),
+                Err(_) => Err(mq_client_err!("Could not decode GetMetaDataResponseHeader".to_string())),
+            },
+            code => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string())
+            )),
+        }
     }
 }
 
