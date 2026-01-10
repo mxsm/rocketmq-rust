@@ -1189,7 +1189,8 @@ impl DefaultMQProducerImpl {
     async fn try_to_find_topic_publish_info(&self, topic: &CheetahString) -> Option<TopicPublishInfo> {
         let mut topic_publish_info = self.topic_publish_info_table.get(topic).map(|v| v.clone());
         if topic_publish_info.is_none() || !topic_publish_info.as_ref().unwrap().ok() {
-            self.topic_publish_info_table.insert(topic.clone(), TopicPublishInfo::new());
+            self.topic_publish_info_table
+                .insert(topic.clone(), TopicPublishInfo::new());
             self.client_instance
                 .as_ref()
                 .unwrap()
@@ -1868,7 +1869,10 @@ impl DefaultMQProducerImpl {
 
 impl MQProducerInner for DefaultMQProducerImpl {
     fn get_publish_topic_list(&self) -> HashSet<CheetahString> {
-        self.topic_publish_info_table.iter().map(|entry| entry.key().clone()).collect()
+        self.topic_publish_info_table
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
     }
 
     fn is_publish_topic_need_update(&self, topic: &CheetahString) -> bool {
@@ -2194,7 +2198,10 @@ impl ServiceDetector for DefaultServiceDetector {
 
 impl DefaultServiceDetector {
     fn pick_topic(&self) -> Option<CheetahString> {
-        self.topic_publish_info_table.iter().next().map(|entry| entry.key().clone())
+        self.topic_publish_info_table
+            .iter()
+            .next()
+            .map(|entry| entry.key().clone())
     }
 }
 
