@@ -321,7 +321,114 @@ impl MQClientInstance {
         Ok(())
     }
 
-    pub async fn shutdown(&mut self) {}
+    pub async fn shutdown(&mut self) {
+        // 1. State check and transition - prevent duplicate shutdown
+        match self.service_state {
+            ServiceState::CreateJust | ServiceState::ShutdownAlready | ServiceState::StartFailed => {
+                warn!(
+                    "MQClientInstance shutdown called but state is {:?}, ignoring shutdown request",
+                    self.service_state
+                );
+                return;
+            }
+            ServiceState::Running => {
+                info!(
+                    "MQClientInstance[{}] shutdown starting, current state: Running",
+                    self.client_id
+                );
+            }
+        }
+
+        // 2. Shutdown rebalance service first to stop new rebalance operations
+        info!("MQClientInstance[{}] shutting down rebalance service", self.client_id);
+        self.rebalance_service.shutdown();
+
+        // 3. Shutdown pull message service to stop message consumption
+        info!(
+            "MQClientInstance[{}] shutting down pull message service",
+            self.client_id
+        );
+        self.pull_message_service.shutdown();
+
+        // 4. Persist consumer offsets after stopping services
+        info!("MQClientInstance[{}] persisting all consumer offsets", self.client_id);
+        self.persist_all_consumer_offset().await;
+
+        // 5. Shutdown default producer first (passing false to avoid recursion)
+        info!("MQClientInstance[{}] shutting down default producer", self.client_id);
+        if let Some(producer_impl) = self.default_producer.default_mqproducer_impl.as_mut() {
+            // Note: We pass false to avoid recursion back to this shutdown method
+            let shutdown_future = producer_impl.shutdown_with_factory(false);
+            if let Err(e) = Box::pin(shutdown_future).await {
+                warn!("Failed to shutdown default producer: {:?}", e);
+            }
+        }
+
+        // 6. Unregister all consumers from broker
+        info!("MQClientInstance[{}] unregistering all consumers", self.client_id);
+        self.unregister_all_consumers().await;
+
+        // 7. Unregister all producers from broker
+        info!("MQClientInstance[{}] unregistering all producers", self.client_id);
+        self.unregister_all_producers().await;
+
+        // 8. Shutdown MQClientAPIImpl (network layer)
+        // Note: MQClientAPIImpl doesn't expose remoting_client shutdown method yet
+        // This can be added as a future enhancement
+        if self.mq_client_api_impl.is_some() {
+            info!(
+                "MQClientInstance[{}] network client shutdown (deferred to Drop)",
+                self.client_id
+            );
+        }
+
+        // 9. Clear all registration tables
+        info!("MQClientInstance[{}] clearing all registration tables", self.client_id);
+        self.producer_table.write().await.clear();
+        self.consumer_table.write().await.clear();
+        self.admin_ext_table.write().await.clear();
+
+        // 10. Clear route and broker tables
+        self.topic_route_table.write().await.clear();
+        self.topic_end_points_table.write().await.clear();
+        self.broker_addr_table.write().await.clear();
+        self.broker_version_table.write().await.clear();
+
+        // 11. Update state to shutdown
+        self.service_state = ServiceState::ShutdownAlready;
+
+        info!("MQClientInstance[{}] shutdown completed successfully", self.client_id);
+    }
+
+    /// Unregister all producers from broker
+    async fn unregister_all_producers(&mut self) {
+        // Get all producer groups before removing from table
+        let producer_groups: Vec<CheetahString> = {
+            let producer_table = self.producer_table.read().await;
+            producer_table.keys().cloned().collect()
+        };
+
+        // Unregister each producer from broker
+        for group in producer_groups {
+            info!("Unregistering producer group: {}", group);
+            self.unregister_client(Some(group.clone()), None).await;
+        }
+    }
+
+    /// Unregister all consumers from broker
+    async fn unregister_all_consumers(&mut self) {
+        // Get all consumer groups before removing from table
+        let consumer_groups: Vec<CheetahString> = {
+            let consumer_table = self.consumer_table.read().await;
+            consumer_table.keys().cloned().collect()
+        };
+
+        // Unregister each consumer from broker
+        for group in consumer_groups {
+            info!("Unregistering consumer group: {}", group);
+            self.unregister_client(None, Some(group.clone())).await;
+        }
+    }
 
     pub async fn register_producer(&mut self, group: &str, producer: MQProducerInnerImpl) -> bool {
         if group.is_empty() {
