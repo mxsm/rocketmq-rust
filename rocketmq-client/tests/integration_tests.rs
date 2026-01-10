@@ -25,7 +25,9 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+use rocketmq_client_rust::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use rocketmq_common::common::message::MessageTrait;
+use rocketmq_common::common::message::message_queue::MessageQueue;
 
 #[test]
 fn test_producer_creation() {
@@ -126,4 +128,94 @@ fn test_cheetah_string_operations() {
     assert_eq!(topic1.as_str(), "topic_1");
     assert_eq!(topic2.as_str(), "topic_2");
     assert_ne!(topic1, topic2);
+}
+
+#[test]
+fn new_has_default_values() {
+    let tpi = TopicPublishInfo::new();
+    assert!(!tpi.order_topic);
+    assert!(!tpi.have_topic_router_info);
+    assert!(tpi.message_queue_list.is_empty());
+    assert!(tpi.topic_route_data.is_none());
+}
+
+#[test]
+fn ok_returns_true_when_non_empty() {
+    let mut tpi = TopicPublishInfo::new();
+    assert!(!tpi.ok());
+    tpi.message_queue_list.push(MessageQueue::from_parts("t", "b", 1));
+    assert!(tpi.ok());
+}
+
+#[test]
+fn select_with_empty_list_returns_none() {
+    let tpi = TopicPublishInfo::new();
+    assert!(tpi.select_one_message_queue_filters(&[]).is_none());
+}
+
+#[test]
+fn select_one_message_queue_returns_item_from_list() {
+    let mut tpi = TopicPublishInfo::new();
+    let mq1 = MessageQueue::from_parts("t", "b1", 1);
+    let mq2 = MessageQueue::from_parts("t", "b2", 2);
+    let mq3 = MessageQueue::from_parts("t", "b3", 3);
+    tpi.message_queue_list = vec![mq1.clone(), mq2.clone(), mq3.clone()];
+    for _ in 0..10 {
+        let out = tpi.select_one_message_queue();
+        assert!(out.is_some());
+        let out = out.unwrap();
+        assert!(out == mq1 || out == mq2 || out == mq3);
+    }
+}
+
+#[test]
+fn select_by_broker_prefers_different_one() {
+    let mut tpi = TopicPublishInfo::new();
+    let mq1 = MessageQueue::from_parts("t", "b1", 1);
+    let mq2 = MessageQueue::from_parts("t", "b2", 2);
+    tpi.message_queue_list = vec![mq1.clone(), mq2.clone()];
+    let last = CheetahString::from("b1");
+    let out = tpi.select_one_message_queue_by_broker(Some(&last));
+    assert!(out.is_some());
+    let out = out.unwrap();
+    assert_ne!(out.get_broker_name(), &last);
+}
+
+#[test]
+fn select_by_broker_falls_back_when_all_same() {
+    let mut tpi = TopicPublishInfo::new();
+    let mq1 = MessageQueue::from_parts("t", "same", 1);
+    let mq2 = MessageQueue::from_parts("t", "same", 2);
+    tpi.message_queue_list = vec![mq1.clone(), mq2.clone()];
+    let last = CheetahString::from("same");
+    let out = tpi.select_one_message_queue_by_broker(Some(&last));
+    assert!(out.is_some());
+    let out = out.unwrap();
+    assert_eq!(out.get_broker_name(), &last);
+}
+
+#[test]
+fn select_with_filters_matches_and_no_match() {
+    let mut tpi = TopicPublishInfo::new();
+    let mq1 = MessageQueue::from_parts("t", "b1", 1);
+    let mq2 = MessageQueue::from_parts("t", "b2", 2);
+    tpi.message_queue_list = vec![mq1.clone(), mq2.clone()];
+
+    let filter_match = |mq: &MessageQueue| mq.get_queue_id() == 2;
+    let out = tpi.select_one_message_queue_filters(&[&filter_match]);
+    assert!(out.is_some());
+    assert_eq!(out.unwrap(), mq2);
+
+    let filter_none = |_: &MessageQueue| false;
+    let out = tpi.select_one_message_queue_filters(&[&filter_none]);
+    assert!(out.is_none());
+}
+
+#[test]
+fn reset_index_does_not_panic_and_selection_works() {
+    let mut tpi = TopicPublishInfo::new();
+    tpi.message_queue_list.push(MessageQueue::from_parts("t", "b", 1));
+    tpi.reset_index();
+    let out = tpi.select_one_message_queue();
+    assert!(out.is_some());
 }
