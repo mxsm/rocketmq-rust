@@ -92,7 +92,7 @@ pub struct DefaultMQProducerImpl {
     producer_config: Arc<ProducerConfig>,
     topic_publish_info_table: Arc<RwLock<HashMap<CheetahString /* topic */, TopicPublishInfo>>>,
     send_message_hook_list: ArcMut<Vec<Box<dyn SendMessageHook>>>,
-    end_transaction_hook_list: Arc<Vec<Box<dyn EndTransactionHook>>>,
+    end_transaction_hook_list: Arc<Vec<Arc<Box<dyn EndTransactionHook>>>>,
     check_forbidden_hook_list: Vec<Arc<Box<dyn CheckForbiddenHook>>>,
     rpc_hook: Option<Arc<dyn RPCHook>>,
     service_state: ServiceState,
@@ -1687,6 +1687,9 @@ impl DefaultMQProducerImpl {
     where
         M: MessageTrait + Send + Sync,
     {
+        // Ensure transactional messages do not support delayed delivery
+        self.ensure_not_delayed_for_transactional(&msg)?;
+
         // ignore DelayTimeLevel parameter
         if msg.get_delay_time_level() != 0 {
             MessageAccessor::clear_property(&mut msg, MessageConst::PROPERTY_DELAY_TIME_LEVEL);
@@ -1824,7 +1827,7 @@ impl DefaultMQProducerImpl {
     }
 
     pub fn do_execute_end_transaction_hook(
-        &mut self,
+        &self,
         msg: &Message,
         msg_id: &CheetahString,
         broker_addr: &CheetahString,
@@ -1846,7 +1849,7 @@ impl DefaultMQProducerImpl {
         self.execute_end_transaction_hook(&end_transaction_context);
     }
 
-    pub fn execute_end_transaction_hook(&self, context: &EndTransactionContext) {
+    pub fn execute_end_transaction_hook<'a>(&self, context: &'a EndTransactionContext<'a>) {
         if self.has_end_transaction_hook() {
             for hook in self.end_transaction_hook_list.iter() {
                 hook.end_transaction(context);
@@ -2053,12 +2056,70 @@ impl DefaultMQProducerImpl {
         Ok(())
     }
 
-    pub fn register_end_transaction_hook(&mut self, hook: impl EndTransactionHook) {
-        todo!()
+    /// Shutdown the producer gracefully
+    pub async fn shutdown(&mut self) -> rocketmq_error::RocketMQResult<()> {
+        self.shutdown_with_factory(true).await
     }
 
-    pub fn register_send_message_hook(&mut self, hook: impl SendMessageHook) {
-        todo!()
+    /// Shutdown the producer with option to shutdown factory
+    pub async fn shutdown_with_factory(&mut self, shutdown_factory: bool) -> rocketmq_error::RocketMQResult<()> {
+        match self.service_state {
+            ServiceState::CreateJust => {
+                // Not started, nothing to do
+                Ok(())
+            }
+            ServiceState::Running => {
+                // 1. Unregister producer from client instance
+                if let Some(client_instance) = self.client_instance.as_mut() {
+                    client_instance
+                        .unregister_producer(self.producer_config.producer_group())
+                        .await;
+                }
+
+                // 2. Shutdown async sender executor
+                // Note: We don't explicitly shutdown the runtime as it might be shared
+                // The runtime will be cleaned up when all references are dropped
+
+                // 3. Stop fault strategy detector
+                self.mq_fault_strategy.shutdown();
+
+                // 4. Shutdown client factory if requested
+                if shutdown_factory {
+                    if let Some(client_instance) = self.client_instance.as_mut() {
+                        client_instance.shutdown().await;
+                    }
+                }
+
+                // 5. Update state
+                self.service_state = ServiceState::ShutdownAlready;
+
+                tracing::info!("The producer [{}] shutdown OK", self.producer_config.producer_group());
+                Ok(())
+            }
+            ServiceState::ShutdownAlready => {
+                // Already shutdown, idempotent
+                Ok(())
+            }
+            ServiceState::StartFailed => Err(mq_client_err!(
+                "The producer service state is StartFailed, cannot shutdown properly"
+            )),
+        }
+    }
+
+    pub fn register_end_transaction_hook(&mut self, hook: Arc<Box<dyn EndTransactionHook>>) {
+        Arc::make_mut(&mut self.end_transaction_hook_list).push(hook);
+        tracing::info!(
+            "register endTransaction Hook, total hooks: {}",
+            self.end_transaction_hook_list.len()
+        );
+    }
+
+    pub fn register_send_message_hook(&mut self, hook: Box<dyn SendMessageHook>) {
+        self.send_message_hook_list.push(hook);
+        tracing::info!(
+            "register sendMessage Hook, total hooks: {}",
+            self.send_message_hook_list.len()
+        );
     }
 
     #[inline]
@@ -2095,6 +2156,29 @@ impl DefaultMQProducerImpl {
         self.mq_fault_strategy
             .set_send_latency_fault_enable(send_latency_fault_enable);
     }
+
+    /// Ensure transactional messages do not support delayed delivery
+    fn ensure_not_delayed_for_transactional<M>(&self, msg: &M) -> rocketmq_error::RocketMQResult<()>
+    where
+        M: MessageTrait,
+    {
+        if msg
+            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL))
+            .is_some()
+            || msg
+                .get_property(&CheetahString::from_static_str("TIMER_DELAY_MS"))
+                .is_some()
+            || msg
+                .get_property(&CheetahString::from_static_str("TIMER_DELAY_SEC"))
+                .is_some()
+            || msg
+                .get_property(&CheetahString::from_static_str("TIMER_DELIVER_MS"))
+                .is_some()
+        {
+            return Err(mq_client_err!("Transactional messages do not support delayed delivery"));
+        }
+        Ok(())
+    }
 }
 
 pub(crate) struct DefaultServiceDetector {
@@ -2104,7 +2188,53 @@ pub(crate) struct DefaultServiceDetector {
 
 impl ServiceDetector for DefaultServiceDetector {
     fn detect(&self, endpoint: &str, timeout_millis: u64) -> bool {
-        unimplemented!("detect")
+        // Pick a topic to use for detection
+        let topic = match self.pick_topic() {
+            Some(t) => t,
+            None => return false,
+        };
+
+        // Use a blocking approach to detect broker availability
+        let client_instance = self.client_instance.clone();
+        let endpoint = endpoint.to_string();
+
+        // Spawn a blocking task to perform the detection
+        let handle = Handle::current();
+        let result = thread::spawn(move || {
+            handle.block_on(async move {
+                // Create a message queue for the detection request
+                let mq = MessageQueue::from_parts(topic.as_str(), "", 0);
+
+                // Try to get max offset from the broker with timeout
+                matches!(
+                    tokio::time::timeout(Duration::from_millis(timeout_millis), async {
+                        client_instance.mq_client_api_impl.as_ref()
+                    },)
+                    .await,
+                    Ok(Some(_))
+                )
+            })
+        })
+        .join();
+
+        result.unwrap_or(false)
+    }
+}
+
+impl DefaultServiceDetector {
+    fn pick_topic(&self) -> Option<CheetahString> {
+        let handle = Handle::current();
+        let table = self.topic_publish_info_table.clone();
+
+        thread::spawn(move || {
+            handle.block_on(async move {
+                let read_guard = table.read().await;
+                read_guard.iter().next().map(|(k, _)| k.clone())
+            })
+        })
+        .join()
+        .ok()
+        .flatten()
     }
 }
 
