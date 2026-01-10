@@ -16,7 +16,6 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -2169,30 +2168,10 @@ impl ServiceDetector for DefaultServiceDetector {
             None => return false,
         };
 
-        // Use a blocking approach to detect broker availability
-        let client_instance = self.client_instance.clone();
-        let endpoint = endpoint.to_string();
-
-        // Spawn a blocking task to perform the detection
+        // Execute async detection directly using Handle::block_on
+        // This avoids the overhead of thread::spawn and potential runtime conflicts
         let handle = Handle::current();
-        let result = thread::spawn(move || {
-            handle.block_on(async move {
-                // Create a message queue for the detection request
-                let mq = MessageQueue::from_parts(topic.as_str(), "", 0);
-
-                // Try to get max offset from the broker with timeout
-                matches!(
-                    tokio::time::timeout(Duration::from_millis(timeout_millis), async {
-                        client_instance.mq_client_api_impl.as_ref()
-                    },)
-                    .await,
-                    Ok(Some(_))
-                )
-            })
-        })
-        .join();
-
-        result.unwrap_or(false)
+        handle.block_on(async { self.detect_async(endpoint, timeout_millis, &topic).await })
     }
 }
 
@@ -2202,6 +2181,33 @@ impl DefaultServiceDetector {
             .iter()
             .next()
             .map(|entry| entry.key().clone())
+    }
+
+    /// Async implementation of broker availability detection
+    ///
+    /// Sends a lightweight request to the broker to check if it's reachable and responsive.
+    /// Uses timeout to prevent hanging indefinitely.
+    async fn detect_async(&self, endpoint: &str, timeout_millis: u64, topic: &CheetahString) -> bool {
+        // Create a message queue for the detection request
+        let mq = MessageQueue::from_parts(topic.as_str(), endpoint, 0);
+
+        // Clone the client instance to get mutable access
+        let mut client_instance = self.client_instance.clone();
+
+        // Try to get max offset from the broker with timeout
+        // This is a lightweight operation that verifies broker connectivity
+        let result = tokio::time::timeout(Duration::from_millis(timeout_millis), async move {
+            match client_instance.mq_client_api_impl.as_mut() {
+                Some(api) => {
+                    // Attempt to get max offset - if this succeeds, broker is healthy
+                    api.get_max_offset(endpoint, &mq, timeout_millis).await.is_ok()
+                }
+                None => false,
+            }
+        })
+        .await;
+
+        matches!(result, Ok(true))
     }
 }
 
