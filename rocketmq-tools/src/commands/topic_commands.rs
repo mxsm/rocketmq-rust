@@ -21,6 +21,7 @@ mod topic_route_sub_command;
 mod topic_status_sub_command;
 mod update_order_conf_command;
 mod update_static_topic_sub_command;
+mod update_topic_list_sub_command;
 mod update_topic_perm_sub_command;
 mod update_topic_sub_command;
 use std::sync::Arc;
@@ -111,6 +112,12 @@ more memory space, you can use this command to allocate it."#
         long_about = r#"Update or create topic with specified configuration."#
     )]
     UpdateTopic(update_topic_sub_command::UpdateTopicSubCommand),
+    #[command(
+        name = "updateTopicList",
+        about = "Update topic list",
+        long_about = "Update topic list with specified configuration."
+    )]
+    UpdateTopicList(update_topic_list_sub_command::UpdateTopicListSubCommand),
 }
 
 impl CommandExecute for TopicCommands {
@@ -127,6 +134,7 @@ impl CommandExecute for TopicCommands {
             TopicCommands::UpdateStaticTopic(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::UpdateTopicPerm(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::UpdateTopic(cmd) => cmd.execute(rpc_hook).await,
+            TopicCommands::UpdateTopicList(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }
