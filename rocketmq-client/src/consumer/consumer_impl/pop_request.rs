@@ -34,7 +34,7 @@ pub struct PopRequest {
 
 impl PopRequest {
     #[inline]
-    pub fn new(
+    pub(crate) fn new(
         topic: CheetahString,
         consumer_group: CheetahString,
         message_queue: MessageQueue,
@@ -92,12 +92,12 @@ impl PopRequest {
     }
 
     #[inline]
-    pub fn get_pop_process_queue(&self) -> &PopProcessQueue {
+    pub(crate) fn get_pop_process_queue(&self) -> &PopProcessQueue {
         &self.pop_process_queue
     }
 
     #[inline]
-    pub fn set_pop_process_queue(&mut self, pop_process_queue: PopProcessQueue) {
+    pub(crate) fn set_pop_process_queue(&mut self, pop_process_queue: PopProcessQueue) {
         self.pop_process_queue = pop_process_queue;
     }
 
