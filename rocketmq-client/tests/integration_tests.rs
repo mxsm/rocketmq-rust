@@ -26,8 +26,8 @@ use std::time::Duration;
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::producer_impl::topic_publish_info::TopicPublishInfo;
-use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::message::MessageTrait;
 
 #[test]
 fn test_producer_creation() {
