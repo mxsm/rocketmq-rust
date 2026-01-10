@@ -42,7 +42,7 @@ pub struct ProduceAccumulator {
     hold_ms: u32,
     guard_thread_for_sync_send: GuardForSyncSendService,
     guard_thread_for_async_send: GuardForAsyncSendService,
-    currently_hold_size: AtomicU64,
+    currently_hold_size: Arc<AtomicU64>,
     instance_name: String,
     currently_hold_size_lock: Arc<parking_lot::Mutex<()>>,
     sync_send_batchs: Arc<DashMap<AggregateKey, Arc<Mutex<MessageAccumulation>>>>,
@@ -75,8 +75,12 @@ impl ProduceAccumulator {
     pub fn start(&mut self) {
         self.guard_thread_for_sync_send
             .start(self.sync_send_batchs.clone(), self.hold_ms);
-        self.guard_thread_for_async_send
-            .start(self.async_send_batchs.clone(), self.hold_size, self.hold_ms);
+        self.guard_thread_for_async_send.start(
+            self.async_send_batchs.clone(),
+            self.currently_hold_size.clone(),
+            self.hold_size,
+            self.hold_ms,
+        );
     }
     pub fn shutdown(&mut self) {
         self.guard_thread_for_sync_send.shutdown();
@@ -597,6 +601,7 @@ impl GuardForAsyncSendService {
     pub fn start(
         &mut self,
         batches: Arc<DashMap<AggregateKey, Arc<Mutex<MessageAccumulation>>>>,
+        currently_hold_size: Arc<AtomicU64>,
         hold_size: usize,
         hold_ms: u32,
     ) {
@@ -612,41 +617,56 @@ impl GuardForAsyncSendService {
             while !stopped.load(Ordering::Acquire) {
                 interval.tick().await;
 
-                // Process batches - DashMap provides concurrent access
-                // Collect ready batches
-                let mut to_send = Vec::new();
+                // Collect keys of ready batches (without holding locks during iteration)
+                let mut ready_keys = Vec::new();
                 for item in batches.iter() {
                     let key = item.key();
                     let batch = item.value();
-                    let batch_guard = batch.lock().await;
-                    if batch_guard.ready_to_send(hold_size, hold_ms as u64) {
-                        to_send.push(key.clone());
+
+                    // Quick check without locking first
+                    let should_check = {
+                        let batch_guard = batch.lock().await;
+                        let is_closed = batch_guard.closed.load(Ordering::Acquire);
+                        !is_closed && batch_guard.ready_to_send(hold_size, hold_ms as u64)
+                    };
+
+                    if should_check {
+                        ready_keys.push(key.clone());
                     }
                 }
 
-                // Remove ready batches (they will be sent by main logic)
-                for key in to_send {
+                // Send ready batches
+                for key in ready_keys {
                     if let Some((_, batch)) = batches.remove(&key) {
+                        // Send the batch asynchronously
+                        if let Err(e) = Self::send_batch_async_internal(batch, currently_hold_size.clone()).await {
+                            tracing::error!("Failed to send batch via guard thread: {:?}", e);
+                        }
+                    }
+                }
+
+                // Collect empty batches to remove
+                let mut empty_keys = Vec::new();
+                for item in batches.iter() {
+                    let key = item.key();
+                    let batch = item.value();
+
+                    let is_empty = {
                         let batch_guard = batch.lock().await;
-                        tracing::debug!("Batch ready to send via guard thread");
+                        batch_guard.messages_size.load(Ordering::Acquire) == 0
+                    };
+
+                    if is_empty {
+                        empty_keys.push(key.clone());
                     }
                 }
 
                 // Remove empty batches
-                let mut to_remove_empty = Vec::new();
-                for item in batches.iter() {
-                    let key = item.key();
-                    let batch = item.value();
-                    let batch_guard = batch.lock().await;
-                    let messages_size = batch_guard.messages_size.load(Ordering::Acquire);
-                    if messages_size == 0 {
+                for key in empty_keys {
+                    if let Some((_, batch)) = batches.remove(&key) {
+                        let batch_guard = batch.lock().await;
                         batch_guard.closed.store(true, Ordering::Release);
-                        to_remove_empty.push(key.clone());
                     }
-                }
-
-                for key in to_remove_empty {
-                    batches.remove(&key);
                 }
             }
 
@@ -654,6 +674,67 @@ impl GuardForAsyncSendService {
         });
 
         self.task_handle = Some(task_handle);
+    }
+
+    /// Internal method to send batch (used by guard thread)
+    async fn send_batch_async_internal(
+        batch: Arc<Mutex<MessageAccumulation>>,
+        currently_hold_size: Arc<AtomicU64>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        // Extract all data from the batch without holding the lock across await
+        let (messages, mq, mut producer, total_size, callbacks) = {
+            let mut batch_guard = batch.lock().await;
+            batch_guard.closed.store(true, Ordering::Release);
+
+            if batch_guard.messages.is_empty() {
+                return Err(crate::mq_client_err!("No messages to send"));
+            }
+
+            let total_size = batch_guard.messages_size.load(Ordering::Acquire) as u64;
+            let messages = std::mem::take(&mut batch_guard.messages);
+            let callbacks = std::mem::take(&mut batch_guard.send_callbacks);
+            let mq = batch_guard.aggregate_key.mq.clone();
+            let producer = batch_guard.default_mq_producer.clone();
+
+            (messages, mq, producer, total_size, callbacks)
+        }; // Lock released here
+
+        // Convert to MessageBatch
+        let mut concrete_messages = Vec::new();
+        for boxed_msg in messages {
+            if let Some(msg) = boxed_msg.as_any().downcast_ref::<Message>() {
+                concrete_messages.push(msg.clone());
+            } else {
+                let mut msg = Message::default();
+                msg.set_topic(boxed_msg.get_topic().clone());
+                if let Some(body) = boxed_msg.get_body() {
+                    msg.set_body(body.clone());
+                }
+                msg.set_flag(boxed_msg.get_flag());
+                msg.set_properties(boxed_msg.get_properties().clone());
+                concrete_messages.push(msg);
+            }
+        }
+
+        let batch_msg =
+            rocketmq_common::common::message::message_batch::MessageBatch::generate_from_vec(concrete_messages)?;
+
+        // Create combined callback
+        let combined_callback = move |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
+            for callback in &callbacks {
+                callback(result, error);
+            }
+        };
+
+        // Send without holding any locks
+        let send_result = producer
+            .send_direct(batch_msg, mq, Some(Arc::new(combined_callback)))
+            .await;
+
+        // Always decrement currently_hold_size (even on error)
+        currently_hold_size.fetch_sub(total_size, Ordering::AcqRel);
+
+        send_result.map(|_| ())
     }
 
     pub fn shutdown(&mut self) {
