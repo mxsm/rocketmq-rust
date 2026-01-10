@@ -175,7 +175,7 @@ mod tests {
     /// Test with various broker versions
     #[test]
     fn test_find_broker_result_broker_versions() {
-        let versions = vec![0, 1, 100, 500, 999, i32::MAX];
+        let versions = [0, 1, 100, 500, 999, i32::MAX];
 
         for version in versions {
             let result = FindBrokerResult {
@@ -222,7 +222,7 @@ mod tests {
     /// Test with different address formats
     #[test]
     fn test_find_broker_result_address_formats() {
-        let addresses = vec![
+        let addresses = [
             "127.0.0.1:10911",
             "192.168.1.100:10911",
             "broker.example.com:10911",
