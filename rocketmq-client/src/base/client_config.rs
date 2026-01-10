@@ -539,6 +539,7 @@ impl ClientConfig {
     // ============ Utility Methods ============
 
     /// Clones the configuration
+    #[inline]
     pub fn clone_client_config(&self) -> Self {
         self.clone()
     }

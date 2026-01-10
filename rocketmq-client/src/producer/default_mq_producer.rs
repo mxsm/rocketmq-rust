@@ -608,8 +608,10 @@ impl MQProducer for DefaultMQProducer {
             let dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>> = Arc::new(Box::new(dispatcher));
             self.producer_config.trace_dispatcher = Some(dispatcher.clone());
             let default_mqproducer_impl = self.default_mqproducer_impl.as_mut().unwrap();
-            default_mqproducer_impl.register_send_message_hook(SendMessageTraceHookImpl::new(dispatcher.clone()));
-            default_mqproducer_impl.register_end_transaction_hook(EndTransactionTraceHookImpl::new(dispatcher))
+            default_mqproducer_impl
+                .register_send_message_hook(Box::new(SendMessageTraceHookImpl::new(dispatcher.clone())));
+            default_mqproducer_impl
+                .register_end_transaction_hook(Arc::new(Box::new(EndTransactionTraceHookImpl::new(dispatcher))))
         }
 
         if let Some(ref mut trace_dispatcher) = self.producer_config.trace_dispatcher {
@@ -649,19 +651,21 @@ impl MQProducer for DefaultMQProducer {
         }
     }
 
-    async fn send_with_timeout<M>(&mut self, mut msg: M, timeout: u64) -> rocketmq_error::RocketMQResult<SendResult>
+    async fn send_with_timeout<M>(
+        &mut self,
+        mut msg: M,
+        timeout: u64,
+    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
     {
         let topic_build = self.with_namespace(msg.get_topic().as_str());
         msg.set_topic(topic_build);
-        let result = self
-            .default_mqproducer_impl
+        self.default_mqproducer_impl
             .as_mut()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
             .send_with_timeout(&mut msg, timeout)
-            .await?;
-        Ok(result.expect("SendResult should not be None"))
+            .await
     }
 
     async fn send_with_callback<M, F>(&mut self, mut msg: M, send_callback: F) -> rocketmq_error::RocketMQResult<()>
@@ -811,7 +815,7 @@ impl MQProducer for DefaultMQProducer {
         mut msg: M,
         selector: S,
         arg: T,
-    ) -> rocketmq_error::RocketMQResult<SendResult>
+    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
         S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue> + Send + Sync + 'static,
@@ -830,13 +834,11 @@ impl MQProducer for DefaultMQProducer {
             )
             .await?;
         let mq = self.client_config.queue_with_namespace(mq);
-        let result = if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
+        if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
             self.send_by_accumulator(msg, Some(mq), None).await
         } else {
             self.send_direct(msg, Some(mq), None).await
-        }?;
-
-        Ok(result.expect("SendResult should not be None"))
+        }
     }
 
     async fn send_with_selector_timeout<M, S, T>(

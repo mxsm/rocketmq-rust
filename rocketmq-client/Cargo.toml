@@ -39,6 +39,14 @@ dashmap     = { workspace = true }
 
 futures        = { workspace = true }
 cheetah-string = { workspace = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+[[bench]]
+name = "produce_accumulator_benchmark"
+harness = false
+
 [[example]]
 name = "simple-producer"
 path = "examples/producer/simple_producer.rs"

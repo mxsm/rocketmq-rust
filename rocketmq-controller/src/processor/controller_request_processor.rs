@@ -94,12 +94,15 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
+use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
+use tracing::info;
+use tracing::warn;
 // Note: These types need to be implemented in their respective modules
 // Placeholder imports that need actual implementation:
 // - SyncStateSet in rocketmq-remoting::protocol::body
@@ -477,7 +480,11 @@ impl ControllerRequestProcessor {
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        unimplemented!("unimplemented handle_get_controller_config")
+        let controller_config = self.controller_manager.controller_config();
+        let config_string = controller_config.to_properties_string();
+
+        let response = RemotingCommand::create_response_command().set_body(config_string.into_bytes());
+        Ok(Some(response))
     }
 
     /// Handle CLEAN_BROKER_DATA request
@@ -527,6 +534,22 @@ impl ControllerRequestProcessor {
     /// Handle APPLY_BROKER_ID request
     ///
     /// Applies for a specific broker ID (for broker restart or migration).
+    /// This operation requires Raft consensus to reserve/allocate the ID.
+    ///
+    /// # Request Flow
+    ///
+    /// 1. Decode ApplyBrokerIdRequestHeader from request
+    /// 2. Validate requested broker ID (must be non-negative)
+    /// 3. Validate cluster_name and broker_name are not empty
+    /// 4. Forward to controller.apply_broker_id() for Raft consensus
+    /// 5. Return response indicating success or rejection
+    ///
+    /// # Use Cases
+    ///
+    /// - Broker restart: Broker reclaims its previous ID
+    /// - Broker migration: New instance takes over old broker's ID
+    /// - Disaster recovery: Restoring broker from backup with known ID
+    /// - Pre-planned topology: Admin assigns specific IDs
     ///
     /// # Arguments
     ///
@@ -537,13 +560,104 @@ impl ControllerRequestProcessor {
     /// # Returns
     ///
     /// Result containing approval or rejection
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - Request header decoding fails
+    /// - Invalid broker ID (negative value)
+    /// - Empty cluster_name or broker_name
+    /// - ID is already in use by another active broker
+    /// - Controller is not the leader
+    /// - Raft consensus fails
     async fn handle_apply_broker_id(
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
-        _request: &mut RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        unimplemented!("unimplemented handle_apply_broker_id")
+        // Decode request header
+        let request_header = request
+            .decode_command_custom_header::<ApplyBrokerIdRequestHeader>()
+            .map_err(|e| {
+                warn!("Failed to decode ApplyBrokerIdRequestHeader: {:?}", e);
+                RocketMQError::request_header_error(format!("Failed to decode ApplyBrokerIdRequestHeader: {:?}", e))
+            })?;
+
+        info!(
+            "Received ApplyBrokerId request: cluster={}, broker={}, broker_id={}",
+            request_header.cluster_name, request_header.broker_name, request_header.applied_broker_id
+        );
+
+        // Validate cluster_name is not empty
+        if request_header.cluster_name.is_empty() {
+            warn!("ApplyBrokerId request rejected: cluster_name is empty");
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::ControllerInvalidRequest,
+                "cluster_name cannot be empty".to_string(),
+            )));
+        }
+
+        // Validate broker_name is not empty
+        if request_header.broker_name.is_empty() {
+            warn!("ApplyBrokerId request rejected: broker_name is empty");
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::ControllerInvalidRequest,
+                "broker_name cannot be empty".to_string(),
+            )));
+        }
+
+        // Validate requested broker ID is non-negative
+        if request_header.applied_broker_id < 0 {
+            warn!(
+                "ApplyBrokerId request rejected: invalid broker_id={} for broker={}",
+                request_header.applied_broker_id, request_header.broker_name
+            );
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::ControllerBrokerIdInvalid,
+                format!(
+                    "Invalid broker ID: {}. Broker ID must be non-negative.",
+                    request_header.applied_broker_id
+                ),
+            )));
+        }
+
+        // Forward to controller for Raft consensus
+        let result = self
+            .controller_manager
+            .controller()
+            .apply_broker_id(&request_header)
+            .await;
+
+        match &result {
+            Ok(Some(response)) => {
+                if response.code() == ResponseCode::Success as i32 {
+                    info!(
+                        "ApplyBrokerId succeeded: broker={} applied broker_id={}",
+                        request_header.broker_name, request_header.applied_broker_id
+                    );
+                } else {
+                    warn!(
+                        "ApplyBrokerId failed: broker={}, broker_id={}, code={}, remark={:?}",
+                        request_header.broker_name,
+                        request_header.applied_broker_id,
+                        response.code(),
+                        response.remark()
+                    );
+                }
+            }
+            Ok(None) => {
+                warn!(
+                    "ApplyBrokerId returned no response for broker={}",
+                    request_header.broker_name
+                );
+            }
+            Err(e) => {
+                warn!("ApplyBrokerId error for broker={}: {:?}", request_header.broker_name, e);
+            }
+        }
+
+        result
     }
 
     /// Handle REGISTER_BROKER request
@@ -605,6 +719,7 @@ impl RequestProcessor for ControllerRequestProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cheetah_string::CheetahString;
 
     #[test]
     fn test_config_blacklist() {
@@ -618,5 +733,79 @@ mod tests {
         assert!(blacklist.contains("configBlackList"));
         assert!(blacklist.contains("configStorePath"));
         assert!(blacklist.contains("rocketmqHome"));
+    }
+
+    #[test]
+    fn test_apply_broker_id_request_header_validation() {
+        // Test that ApplyBrokerIdRequestHeader can be created properly
+        let header = ApplyBrokerIdRequestHeader {
+            cluster_name: CheetahString::from_static_str("test_cluster"),
+            broker_name: CheetahString::from_static_str("test_broker"),
+            applied_broker_id: 1,
+            register_check_code: CheetahString::from_static_str("check_code_123"),
+        };
+
+        assert_eq!(header.cluster_name.as_str(), "test_cluster");
+        assert_eq!(header.broker_name.as_str(), "test_broker");
+        assert_eq!(header.applied_broker_id, 1);
+        assert_eq!(header.register_check_code.as_str(), "check_code_123");
+    }
+
+    #[test]
+    fn test_apply_broker_id_request_header_with_zero_id() {
+        // Test with broker ID 0 (master)
+        let header = ApplyBrokerIdRequestHeader {
+            cluster_name: CheetahString::from_static_str("production"),
+            broker_name: CheetahString::from_static_str("broker-group-1"),
+            applied_broker_id: 0,
+            register_check_code: CheetahString::from_static_str("master_check"),
+        };
+
+        assert_eq!(header.applied_broker_id, 0);
+        // Broker ID 0 is valid (represents master)
+        assert!(header.applied_broker_id >= 0);
+    }
+
+    #[test]
+    fn test_apply_broker_id_request_header_with_negative_id() {
+        // Test with negative broker ID (should be invalid)
+        let header = ApplyBrokerIdRequestHeader {
+            cluster_name: CheetahString::from_static_str("test"),
+            broker_name: CheetahString::from_static_str("broker"),
+            applied_broker_id: -1,
+            register_check_code: CheetahString::from_static_str(""),
+        };
+
+        // Negative ID should be rejected
+        assert!(header.applied_broker_id < 0);
+    }
+
+    #[test]
+    fn test_apply_broker_id_request_header_empty_fields() {
+        // Test with empty cluster_name and broker_name
+        let header = ApplyBrokerIdRequestHeader {
+            cluster_name: CheetahString::from_static_str(""),
+            broker_name: CheetahString::from_static_str(""),
+            applied_broker_id: 1,
+            register_check_code: CheetahString::from_static_str(""),
+        };
+
+        // Empty fields should be rejected in handler
+        assert!(header.cluster_name.is_empty());
+        assert!(header.broker_name.is_empty());
+    }
+
+    #[test]
+    fn test_apply_broker_id_request_header_large_broker_id() {
+        // Test with large broker ID
+        let header = ApplyBrokerIdRequestHeader {
+            cluster_name: CheetahString::from_static_str("cluster"),
+            broker_name: CheetahString::from_static_str("broker"),
+            applied_broker_id: i64::MAX,
+            register_check_code: CheetahString::from_static_str(""),
+        };
+
+        assert_eq!(header.applied_broker_id, i64::MAX);
+        assert!(header.applied_broker_id > 0);
     }
 }

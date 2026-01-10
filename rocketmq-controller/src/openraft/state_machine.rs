@@ -193,6 +193,68 @@ impl StateMachine {
                 self.topics.insert(topic_name.clone(), config);
                 ControllerResponse::Success
             }
+            ControllerRequest::ApplyBrokerId {
+                cluster_name,
+                broker_name,
+                broker_addr,
+                applied_broker_id,
+                register_check_code: _,
+            } => {
+                if let Some(existing_broker) = self.brokers.get(broker_name) {
+                    if existing_broker.broker_id == *applied_broker_id {
+                        return ControllerResponse::ApplyBrokerId {
+                            success: true,
+                            error: None,
+                            cluster_name: cluster_name.clone(),
+                            broker_name: broker_name.clone(),
+                        };
+                    }
+                }
+
+                let id_in_use = self
+                    .brokers
+                    .iter()
+                    .any(|entry| entry.value().broker_id == *applied_broker_id && entry.key() != broker_name);
+
+                if id_in_use {
+                    return ControllerResponse::ApplyBrokerId {
+                        success: false,
+                        error: Some(format!(
+                            "Broker ID {} is already in use by another broker",
+                            applied_broker_id
+                        )),
+                        cluster_name: cluster_name.clone(),
+                        broker_name: broker_name.clone(),
+                    };
+                }
+
+                let metadata = BrokerMetadata {
+                    broker_name: broker_name.clone(),
+                    broker_addr: broker_addr.clone(),
+                    broker_id: *applied_broker_id,
+                    cluster_name: cluster_name.clone(),
+                    epoch: 0,
+                    max_offset: 0,
+                    election_priority: 0,
+                    last_heartbeat: chrono::Utc::now().timestamp_millis(),
+                };
+
+                self.brokers.insert(broker_name.clone(), metadata);
+
+                tracing::info!(
+                    "Applied broker ID {} to broker {} in cluster {}",
+                    applied_broker_id,
+                    broker_name,
+                    cluster_name
+                );
+
+                ControllerResponse::ApplyBrokerId {
+                    success: true,
+                    error: None,
+                    cluster_name: cluster_name.clone(),
+                    broker_name: broker_name.clone(),
+                }
+            }
         }
     }
 
@@ -370,5 +432,160 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
         // For simplicity, we don't keep snapshots in memory
         // In production, you might want to cache the last snapshot
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_apply_broker_id_success() {
+        let sm = StateMachine::new();
+
+        let request = ControllerRequest::ApplyBrokerId {
+            cluster_name: "test_cluster".to_string(),
+            broker_name: "broker-1".to_string(),
+            broker_addr: "127.0.0.1:10911".to_string(),
+            applied_broker_id: 1,
+            register_check_code: "check123".to_string(),
+        };
+
+        let response = sm.apply_request(&request);
+
+        match response {
+            ControllerResponse::ApplyBrokerId {
+                success,
+                error,
+                cluster_name,
+                broker_name,
+            } => {
+                assert!(success, "Should succeed for new broker");
+                assert!(error.is_none(), "Should have no error");
+                assert_eq!(cluster_name, "test_cluster");
+                assert_eq!(broker_name, "broker-1");
+            }
+            _ => panic!("Expected ApplyBrokerId response"),
+        }
+
+        let broker = sm.get_broker("broker-1");
+        assert!(broker.is_some());
+        let broker = broker.unwrap();
+        assert_eq!(broker.broker_id, 1);
+        assert_eq!(broker.cluster_name, "test_cluster");
+    }
+
+    #[test]
+    fn test_apply_broker_id_idempotent() {
+        let sm = StateMachine::new();
+
+        let request = ControllerRequest::ApplyBrokerId {
+            cluster_name: "test_cluster".to_string(),
+            broker_name: "broker-1".to_string(),
+            broker_addr: "127.0.0.1:10911".to_string(),
+            applied_broker_id: 1,
+            register_check_code: "check123".to_string(),
+        };
+
+        sm.apply_request(&request);
+
+        let response = sm.apply_request(&request);
+
+        match response {
+            ControllerResponse::ApplyBrokerId { success, .. } => {
+                assert!(success, "Should succeed for idempotent request");
+            }
+            _ => panic!("Expected ApplyBrokerId response"),
+        }
+    }
+
+    #[test]
+    fn test_apply_broker_id_conflict() {
+        let sm = StateMachine::new();
+
+        let request1 = ControllerRequest::ApplyBrokerId {
+            cluster_name: "test_cluster".to_string(),
+            broker_name: "broker-1".to_string(),
+            broker_addr: "127.0.0.1:10911".to_string(),
+            applied_broker_id: 1,
+            register_check_code: "check1".to_string(),
+        };
+        sm.apply_request(&request1);
+
+        let request2 = ControllerRequest::ApplyBrokerId {
+            cluster_name: "test_cluster".to_string(),
+            broker_name: "broker-2".to_string(),
+            broker_addr: "127.0.0.1:10912".to_string(),
+            applied_broker_id: 1,
+            register_check_code: "check2".to_string(),
+        };
+        let response = sm.apply_request(&request2);
+
+        match response {
+            ControllerResponse::ApplyBrokerId { success, error, .. } => {
+                assert!(!success, "Should fail for conflicting ID");
+                assert!(error.is_some(), "Should have error message");
+                assert!(error.unwrap().contains("already in use"));
+            }
+            _ => panic!("Expected ApplyBrokerId response"),
+        }
+    }
+
+    #[test]
+    fn test_apply_broker_id_master() {
+        let sm = StateMachine::new();
+
+        let request = ControllerRequest::ApplyBrokerId {
+            cluster_name: "production".to_string(),
+            broker_name: "broker-master".to_string(),
+            broker_addr: "127.0.0.1:10911".to_string(),
+            applied_broker_id: 0,
+            register_check_code: "master_code".to_string(),
+        };
+
+        let response = sm.apply_request(&request);
+
+        match response {
+            ControllerResponse::ApplyBrokerId { success, .. } => {
+                assert!(success, "Should succeed for master broker ID 0");
+            }
+            _ => panic!("Expected ApplyBrokerId response"),
+        }
+
+        let broker = sm.get_broker("broker-master").unwrap();
+        assert_eq!(broker.broker_id, 0);
+    }
+
+    #[test]
+    fn test_apply_broker_id_different_brokers_different_ids() {
+        let sm = StateMachine::new();
+
+        let request1 = ControllerRequest::ApplyBrokerId {
+            cluster_name: "cluster".to_string(),
+            broker_name: "broker-1".to_string(),
+            broker_addr: "127.0.0.1:10911".to_string(),
+            applied_broker_id: 1,
+            register_check_code: "".to_string(),
+        };
+        sm.apply_request(&request1);
+
+        let request2 = ControllerRequest::ApplyBrokerId {
+            cluster_name: "cluster".to_string(),
+            broker_name: "broker-2".to_string(),
+            broker_addr: "127.0.0.1:10912".to_string(),
+            applied_broker_id: 2,
+            register_check_code: "".to_string(),
+        };
+        let response = sm.apply_request(&request2);
+
+        match response {
+            ControllerResponse::ApplyBrokerId { success, .. } => {
+                assert!(success, "Different brokers should get different IDs");
+            }
+            _ => panic!("Expected ApplyBrokerId response"),
+        }
+
+        assert_eq!(sm.get_broker("broker-1").unwrap().broker_id, 1);
+        assert_eq!(sm.get_broker("broker-2").unwrap().broker_id, 2);
     }
 }
