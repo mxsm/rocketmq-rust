@@ -47,6 +47,10 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 name = "produce_accumulator_benchmark"
 harness = false
 
+[[bench]]
+name = "concurrent_optimization_benchmark"
+harness = false
+
 [[example]]
 name = "simple-producer"
 path = "examples/producer/simple_producer.rs"
