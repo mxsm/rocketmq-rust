@@ -74,8 +74,14 @@ impl MQFaultStrategy {
         self.latency_fault_tolerance.set_service_detector(service_detector);
     }
 
+    pub fn shutdown(&mut self) {
+        // Stop the detector if it's running
+        self.latency_fault_tolerance.shutdown();
+        tracing::info!("MQFaultStrategy shutdown");
+    }
+
     pub fn is_start_detector_enable(&self) -> bool {
-        unimplemented!("not implemented")
+        self.start_detector_enable.load(Ordering::Relaxed)
     }
 
     pub fn select_one_message_queue(
