@@ -22,6 +22,12 @@
 
 use std::sync::Arc;
 
+use crate::controller::Controller;
+use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
+use crate::openraft::GrpcRaftService;
+use crate::openraft::RaftNodeManager;
+use crate::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
+use crate::ReplicasInfoManager;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_error::RocketMQResult;
@@ -35,21 +41,14 @@ use rocketmq_remoting::protocol::header::controller::apply_broker_id_response_he
 use rocketmq_remoting::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader;
 use rocketmq_remoting::protocol::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader;
 use rocketmq_remoting::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
+use rocketmq_remoting::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader;
 use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
+use rocketmq_remoting::protocol::header::pop_message_response_header::PopMessageResponseHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tonic::transport::Server;
 use tracing::info;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader;
-use rocketmq_remoting::protocol::header::pop_message_response_header::PopMessageResponseHeader;
-use crate::controller::Controller;
-use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
-use crate::openraft::GrpcRaftService;
-use crate::openraft::RaftNodeManager;
-use crate::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
-use crate::ReplicasInfoManager;
 
 /// OpenRaft-based controller implementation
 ///
@@ -73,7 +72,6 @@ pub struct OpenRaftController {
 
 impl OpenRaftController {
     pub fn new(config: Arc<ControllerConfig>) -> Self {
-
         let replicas_info_manager = Arc::new(ReplicasInfoManager::new(config.clone()));
 
         Self {
@@ -87,7 +85,6 @@ impl OpenRaftController {
 }
 
 impl Controller for OpenRaftController {
-
     async fn startup(&mut self) -> RocketMQResult<()> {
         info!("Starting OpenRaft controller on {}", self.config.listen_addr);
 
@@ -348,10 +345,7 @@ impl Controller for OpenRaftController {
         &self,
         _request: &GetReplicaInfoRequestHeader,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-
-        let result = self
-            .replica_info_manager
-            .get_replica_info(&_request.broker_name);
+        let result = self.replica_info_manager.get_replica_info(&_request.broker_name);
 
         let mut response = RemotingCommand::create_response_command();
 
@@ -362,7 +356,6 @@ impl Controller for OpenRaftController {
         response = response.set_code(result.response_code());
 
         Ok(Some(response))
-
     }
 
     async fn get_controller_metadata(&self) -> RocketMQResult<Option<RemotingCommand>> {
