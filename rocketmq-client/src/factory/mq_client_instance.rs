@@ -41,6 +41,7 @@ use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_runtime::RocketMQRuntime;
+use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioMutex;
 use tokio::runtime::Handle;
@@ -102,6 +103,7 @@ pub struct MQClientInstance {
     broker_version_table:
         Arc<RwLock<HashMap<CheetahString /* Broker Name */, HashMap<CheetahString /* address */, i32>>>>,
     send_heartbeat_times_total: Arc<AtomicI64>,
+    scheduled_task_manager: ScheduledTaskManager,
 }
 
 impl MQClientInstance {
@@ -203,6 +205,7 @@ impl MQClientInstance {
             broker_addr_table,
             broker_version_table: Arc::new(Default::default()),
             send_heartbeat_times_total: Arc::new(AtomicI64::new(0)),
+            scheduled_task_manager: ScheduledTaskManager::new(),
         });
         let instance_clone = instance.clone();
         instance.mq_admin_impl.set_client(instance_clone);
@@ -322,7 +325,6 @@ impl MQClientInstance {
     }
 
     pub async fn shutdown(&mut self) {
-        // 1. State check and transition - prevent duplicate shutdown
         match self.service_state {
             ServiceState::CreateJust | ServiceState::ShutdownAlready | ServiceState::StartFailed => {
                 warn!(
@@ -339,42 +341,32 @@ impl MQClientInstance {
             }
         }
 
-        // 2. Shutdown rebalance service first to stop new rebalance operations
         info!("MQClientInstance[{}] shutting down rebalance service", self.client_id);
         self.rebalance_service.shutdown();
 
-        // 3. Shutdown pull message service to stop message consumption
         info!(
             "MQClientInstance[{}] shutting down pull message service",
             self.client_id
         );
         self.pull_message_service.shutdown();
 
-        // 4. Persist consumer offsets after stopping services
         info!("MQClientInstance[{}] persisting all consumer offsets", self.client_id);
         self.persist_all_consumer_offset().await;
 
-        // 5. Shutdown default producer first (passing false to avoid recursion)
         info!("MQClientInstance[{}] shutting down default producer", self.client_id);
         if let Some(producer_impl) = self.default_producer.default_mqproducer_impl.as_mut() {
-            // Note: We pass false to avoid recursion back to this shutdown method
             let shutdown_future = producer_impl.shutdown_with_factory(false);
             if let Err(e) = Box::pin(shutdown_future).await {
                 warn!("Failed to shutdown default producer: {:?}", e);
             }
         }
 
-        // 6. Unregister all consumers from broker
         info!("MQClientInstance[{}] unregistering all consumers", self.client_id);
         self.unregister_all_consumers().await;
 
-        // 7. Unregister all producers from broker
         info!("MQClientInstance[{}] unregistering all producers", self.client_id);
         self.unregister_all_producers().await;
 
-        // 8. Shutdown MQClientAPIImpl (network layer)
-        // Note: MQClientAPIImpl doesn't expose remoting_client shutdown method yet
-        // This can be added as a future enhancement
         if self.mq_client_api_impl.is_some() {
             info!(
                 "MQClientInstance[{}] network client shutdown (deferred to Drop)",
@@ -382,19 +374,24 @@ impl MQClientInstance {
             );
         }
 
-        // 9. Clear all registration tables
+        info!("MQClientInstance[{}] canceling scheduled tasks", self.client_id);
+        self.scheduled_task_manager.cancel_all();
+        info!(
+            "MQClientInstance[{}] scheduled tasks canceled, total canceled: {}",
+            self.client_id,
+            self.scheduled_task_manager.task_count()
+        );
+
         info!("MQClientInstance[{}] clearing all registration tables", self.client_id);
         self.producer_table.write().await.clear();
         self.consumer_table.write().await.clear();
         self.admin_ext_table.write().await.clear();
 
-        // 10. Clear route and broker tables
         self.topic_route_table.write().await.clear();
         self.topic_end_points_table.write().await.clear();
         self.broker_addr_table.write().await.clear();
         self.broker_version_table.write().await.clear();
 
-        // 11. Update state to shutdown
         self.service_state = ServiceState::ShutdownAlready;
 
         info!("MQClientInstance[{}] shutdown completed successfully", self.client_id);
@@ -408,10 +405,10 @@ impl MQClientInstance {
             producer_table.keys().cloned().collect()
         };
 
-        // Unregister each producer from broker
+        // Unregister each producer (removes from table and notifies broker)
         for group in producer_groups {
             info!("Unregistering producer group: {}", group);
-            self.unregister_client(Some(group.clone()), None).await;
+            self.unregister_producer(group).await;
         }
     }
 
@@ -423,10 +420,10 @@ impl MQClientInstance {
             consumer_table.keys().cloned().collect()
         };
 
-        // Unregister each consumer from broker
+        // Unregister each consumer (removes from table and notifies broker)
         for group in consumer_groups {
             info!("Unregistering consumer group: {}", group);
-            self.unregister_client(None, Some(group.clone())).await;
+            self.unregister_consumer(group).await;
         }
     }
 
@@ -457,70 +454,66 @@ impl MQClientInstance {
     }
 
     fn start_scheduled_task(&mut self, this: ArcMut<Self>) {
+        info!("Starting scheduled tasks with ScheduledTaskManager");
+
         if self.client_config.namesrv_addr.is_none() {
-            // Fetch name server address
-            let mut mq_client_api_impl = self.mq_client_api_impl.as_ref().unwrap().clone();
-            self.instance_runtime.get_handle().spawn(async move {
-                info!("ScheduledTask fetchNameServerAddr started");
-                tokio::time::sleep(Duration::from_secs(10)).await;
-                loop {
-                    let current_execution_time = tokio::time::Instant::now();
-                    mq_client_api_impl.fetch_name_server_addr().await;
-                    let next_execution_time = current_execution_time + Duration::from_secs(120);
-                    let delay = next_execution_time.saturating_duration_since(tokio::time::Instant::now());
-                    tokio::time::sleep(delay).await;
-                }
-            });
+            let mq_client_api_impl = self.mq_client_api_impl.as_ref().unwrap().clone();
+            self.scheduled_task_manager.add_fixed_rate_task_async(
+                Duration::from_secs(10),
+                Duration::from_secs(120),
+                async move |_token| {
+                    let mut api = mq_client_api_impl.clone();
+                    info!("ScheduledTask: fetchNameServerAddr");
+                    api.fetch_name_server_addr().await;
+                    Ok(())
+                },
+            );
         }
 
-        // Update topic route info from name server
-        let mut client_instance = this.clone();
+        let client_instance = this.clone();
         let poll_name_server_interval = self.client_config.poll_name_server_interval;
-        self.instance_runtime.get_handle().spawn(async move {
-            info!("ScheduledTask update_topic_route_info_from_name_server started");
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            loop {
-                let current_execution_time = tokio::time::Instant::now();
-                client_instance.update_topic_route_info_from_name_server().await;
-                let next_execution_time =
-                    current_execution_time + Duration::from_millis(poll_name_server_interval as u64);
-                let delay = next_execution_time.saturating_duration_since(tokio::time::Instant::now());
-                tokio::time::sleep(delay).await;
-            }
-        });
+        self.scheduled_task_manager.add_fixed_rate_task_async(
+            Duration::from_millis(10),
+            Duration::from_millis(poll_name_server_interval as u64),
+            async move |_token| {
+                let mut instance = client_instance.clone();
+                info!("ScheduledTask: update_topic_route_info_from_name_server");
+                instance.update_topic_route_info_from_name_server().await;
+                Ok(())
+            },
+        );
 
-        // Clean offline broker and send heartbeat to all broker
-        let mut client_instance = this.clone();
+        let client_instance = this.clone();
         let heartbeat_broker_interval = self.client_config.heartbeat_broker_interval;
-        self.instance_runtime.get_handle().spawn(async move {
-            info!("ScheduledTask clean_offline_broker started");
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            loop {
-                let current_execution_time = tokio::time::Instant::now();
-                client_instance.clean_offline_broker().await;
-                client_instance.send_heartbeat_to_all_broker_with_lock().await;
-                let next_execution_time =
-                    current_execution_time + Duration::from_millis(heartbeat_broker_interval as u64);
-                let delay = next_execution_time.saturating_duration_since(tokio::time::Instant::now());
-                tokio::time::sleep(delay).await;
-            }
-        });
+        self.scheduled_task_manager.add_fixed_rate_task_async(
+            Duration::from_secs(1),
+            Duration::from_millis(heartbeat_broker_interval as u64),
+            async move |_token| {
+                let mut instance = client_instance.clone();
+                info!("ScheduledTask: clean_offline_broker and send_heartbeat");
+                instance.clean_offline_broker().await;
+                instance.send_heartbeat_to_all_broker_with_lock().await;
+                Ok(())
+            },
+        );
 
-        // Persist all consumer offset
-        let mut client_instance = this;
+        let client_instance = this;
         let persist_consumer_offset_interval = self.client_config.persist_consumer_offset_interval as u64;
-        self.instance_runtime.get_handle().spawn(async move {
-            info!("ScheduledTask persistAllConsumerOffset started");
-            tokio::time::sleep(Duration::from_secs(10)).await;
-            loop {
-                let current_execution_time = tokio::time::Instant::now();
-                client_instance.persist_all_consumer_offset().await;
-                let next_execution_time =
-                    current_execution_time + Duration::from_millis(persist_consumer_offset_interval);
-                let delay = next_execution_time.saturating_duration_since(tokio::time::Instant::now());
-                tokio::time::sleep(delay).await;
-            }
-        });
+        self.scheduled_task_manager.add_fixed_rate_task_async(
+            Duration::from_secs(10),
+            Duration::from_millis(persist_consumer_offset_interval),
+            async move |_token| {
+                let mut instance = client_instance.clone();
+                info!("ScheduledTask: persistAllConsumerOffset");
+                instance.persist_all_consumer_offset().await;
+                Ok(())
+            },
+        );
+
+        info!(
+            "All scheduled tasks started, total tasks: {}",
+            self.scheduled_task_manager.task_count()
+        );
     }
 
     pub async fn update_topic_route_info_from_name_server(&mut self) {
@@ -1126,11 +1119,46 @@ impl MQClientInstance {
         producer_table.get(group).cloned()
     }
 
-    pub async fn unregister_consumer(&mut self, group: impl Into<CheetahString>) {
-        self.unregister_client(None, Some(group.into())).await;
+    pub async fn unregister_consumer(&mut self, group: impl Into<CheetahString>) -> bool {
+        let group = group.into();
+        if group.is_empty() {
+            warn!("unregister_consumer: group name is empty");
+            return false;
+        }
+
+        let mut consumer_table = self.consumer_table.write().await;
+        let removed = consumer_table.remove(&group).is_some();
+        drop(consumer_table);
+
+        if removed {
+            info!("unregister consumer [{}] OK", group);
+            self.unregister_client(None, Some(group)).await;
+            true
+        } else {
+            warn!("unregister consumer [{}] failed: not found in consumer table", group);
+            false
+        }
     }
-    pub async fn unregister_producer(&mut self, group: impl Into<CheetahString>) {
-        self.unregister_client(Some(group.into()), None).await;
+
+    pub async fn unregister_producer(&mut self, group: impl Into<CheetahString>) -> bool {
+        let group = group.into();
+        if group.is_empty() {
+            warn!("unregister_producer: group name is empty");
+            return false;
+        }
+
+        let mut producer_table = self.producer_table.write().await;
+        let removed = producer_table.remove(&group).is_some();
+        drop(producer_table);
+
+        if removed {
+            info!("unregister producer [{}] OK", group);
+            self.unregister_client(Some(group), None).await;
+            true
+        } else {
+            warn!("unregister producer [{}] failed: not found in producer table", group);
+            false
+        }
     }
 
     pub async fn unregister_admin_ext(&mut self, group: impl Into<CheetahString>) {
