@@ -41,9 +41,7 @@ use rocketmq_remoting::protocol::header::controller::apply_broker_id_response_he
 use rocketmq_remoting::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader;
 use rocketmq_remoting::protocol::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader;
 use rocketmq_remoting::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
-use rocketmq_remoting::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader;
 use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
-use rocketmq_remoting::protocol::header::pop_message_response_header::PopMessageResponseHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
