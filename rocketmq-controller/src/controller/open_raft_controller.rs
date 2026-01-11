@@ -22,6 +22,12 @@
 
 use std::sync::Arc;
 
+use crate::controller::Controller;
+use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
+use crate::openraft::GrpcRaftService;
+use crate::openraft::RaftNodeManager;
+use crate::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
+use crate::ReplicasInfoManager;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_error::RocketMQResult;
@@ -42,12 +48,6 @@ use tokio::task::JoinHandle;
 use tonic::transport::Server;
 use tracing::info;
 
-use crate::controller::Controller;
-use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
-use crate::openraft::GrpcRaftService;
-use crate::openraft::RaftNodeManager;
-use crate::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
-
 /// OpenRaft-based controller implementation
 ///
 /// # Graceful Shutdown
@@ -64,15 +64,20 @@ pub struct OpenRaftController {
     handle: Option<JoinHandle<()>>,
     /// Shutdown signal sender for gRPC server
     shutdown_tx: Option<oneshot::Sender<()>>,
+
+    replica_info_manager: Arc<ReplicasInfoManager>,
 }
 
 impl OpenRaftController {
     pub fn new(config: Arc<ControllerConfig>) -> Self {
+        let replica_info_manager = Arc::new(ReplicasInfoManager::new(config.clone()));
+
         Self {
             config,
             node: None,
             handle: None,
             shutdown_tx: None,
+            replica_info_manager,
         }
     }
 }
@@ -338,8 +343,17 @@ impl Controller for OpenRaftController {
         &self,
         _request: &GetReplicaInfoRequestHeader,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        // TODO: Implement replica info query
-        Ok(Some(RemotingCommand::create_response_command()))
+        let result = self.replica_info_manager.get_replica_info(&_request.broker_name);
+
+        let mut response = RemotingCommand::create_response_command();
+
+        if let Some(body) = response.body() {
+            response.set_body_mut_ref(body.clone());
+        }
+
+        response = response.set_code(result.response_code());
+
+        Ok(Some(response))
     }
 
     async fn get_controller_metadata(&self) -> RocketMQResult<Option<RemotingCommand>> {
