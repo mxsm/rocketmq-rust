@@ -67,6 +67,11 @@ pub struct CommonArgs {
 #[derive(Subcommand)]
 pub enum Commands {
     #[command(subcommand)]
+    #[command(about = "Controller commands")]
+    #[command(name = "controller")]
+    Controller(controller_commands::ControllerCommands),
+
+    #[command(subcommand)]
     #[command(about = "Name server commands")]
     #[command(name = "nameserver")]
     NameServer(namesrv_commands::NameServerCommands),
@@ -75,11 +80,6 @@ pub enum Commands {
     #[command(about = "Topic commands")]
     Topic(topic_commands::TopicCommands),
 
-    #[command(subcommand)]
-    #[command(about = "Controller commands")]
-    #[command(name = "controller")]
-    Controller(controller_commands::ControllerCommands),
-
     #[command(about = "Category commands show")]
     Show(ClassificationTablePrint),
 }
@@ -87,9 +87,9 @@ pub enum Commands {
 impl CommandExecute for Commands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
+            Commands::Controller(value) => value.execute(rpc_hook).await,
             Commands::NameServer(value) => value.execute(rpc_hook).await,
             Commands::Topic(value) => value.execute(rpc_hook).await,
-            Commands::Controller(value) => value.execute(rpc_hook).await,
             Commands::Show(value) => value.execute(rpc_hook).await,
         }
     }
@@ -114,6 +114,16 @@ pub(crate) struct ClassificationTablePrint;
 impl CommandExecute for ClassificationTablePrint {
     async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         let commands: Vec<Command> = vec![
+            Command {
+                category: "Controller",
+                command: "cleanBrokerMetadata",
+                remark: "Clean metadata of broker on controller.",
+            },
+            Command {
+                category: "Controller",
+                command: "getControllerMetaData",
+                remark: "Get meta data of controller.",
+            },
             Command {
                 category: "Topic",
                 command: "allocateMQ",
@@ -198,11 +208,6 @@ impl CommandExecute for ClassificationTablePrint {
                 category: "NameServer",
                 command: "wipeWritePerm",
                 remark: "Wipe write perm of broker in all name server.",
-            },
-            Command {
-                category: "Controller",
-                command: "getControllerMetaData",
-                remark: "Get meta data of controller.",
             },
         ];
         let mut table = Table::new(commands);

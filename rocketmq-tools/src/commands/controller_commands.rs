@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod clean_broker_metadata_command;
 mod get_controller_metadata_sub_command;
 
 use std::sync::Arc;
@@ -20,22 +21,29 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
-use crate::commands::controller_commands::get_controller_metadata_sub_command::GetControllerMetadataSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
 pub enum ControllerCommands {
     #[command(
+        name = "cleanBrokerMetadata",
+        about = "Clean metadata of broker on controller.",
+        long_about = None,
+    )]
+    CleanBrokerMetadata(clean_broker_metadata_command::CleanBrokerMetadataCommand),
+
+    #[command(
         name = "getControllerMetadata",
         about = "Get meta data of controller",
         long_about = None,
     )]
-    GetControllerMetadataSubCommand(GetControllerMetadataSubCommand),
+    GetControllerMetadataSubCommand(get_controller_metadata_sub_command::GetControllerMetadataSubCommand),
 }
 
 impl CommandExecute for ControllerCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
+            ControllerCommands::CleanBrokerMetadata(cmd) => cmd.execute(rpc_hook).await,
             ControllerCommands::GetControllerMetadataSubCommand(value) => value.execute(rpc_hook).await,
         }
     }
