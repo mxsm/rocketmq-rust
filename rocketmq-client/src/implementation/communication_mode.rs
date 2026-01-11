@@ -169,7 +169,9 @@ mod tests {
         let none_mode: Option<CommunicationMode> = None;
 
         assert!(some_mode.is_some());
-        assert_eq!(some_mode.unwrap(), CommunicationMode::Sync);
+        if let Some(mode) = some_mode {
+            assert_eq!(mode, CommunicationMode::Sync);
+        }
         assert!(none_mode.is_none());
     }
 
