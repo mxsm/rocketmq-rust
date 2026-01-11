@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod command_util;
+mod controller_commands;
 mod namesrv_commands;
 mod topic_commands;
 
@@ -74,6 +75,11 @@ pub enum Commands {
     #[command(about = "Topic commands")]
     Topic(topic_commands::TopicCommands),
 
+    #[command(subcommand)]
+    #[command(about = "Controller commands")]
+    #[command(name = "controller")]
+    Controller(controller_commands::ControllerCommands),
+
     #[command(about = "Category commands show")]
     Show(ClassificationTablePrint),
 }
@@ -83,6 +89,7 @@ impl CommandExecute for Commands {
         match self {
             Commands::NameServer(value) => value.execute(rpc_hook).await,
             Commands::Topic(value) => value.execute(rpc_hook).await,
+            Commands::Controller(value) => value.execute(rpc_hook).await,
             Commands::Show(value) => value.execute(rpc_hook).await,
         }
     }
@@ -191,6 +198,11 @@ impl CommandExecute for ClassificationTablePrint {
                 category: "NameServer",
                 command: "wipeWritePerm",
                 remark: "Wipe write perm of broker in all name server.",
+            },
+            Command {
+                category: "Controller",
+                command: "getControllerMetaData",
+                remark: "Get meta data of controller.",
             },
         ];
         let mut table = Table::new(commands);

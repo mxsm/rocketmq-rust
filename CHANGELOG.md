@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **feat(tools):** Add `GetControllerMetadataSubCommand` ([#5624](https://github.com/mxsm/rocketmq-rust/issues/5624))
 - **feat(common):** Add `filter_type` module to filter.rs in rocketmq-common crate ([#5454](https://github.com/mxsm/rocketmq-rust/issues/5454))
 
 ### Changed

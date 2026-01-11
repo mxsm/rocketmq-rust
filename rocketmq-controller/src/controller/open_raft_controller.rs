@@ -32,8 +32,6 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::protocol::body::controller::controller_metadata_info::ControllerMetadataInfo;
-use rocketmq_remoting::protocol::body::controller::node_info::NodeInfo;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
 use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
@@ -42,6 +40,7 @@ use rocketmq_remoting::protocol::header::controller::elect_master_request_header
 use rocketmq_remoting::protocol::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader;
 use rocketmq_remoting::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
 use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
+use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -357,16 +356,18 @@ impl Controller for OpenRaftController {
     }
 
     async fn get_controller_metadata(&self) -> RocketMQResult<Option<RemotingCommand>> {
-        let controller_metadata_info: ControllerMetadataInfo = {
-            let raft_peers: Vec<NodeInfo> = self
-                .config
-                .raft_peers
-                .iter()
-                .map(|raft_peer| NodeInfo {
-                    node_id: raft_peer.id,
-                    addr: raft_peer.addr.to_string(),
-                })
-                .collect::<Vec<NodeInfo>>();
+        let controller_metadata_info: GetMetaDataResponseHeader = {
+            let peers: Option<CheetahString> = {
+                let joined = self
+                    .config
+                    .raft_peers
+                    .iter()
+                    .map(|raft_peer| raft_peer.addr.to_string())
+                    .collect::<Vec<String>>()
+                    .join(";");
+
+                (!joined.is_empty()).then_some(joined.as_str().into())
+            };
 
             let raft_node_manager = self.node.as_ref();
             let controller_leader_id: Option<u64> = if let Some(raft_node_manager) = raft_node_manager {
@@ -375,23 +376,30 @@ impl Controller for OpenRaftController {
                 None
             };
 
-            let controller_leader_address: Option<String> = controller_leader_id
-                .and_then(|leader_node_id| raft_peers.iter().find(|raft_peer| raft_peer.node_id == leader_node_id))
-                .map(|node_info| node_info.addr.clone());
+            let controller_leader_address: Option<CheetahString> = controller_leader_id
+                .and_then(|leader_node_id| {
+                    self.config
+                        .raft_peers
+                        .iter()
+                        .find(|raft_peer| raft_peer.id == leader_node_id)
+                })
+                .map(|node_info| CheetahString::from(node_info.addr.to_string()));
 
-            let is_leader = controller_leader_id
-                .map(|id| self.config.node_id == id)
-                .unwrap_or(false);
+            let is_leader = controller_leader_id.map(|id| self.config.node_id == id);
 
-            ControllerMetadataInfo {
+            let controller_leader_id: Option<CheetahString> =
+                controller_leader_id.map(|id| CheetahString::from(id.to_string()));
+
+            GetMetaDataResponseHeader {
+                group: None,
                 controller_leader_id,
                 controller_leader_address,
                 is_leader,
-                raft_peers,
+                peers,
             }
         };
         Ok(Some(
-            RemotingCommand::create_response_command().set_body(serde_json::to_string(&controller_metadata_info)?),
+            RemotingCommand::create_response_command().set_command_custom_header(controller_metadata_info),
         ))
     }
 
