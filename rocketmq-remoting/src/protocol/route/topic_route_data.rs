@@ -128,37 +128,6 @@ mod tests {
         assert!(serialized.contains("\"topicQueueMappingInfo\":{\"broker\":{"));
     }
 
-    /*    #[test]
-    fn deserialize_topic_route_data() {
-        let json = r#"{
-            "orderTopicConf": "conf",
-            "queueDatas": [{}],
-            "brokerDatas": [{}],
-            "filterServerTable": {"key": ["value"]},
-            "topicQueueMappingInfo": {"broker": {}}
-        }"#;
-        let deserialized: TopicRouteData = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            deserialized.order_topic_conf,
-            Some(CheetahString::from("conf"))
-        );
-        assert_eq!(deserialized.queue_datas.len(), 1);
-        assert_eq!(deserialized.broker_datas.len(), 1);
-        assert_eq!(deserialized.filter_server_table.len(), 1);
-        assert!(deserialized.topic_queue_mapping_by_broker.is_some());
-    }*/
-
-    /*    #[test]
-    fn deserialize_topic_route_data_missing_optional_fields() {
-        let json = r#"{}"#;
-        let deserialized: TopicRouteData = serde_json::from_str(json).unwrap();
-        assert!(deserialized.order_topic_conf.is_none());
-        assert!(deserialized.queue_datas.is_empty());
-        assert!(deserialized.broker_datas.is_empty());
-        assert!(deserialized.filter_server_table.is_empty());
-        assert!(deserialized.topic_queue_mapping_by_broker.is_none());
-    }*/
-
     #[test]
     fn topic_route_data_changed_with_none_old_data() {
         let topic_route_data = TopicRouteData::default();
