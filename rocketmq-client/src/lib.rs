@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![feature(impl_trait_in_assoc_type)]
 #![allow(dead_code)]
 #![allow(unused_variables)]
 #![allow(clippy::result_large_err)]

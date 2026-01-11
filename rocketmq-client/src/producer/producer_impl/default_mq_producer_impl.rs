@@ -51,7 +51,6 @@ use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
-use tokio::runtime::Handle;
 use tokio::sync::Semaphore;
 use tracing::warn;
 
@@ -2161,53 +2160,45 @@ pub(crate) struct DefaultServiceDetector {
 }
 
 impl ServiceDetector for DefaultServiceDetector {
-    fn detect(&self, endpoint: &str, timeout_millis: u64) -> bool {
-        // Pick a topic to use for detection
-        let topic = match self.pick_topic() {
-            Some(t) => t,
-            None => return false,
-        };
+    type Fut<'a>
+        = impl std::future::Future<Output = bool> + Send + 'a
+    where
+        Self: 'a;
 
-        // Execute async detection directly using Handle::block_on
-        // This avoids the overhead of thread::spawn and potential runtime conflicts
-        let handle = Handle::current();
-        handle.block_on(async { self.detect_async(endpoint, timeout_millis, &topic).await })
-    }
-}
+    fn detect<'a>(&'a self, endpoint: &'a str, timeout_millis: u64) -> Self::Fut<'a> {
+        async move {
+            // Pick a topic to use for detection
+            let topic = match self
+                .topic_publish_info_table
+                .iter()
+                .next()
+                .map(|entry| entry.key().clone())
+            {
+                Some(t) => t,
+                None => return false,
+            };
 
-impl DefaultServiceDetector {
-    fn pick_topic(&self) -> Option<CheetahString> {
-        self.topic_publish_info_table
-            .iter()
-            .next()
-            .map(|entry| entry.key().clone())
-    }
+            // Create a message queue for the detection request
+            let mq = MessageQueue::from_parts(topic.as_str(), endpoint, 0);
 
-    /// Async implementation of broker availability detection
-    ///
-    /// Sends a lightweight request to the broker to check if it's reachable and responsive.
-    /// Uses timeout to prevent hanging indefinitely.
-    async fn detect_async(&self, endpoint: &str, timeout_millis: u64, topic: &CheetahString) -> bool {
-        // Create a message queue for the detection request
-        let mq = MessageQueue::from_parts(topic.as_str(), endpoint, 0);
+            // Clone the client instance to get mutable access
+            let mut client_instance = self.client_instance.clone();
 
-        // Clone the client instance to get mutable access
-        let mut client_instance = self.client_instance.clone();
-
-        // Try to get max offset from the broker with timeout
-        // This is a lightweight operation that verifies broker connectivity
-        let result = tokio::time::timeout(Duration::from_millis(timeout_millis), async move {
-            match client_instance.mq_client_api_impl.as_mut() {
-                Some(api) => {
-                    // Attempt to get max offset - if this succeeds, broker is healthy
-                    api.get_max_offset(endpoint, &mq, timeout_millis).await.is_ok()
+            // Try to get max offset from the broker with timeout
+            // This is a lightweight operation that verifies broker connectivity
+            let result = tokio::time::timeout(Duration::from_millis(timeout_millis), async move {
+                match client_instance.mq_client_api_impl.as_mut() {
+                    Some(api) => {
+                        // Attempt to get max offset - if this succeeds, broker is healthy
+                        api.get_max_offset(endpoint, &mq, timeout_millis).await.is_ok()
+                    }
+                    None => false,
                 }
-                None => false,
-            }
-        })
-        .await;
+            })
+            .await;
 
-        matches!(result, Ok(true))
+            matches!(result, Ok(true))
+        }
     }
 }
 
