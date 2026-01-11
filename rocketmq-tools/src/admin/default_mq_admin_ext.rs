@@ -345,7 +345,7 @@ impl MQAdminExt for DefaultMQAdminExt {
     }
 
     async fn examine_broker_cluster_info(&self) -> rocketmq_error::RocketMQResult<ClusterInfo> {
-        todo!()
+        self.default_mqadmin_ext_impl.examine_broker_cluster_info().await
     }
 
     async fn examine_topic_route_info(
