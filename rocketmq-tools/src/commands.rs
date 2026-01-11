@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod command_util;
+mod consumer_commands;
 mod namesrv_commands;
 mod topic_commands;
 
@@ -66,6 +67,11 @@ pub struct CommonArgs {
 #[derive(Subcommand)]
 pub enum Commands {
     #[command(subcommand)]
+    #[command(about = "Consumer commands")]
+    #[command(name = "consumer")]
+    Consumer(consumer_commands::ConsumerCommands),
+
+    #[command(subcommand)]
     #[command(about = "Name server commands")]
     #[command(name = "nameserver")]
     NameServer(namesrv_commands::NameServerCommands),
@@ -81,6 +87,7 @@ pub enum Commands {
 impl CommandExecute for Commands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
+            Commands::Consumer(value) => value.execute(rpc_hook).await,
             Commands::NameServer(value) => value.execute(rpc_hook).await,
             Commands::Topic(value) => value.execute(rpc_hook).await,
             Commands::Show(value) => value.execute(rpc_hook).await,
@@ -107,6 +114,11 @@ pub(crate) struct ClassificationTablePrint;
 impl CommandExecute for ClassificationTablePrint {
     async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         let commands: Vec<Command> = vec![
+            Command {
+                category: "Consumer",
+                command: "updateSubGroup",
+                remark: "Update consumer sub group.",
+            },
             Command {
                 category: "Topic",
                 command: "allocateMQ",
