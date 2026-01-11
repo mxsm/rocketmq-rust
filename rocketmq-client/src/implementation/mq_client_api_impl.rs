@@ -2047,14 +2047,14 @@ impl MQClientAPIImpl {
         let request = RemotingCommand::create_remoting_command(RequestCode::ControllerGetMetadataInfo);
         let response = self
             .remoting_client
-            .invoke_request(Some(&controller_address), request.clone(), timeout_millis)
+            .invoke_request(Some(&controller_address), request, timeout_millis)
             .await?;
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => match response.decode_command_custom_header_fast::<GetMetaDataResponseHeader>() {
                 Ok(header) => Ok(header),
                 Err(_) => Err(mq_client_err!("Could not decode GetMetaDataResponseHeader".to_string())),
             },
-            code => Err(mq_client_err!(
+            _ => Err(mq_client_err!(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string())
             )),
