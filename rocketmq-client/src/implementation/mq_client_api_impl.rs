@@ -647,7 +647,7 @@ impl MQClientAPIImpl {
                     }
                     let duration = (Instant::now() - begin_start_time).as_millis() as u64;
                     producer
-                        .update_fault_item(broker_name.clone(), duration, false, true)
+                        .update_fault_item(&broker_name, duration, false, true)
                         .await;
                     return;
                 }
@@ -662,13 +662,13 @@ impl MQClientAPIImpl {
                         let duration = (Instant::now() - begin_start_time).as_millis() as u64;
                         send_callback.as_ref().unwrap()(Some(&result), None);
                         producer
-                            .update_fault_item(broker_name.clone(), duration, false, true)
+                            .update_fault_item(&broker_name, duration, false, true)
                             .await;
                     }
                     Err(err) => {
                         let duration = (Instant::now() - begin_start_time).as_millis() as u64;
                         producer
-                            .update_fault_item(broker_name.clone(), duration, true, true)
+                            .update_fault_item(&broker_name, duration, true, true)
                             .await;
                         Box::pin(self.on_exception_impl(
                             broker_name,
@@ -736,7 +736,7 @@ impl MQClientAPIImpl {
                         }
                         let duration = (Instant::now() - begin_start_time).as_millis() as u64;
                         producer
-                            .update_fault_item(current_broker_name.clone(), duration, false, true)
+                            .update_fault_item(&current_broker_name, duration, false, true)
                             .await;
                         return;
                     }
@@ -752,14 +752,14 @@ impl MQClientAPIImpl {
                             let duration = (Instant::now() - begin_start_time).as_millis() as u64;
                             send_callback.as_ref().unwrap()(Some(&result), None);
                             producer
-                                .update_fault_item(current_broker_name.clone(), duration, false, true)
+                                .update_fault_item(&current_broker_name, duration, false, true)
                                 .await;
                             return; // success, return loop
                         }
                         Err(err) => {
                             let duration = (Instant::now() - begin_start_time).as_millis() as u64;
                             producer
-                                .update_fault_item(current_broker_name.clone(), duration, true, true)
+                                .update_fault_item(&current_broker_name, duration, true, true)
                                 .await;
 
                             // Check if a retry is needed
