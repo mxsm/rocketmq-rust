@@ -743,7 +743,7 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         if let Some(ref mq_client_instance) = self.client_instance {
             Ok(mq_client_instance
                 .get_mq_client_api_impl()
-                .get_controller_metadata(controller_addr, Duration::from_millis(3000))
+                .get_controller_metadata(controller_addr, self.timeout_millis.as_millis() as u64)
                 .await?)
         } else {
             Err(rocketmq_error::RocketMQError::ClientNotStarted)

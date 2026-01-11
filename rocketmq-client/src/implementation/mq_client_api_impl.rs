@@ -2042,16 +2042,12 @@ impl MQClientAPIImpl {
     pub async fn get_controller_metadata(
         &self,
         controller_address: CheetahString,
-        timeout_millis: Duration,
+        timeout_millis: u64,
     ) -> RocketMQResult<GetMetaDataResponseHeader> {
         let request = RemotingCommand::create_remoting_command(RequestCode::ControllerGetMetadataInfo);
         let response = self
             .remoting_client
-            .invoke_request(
-                Some(&controller_address),
-                request.clone(),
-                timeout_millis.as_millis() as u64,
-            )
+            .invoke_request(Some(&controller_address), request.clone(), timeout_millis)
             .await?;
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => match response.decode_command_custom_header_fast::<GetMetaDataResponseHeader>() {
