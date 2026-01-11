@@ -97,8 +97,6 @@ pub struct DefaultMQProducerImpl {
     mq_fault_strategy: ArcMut<MQFaultStrategy>,
     semaphore_async_send_num: Arc<Semaphore>,
     semaphore_async_send_size: Arc<Semaphore>,
-    async_sender_runtime: Option<Arc<RocketMQRuntime>>,
-    default_async_sender_runtime: Option<Arc<RocketMQRuntime>>,
     default_mqproducer_impl_inner: Option<ArcMut<DefaultMQProducerImpl>>,
     transaction_listener: Option<Arc<Box<dyn TransactionListener>>>,
     check_runtime: Option<Arc<RocketMQRuntime>>,
@@ -130,8 +128,6 @@ impl DefaultMQProducerImpl {
             mq_fault_strategy: ArcMut::new(MQFaultStrategy::new(&client_config)),
             semaphore_async_send_num: Arc::new(semaphore_async_send_num),
             semaphore_async_send_size: Arc::new(semaphore_async_send_size),
-            async_sender_runtime: None,
-            default_async_sender_runtime: Some(Arc::new(RocketMQRuntime::new_multi(num_cpus::get(), "async-sender"))),
             default_mqproducer_impl_inner: None,
             transaction_listener: None,
             check_runtime: None,
@@ -605,19 +601,9 @@ impl DefaultMQProducerImpl {
         } else {
             (None, None)
         };
-
-        self.get_async_sender_executor().get_handle().spawn(f);
+        tokio::spawn(f);
         drop((acquire_value_num, acquire_value_size));
         Ok(())
-    }
-
-    #[inline]
-    pub fn get_async_sender_executor(&self) -> &Arc<RocketMQRuntime> {
-        if let Some(ref async_sender_runtime) = self.async_sender_runtime {
-            async_sender_runtime
-        } else {
-            self.default_async_sender_runtime.as_ref().unwrap()
-        }
     }
 
     async fn send_default_impl<T>(
