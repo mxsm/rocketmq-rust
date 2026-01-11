@@ -23,10 +23,10 @@ pub(crate) mod default_mq_push_consumer_impl;
 pub(crate) mod message_request;
 pub(crate) mod pop_process_queue;
 pub(crate) mod pop_request;
-pub(crate) mod process_queue;
+pub mod process_queue;
 pub(crate) mod pull_api_wrapper;
-pub(crate) mod pull_message_service;
-pub(crate) mod pull_request;
+pub mod pull_message_service;
+pub mod pull_request;
 pub(crate) mod pull_request_ext;
 pub(crate) mod re_balance;
 

@@ -22,10 +22,18 @@
 
 use std::sync::Arc;
 
+use crate::controller::Controller;
+use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
+use crate::openraft::GrpcRaftService;
+use crate::openraft::RaftNodeManager;
+use crate::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
+use crate::ReplicasInfoManager;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::protocol::body::controller::controller_metadata_info::ControllerMetadataInfo;
+use rocketmq_remoting::protocol::body::controller::node_info::NodeInfo;
 use rocketmq_remoting::protocol::body::sync_state_set_body::SyncStateSet;
 use rocketmq_remoting::protocol::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
 use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
@@ -39,12 +47,6 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tonic::transport::Server;
 use tracing::info;
-
-use crate::controller::Controller;
-use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
-use crate::openraft::GrpcRaftService;
-use crate::openraft::RaftNodeManager;
-use crate::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
 
 /// OpenRaft-based controller implementation
 ///
@@ -62,15 +64,20 @@ pub struct OpenRaftController {
     handle: Option<JoinHandle<()>>,
     /// Shutdown signal sender for gRPC server
     shutdown_tx: Option<oneshot::Sender<()>>,
+
+    replica_info_manager: Arc<ReplicasInfoManager>,
 }
 
 impl OpenRaftController {
     pub fn new(config: Arc<ControllerConfig>) -> Self {
+        let replica_info_manager = Arc::new(ReplicasInfoManager::new(config.clone()));
+
         Self {
             config,
             node: None,
             handle: None,
             shutdown_tx: None,
+            replica_info_manager,
         }
     }
 }
@@ -336,13 +343,56 @@ impl Controller for OpenRaftController {
         &self,
         _request: &GetReplicaInfoRequestHeader,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        // TODO: Implement replica info query
-        Ok(Some(RemotingCommand::create_response_command()))
+        let result = self.replica_info_manager.get_replica_info(&_request.broker_name);
+
+        let mut response = RemotingCommand::create_response_command();
+
+        if let Some(body) = response.body() {
+            response.set_body_mut_ref(body.clone());
+        }
+
+        response = response.set_code(result.response_code());
+
+        Ok(Some(response))
     }
 
-    fn get_controller_metadata(&self) -> RocketMQResult<Option<RemotingCommand>> {
-        // TODO: Implement metadata query
-        Ok(Some(RemotingCommand::create_response_command()))
+    async fn get_controller_metadata(&self) -> RocketMQResult<Option<RemotingCommand>> {
+        let controller_metadata_info: ControllerMetadataInfo = {
+            let raft_peers: Vec<NodeInfo> = self
+                .config
+                .raft_peers
+                .iter()
+                .map(|raft_peer| NodeInfo {
+                    node_id: raft_peer.id,
+                    addr: raft_peer.addr.to_string(),
+                })
+                .collect::<Vec<NodeInfo>>();
+
+            let raft_node_manager = self.node.as_ref();
+            let controller_leader_id: Option<u64> = if let Some(raft_node_manager) = raft_node_manager {
+                raft_node_manager.get_leader().await.ok().flatten()
+            } else {
+                None
+            };
+
+            let controller_leader_address: Option<String> = controller_leader_id
+                .and_then(|leader_node_id| raft_peers.iter().find(|raft_peer| raft_peer.node_id == leader_node_id))
+                .map(|node_info| node_info.addr.clone());
+
+            let is_leader = controller_leader_id
+                .map(|id| self.config.node_id == id)
+                .unwrap_or(false);
+
+            ControllerMetadataInfo {
+                controller_leader_id,
+                controller_leader_address,
+                is_leader,
+                raft_peers,
+            }
+        };
+        Ok(Some(
+            RemotingCommand::create_response_command().set_body(serde_json::to_string(&controller_metadata_info)?),
+        ))
     }
 
     async fn get_sync_state_data(&self, _broker_names: &[CheetahString]) -> RocketMQResult<Option<RemotingCommand>> {

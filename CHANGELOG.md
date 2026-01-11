@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(client):** Refactor `default_mq_producer::start` in `default_mq_producer.rs` removing repeated `as_mut().unwrap()`([#5576](https://github.com/mxsm/rocketmq-rust/issues/5576))
 - **refactor(tui):** Reformat `rocketmq-tui` using `taplo`([#5242](https://github.com/mxsm/rocketmq-rust/issues/5242))
 - **refactor(error):** Reformat `Cargo.toml` using `taplo` with entry alignment ([#5232](https://github.com/mxsm/rocketmq-rust/issues/5232))
 - **refactor(client):** Change `MQProducer::send_to_queue` return type to `RocketMQResult<Option<SendResult>>` in `mq_producer.rs`, `default_mq_producer.rs` and `transaction_mq_producer.rs` ([#5169](https://github.com/mxsm/rocketmq-rust/issues/5169))
