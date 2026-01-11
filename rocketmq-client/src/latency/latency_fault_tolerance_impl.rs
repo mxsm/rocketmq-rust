@@ -144,7 +144,8 @@ where
                 .service_detector
                 .as_ref()
                 .unwrap()
-                .detect(broker_addr.unwrap().as_str(), self.detect_timeout as u64);
+                .detect(broker_addr.unwrap().as_str(), self.detect_timeout as u64)
+                .await;
             if service_ok && fault_item.reachable_flag.load(std::sync::atomic::Ordering::Acquire) {
                 info!("{} is reachable now, then it can be used.", name);
                 fault_item
