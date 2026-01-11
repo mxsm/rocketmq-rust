@@ -2160,12 +2160,20 @@ pub(crate) struct DefaultServiceDetector {
 }
 
 impl ServiceDetector for DefaultServiceDetector {
-    type Fut<'a> = impl std::future::Future<Output = bool> + Send + 'a where Self: 'a;
+    type Fut<'a>
+        = impl std::future::Future<Output = bool> + Send + 'a
+    where
+        Self: 'a;
 
     fn detect<'a>(&'a self, endpoint: &'a str, timeout_millis: u64) -> Self::Fut<'a> {
         async move {
             // Pick a topic to use for detection
-            let topic = match self.topic_publish_info_table.iter().next().map(|entry| entry.key().clone()) {
+            let topic = match self
+                .topic_publish_info_table
+                .iter()
+                .next()
+                .map(|entry| entry.key().clone())
+            {
                 Some(t) => t,
                 None => return false,
             };
