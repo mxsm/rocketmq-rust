@@ -344,7 +344,7 @@ impl DefaultMQProducer {
 
     pub fn set_default_mqproducer_impl(&mut self, default_mqproducer_impl: DefaultMQProducerImpl) {
         let wrapper = ArcMut::new(default_mqproducer_impl);
-        self.default_mqproducer_impl = Some(wrapper.clone());
+        self.default_mqproducer_impl = Some(ArcMut::clone(&wrapper));
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()
