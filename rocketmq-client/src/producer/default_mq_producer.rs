@@ -622,9 +622,9 @@ impl MQProducer for DefaultMQProducer {
             let dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>> = Arc::new(Box::new(dispatcher));
             self.producer_config.trace_dispatcher = Some(dispatcher.clone());
             default_mqproducer_impl
-                .register_send_message_hook(Box::new(SendMessageTraceHookImpl::new(dispatcher.clone())));
+                .register_send_message_hook(Arc::new(SendMessageTraceHookImpl::new(dispatcher.clone())));
             default_mqproducer_impl
-                .register_end_transaction_hook(Arc::new(Box::new(EndTransactionTraceHookImpl::new(dispatcher))))
+                .register_end_transaction_hook(Arc::new(EndTransactionTraceHookImpl::new(dispatcher)))
         }
 
         if let Some(ref mut trace_dispatcher) = self.producer_config.trace_dispatcher {
