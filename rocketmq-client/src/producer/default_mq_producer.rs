@@ -250,58 +250,72 @@ impl DefaultMQProducer {
         Self::builder().build()
     }
 
+    #[inline]
     pub fn client_config(&self) -> &ClientConfig {
         &self.client_config
     }
 
+    #[inline]
     pub fn retry_response_codes(&self) -> &HashSet<i32> {
         &self.producer_config.retry_response_codes
     }
 
+    #[inline]
     pub fn producer_group(&self) -> &str {
         &self.producer_config.producer_group
     }
 
+    #[inline]
     pub fn topics(&self) -> &Vec<CheetahString> {
         &self.producer_config.topics
     }
 
+    #[inline]
     pub fn create_topic_key(&self) -> &str {
         &self.producer_config.create_topic_key
     }
 
+    #[inline]
     pub fn default_topic_queue_nums(&self) -> u32 {
         self.producer_config.default_topic_queue_nums
     }
 
+    #[inline]
     pub fn send_msg_timeout(&self) -> u32 {
         self.producer_config.send_msg_timeout
     }
 
+    #[inline]
     pub fn compress_msg_body_over_howmuch(&self) -> u32 {
         self.producer_config.compress_msg_body_over_howmuch
     }
 
+    #[inline]
     pub fn retry_times_when_send_failed(&self) -> u32 {
         self.producer_config.retry_times_when_send_failed
     }
 
+    #[inline]
     pub fn retry_times_when_send_async_failed(&self) -> u32 {
         self.producer_config.retry_times_when_send_async_failed
     }
 
+    #[inline]
     pub fn retry_another_broker_when_not_store_ok(&self) -> bool {
         self.producer_config.retry_another_broker_when_not_store_ok
     }
 
+    #[inline]
     pub fn max_message_size(&self) -> u32 {
         self.producer_config.max_message_size
     }
 
+    #[inline]
     pub fn trace_dispatcher(&self) -> Option<&Arc<Box<dyn TraceDispatcher + Send + Sync>>> {
         self.producer_config.trace_dispatcher()
     }
 
+    #[inline]
     pub fn auto_batch(&self) -> bool {
         self.producer_config.auto_batch
     }
