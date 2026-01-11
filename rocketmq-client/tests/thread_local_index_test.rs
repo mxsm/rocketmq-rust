@@ -1,7 +1,7 @@
-use std::cell::RefCell;
-use std::time::Instant;
 use rand::Rng;
 use rocketmq_client_rust::common::thread_local_index::ThreadLocalIndex;
+use std::cell::RefCell;
+use std::time::Instant;
 
 // Original implementation for comparison
 thread_local! {
@@ -40,11 +40,11 @@ fn test_thread_local_index_basic() {
     let idx = ThreadLocalIndex;
     let val1 = idx.increment_and_get();
     let val2 = idx.increment_and_get();
-    
+
     // Values should be positive
     assert!(val1 >= 0);
     assert!(val2 >= 0);
-    
+
     // Values should increment
     assert_ne!(val1, val2);
 }
@@ -55,22 +55,22 @@ fn test_thread_local_index_reset() {
     let _ = idx.increment_and_get();
     idx.reset();
     let val = idx.increment_and_get();
-    
+
     // Value after reset should still be positive
     assert!(val >= 0);
 }
 
 #[test]
 fn test_performance_comparison() {
-    println!("\n🚀 ThreadLocalIndex Performance Comparison");
+    println!("\nThreadLocalIndex Performance Comparison");
     println!("{}", "=".repeat(70));
 
     // Test 1: First call (cold start)
-    println!("\n📊 Test 1: First Call (includes RNG initialization)");
+    println!("\nTest 1: First Call (includes RNG initialization)");
     println!("{}", "-".repeat(70));
-    
+
     let iterations = 1000;
-    
+
     // Original - first call
     let start = Instant::now();
     for _ in 0..iterations {
@@ -78,7 +78,7 @@ fn test_performance_comparison() {
         let _ = OriginalThreadLocalIndex.increment_and_get();
     }
     let original_first = start.elapsed();
-    
+
     // Optimized - first call
     let start = Instant::now();
     for _ in 0..iterations {
@@ -87,58 +87,90 @@ fn test_performance_comparison() {
         let _ = idx.increment_and_get();
     }
     let optimized_first = start.elapsed();
-    
-    println!("Original:  {:>10.2?} ({:.2} ns/iter)", original_first, original_first.as_nanos() as f64 / iterations as f64);
-    println!("Optimized: {:>10.2?} ({:.2} ns/iter)", optimized_first, optimized_first.as_nanos() as f64 / iterations as f64);
-    println!("Speedup:   {:.2}x faster", original_first.as_nanos() as f64 / optimized_first.as_nanos() as f64);
+
+    println!(
+        "Original:  {:>10.2?} ({:.2} ns/iter)",
+        original_first,
+        original_first.as_nanos() as f64 / iterations as f64
+    );
+    println!(
+        "Optimized: {:>10.2?} ({:.2} ns/iter)",
+        optimized_first,
+        optimized_first.as_nanos() as f64 / iterations as f64
+    );
+    println!(
+        "Speedup:   {:.2}x faster",
+        original_first.as_nanos() as f64 / optimized_first.as_nanos() as f64
+    );
 
     // Test 2: Subsequent calls (hot path)
-    println!("\n📊 Test 2: Subsequent Calls (hot path)");
+    println!("\nTest 2: Subsequent Calls (hot path)");
     println!("{}", "-".repeat(70));
-    
+
     // Initialize
     let _ = OriginalThreadLocalIndex.increment_and_get();
     let _ = ThreadLocalIndex.increment_and_get();
-    
+
     let iterations = 100_000;
-    
+
     // Original - hot
     let start = Instant::now();
     for _ in 0..iterations {
         let _ = OriginalThreadLocalIndex.increment_and_get();
     }
     let original_hot = start.elapsed();
-    
+
     // Optimized - hot
     let start = Instant::now();
     for _ in 0..iterations {
         let _ = ThreadLocalIndex.increment_and_get();
     }
     let optimized_hot = start.elapsed();
-    
-    println!("Original:  {:>10.2?} ({:.2} ns/iter)", original_hot, original_hot.as_nanos() as f64 / iterations as f64);
-    println!("Optimized: {:>10.2?} ({:.2} ns/iter)", optimized_hot, optimized_hot.as_nanos() as f64 / iterations as f64);
-    println!("Speedup:   {:.2}x faster", original_hot.as_nanos() as f64 / optimized_hot.as_nanos() as f64);
+
+    println!(
+        "Original:  {:>10.2?} ({:.2} ns/iter)",
+        original_hot,
+        original_hot.as_nanos() as f64 / iterations as f64
+    );
+    println!(
+        "Optimized: {:>10.2?} ({:.2} ns/iter)",
+        optimized_hot,
+        optimized_hot.as_nanos() as f64 / iterations as f64
+    );
+    println!(
+        "Speedup:   {:.2}x faster",
+        original_hot.as_nanos() as f64 / optimized_hot.as_nanos() as f64
+    );
 
     // Summary
     println!("\n{}", "=".repeat(70));
-    println!("📈 PERFORMANCE SUMMARY");
+    println!("PERFORMANCE SUMMARY");
     println!("{}", "=".repeat(70));
-    println!("First Call:       {:.2}x faster", original_first.as_nanos() as f64 / optimized_first.as_nanos() as f64);
-    println!("Subsequent Calls: {:.2}x faster", original_hot.as_nanos() as f64 / optimized_hot.as_nanos() as f64);
-    
+    println!(
+        "First Call:       {:.2}x faster",
+        original_first.as_nanos() as f64 / optimized_first.as_nanos() as f64
+    );
+    println!(
+        "Subsequent Calls: {:.2}x faster",
+        original_hot.as_nanos() as f64 / optimized_hot.as_nanos() as f64
+    );
+
     // Assert performance improvement
-    assert!(optimized_first <= original_first, "Optimized version should be faster on first call");
+    assert!(
+        optimized_first <= original_first,
+        "Optimized version should be faster on first call"
+    );
 }
 
 #[test]
 fn test_thread_safety() {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    
+
     let counter = Arc::new(AtomicUsize::new(0));
     let mut handles = vec![];
-    
+
     for _ in 0..4 {
         let counter_clone = counter.clone();
         let handle = std::thread::spawn(move || {
@@ -151,10 +183,10 @@ fn test_thread_safety() {
         });
         handles.push(handle);
     }
-    
+
     for handle in handles {
         handle.join().unwrap();
     }
-    
+
     assert_eq!(counter.load(Ordering::Relaxed), 4000);
 }
