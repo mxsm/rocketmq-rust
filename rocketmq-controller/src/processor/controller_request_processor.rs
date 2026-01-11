@@ -95,6 +95,7 @@ use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
+use rocketmq_remoting::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingDeserializable;
@@ -316,9 +317,23 @@ impl ControllerRequestProcessor {
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
-        _request: &mut RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        unimplemented!("unimplemented handle_elect_master")
+        // Decode request header
+        let request_header = request
+            .decode_command_custom_header::<ElectMasterRequestHeader>()
+            .map_err(|e| {
+                RocketMQError::request_header_error(format!("Failed to decode ElectMasterRequestHeader: {:?}", e))
+            })?;
+
+        // Forward to Controller
+        let response = self
+            .controller_manager
+            .controller()
+            .elect_master(&request_header)
+            .await?;
+
+        Ok(response)
     }
 
     /// Handle GET_REPLICA_INFO request
@@ -340,7 +355,18 @@ impl ControllerRequestProcessor {
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        unimplemented!("unimplemented handle_get_replica_info")
+        use rocketmq_remoting::protocol::header::controller::get_replica_info_request_header::GetReplicaInfoRequestHeader;
+
+        let request_header = _request
+            .decode_command_custom_header::<GetReplicaInfoRequestHeader>()
+            .map_err(|e| {
+                RocketMQError::request_header_error(format!("Failed to decode GetReplicaInfoRequestHeader: {:?}", e))
+            })?;
+
+        self.controller_manager
+            .controller()
+            .get_replica_info(&request_header)
+            .await
     }
 
     /// Handle GET_METADATA_INFO request
@@ -362,8 +388,7 @@ impl ControllerRequestProcessor {
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        // This is a read-only operation, no timeout needed
-        unimplemented!("unimplemented handle_get_metadata_info")
+        self.controller_manager.controller().get_controller_metadata().await
     }
 
     /// Handle BROKER_HEARTBEAT request

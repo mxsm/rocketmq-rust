@@ -176,7 +176,7 @@ impl Controller for RaftRsController {
         Ok(Some(RemotingCommand::create_response_command()))
     }
 
-    fn get_controller_metadata(&self) -> RocketMQResult<Option<RemotingCommand>> {
+    async fn get_controller_metadata(&self) -> RocketMQResult<Option<RemotingCommand>> {
         // TODO: Implement metadata query
         Ok(Some(RemotingCommand::create_response_command()))
     }

@@ -17,9 +17,11 @@ use std::cell::RefCell;
 use std::fmt;
 
 use rand::Rng;
+use rand::SeedableRng;
 
 thread_local! {
     static THREAD_LOCAL_INDEX: RefCell<Option<i32>> = const {RefCell::new(None)};
+    static THREAD_LOCAL_RNG: RefCell<rand::rngs::SmallRng> = RefCell::new(rand::rngs::SmallRng::seed_from_u64(rand::random()));
 }
 
 const POSITIVE_MASK: i32 = 0x7FFFFFFF;
@@ -33,17 +35,17 @@ impl ThreadLocalIndex {
         THREAD_LOCAL_INDEX.with(|index| {
             let mut index = index.borrow_mut();
             let new_value = match *index {
-                Some(val) => val.wrapping_add(1) & POSITIVE_MASK,
-                None => rand::rng().random_range(0..=MAX) & POSITIVE_MASK,
+                Some(val) => val.wrapping_add(1),
+                None => THREAD_LOCAL_RNG.with(|rng| rng.borrow_mut().random::<i32>()),
             };
             *index = Some(new_value);
-            new_value
+            new_value & POSITIVE_MASK
         })
     }
 
     pub fn reset(&self) {
-        let new_value = rand::rng().random_range(0..=MAX).abs();
         THREAD_LOCAL_INDEX.with(|index| {
+            let new_value = THREAD_LOCAL_RNG.with(|rng| rng.borrow_mut().random_range(0..MAX));
             *index.borrow_mut() = Some(new_value);
         });
     }

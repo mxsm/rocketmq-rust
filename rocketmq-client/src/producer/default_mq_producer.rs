@@ -250,58 +250,72 @@ impl DefaultMQProducer {
         Self::builder().build()
     }
 
+    #[inline]
     pub fn client_config(&self) -> &ClientConfig {
         &self.client_config
     }
 
+    #[inline]
     pub fn retry_response_codes(&self) -> &HashSet<i32> {
         &self.producer_config.retry_response_codes
     }
 
+    #[inline]
     pub fn producer_group(&self) -> &str {
         &self.producer_config.producer_group
     }
 
+    #[inline]
     pub fn topics(&self) -> &Vec<CheetahString> {
         &self.producer_config.topics
     }
 
+    #[inline]
     pub fn create_topic_key(&self) -> &str {
         &self.producer_config.create_topic_key
     }
 
+    #[inline]
     pub fn default_topic_queue_nums(&self) -> u32 {
         self.producer_config.default_topic_queue_nums
     }
 
+    #[inline]
     pub fn send_msg_timeout(&self) -> u32 {
         self.producer_config.send_msg_timeout
     }
 
+    #[inline]
     pub fn compress_msg_body_over_howmuch(&self) -> u32 {
         self.producer_config.compress_msg_body_over_howmuch
     }
 
+    #[inline]
     pub fn retry_times_when_send_failed(&self) -> u32 {
         self.producer_config.retry_times_when_send_failed
     }
 
+    #[inline]
     pub fn retry_times_when_send_async_failed(&self) -> u32 {
         self.producer_config.retry_times_when_send_async_failed
     }
 
+    #[inline]
     pub fn retry_another_broker_when_not_store_ok(&self) -> bool {
         self.producer_config.retry_another_broker_when_not_store_ok
     }
 
+    #[inline]
     pub fn max_message_size(&self) -> u32 {
         self.producer_config.max_message_size
     }
 
+    #[inline]
     pub fn trace_dispatcher(&self) -> Option<&Arc<Box<dyn TraceDispatcher + Send + Sync>>> {
         self.producer_config.trace_dispatcher()
     }
 
+    #[inline]
     pub fn auto_batch(&self) -> bool {
         self.producer_config.auto_batch
     }
@@ -344,7 +358,7 @@ impl DefaultMQProducer {
 
     pub fn set_default_mqproducer_impl(&mut self, default_mqproducer_impl: DefaultMQProducerImpl) {
         let wrapper = ArcMut::new(default_mqproducer_impl);
-        self.default_mqproducer_impl = Some(wrapper.clone());
+        self.default_mqproducer_impl = Some(ArcMut::clone(&wrapper));
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()
@@ -588,11 +602,11 @@ impl MQProducer for DefaultMQProducer {
     async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
         let producer_group = self.with_namespace(self.producer_config.producer_group.clone().as_str());
         self.set_producer_group(producer_group);
-        self.default_mqproducer_impl
+        let default_mqproducer_impl = self
+            .default_mqproducer_impl
             .as_mut()
-            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
-            .start()
-            .await?;
+            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?;
+        default_mqproducer_impl.start().await?;
         if let Some(ref mut produce_accumulator) = self.producer_config.produce_accumulator {
             produce_accumulator.start();
         }
@@ -603,11 +617,10 @@ impl MQProducer for DefaultMQProducer {
                 self.client_config.trace_topic.clone().unwrap().as_str(),
                 self.producer_config.rpc_hook.clone(),
             );
-            dispatcher.set_host_producer(self.default_mqproducer_impl.as_ref().unwrap().clone());
+            dispatcher.set_host_producer(default_mqproducer_impl.clone());
             dispatcher.set_namespace_v2(self.client_config.namespace_v2.clone());
             let dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>> = Arc::new(Box::new(dispatcher));
             self.producer_config.trace_dispatcher = Some(dispatcher.clone());
-            let default_mqproducer_impl = self.default_mqproducer_impl.as_mut().unwrap();
             default_mqproducer_impl
                 .register_send_message_hook(Box::new(SendMessageTraceHookImpl::new(dispatcher.clone())));
             default_mqproducer_impl

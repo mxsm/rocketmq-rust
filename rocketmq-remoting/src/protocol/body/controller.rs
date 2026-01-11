@@ -1,4 +1,4 @@
-// Copyright 2023 The RocketMQ Rust Authors
+// Copyright 2026 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,11 +12,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[allow(async_fn_in_trait)]
-pub trait ServiceDetector: Send + Sync + 'static {
-    type Fut<'a>: std::future::Future<Output = bool> + Send + 'a
-    where
-        Self: 'a;
-
-    fn detect<'a>(&'a self, endpoint: &'a str, timeout_millis: u64) -> Self::Fut<'a>;
-}
+pub mod controller_metadata_info;
+pub mod node_info;
