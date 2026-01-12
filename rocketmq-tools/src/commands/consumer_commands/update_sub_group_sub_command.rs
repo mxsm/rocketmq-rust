@@ -116,7 +116,9 @@ pub struct UpdateSubGroupSubCommand {
 
 impl CommandExecute for UpdateSubGroupSubCommand {
     async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        if self.broker_addr.is_none() && self.cluster_name.is_none() {
+        if (self.broker_addr.is_none() && self.cluster_name.is_none())
+            || (self.broker_addr.is_some() && self.cluster_name.is_some())
+        {
             return Err(RocketMQError::IllegalArgument(
                 "UpdateSubGroupSubCommand: Invalid arguments: specify exactly one of --brokerAddr (-b) or \
                  --clusterName (-c)."
@@ -156,7 +158,12 @@ impl CommandExecute for UpdateSubGroupSubCommand {
             if let Some(ref group_retry_policy) = self.group_retry_policy {
                 match serde_json::from_str::<GroupRetryPolicy>(group_retry_policy.as_str()) {
                     Ok(value) => subscription_group_config.set_group_retry_policy(value),
-                    Err(e) => eprintln!("UpdateSubGroupSubCommand: Failed to parse groupRetryPolicy: {}", e),
+                    Err(e) => {
+                        return Err(RocketMQError::Internal(format!(
+                            "UpdateSubGroupSubCommand: Failed to parse groupRetryPolicy: {}",
+                            e
+                        )))
+                    }
                 }
             }
 
@@ -180,7 +187,12 @@ impl CommandExecute for UpdateSubGroupSubCommand {
                             .collect::<HashMap<CheetahString, CheetahString>>();
                         subscription_group_config.set_attributes(attributes_modification);
                     }
-                    Err(e) => eprintln!("UpdateSubGroupSubCommand: Failed to parse attributes: {}", e),
+                    Err(e) => {
+                        return Err(RocketMQError::Internal(format!(
+                            "UpdateSubGroupSubCommand: Failed to parse attributes: {}: {}",
+                            attributes, e
+                        )))
+                    }
                 }
             }
 
