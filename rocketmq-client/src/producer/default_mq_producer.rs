@@ -362,7 +362,7 @@ impl DefaultMQProducer {
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()
-            .set_default_mqproducer_impl_inner(wrapper);
+            .set_default_mqproducer_impl_inner(ArcMut::downgrade(&wrapper));
     }
 
     pub fn set_retry_response_codes(&mut self, retry_response_codes: HashSet<i32>) {
