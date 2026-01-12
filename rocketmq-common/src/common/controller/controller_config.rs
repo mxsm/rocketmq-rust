@@ -644,8 +644,7 @@ impl ControllerConfig {
                 }
 
                 "controllerStorePath" => {
-                    self.config_store_path =
-                        serde_json::from_str::<PathBuf>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                    self.controller_store_path = value.clone();
                 }
 
                 "electMasterMaxRetryCount" => {
@@ -687,7 +686,8 @@ impl ControllerConfig {
                 }
 
                 "metricGrpcExporterTimeOutInMills" => {
-                    serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                    self.metric_grpc_exporter_time_out_in_mills =
+                        serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
                 }
 
                 "metricGrpcExporterIntervalInMills" => {
