@@ -96,6 +96,7 @@ use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::header::controller::apply_broker_id_request_header::ApplyBrokerIdRequestHeader;
 use rocketmq_remoting::protocol::header::controller::elect_master_request_header::ElectMasterRequestHeader;
+use rocketmq_remoting::protocol::header::controller::get_next_broker_id_request_header::GetNextBrokerIdRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::RemotingDeserializable;
@@ -551,9 +552,61 @@ impl ControllerRequestProcessor {
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
-        _request: &mut RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        unimplemented!("unimplemented handle_get_next_broker_id")
+        // Decode the request header
+        let request_header = request
+            .decode_command_custom_header::<GetNextBrokerIdRequestHeader>()
+            .map_err(|e| {
+                warn!("Failed to decode GetNextBrokerIdRequestHeader: {:?}", e);
+                RocketMQError::request_header_error(format!("Failed to decode GetNextBrokerIdRequestHeader: {:?}", e))
+            })?;
+
+        info!(
+            "Received GetNextBrokerId request: cluster={}, broker={}",
+            request_header.cluster_name, request_header.broker_name
+        );
+
+        // Validate cluster_name
+        if request_header.cluster_name.is_empty() {
+            warn!("GetNextBrokerId request rejected: cluster_name is empty");
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::ControllerInvalidRequest,
+                "cluster_name cannot be empty".to_string(),
+            )));
+        }
+
+        // Validate broker_name
+        if request_header.broker_name.is_empty() {
+            warn!("GetNextBrokerId request rejected: broker_name is empty");
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::ControllerInvalidRequest,
+                "broker_name cannot be empty".to_string(),
+            )));
+        }
+
+        // Forward to controller to allocate next broker ID
+        let response: Option<RemotingCommand> = self
+            .controller_manager
+            .controller()
+            .get_next_broker_id(&request_header)
+            .await?;
+
+        // Log result
+        if let Some(_res) = &response {
+            info!(
+                "Allocated broker_id response created for cluster={}, broker={}",
+                request_header.cluster_name, request_header.broker_name
+            );
+        } else {
+            warn!(
+                "Failed to allocate broker_id for cluster={}, broker={}",
+                request_header.cluster_name, request_header.broker_name
+            );
+        }
+
+        // Return the controller's response
+        Ok(response)
     }
 
     /// Handle APPLY_BROKER_ID request
