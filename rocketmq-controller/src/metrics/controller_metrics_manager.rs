@@ -57,6 +57,7 @@ use opentelemetry_sdk::metrics::SdkMeterProvider;
 use rocketmq_common::common::metrics::metrics_exporter_type::MetricsExporterType;
 use rocketmq_common::common::metrics::nop_long_counter::NopLongCounter;
 use rocketmq_common::common::metrics::nop_long_histogram::NopLongHistogram;
+use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -187,7 +188,7 @@ pub struct ControllerMetricsManager {
     meter: Meter,
 
     // Configuration
-    config: Arc<ControllerConfig>,
+    config: ArcMut<ControllerConfig>,
 
     // OpenTelemetry SDK components
     _meter_provider: Option<SdkMeterProvider>,
@@ -201,7 +202,7 @@ impl ControllerMetricsManager {
     ///
     /// # Returns
     /// Arc reference to the ControllerMetricsManager instance
-    pub fn get_instance(config: Arc<ControllerConfig>) -> Arc<Self> {
+    pub fn get_instance(config: ArcMut<ControllerConfig>) -> Arc<Self> {
         INSTANCE
             .get_or_init(|| {
                 let manager = Self::new(config);
@@ -211,7 +212,7 @@ impl ControllerMetricsManager {
     }
 
     /// Create a new ControllerMetricsManager
-    fn new(config: Arc<ControllerConfig>) -> Self {
+    fn new(config: ArcMut<ControllerConfig>) -> Self {
         // Initialize label map
         let label_map = LABEL_MAP.get_or_init(|| RwLock::new(HashMap::new()));
 
@@ -258,7 +259,7 @@ impl ControllerMetricsManager {
     }
 
     /// Create a no-op manager when metrics are disabled
-    fn create_noop_manager(config: Arc<ControllerConfig>) -> Self {
+    fn create_noop_manager(config: ArcMut<ControllerConfig>) -> Self {
         let provider = SdkMeterProvider::builder().build();
         let meter = provider.meter("noop");
         Self::init_metrics(meter, config, None)
@@ -369,7 +370,7 @@ impl ControllerMetricsManager {
     }
 
     /// Initialize all metrics with the given meter
-    fn init_metrics(meter: Meter, config: Arc<ControllerConfig>, meter_provider: Option<SdkMeterProvider>) -> Self {
+    fn init_metrics(meter: Meter, config: ArcMut<ControllerConfig>, meter_provider: Option<SdkMeterProvider>) -> Self {
         // Node status metrics
         let role = meter
             .i64_up_down_counter(GAUGE_ROLE)
