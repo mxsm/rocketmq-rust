@@ -15,9 +15,13 @@
 use std::any::Any;
 use std::collections::HashSet;
 use std::future::Future;
+use std::sync::atomic::AtomicU8;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
+
+use parking_lot::Mutex as ParkingLotMutex;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
@@ -83,18 +87,178 @@ use crate::producer::send_result::SendResult;
 use crate::producer::send_status::SendStatus;
 use crate::producer::transaction_listener::TransactionListener;
 use crate::producer::transaction_send_result::TransactionSendResult;
+use tokio::task::JoinHandle;
+
+/// Producer state machine (atomic)
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProducerState {
+    Created = 0,
+    Starting = 1,
+    Running = 2,
+    Stopping = 3,
+    Stopped = 4,
+}
+
+impl ProducerState {
+    #[inline]
+    fn from_u8(val: u8) -> Self {
+        match val {
+            0 => Self::Created,
+            1 => Self::Starting,
+            2 => Self::Running,
+            3 => Self::Stopping,
+            _ => Self::Stopped,
+        }
+    }
+}
+
+/// Producer runtime state (only exists when Running)
+struct ProducerRuntime {
+    /// Background task handles
+    background_tasks: Vec<JoinHandle<()>>,
+    /// Shutdown signal sender
+    shutdown_tx: tokio::sync::broadcast::Sender<()>,
+}
+
+impl ProducerRuntime {
+    async fn shutdown(mut self) {
+        // Send shutdown signal
+        let _ = self.shutdown_tx.send(());
+
+        // Wait for all background tasks to complete
+        for handle in self.background_tasks.drain(..) {
+            let _ = handle.await;
+        }
+    }
+}
+
+/// Send context - encapsulates mutable state during message sending
+struct SendContext {
+    invoke_id: u64,
+    start_time: Instant,
+    timeout_ms: u64,
+    communication_mode: CommunicationMode,
+}
+
+impl SendContext {
+    fn new(timeout_ms: u64, communication_mode: CommunicationMode) -> Self {
+        Self {
+            invoke_id: random::<u64>(),
+            start_time: Instant::now(),
+            timeout_ms,
+            communication_mode,
+        }
+    }
+
+    #[inline]
+    fn elapsed(&self) -> u64 {
+        self.start_time.elapsed().as_millis() as u64
+    }
+
+    #[inline]
+    fn remaining_timeout(&self) -> u64 {
+        self.timeout_ms.saturating_sub(self.elapsed())
+    }
+
+    fn check_timeout(&self) -> rocketmq_error::RocketMQResult<()> {
+        if self.elapsed() >= self.timeout_ms {
+            return Err(rocketmq_error::RocketMQError::Timeout {
+                operation: "send_with_retry",
+                timeout_ms: self.timeout_ms,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Retry state tracker
+struct RetryState {
+    times_total: u32,
+    brokers_sent: Vec<String>,
+    last_error: Option<rocketmq_error::RocketMQError>,
+}
+
+impl RetryState {
+    fn new(times_total: u32) -> Self {
+        Self {
+            times_total,
+            brokers_sent: vec![String::new(); times_total as usize],
+            last_error: None,
+        }
+    }
+
+    fn record_broker(&mut self, attempt: usize, broker_name: &str) {
+        if attempt < self.brokers_sent.len() {
+            self.brokers_sent[attempt] = broker_name.to_string();
+        }
+    }
+
+    fn set_error(&mut self, error: rocketmq_error::RocketMQError) {
+        self.last_error = Some(error);
+    }
+
+    fn build_failure_error(&self, topic: &CheetahString, elapsed_ms: u128) -> rocketmq_error::RocketMQError {
+        let info = format!(
+            "Send [{}] times, still failed, cost [{}]ms, Topic:{}, BrokersSent: {} {}",
+            self.times_total,
+            elapsed_ms,
+            topic,
+            self.brokers_sent.join(","),
+            FAQUrl::suggest_todo(FAQUrl::SEND_MSG_FAILED)
+        );
+
+        if let Some(ref err) = self.last_error {
+            match err {
+                rocketmq_error::RocketMQError::IllegalArgument(_)
+                | rocketmq_error::RocketMQError::Timeout { .. }
+                | rocketmq_error::RocketMQError::BrokerOperationFailed { .. }
+                | rocketmq_error::RocketMQError::Network(_) => {
+                    mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info)
+                }
+                _ => {
+                    // For other error types, create a new error with info
+                    mq_client_err!(
+                        ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION,
+                        format!("{}: {}", info, err)
+                    )
+                }
+            }
+        } else {
+            mq_client_err!(info)
+        }
+    }
+}
 
 pub struct DefaultMQProducerImpl {
+    // ===== Immutable configuration =====
     client_config: ClientConfig,
     producer_config: Arc<ProducerConfig>,
+
+    // ===== Atomic state machine =====
+    state: AtomicU8,             // ProducerState
+    service_state: ServiceState, // Keep for compatibility
+
+    // ===== Runtime (created/destroyed on demand) =====
+    runtime: tokio::sync::RwLock<Option<ProducerRuntime>>,
+
+    // ===== Read-only hot data (immutable after init, zero-cost sharing) =====
+    send_message_hook_list: Arc<[Arc<dyn SendMessageHook>]>,
+    end_transaction_hook_list: Arc<[Arc<dyn EndTransactionHook>]>,
+    check_forbidden_hook_list: Arc<[Arc<dyn CheckForbiddenHook>]>,
+
+    // Temporary hook storage during initialization
+    pending_send_hooks: parking_lot::Mutex<Option<Vec<Arc<dyn SendMessageHook>>>>,
+    pending_end_transaction_hooks: parking_lot::Mutex<Option<Vec<Arc<dyn EndTransactionHook>>>>,
+    pending_forbidden_hooks: parking_lot::Mutex<Option<Vec<Arc<dyn CheckForbiddenHook>>>>,
+
     topic_publish_info_table: Arc<DashMap<CheetahString /* topic */, TopicPublishInfo>>,
-    send_message_hook_list: ArcMut<Vec<Box<dyn SendMessageHook>>>,
-    end_transaction_hook_list: Arc<Vec<Arc<Box<dyn EndTransactionHook>>>>,
-    check_forbidden_hook_list: Vec<Arc<Box<dyn CheckForbiddenHook>>>,
+
     rpc_hook: Option<Arc<dyn RPCHook>>,
-    service_state: ServiceState,
     client_instance: Option<ArcMut<MQClientInstance>>,
     mq_fault_strategy: ArcMut<MQFaultStrategy>,
+
+    // ===== Backpressure control =====
     semaphore_async_send_num: Arc<Semaphore>,
     semaphore_async_send_size: Arc<Semaphore>,
     default_mqproducer_impl_inner: Option<ArcMut<DefaultMQProducerImpl>>,
@@ -118,12 +282,17 @@ impl DefaultMQProducerImpl {
         DefaultMQProducerImpl {
             client_config: client_config.clone(),
             producer_config: Arc::new(producer_config),
-            topic_publish_info_table,
-            send_message_hook_list: ArcMut::new(vec![]),
-            end_transaction_hook_list: Arc::new(vec![]),
-            check_forbidden_hook_list: vec![],
-            rpc_hook: None,
+            state: AtomicU8::new(ProducerState::Created as u8),
             service_state: ServiceState::CreateJust,
+            runtime: tokio::sync::RwLock::new(None),
+            topic_publish_info_table,
+            send_message_hook_list: Arc::new([]),
+            end_transaction_hook_list: Arc::new([]),
+            check_forbidden_hook_list: Arc::new([]),
+            pending_send_hooks: ParkingLotMutex::new(Some(Vec::new())),
+            pending_end_transaction_hooks: ParkingLotMutex::new(Some(Vec::new())),
+            pending_forbidden_hooks: ParkingLotMutex::new(Some(Vec::new())),
+            rpc_hook: None,
             client_instance: None,
             mq_fault_strategy: ArcMut::new(MQFaultStrategy::new(&client_config)),
             semaphore_async_send_num: Arc::new(semaphore_async_send_num),
@@ -617,206 +786,19 @@ impl DefaultMQProducerImpl {
         T: MessageTrait + Send + Sync,
     {
         self.make_sure_state_ok()?;
-        let invoke_id = random::<u64>();
-        let begin_timestamp_first = Instant::now();
-        let mut begin_timestamp_prev = begin_timestamp_first;
-        let mut end_timestamp = begin_timestamp_first;
+
         let topic = msg.get_topic().clone();
         let topic_publish_info = self.try_to_find_topic_publish_info(&topic).await;
+
         if let Some(topic_publish_info) = topic_publish_info {
             if topic_publish_info.ok() {
-                let mut call_timeout = false;
-                let mut mq: Option<MessageQueue> = None;
-                let mut exception: Option<rocketmq_error::RocketMQError> = None;
-                let mut send_result: Option<SendResult> = None;
-                let times_total = if communication_mode == CommunicationMode::Sync {
-                    self.producer_config.retry_times_when_send_failed() + 1
-                } else {
-                    1
-                };
-                let mut brokers_sent = vec![String::new(); times_total as usize];
-                let mut reset_index = false;
-                //handle send message
-                for times in 0..times_total {
-                    let last_broker_name = mq.as_ref().map(|mq_inner| mq_inner.get_broker_name());
-                    if times > 0 {
-                        reset_index = true;
-                    }
-
-                    //select one message queue to send message
-                    let mq_selected = self.select_one_message_queue(&topic_publish_info, last_broker_name, reset_index);
-                    if mq_selected.is_some() {
-                        mq = mq_selected;
-                        brokers_sent[times as usize] = mq.as_ref().unwrap().get_broker_name().to_string();
-                        begin_timestamp_prev = Instant::now();
-                        if times > 0 {
-                            //Reset topic with namespace during resend.
-                            let namespace = self.client_config.get_namespace().unwrap_or_default();
-                            msg.set_topic(CheetahString::from_string(NamespaceUtil::wrap_namespace(
-                                namespace.as_str(),
-                                topic.as_str(),
-                            )));
-                        }
-                        let cost_time = (begin_timestamp_prev - begin_timestamp_first).as_millis() as u64;
-                        if timeout < cost_time {
-                            call_timeout = true;
-                            break;
-                        }
-
-                        //send message to broker
-                        let result_inner = self
-                            .send_kernel_impl(
-                                msg,
-                                mq.as_ref().unwrap(),
-                                communication_mode,
-                                send_callback.clone(),
-                                Some(&topic_publish_info),
-                                timeout - cost_time,
-                            )
-                            .await;
-
-                        match result_inner {
-                            Ok(result) => {
-                                send_result = result;
-                                end_timestamp = Instant::now();
-                                self.update_fault_item(
-                                    mq.as_ref().unwrap().get_broker_name().clone(),
-                                    (end_timestamp - begin_timestamp_prev).as_millis() as u64,
-                                    false,
-                                    true,
-                                )
-                                .await;
-                                return match communication_mode {
-                                    CommunicationMode::Sync => {
-                                        if let Some(ref result) = send_result {
-                                            if result.send_status != SendStatus::SendOk
-                                                && self.producer_config.retry_another_broker_when_not_store_ok()
-                                            {
-                                                continue;
-                                            }
-                                        }
-                                        Ok(send_result)
-                                    }
-                                    CommunicationMode::Async | CommunicationMode::Oneway => Ok(None),
-                                };
-                            }
-                            Err(err) => match err {
-                                rocketmq_error::RocketMQError::IllegalArgument(_) => {
-                                    end_timestamp = Instant::now();
-                                    let elapsed = (end_timestamp - begin_timestamp_prev).as_millis() as u64;
-                                    self.update_fault_item(
-                                        mq.as_ref().unwrap().get_broker_name().clone(),
-                                        elapsed,
-                                        false,
-                                        true,
-                                    )
-                                    .await;
-                                    warn!(
-                                        "sendKernelImpl exception, resend at once, InvokeID: {}, RT: {}ms, Broker: \
-                                         {:?},{}",
-                                        invoke_id,
-                                        elapsed,
-                                        mq,
-                                        err.to_string()
-                                    );
-                                    // warn!("{:?}", msg);
-                                    exception = Some(err);
-                                    continue;
-                                }
-                                rocketmq_error::RocketMQError::BrokerOperationFailed { code, .. } => {
-                                    end_timestamp = Instant::now();
-                                    let elapsed = (end_timestamp - begin_timestamp_prev).as_millis() as u64;
-                                    self.update_fault_item(
-                                        mq.as_ref().unwrap().get_broker_name().clone(),
-                                        elapsed,
-                                        true,
-                                        false,
-                                    )
-                                    .await;
-                                    if self.producer_config.retry_response_codes().contains(&code) {
-                                        exception = Some(err);
-                                        continue;
-                                    } else {
-                                        if send_result.is_some() {
-                                            return Ok(send_result);
-                                        }
-                                        return Err(err);
-                                    }
-                                }
-                                rocketmq_error::RocketMQError::Network(_) => {
-                                    end_timestamp = Instant::now();
-                                    let elapsed = (end_timestamp - begin_timestamp_prev).as_millis() as u64;
-                                    if self.mq_fault_strategy.is_start_detector_enable() {
-                                        self.update_fault_item(
-                                            mq.as_ref().unwrap().get_broker_name().clone(),
-                                            elapsed,
-                                            true,
-                                            false,
-                                        )
-                                        .await;
-                                    } else {
-                                        self.update_fault_item(
-                                            mq.as_ref().unwrap().get_broker_name().clone(),
-                                            elapsed,
-                                            true,
-                                            true,
-                                        )
-                                        .await;
-                                    }
-                                    exception = Some(err);
-                                    continue;
-                                }
-
-                                _ => {
-                                    return Err(err);
-                                }
-                            },
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                if send_result.is_some() {
-                    return Ok(send_result);
-                }
-
-                if call_timeout {
-                    return Err(rocketmq_error::RocketMQError::Timeout {
-                        operation: "sendDefaultImpl",
-                        timeout_ms: self.producer_config.send_msg_timeout() as u64,
-                    });
-                }
-
-                let info = format!(
-                    "Send [{}] times, still failed, cost [{}]ms, Topic:{}, BrokersSent: {} {}",
-                    times_total,
-                    (Instant::now() - begin_timestamp_first).as_millis(),
-                    topic,
-                    brokers_sent.join(","),
-                    FAQUrl::suggest_todo(FAQUrl::SEND_MSG_FAILED)
-                );
-
-                return if let Some(err) = exception {
-                    match err {
-                        rocketmq_error::RocketMQError::IllegalArgument(_) => {
-                            Err(mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info))
-                        }
-                        rocketmq_error::RocketMQError::Timeout { .. } => {
-                            Err(mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info))
-                        }
-                        rocketmq_error::RocketMQError::BrokerOperationFailed { .. } => {
-                            Err(mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info))
-                        }
-                        rocketmq_error::RocketMQError::Network(_) => {
-                            Err(mq_client_err!(ClientErrorCode::BROKER_NOT_EXIST_EXCEPTION, info))
-                        }
-                        _ => Err(err),
-                    }
-                } else {
-                    Err(mq_client_err!(info))
-                };
+                let ctx = SendContext::new(timeout, communication_mode);
+                return self
+                    .send_with_retry(msg, &topic, &topic_publish_info, send_callback, ctx)
+                    .await;
             }
         }
+
         self.validate_name_server_setting()?;
         Err(mq_client_err!(
             ClientErrorCode::NOT_FOUND_TOPIC_EXCEPTION,
@@ -828,17 +810,176 @@ impl DefaultMQProducerImpl {
         ))
     }
 
+    /// Core: send with retry logic
+    async fn send_with_retry<T>(
+        &mut self,
+        msg: &mut T,
+        topic: &CheetahString,
+        topic_publish_info: &TopicPublishInfo,
+        send_callback: Option<SendMessageCallback>,
+        ctx: SendContext,
+    ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
+    where
+        T: MessageTrait + Send + Sync,
+    {
+        let retry_times = self.get_retry_times(ctx.communication_mode);
+        let mut retry_state = RetryState::new(retry_times);
+        let mut last_broker_name: Option<CheetahString> = None;
+        let send_result: Option<SendResult> = None;
+
+        for attempt in 0..retry_times {
+            let reset_index = attempt > 0;
+
+            // Select message queue
+            let mq = match self.select_one_message_queue(topic_publish_info, last_broker_name.as_ref(), reset_index) {
+                Some(mq) => mq,
+                None => break,
+            };
+
+            retry_state.record_broker(attempt as usize, mq.get_broker_name());
+            last_broker_name = Some(mq.get_broker_name().clone());
+
+            // Prepare message for retry
+            if attempt > 0 {
+                self.prepare_message_for_retry(msg, topic);
+            }
+
+            // Check timeout
+            ctx.check_timeout()?;
+
+            // Send to broker
+            let send_start = Instant::now();
+            let result = self
+                .send_kernel_impl(
+                    msg,
+                    &mq,
+                    ctx.communication_mode,
+                    send_callback.clone(),
+                    Some(topic_publish_info),
+                    ctx.remaining_timeout(),
+                )
+                .await;
+
+            let elapsed = send_start.elapsed().as_millis() as u64;
+
+            match result {
+                Ok(result) => {
+                    // Update fault item - success
+                    self.update_fault_item(mq.get_broker_name(), elapsed, false, true).await;
+
+                    // Check if need to retry based on send status
+                    if self.should_retry_on_result(&result, ctx.communication_mode) {
+                        retry_state.set_error(mq_client_err!("Send status not OK"));
+                        continue;
+                    }
+
+                    return Ok(result);
+                }
+                Err(e) => {
+                    // Handle send error
+                    self.handle_send_error(&mq, &e, elapsed, ctx.invoke_id).await;
+
+                    if !self.should_retry_on_error(&e) {
+                        return Err(e);
+                    }
+
+                    retry_state.set_error(e);
+                }
+            }
+        }
+
+        // All retries exhausted
+        if send_result.is_some() {
+            return Ok(send_result);
+        }
+
+        Err(retry_state.build_failure_error(topic, ctx.elapsed() as u128))
+    }
+
+    /// Get retry times based on communication mode
+    #[inline]
+    fn get_retry_times(&self, mode: CommunicationMode) -> u32 {
+        if mode == CommunicationMode::Sync {
+            self.producer_config.retry_times_when_send_failed() + 1
+        } else {
+            1
+        }
+    }
+
+    /// Prepare message for retry (reset topic with namespace)
+    fn prepare_message_for_retry<T: MessageTrait>(&self, msg: &mut T, topic: &CheetahString) {
+        let namespace = self.client_config.namespace.as_ref().map(|s| s.as_str()).unwrap_or("");
+        msg.set_topic(CheetahString::from_string(NamespaceUtil::wrap_namespace(
+            namespace,
+            topic.as_str(),
+        )));
+    }
+
+    /// Handle send error - update fault item and log
+    async fn handle_send_error(
+        &self,
+        mq: &MessageQueue,
+        error: &rocketmq_error::RocketMQError,
+        elapsed: u64,
+        invoke_id: u64,
+    ) {
+        let broker_name = mq.get_broker_name();
+
+        match error {
+            rocketmq_error::RocketMQError::IllegalArgument(_) => {
+                self.update_fault_item(broker_name, elapsed, false, true).await;
+                warn!(
+                    "sendKernelImpl exception, resend at once, InvokeID: {}, RT: {}ms, Broker: {:?}, {}",
+                    invoke_id, elapsed, mq, error
+                );
+            }
+            rocketmq_error::RocketMQError::BrokerOperationFailed { .. } => {
+                self.update_fault_item(broker_name, elapsed, true, false).await;
+            }
+            rocketmq_error::RocketMQError::Network(_) => {
+                let reachable = !self.mq_fault_strategy.is_start_detector_enable();
+                self.update_fault_item(broker_name, elapsed, true, reachable).await;
+            }
+            _ => {}
+        }
+    }
+
+    /// Check if should retry based on error type
+    #[inline]
+    fn should_retry_on_error(&self, error: &rocketmq_error::RocketMQError) -> bool {
+        match error {
+            rocketmq_error::RocketMQError::IllegalArgument(_) => true,
+            rocketmq_error::RocketMQError::Network(_) => true,
+            rocketmq_error::RocketMQError::BrokerOperationFailed { code, .. } => {
+                self.producer_config.retry_response_codes().contains(code)
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if should retry based on send result
+    #[inline]
+    fn should_retry_on_result(&self, result: &Option<SendResult>, mode: CommunicationMode) -> bool {
+        if mode != CommunicationMode::Sync {
+            return false;
+        }
+
+        result.as_ref().is_some_and(|r| {
+            r.send_status != SendStatus::SendOk && self.producer_config.retry_another_broker_when_not_store_ok()
+        })
+    }
+
     #[inline]
     pub async fn update_fault_item(
         &self,
-        broker_name: CheetahString,
+        broker_name: &CheetahString,
         current_latency: u64,
         isolation: bool,
         reachable: bool,
     ) {
         self.mq_fault_strategy
             .mut_from_ref()
-            .update_fault_item(broker_name, current_latency, isolation, reachable)
+            .update_fault_item(broker_name.clone(), current_latency, isolation, reachable)
             .await;
     }
 
@@ -1089,8 +1230,8 @@ impl DefaultMQProducerImpl {
         }
     }
 
-    pub fn execute_send_message_hook_before(&mut self, context: &Option<SendMessageContext<'_>>) {
-        if self.has_send_message_hook() {
+    pub fn execute_send_message_hook_before(&self, context: &Option<SendMessageContext<'_>>) {
+        if !self.send_message_hook_list.is_empty() {
             for hook in self.send_message_hook_list.iter() {
                 hook.send_message_before(context);
             }
@@ -1105,6 +1246,7 @@ impl DefaultMQProducerImpl {
         }
     }
 
+    #[inline]
     pub fn has_send_message_hook(&self) -> bool {
         !self.send_message_hook_list.is_empty()
     }
@@ -1112,6 +1254,11 @@ impl DefaultMQProducerImpl {
     #[inline]
     pub fn has_check_forbidden_hook(&self) -> bool {
         !self.check_forbidden_hook_list.is_empty()
+    }
+
+    #[inline]
+    pub fn has_end_transaction_hook(&self) -> bool {
+        !self.end_transaction_hook_list.is_empty()
     }
 
     pub fn execute_check_forbidden_hook(&self, context: &CheckForbiddenContext) -> rocketmq_error::RocketMQResult<()> {
@@ -1199,11 +1346,49 @@ impl DefaultMQProducerImpl {
     }
 
     fn make_sure_state_ok(&self) -> rocketmq_error::RocketMQResult<()> {
-        if self.service_state != ServiceState::Running {
+        let current_state = ProducerState::from_u8(self.state.load(Ordering::Acquire));
+        if current_state != ProducerState::Running {
             return Err(mq_client_err!(format!(
                 "The producer service state not OK, {:?} {}",
-                self.service_state,
+                current_state,
                 FAQUrl::suggest_todo(FAQUrl::CLIENT_SERVICE_NOT_OK)
+            )));
+        }
+        Ok(())
+    }
+
+    /// Ensure producer is in running state (atomic check)
+    /// Freeze hook lists from mutable to immutable (called once during start)
+    fn freeze_hook_lists(&mut self) {
+        // Take ownership of pending hooks and convert to Arc<[_]>
+        if let Some(send_hooks) = self.pending_send_hooks.lock().take() {
+            if !send_hooks.is_empty() {
+                self.send_message_hook_list = send_hooks.into();
+                tracing::info!("Frozen {} send message hooks", self.send_message_hook_list.len());
+            }
+        }
+
+        if let Some(end_hooks) = self.pending_end_transaction_hooks.lock().take() {
+            if !end_hooks.is_empty() {
+                self.end_transaction_hook_list = end_hooks.into();
+                tracing::info!("Frozen {} end transaction hooks", self.end_transaction_hook_list.len());
+            }
+        }
+
+        if let Some(forbidden_hooks) = self.pending_forbidden_hooks.lock().take() {
+            if !forbidden_hooks.is_empty() {
+                self.check_forbidden_hook_list = forbidden_hooks.into();
+                tracing::info!("Frozen {} check forbidden hooks", self.check_forbidden_hook_list.len());
+            }
+        }
+    }
+
+    #[inline]
+    fn ensure_running(&self) -> rocketmq_error::RocketMQResult<()> {
+        if self.state.load(Ordering::Acquire) != ProducerState::Running as u8 {
+            return Err(mq_client_err!(format!(
+                "Producer is not running, current state: {:?}",
+                ProducerState::from_u8(self.state.load(Ordering::Relaxed))
             )));
         }
         Ok(())
@@ -1803,10 +1988,6 @@ impl DefaultMQProducerImpl {
         Ok(())
     }
 
-    pub fn has_end_transaction_hook(&self) -> bool {
-        !self.end_transaction_hook_list.is_empty()
-    }
-
     pub fn do_execute_end_transaction_hook(
         &self,
         msg: &Message,
@@ -1946,9 +2127,20 @@ impl DefaultMQProducerImpl {
 
     #[inline]
     pub async fn start_with_factory(&mut self, start_factory: bool) -> rocketmq_error::RocketMQResult<()> {
-        match self.service_state {
-            ServiceState::CreateJust => {
+        // Atomic CAS state transition
+        match self.state.compare_exchange(
+            ProducerState::Created as u8,
+            ProducerState::Starting as u8,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            Ok(_) => {
+                // First-time startup
                 self.service_state = ServiceState::StartFailed;
+
+                // Freeze hook lists (convert from mutable Vec to immutable Arc<[_]>)
+                self.freeze_hook_lists();
+
                 self.check_config()?;
 
                 if self.producer_config.producer_group() != CLIENT_INNER_PRODUCER_GROUP {
@@ -1996,23 +2188,36 @@ impl DefaultMQProducerImpl {
 
                 self.init_topic_route().await;
                 self.mq_fault_strategy.start_detector();
+
+                // Update both states
                 self.service_state = ServiceState::Running;
+                self.state.store(ProducerState::Running as u8, Ordering::SeqCst);
+
+                tracing::info!(
+                    "Producer [{}] started successfully",
+                    self.producer_config.producer_group()
+                );
+                Ok(())
             }
-            ServiceState::Running => {
-                return Err(mq_client_err!("The producer service state is Running"));
-            }
-            ServiceState::ShutdownAlready => {
-                return Err(mq_client_err!("The producer service state is ShutdownAlready"));
-            }
-            ServiceState::StartFailed => {
-                return Err(mq_client_err!(format!(
-                    "The producer service state not OK, maybe started once,{:?},{}",
-                    self.service_state,
-                    FAQUrl::suggest_todo(FAQUrl::CLIENT_SERVICE_NOT_OK)
-                )));
+            Err(current) => {
+                let state = ProducerState::from_u8(current);
+                match state {
+                    ProducerState::Running => {
+                        // Already running, idempotent
+                        Ok(())
+                    }
+                    ProducerState::Starting => {
+                        // Another thread is starting, wait for completion
+                        while self.state.load(Ordering::SeqCst) == ProducerState::Starting as u8 {
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                        self.ensure_running()
+                    }
+                    ProducerState::Stopped => Err(mq_client_err!("The producer service state is ShutdownAlready")),
+                    _ => Err(mq_client_err!(format!("Cannot start producer in state {:?}", state))),
+                }
             }
         }
-        Ok(())
     }
 
     /// Shutdown the producer gracefully
@@ -2022,63 +2227,124 @@ impl DefaultMQProducerImpl {
 
     /// Shutdown the producer with option to shutdown factory
     pub async fn shutdown_with_factory(&mut self, shutdown_factory: bool) -> rocketmq_error::RocketMQResult<()> {
-        match self.service_state {
-            ServiceState::CreateJust => {
-                // Not started, nothing to do
-                Ok(())
-            }
-            ServiceState::Running => {
-                // 1. Unregister producer from client instance
-                if let Some(client_instance) = self.client_instance.as_mut() {
-                    client_instance
-                        .unregister_producer(self.producer_config.producer_group())
-                        .await;
+        // Atomic CAS state transition
+        match self.state.compare_exchange(
+            ProducerState::Running as u8,
+            ProducerState::Stopping as u8,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            Ok(_) => {
+                // Perform shutdown
+                self.do_shutdown_internal(shutdown_factory).await?;
+
+                // Shutdown runtime if exists
+                if let Some(runtime) = self.runtime.write().await.take() {
+                    runtime.shutdown().await;
                 }
 
-                // 2. Shutdown async sender executor
-                // Note: We don't explicitly shutdown the runtime as it might be shared
-                // The runtime will be cleaned up when all references are dropped
-
-                // 3. Stop fault strategy detector
-                self.mq_fault_strategy.shutdown();
-
-                // 4. Shutdown client factory if requested
-                if shutdown_factory {
-                    if let Some(client_instance) = self.client_instance.as_mut() {
-                        client_instance.shutdown().await;
-                    }
-                }
-
-                // 5. Update state
+                // Update states
                 self.service_state = ServiceState::ShutdownAlready;
+                self.state.store(ProducerState::Stopped as u8, Ordering::SeqCst);
 
-                tracing::info!("The producer [{}] shutdown OK", self.producer_config.producer_group());
+                tracing::info!("Producer [{}] shutdown OK", self.producer_config.producer_group());
                 Ok(())
             }
-            ServiceState::ShutdownAlready => {
-                // Already shutdown, idempotent
-                Ok(())
+            Err(current) => {
+                let state = ProducerState::from_u8(current);
+                match state {
+                    ProducerState::Stopped => {
+                        // Already stopped, idempotent
+                        Ok(())
+                    }
+                    ProducerState::Created => {
+                        // Not started, nothing to do
+                        Ok(())
+                    }
+                    ProducerState::Stopping => {
+                        // Another thread is stopping, wait for completion
+                        while self.state.load(Ordering::SeqCst) == ProducerState::Stopping as u8 {
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                        Ok(())
+                    }
+                    _ => Err(mq_client_err!(format!("Cannot shutdown producer in state {:?}", state))),
+                }
             }
-            ServiceState::StartFailed => Err(mq_client_err!(
-                "The producer service state is StartFailed, cannot shutdown properly"
-            )),
         }
     }
 
-    pub fn register_end_transaction_hook(&mut self, hook: Arc<Box<dyn EndTransactionHook>>) {
-        Arc::make_mut(&mut self.end_transaction_hook_list).push(hook);
-        tracing::info!(
-            "register endTransaction Hook, total hooks: {}",
-            self.end_transaction_hook_list.len()
-        );
+    /// Internal shutdown logic
+    async fn do_shutdown_internal(&mut self, shutdown_factory: bool) -> rocketmq_error::RocketMQResult<()> {
+        // 1. Unregister producer from client instance
+        if let Some(client_instance) = self.client_instance.as_mut() {
+            client_instance
+                .unregister_producer(self.producer_config.producer_group())
+                .await;
+        }
+
+        // 2. Stop fault strategy detector
+        self.mq_fault_strategy.shutdown();
+
+        // 3. Shutdown client factory if requested
+        if shutdown_factory {
+            if let Some(client_instance) = self.client_instance.as_mut() {
+                client_instance.shutdown().await;
+            }
+        }
+
+        Ok(())
     }
 
-    pub fn register_send_message_hook(&mut self, hook: Box<dyn SendMessageHook>) {
-        self.send_message_hook_list.push(hook);
-        tracing::info!(
-            "register sendMessage Hook, total hooks: {}",
-            self.send_message_hook_list.len()
-        );
+    pub fn register_end_transaction_hook(&mut self, hook: Arc<dyn EndTransactionHook>) {
+        // Only allow registration before start
+        let current_state = ProducerState::from_u8(self.state.load(Ordering::Relaxed));
+        if current_state != ProducerState::Created {
+            tracing::warn!(
+                "Cannot register hook after producer started (state: {:?})",
+                current_state
+            );
+            return;
+        }
+
+        if let Some(pending) = self.pending_end_transaction_hooks.lock().as_mut() {
+            pending.push(hook);
+            tracing::info!("Registered endTransaction Hook, pending hooks: {}", pending.len());
+        }
+    }
+
+    pub fn register_check_forbidden_hook(&mut self, hook: Arc<dyn CheckForbiddenHook>) {
+        // Only allow registration before start
+        let current_state = ProducerState::from_u8(self.state.load(Ordering::Relaxed));
+        if current_state != ProducerState::Created {
+            tracing::warn!(
+                "Cannot register hook after producer started (state: {:?})",
+                current_state
+            );
+            return;
+        }
+
+        if let Some(pending) = self.pending_forbidden_hooks.lock().as_mut() {
+            pending.push(hook);
+            tracing::info!("Registered checkForbidden Hook, pending hooks: {}", pending.len());
+        }
+    }
+
+    pub fn register_send_message_hook(&mut self, hook: Arc<dyn SendMessageHook>) {
+        // Only allow registration before start
+        let current_state = ProducerState::from_u8(self.state.load(Ordering::Relaxed));
+        if current_state != ProducerState::Created {
+            tracing::warn!(
+                "Cannot register hook after producer started (state: {:?})",
+                current_state
+            );
+            return;
+        }
+
+        if let Some(pending) = self.pending_send_hooks.lock().as_mut() {
+            pending.push(hook);
+            tracing::info!("Registered sendMessage Hook, pending hooks: {}", pending.len());
+        }
     }
 
     #[inline]

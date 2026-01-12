@@ -41,6 +41,7 @@ use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::body::producer_connection::ProducerConnection;
 use rocketmq_remoting::protocol::body::topic::topic_list::TopicList;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
+use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
@@ -691,6 +692,15 @@ impl MQAdminExt for DefaultMQAdminExt {
         force: bool,
     ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
+    }
+
+    async fn get_controller_meta_data(
+        &self,
+        controller_addr: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<GetMetaDataResponseHeader> {
+        self.default_mqadmin_ext_impl
+            .get_controller_meta_data(controller_addr)
+            .await
     }
 
     async fn reset_master_flush_offset(

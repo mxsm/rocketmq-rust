@@ -39,6 +39,7 @@ use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::body::producer_connection::ProducerConnection;
 use rocketmq_remoting::protocol::body::topic::topic_list::TopicList;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
+use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
@@ -733,6 +734,20 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         force: bool,
     ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
+    }
+
+    async fn get_controller_meta_data(
+        &self,
+        controller_addr: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<GetMetaDataResponseHeader> {
+        if let Some(ref mq_client_instance) = self.client_instance {
+            Ok(mq_client_instance
+                .get_mq_client_api_impl()
+                .get_controller_metadata(controller_addr, self.timeout_millis.as_millis() as u64)
+                .await?)
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn reset_master_flush_offset(

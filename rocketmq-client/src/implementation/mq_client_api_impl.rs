@@ -67,6 +67,7 @@ use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
 use rocketmq_remoting::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
+use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
 use rocketmq_remoting::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
 use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
@@ -647,7 +648,7 @@ impl MQClientAPIImpl {
                     }
                     let duration = (Instant::now() - begin_start_time).as_millis() as u64;
                     producer
-                        .update_fault_item(broker_name.clone(), duration, false, true)
+                        .update_fault_item(&broker_name, duration, false, true)
                         .await;
                     return;
                 }
@@ -662,13 +663,13 @@ impl MQClientAPIImpl {
                         let duration = (Instant::now() - begin_start_time).as_millis() as u64;
                         send_callback.as_ref().unwrap()(Some(&result), None);
                         producer
-                            .update_fault_item(broker_name.clone(), duration, false, true)
+                            .update_fault_item(&broker_name, duration, false, true)
                             .await;
                     }
                     Err(err) => {
                         let duration = (Instant::now() - begin_start_time).as_millis() as u64;
                         producer
-                            .update_fault_item(broker_name.clone(), duration, true, true)
+                            .update_fault_item(&broker_name, duration, true, true)
                             .await;
                         Box::pin(self.on_exception_impl(
                             broker_name,
@@ -736,7 +737,7 @@ impl MQClientAPIImpl {
                         }
                         let duration = (Instant::now() - begin_start_time).as_millis() as u64;
                         producer
-                            .update_fault_item(current_broker_name.clone(), duration, false, true)
+                            .update_fault_item(&current_broker_name, duration, false, true)
                             .await;
                         return;
                     }
@@ -752,14 +753,14 @@ impl MQClientAPIImpl {
                             let duration = (Instant::now() - begin_start_time).as_millis() as u64;
                             send_callback.as_ref().unwrap()(Some(&result), None);
                             producer
-                                .update_fault_item(current_broker_name.clone(), duration, false, true)
+                                .update_fault_item(&current_broker_name, duration, false, true)
                                 .await;
                             return; // success, return loop
                         }
                         Err(err) => {
                             let duration = (Instant::now() - begin_start_time).as_millis() as u64;
                             producer
-                                .update_fault_item(current_broker_name.clone(), duration, true, true)
+                                .update_fault_item(&current_broker_name, duration, true, true)
                                 .await;
 
                             // Check if a retry is needed
@@ -2036,6 +2037,28 @@ impl MQClientAPIImpl {
             }
         }
         Ok(Some(config_map))
+    }
+
+    pub async fn get_controller_metadata(
+        &self,
+        controller_address: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<GetMetaDataResponseHeader> {
+        let request = RemotingCommand::create_remoting_command(RequestCode::ControllerGetMetadataInfo);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&controller_address), request, timeout_millis)
+            .await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => match response.decode_command_custom_header_fast::<GetMetaDataResponseHeader>() {
+                Ok(header) => Ok(header),
+                Err(_) => Err(mq_client_err!("Could not decode GetMetaDataResponseHeader".to_string())),
+            },
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string())
+            )),
+        }
     }
 }
 
