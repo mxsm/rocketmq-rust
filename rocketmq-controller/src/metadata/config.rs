@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
+use rocketmq_rust::ArcMut;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::info;
@@ -43,12 +44,12 @@ pub struct ConfigManager {
 
     /// Controller configuration
     #[allow(dead_code)]
-    config: Arc<ControllerConfig>,
+    config: ArcMut<ControllerConfig>,
 }
 
 impl ConfigManager {
     /// Create a new config manager
-    pub fn new(config: Arc<ControllerConfig>) -> Self {
+    pub fn new(config: ArcMut<ControllerConfig>) -> Self {
         Self {
             configs: Arc::new(DashMap::new()),
             config,
@@ -113,7 +114,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_config_management() {
-        let config = Arc::new(ControllerConfig::test_config());
+        let config = ArcMut::new(ControllerConfig::test_config());
 
         let manager = ConfigManager::new(config);
 

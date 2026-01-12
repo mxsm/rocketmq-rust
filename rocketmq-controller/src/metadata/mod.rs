@@ -28,6 +28,7 @@ pub use replica::BrokerReplicaInfo;
 pub use replica::ReplicaRole;
 pub use replica::ReplicasManager;
 pub use replica::SyncStateSet;
+use rocketmq_rust::ArcMut;
 pub use topic::TopicConfig;
 pub use topic::TopicInfo;
 pub use topic::TopicManager;
@@ -61,7 +62,7 @@ pub struct MetadataStore {
 
 impl MetadataStore {
     /// Create a new metadata store
-    pub async fn new(config: Arc<ControllerConfig>) -> Result<Self> {
+    pub async fn new(config: ArcMut<ControllerConfig>) -> Result<Self> {
         info!("Initializing metadata store");
 
         let broker_manager = Arc::new(BrokerManager::new(config.clone()));

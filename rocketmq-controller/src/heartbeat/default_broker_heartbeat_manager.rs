@@ -21,6 +21,7 @@ use std::time::Duration;
 use dashmap::DashMap;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::net::channel::Channel;
+use rocketmq_rust::ArcMut;
 use tokio::task::JoinHandle;
 use tracing::info;
 use tracing::warn;
@@ -58,7 +59,7 @@ use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
 /// ```
 pub struct DefaultBrokerHeartbeatManager {
     /// Controller configuration
-    config: Arc<ControllerConfig>,
+    config: ArcMut<ControllerConfig>,
 
     /// Broker live information table
     /// Key: BrokerIdentityInfo, Value: BrokerLiveInfo
@@ -80,7 +81,7 @@ impl DefaultBrokerHeartbeatManager {
     /// # Arguments
     ///
     /// * `config` - Controller configuration
-    pub fn new(config: Arc<ControllerConfig>) -> Self {
+    pub fn new(config: ArcMut<ControllerConfig>) -> Self {
         Self {
             config,
             broker_live_table: Arc::new(DashMap::with_capacity(256)),
@@ -401,7 +402,7 @@ mod tests {
 
     #[test]
     fn test_default_broker_heartbeat_manager_creation() {
-        let config = Arc::new(ControllerConfig::test_config());
+        let config = ArcMut::new(ControllerConfig::test_config());
         let manager = DefaultBrokerHeartbeatManager::new(config.clone());
         assert_eq!(manager.scan_interval_ms, 2000);
     }

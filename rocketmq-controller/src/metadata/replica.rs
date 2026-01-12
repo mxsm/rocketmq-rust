@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use dashmap::DashMap;
+use rocketmq_rust::ArcMut;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::debug;
@@ -217,7 +218,7 @@ impl SyncStateSet {
 /// - Master election and failover
 pub struct ReplicasManager {
     /// Configuration
-    config: Arc<ControllerConfig>,
+    config: ArcMut<ControllerConfig>,
 
     /// Replicas: broker_name -> (broker_id -> BrokerReplicaInfo)
     replicas: Arc<DashMap<String, HashMap<u64, BrokerReplicaInfo>>>,
@@ -228,7 +229,7 @@ pub struct ReplicasManager {
 
 impl ReplicasManager {
     /// Create a new replicas manager
-    pub fn new(config: Arc<ControllerConfig>) -> Self {
+    pub fn new(config: ArcMut<ControllerConfig>) -> Self {
         Self {
             config,
             replicas: Arc::new(DashMap::new()),
@@ -519,7 +520,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_replicas_manager() {
-        let config = Arc::new(ControllerConfig::new_node(1, "127.0.0.1:9876".parse().unwrap()));
+        let config = ArcMut::new(ControllerConfig::new_node(1, "127.0.0.1:9876".parse().unwrap()));
         let manager = ReplicasManager::new(config);
 
         // Register master

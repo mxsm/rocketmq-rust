@@ -12,13 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
 use serde::Deserialize;
 use serde::Serialize;
+use tokio::sync::RwLock;
 
 use crate::common::metrics::MetricsExporterType;
 use crate::common::mix_all::ROCKETMQ_HOME_ENV;
@@ -64,7 +68,7 @@ impl fmt::Display for StorageBackendType {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ControllerConfig {
     // --- shared Controller fields (existing) ---
@@ -208,6 +212,47 @@ pub struct ControllerConfig {
 
     /// Whether the controller may elect an unclean master on this node
     pub enable_elect_unclean_master_local: bool,
+    #[serde(skip)]
+    rw_lock: RwLock<()>,
+}
+impl Clone for ControllerConfig {
+    fn clone(&self) -> Self {
+        Self {
+            rocketmq_home: self.rocketmq_home.clone(),
+            config_store_path: self.config_store_path.clone(),
+            controller_type: self.controller_type.clone(),
+            scan_not_active_broker_interval: self.scan_not_active_broker_interval.clone(),
+            controller_thread_pool_nums: self.controller_thread_pool_nums.clone(),
+            controller_request_thread_pool_queue_capacity: self.controller_request_thread_pool_queue_capacity.clone(),
+            mapped_file_size: self.mapped_file_size.clone(),
+            controller_store_path: self.controller_store_path.clone(),
+            elect_master_max_retry_count: self.elect_master_max_retry_count.clone(),
+            enable_elect_unclean_master: self.enable_elect_unclean_master.clone(),
+            is_process_read_event: self.is_process_read_event.clone(),
+            notify_broker_role_changed: self.notify_broker_role_changed.clone(),
+            scan_inactive_master_interval: self.scan_inactive_master_interval.clone(),
+            metrics_exporter_type: self.metrics_exporter_type.clone(),
+            metrics_grpc_exporter_target: self.metrics_grpc_exporter_target.clone(),
+            metrics_grpc_exporter_header: self.metrics_grpc_exporter_header.clone(),
+            metric_grpc_exporter_time_out_in_mills: self.metric_grpc_exporter_time_out_in_mills.clone(),
+            metric_grpc_exporter_interval_in_mills: self.metric_grpc_exporter_interval_in_mills.clone(),
+            metric_logging_exporter_interval_in_mills: self.metric_logging_exporter_interval_in_mills.clone(),
+            metrics_prom_exporter_port: self.metrics_prom_exporter_port.clone(),
+            metrics_prom_exporter_host: self.metrics_prom_exporter_host.clone(),
+            metrics_label: self.metrics_label.clone(),
+            metrics_in_delta: self.metrics_in_delta.clone(),
+            config_black_list: self.config_black_list.clone(),
+            node_id: self.node_id.clone(),
+            listen_addr: self.listen_addr.clone(),
+            raft_peers: self.raft_peers.clone(),
+            election_timeout_ms: self.election_timeout_ms.clone(),
+            heartbeat_interval_ms: self.heartbeat_interval_ms.clone(),
+            storage_path: self.storage_path.clone(),
+            storage_backend: self.storage_backend.clone(),
+            enable_elect_unclean_master_local: self.enable_elect_unclean_master_local.clone(),
+            rw_lock: RwLock::new(()),
+        }
+    }
 }
 
 impl Default for ControllerConfig {
@@ -259,6 +304,7 @@ impl Default for ControllerConfig {
             storage_path: String::new(),
             storage_backend: StorageBackendType::Memory,
             enable_elect_unclean_master_local: false,
+            rw_lock: RwLock::new(()),
         }
     }
 }
@@ -559,6 +605,167 @@ impl ControllerConfig {
         .unwrap();
 
         result
+    }
+    pub async fn update(&mut self, properties: HashMap<String, String>) -> RocketMQResult<()> {
+        let lock = self.rw_lock.write().await;
+        for (key, value) in &properties {
+            match key.as_str() {
+                "rocketmqHome" => {
+                    self.rocketmq_home = value.clone();
+                }
+
+                "configStorePath" => {
+                    self.config_store_path =
+                        serde_json::from_str::<PathBuf>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "controllerType" => {
+                    self.controller_type = value.clone();
+                }
+
+                "scanNotActiveBrokerInterval" => {
+                    self.scan_not_active_broker_interval =
+                        serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "controllerThreadPoolNums" => {
+                    self.controller_thread_pool_nums =
+                        serde_json::from_str::<usize>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "controllerRequestThreadPoolQueueCapacity" => {
+                    self.controller_request_thread_pool_queue_capacity =
+                        serde_json::from_str::<usize>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "mappedFileSize" => {
+                    self.mapped_file_size =
+                        serde_json::from_str::<usize>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "controllerStorePath" => {
+                    self.config_store_path =
+                        serde_json::from_str::<PathBuf>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "electMasterMaxRetryCount" => {
+                    self.elect_master_max_retry_count =
+                        serde_json::from_str::<u32>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "enableElectUncleanMaster" => {
+                    self.enable_elect_unclean_master =
+                        serde_json::from_str::<bool>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "isProcessReadEvent" => {
+                    self.is_process_read_event =
+                        serde_json::from_str::<bool>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "notifyBrokerRoleChanged" => {
+                    self.notify_broker_role_changed =
+                        serde_json::from_str::<bool>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "scanInactiveMasterInterval" => {
+                    self.scan_inactive_master_interval =
+                        serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "metricsExporterType" => {
+                    self.metrics_exporter_type = serde_json::from_str::<MetricsExporterType>(value)
+                        .map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "metricsGrpcExporterTarget" => {
+                    self.metrics_grpc_exporter_target = value.clone();
+                }
+
+                "metricsGrpcExporterHeader" => {
+                    self.metrics_grpc_exporter_header = value.clone();
+                }
+
+                "metricGrpcExporterTimeOutInMills" => {
+                    serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "metricGrpcExporterIntervalInMills" => {
+                    self.metric_grpc_exporter_interval_in_mills =
+                        serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "metricLoggingExporterIntervalInMills" => {
+                    self.metric_logging_exporter_interval_in_mills =
+                        serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "metricsPromExporterPort" => {
+                    self.metrics_prom_exporter_port =
+                        serde_json::from_str::<u16>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "metricsPromExporterHost" => {
+                    self.metrics_prom_exporter_host = value.clone();
+                }
+
+                "metricsLabel" => {
+                    self.metrics_label = value.clone();
+                }
+
+                "metricsInDelta" => {
+                    self.metrics_in_delta =
+                        serde_json::from_str::<bool>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "configBlackList" => {
+                    self.config_black_list = value.clone();
+                }
+
+                "nodeId" => {
+                    self.node_id =
+                        serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "listenAddr" => {
+                    self.listen_addr = serde_json::from_str::<SocketAddr>(value)
+                        .map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "raftPeers" => {
+                    self.raft_peers = serde_json::from_str::<Vec<RaftPeer>>(value)
+                        .map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "electionTimeoutMs" => {
+                    self.election_timeout_ms =
+                        serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "heartbeatIntervalMs" => {
+                    self.heartbeat_interval_ms =
+                        serde_json::from_str::<u64>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "storagePath" => {
+                    self.storage_path = value.clone();
+                }
+
+                "storageBackend" => {
+                    self.storage_backend = serde_json::from_str::<StorageBackendType>(value)
+                        .map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+
+                "enableElectUncleanMasterLocal" => {
+                    self.enable_elect_unclean_master_local =
+                        serde_json::from_str::<bool>(value).map_err(|e| RocketMQError::Internal(e.to_string()))?;
+                }
+                _ => {
+                    return Err(RocketMQError::Internal(format!("found unknown property: {}", key)));
+                }
+            }
+        }
+        Ok(())
     }
 }
 

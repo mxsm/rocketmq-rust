@@ -23,12 +23,12 @@
 //! - State queries
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use rocketmq_controller::config::ControllerConfig;
 use rocketmq_controller::openraft::RaftNodeManager;
 use rocketmq_controller::typ::ControllerRequest;
 use rocketmq_controller::typ::Node;
+use rocketmq_rust::ArcMut;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -42,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let node_id = 1;
     let listen_addr = "127.0.0.1:60109".parse()?;
 
-    let config = Arc::new(
+    let config = ArcMut::new(
         ControllerConfig::new_node(node_id, listen_addr)
             .with_election_timeout_ms(1000)
             .with_heartbeat_interval_ms(300),

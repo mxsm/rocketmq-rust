@@ -54,6 +54,7 @@ use rocketmq_remoting::protocol::header::controller::get_next_broker_id_response
 use rocketmq_remoting::protocol::header::controller::get_replica_info_response_header::GetReplicaInfoResponseHeader;
 use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_response_header::RegisterBrokerToControllerResponseHeader;
 use rocketmq_remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
+use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -91,7 +92,7 @@ struct SerializedState {
 /// All methods are thread-safe and can be called concurrently from multiple threads.
 pub struct ReplicasInfoManager {
     /// Controller configuration
-    config: Arc<ControllerConfig>,
+    config: ArcMut<ControllerConfig>,
 
     /// Replica information table: broker_name -> BrokerReplicaInfo
     /// Thread-safe concurrent map
@@ -104,7 +105,7 @@ pub struct ReplicasInfoManager {
 
 impl ReplicasInfoManager {
     /// Create a new ReplicasInfoManager with the given configuration
-    pub fn new(config: Arc<ControllerConfig>) -> Self {
+    pub fn new(config: ArcMut<ControllerConfig>) -> Self {
         Self {
             config,
             replica_info_table: Arc::new(DashMap::new()),
@@ -1006,7 +1007,7 @@ mod tests {
 
     #[test]
     fn test_replicas_info_manager_creation() {
-        let config = Arc::new(ControllerConfig::new_node(1, "127.0.0.1:9876".parse().unwrap()));
+        let config = ArcMut::new(ControllerConfig::new_node(1, "127.0.0.1:9876".parse().unwrap()));
         let manager = ReplicasInfoManager::new(config);
         assert_eq!(manager.replica_info_table.len(), 0);
         assert_eq!(manager.sync_state_set_info_table.len(), 0);

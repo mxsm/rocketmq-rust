@@ -25,6 +25,7 @@ use rocketmq_controller::openraft::RaftNodeManager;
 use rocketmq_controller::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
 use rocketmq_controller::typ::ControllerRequest;
 use rocketmq_controller::typ::Node;
+use rocketmq_rust::ArcMut;
 use tonic::transport::Server;
 
 /// Helper to create a test cluster
@@ -54,7 +55,7 @@ async fn create_cluster(node_count: u64, base_port: u16) -> Vec<(u64, Arc<RaftNo
             .with_heartbeat_interval_ms(300)
             .with_raft_peers(peers);
 
-        let node = Arc::new(RaftNodeManager::new(Arc::new(config)).await.unwrap());
+        let node = Arc::new(RaftNodeManager::new(ArcMut::new(config)).await.unwrap());
 
         // Start gRPC server for this node
         let service = GrpcRaftService::new(node.raft());

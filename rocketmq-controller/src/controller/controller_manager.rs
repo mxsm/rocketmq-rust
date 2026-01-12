@@ -84,7 +84,7 @@ use tracing::warn;
 /// Uses AtomicBool for state flags instead of RwLock to minimize lock contention.
 pub struct ControllerManager {
     /// Configuration
-    config: Arc<ControllerConfig>,
+    config: ArcMut<ControllerConfig>,
 
     /// Raft controller for consensus and leader election
     /// Note: Uses ArcMut to allow mutable access via &self
@@ -137,7 +137,7 @@ impl ControllerManager {
     /// - Metadata store creation fails
     /// - Configuration is invalid
     pub async fn new(config: ControllerConfig) -> Result<Self> {
-        let config = Arc::new(config);
+        let config = ArcMut::new(config);
 
         info!("Creating controller manager with config: {:?}", config);
 
@@ -147,7 +147,7 @@ impl ControllerManager {
         // Initialize Raft controller for leader election
         // This MUST succeed before proceeding
         // Using OpenRaft implementation by default
-        let raft_arc = ArcMut::new(RaftController::new_open_raft(Arc::clone(&config)));
+        let raft_arc = ArcMut::new(RaftController::new_open_raft(config.clone()));
 
         // Initialize metadata store
         // This MUST succeed before proceeding
@@ -572,8 +572,8 @@ impl ControllerManager {
     /// # Returns
     ///
     /// A reference to the controller configuration
-    pub fn config(&self) -> &Arc<ControllerConfig> {
-        &self.config
+    pub fn config(&self) -> ArcMut<ControllerConfig> {
+        self.config.clone()
     }
 
     /// Get the metrics manager (only available with "metrics" feature)

@@ -24,6 +24,7 @@ use rocketmq_controller::openraft::GrpcRaftService;
 use rocketmq_controller::openraft::RaftNodeManager;
 use rocketmq_controller::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
 use rocketmq_controller::typ::Node;
+use rocketmq_rust::ArcMut;
 use tonic::transport::Server;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -59,7 +60,7 @@ async fn test_simple_cluster_setup() {
             .with_heartbeat_interval_ms(300)
             .with_raft_peers(peers);
 
-        let node = Arc::new(RaftNodeManager::new(Arc::new(config)).await.unwrap());
+        let node = Arc::new(RaftNodeManager::new(ArcMut::new(config)).await.unwrap());
 
         // Start gRPC server
         let service = GrpcRaftService::new(node.raft());

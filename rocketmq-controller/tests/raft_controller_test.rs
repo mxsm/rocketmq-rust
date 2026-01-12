@@ -18,10 +18,11 @@ use rocketmq_common::common::controller::ControllerConfig;
 use rocketmq_controller::Controller;
 use rocketmq_controller::RaftController;
 use rocketmq_runtime::RocketMQRuntime;
+use rocketmq_rust::ArcMut;
 
 #[tokio::test]
 async fn test_open_raft_controller_lifecycle() {
-    let config = Arc::new(ControllerConfig::test_config());
+    let config = ArcMut::new(ControllerConfig::test_config());
     let mut controller = RaftController::new_open_raft(config);
 
     assert!(controller.startup().await.is_ok());
@@ -54,7 +55,7 @@ async fn test_raft_controller_wrapper() {
     let runtime = tokio::task::spawn_blocking(|| Arc::new(RocketMQRuntime::new_multi(4, "test-runtime")))
         .await
         .unwrap();
-    let config = Arc::new(ControllerConfig::test_config());
+    let config = ArcMut::new(ControllerConfig::test_config());
 
     // Test OpenRaft variant
     let mut open_raft_controller = RaftController::new_open_raft(config.clone());

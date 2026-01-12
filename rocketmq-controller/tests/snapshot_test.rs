@@ -15,18 +15,18 @@
 //! Snapshot functionality tests for OpenRaft implementation
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use rocketmq_controller::config::ControllerConfig;
 use rocketmq_controller::openraft::RaftNodeManager;
 use rocketmq_controller::openraft::StateMachine;
 use rocketmq_controller::typ::ControllerRequest;
 use rocketmq_controller::typ::Node;
+use rocketmq_rust::ArcMut;
 
 #[tokio::test]
 async fn test_snapshot_creation() {
     // Create a test configuration
-    let config = Arc::new(
+    let config = ArcMut::new(
         ControllerConfig::default()
             .with_node_info(1, "127.0.0.1:39876".parse().unwrap())
             .with_election_timeout_ms(1000)
