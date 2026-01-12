@@ -715,7 +715,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         &self,
         controller_servers: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .get_controller_config(controller_servers)
+            .await
     }
 
     async fn update_controller_config(
