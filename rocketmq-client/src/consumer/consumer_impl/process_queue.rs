@@ -20,7 +20,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
-use once_cell::sync::Lazy;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
@@ -29,19 +28,20 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::body::process_queue_info::ProcessQueueInfo;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioRwLock;
+use std::sync::LazyLock;
 use tokio::sync::RwLock;
 
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::PULL_MAX_IDLE_TIME;
 
-pub static REBALANCE_LOCK_MAX_LIVE_TIME: Lazy<u64> = Lazy::new(|| {
+pub static REBALANCE_LOCK_MAX_LIVE_TIME: LazyLock<u64> = LazyLock::new(|| {
     std::env::var("rocketmq.client.rebalance.lockMaxLiveTime")
         .unwrap_or_else(|_| "30000".into())
         .parse()
         .unwrap_or(30000)
 });
 
-pub static REBALANCE_LOCK_INTERVAL: Lazy<u64> = Lazy::new(|| {
+pub static REBALANCE_LOCK_INTERVAL: LazyLock<u64> = LazyLock::new(|| {
     std::env::var("rocketmq.client.rebalance.lockInterval")
         .unwrap_or_else(|_| "20000".into())
         .parse()

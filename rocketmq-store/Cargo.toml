@@ -60,7 +60,6 @@ tempfile = "3.24.0"
 memmap2                 = "0.9.9"
 trait-variant.workspace = true
 sysinfo                 = "0.37.2"
-once_cell               = { workspace = true }
 cheetah-string          = { workspace = true }
 thiserror               = { workspace = true }
 

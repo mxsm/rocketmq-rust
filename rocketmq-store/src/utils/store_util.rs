@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use sysinfo::System;
 
 pub struct StoreUtil;
 
-pub static TOTAL_PHYSICAL_MEMORY_SIZE: Lazy<u64> = Lazy::new(StoreUtil::get_total_physical_memory_size);
+pub static TOTAL_PHYSICAL_MEMORY_SIZE: LazyLock<u64> = LazyLock::new(StoreUtil::get_total_physical_memory_size);
 
 impl StoreUtil {
     pub fn get_total_physical_memory_size() -> u64 {

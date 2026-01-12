@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::task;
@@ -25,7 +25,8 @@ use tokio::time::interval;
 
 use crate::producer::request_response_future::RequestResponseFuture;
 
-pub static REQUEST_FUTURE_HOLDER: Lazy<Arc<RequestFutureHolder>> = Lazy::new(|| Arc::new(RequestFutureHolder::new()));
+pub static REQUEST_FUTURE_HOLDER: LazyLock<Arc<RequestFutureHolder>> =
+    LazyLock::new(|| Arc::new(RequestFutureHolder::new()));
 
 pub struct RequestFutureHolder {
     request_future_table: Arc<RwLock<HashMap<String, Arc<RequestResponseFuture>>>>,

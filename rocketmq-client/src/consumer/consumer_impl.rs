@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 pub(crate) mod consume_message_concurrently_service;
 pub(crate) mod consume_message_orderly_service;
@@ -30,7 +30,7 @@ pub mod pull_request;
 pub(crate) mod pull_request_ext;
 pub(crate) mod re_balance;
 
-pub(crate) static PULL_MAX_IDLE_TIME: Lazy<u64> = Lazy::new(|| {
+pub(crate) static PULL_MAX_IDLE_TIME: LazyLock<u64> = LazyLock::new(|| {
     std::env::var("rocketmq.client.pull.pullMaxIdleTime")
         .unwrap_or_else(|_| "120000".into())
         .parse()

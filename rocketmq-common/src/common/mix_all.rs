@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use cheetah_string::CheetahString;
 use std::collections::HashMap;
 use std::env;
-
-use cheetah_string::CheetahString;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 pub const ROCKETMQ_HOME_ENV: &str = "ROCKETMQ_HOME";
 pub const ROCKETMQ_HOME_PROPERTY: &str = "rocketmq.home.dir";
@@ -70,8 +69,8 @@ pub const ZONE_MODE: &str = "__ZONE_MODE";
 pub const LOGICAL_QUEUE_MOCK_BROKER_PREFIX: &str = "__syslo__";
 pub const METADATA_SCOPE_GLOBAL: &str = "__global__";
 pub const LOGICAL_QUEUE_MOCK_BROKER_NAME_NOT_EXIST: &str = "__syslo__none__";
-pub static MULTI_PATH_SPLITTER: Lazy<String> =
-    Lazy::new(|| env::var("rocketmq.broker.multiPathSplitter").unwrap_or_else(|_| ",".to_string()));
+pub static MULTI_PATH_SPLITTER: LazyLock<String> =
+    LazyLock::new(|| env::var("rocketmq.broker.multiPathSplitter").unwrap_or_else(|_| ",".to_string()));
 
 pub fn is_sys_consumer_group(consumer_group: &str) -> bool {
     consumer_group.starts_with(CID_RMQ_SYS_PREFIX)

@@ -58,7 +58,6 @@ time             = "0.3.44"
 iana-time-zone   = "0.1"
 
 parking_lot             = { workspace = true }
-once_cell               = { workspace = true }
 tempfile                = "3.24.0"
 trait-variant.workspace = true
 
