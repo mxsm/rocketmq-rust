@@ -231,7 +231,7 @@ impl Clone for ControllerConfig {
             is_process_read_event: self.is_process_read_event,
             notify_broker_role_changed: self.notify_broker_role_changed,
             scan_inactive_master_interval: self.scan_inactive_master_interval,
-            metrics_exporter_type: self.metrics_exporter_type.clone(),
+            metrics_exporter_type: self.metrics_exporter_type,
             metrics_grpc_exporter_target: self.metrics_grpc_exporter_target.clone(),
             metrics_grpc_exporter_header: self.metrics_grpc_exporter_header.clone(),
             metric_grpc_exporter_time_out_in_mills: self.metric_grpc_exporter_time_out_in_mills,
