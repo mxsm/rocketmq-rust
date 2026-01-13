@@ -787,34 +787,6 @@ dependencies = [
 
 [[package]]
 name = "criterion"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2b12d017a929603d80db1831cd3a24082f8137ce19c69e6447f54f5fc8d692f"
-dependencies = [
- "anes",
- "cast",
- "ciborium",
- "clap",
- "criterion-plot 0.5.0",
- "futures",
- "is-terminal",
- "itertools 0.10.5",
- "num-traits",
- "once_cell",
- "oorandom",
- "plotters",
- "rayon",
- "regex",
- "serde",
- "serde_derive",
- "serde_json",
- "tinytemplate",
- "tokio",
- "walkdir",
-]
-
-[[package]]
-name = "criterion"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d883447757bb0ee46f233e9dc22eb84d93a9508c9b868687b274fc431d886bf"
@@ -824,7 +796,7 @@ dependencies = [
  "cast",
  "ciborium",
  "clap",
- "criterion-plot 0.8.1",
+ "criterion-plot",
  "futures",
  "itertools 0.13.0",
  "num-traits",
@@ -838,16 +810,6 @@ dependencies = [
  "tinytemplate",
  "tokio",
  "walkdir",
-]
-
-[[package]]
-name = "criterion-plot"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b50826342786a51a89e2da3a28f1c32b06e387201bc2d19791f622c673706b1"
-dependencies = [
- "cast",
- "itertools 0.10.5",
 ]
 
 [[package]]
@@ -1109,7 +1071,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1990,7 +1952,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1998,15 +1960,6 @@ name = "is_terminal_polyfill"
 version = "1.70.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
-
-[[package]]
-name = "itertools"
-version = "0.10.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
-dependencies = [
- "either",
-]
 
 [[package]]
 name = "itertools"
@@ -3100,7 +3053,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.6.0",
+ "socket2 0.5.9",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
@@ -3138,7 +3091,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.0",
+ "socket2 0.5.9",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -3532,7 +3485,7 @@ dependencies = [
  "cfg-if",
  "cheetah-string",
  "clap",
- "criterion 0.8.1",
+ "criterion",
  "crossbeam-skiplist",
  "dashmap",
  "dirs",
@@ -3580,7 +3533,7 @@ version = "0.8.0"
 dependencies = [
  "bytes",
  "cheetah-string",
- "criterion 0.5.1",
+ "criterion",
  "dashmap",
  "futures",
  "num_cpus",
@@ -3611,7 +3564,7 @@ dependencies = [
  "chrono-tz",
  "config",
  "crc",
- "criterion 0.8.1",
+ "criterion",
  "dashmap",
  "dirs",
  "flate2",
@@ -3658,7 +3611,7 @@ dependencies = [
  "chrono",
  "clap",
  "config",
- "criterion 0.8.1",
+ "criterion",
  "dashmap",
  "env_logger",
  "futures",
@@ -3737,7 +3690,7 @@ dependencies = [
 name = "rocketmq-macros"
 version = "0.8.0"
 dependencies = [
- "criterion 0.8.1",
+ "criterion",
  "proc-macro2",
  "quote",
  "syn 2.0.114",
@@ -3751,7 +3704,7 @@ dependencies = [
  "cheetah-string",
  "clap",
  "config",
- "criterion 0.8.1",
+ "criterion",
  "dashmap",
  "futures",
  "hashbrown 0.16.1",
@@ -3781,7 +3734,7 @@ dependencies = [
  "bytemuck",
  "bytes",
  "cheetah-string",
- "criterion 0.8.1",
+ "criterion",
  "dashmap",
  "flate2",
  "flume",
@@ -3841,7 +3794,7 @@ dependencies = [
  "arc-swap",
  "bytes",
  "cheetah-string",
- "criterion 0.8.1",
+ "criterion",
  "dashmap",
  "dirs",
  "futures-util",
@@ -3989,7 +3942,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4045,7 +3998,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4700,7 +4653,7 @@ dependencies = [
  "getrandom 0.3.2",
  "once_cell",
  "rustix 1.1.3",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4709,7 +4662,7 @@ version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2111ef44dae28680ae9752bb89409e7310ca33a8c621ebe7b106cf5c928b3ac0"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
