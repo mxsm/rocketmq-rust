@@ -61,6 +61,7 @@ use rocketmq_remoting::protocol::header::change_invisible_time_request_header::C
 use rocketmq_remoting::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
+use rocketmq_remoting::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
 use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
@@ -312,6 +313,36 @@ impl MQClientAPIImpl {
                 return ClusterInfo::decode(body.as_ref());
             }
         }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub async fn delete_subscription_group(
+        &self,
+        addr: &CheetahString,
+        group_name: CheetahString,
+        clean_offset: bool,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let request_header = DeleteSubscriptionGroupRequestHeader {
+            group_name,
+            clean_offset,
+            rpc_request_header: None,
+        };
+
+        let request = RemotingCommand::create_request_command(RequestCode::DeleteSubscriptionGroup, request_header);
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            return Ok(());
+        }
+
         Err(mq_client_err!(
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string())
