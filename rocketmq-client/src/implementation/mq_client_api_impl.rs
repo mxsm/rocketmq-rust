@@ -105,7 +105,8 @@ use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::warn;
-
+use rocketmq_common::common::mix_all::properties_to_string;
+use rocketmq_remoting::code::request_code::RequestCode::UpdateControllerConfig;
 use crate::base::client_config::ClientConfig;
 use crate::consumer::ack_callback::AckCallback;
 use crate::consumer::ack_result::AckResult;
@@ -316,6 +317,37 @@ impl MQClientAPIImpl {
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string())
         ))
+    }
+
+    pub(crate) async fn update_controller_config(&self,properties: HashMap<CheetahString, CheetahString>,
+                                                 controllers: Vec<CheetahString>,timeout_millis: u64) -> RocketMQResult<()>
+    {
+
+        let str = properties_to_string(&properties);
+
+        if str.is_empty() || controllers.is_empty() {
+            return Ok(());
+        }
+
+        for controller in &controllers {
+
+            let mut request = RemotingCommand::create_request_command(RequestCode::UpdateControllerConfig,EmptyHeader {});
+            request.set_body_mut_ref(str.clone().to_string());
+            let response = self
+                .remoting_client
+                .invoke_request(Some(controller),request.clone(), timeout_millis)
+                .await?;
+
+            if ResponseCode::from(response.code()) != ResponseCode::Success {
+                return Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ));
+            }
+        }
+        
+        Ok(())
+
     }
 }
 

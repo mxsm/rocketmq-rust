@@ -770,7 +770,13 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         properties: HashMap<CheetahString, CheetahString>,
         controllers: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        
+        Ok(self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .update_controller_config(properties, controllers, self.timeout_millis.as_millis() as u64).await?)
+
     }
 
     async fn clean_controller_broker_data(
