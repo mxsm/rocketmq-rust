@@ -55,15 +55,107 @@ pub struct UpdateAclSubCommand {
     source_ip: Option<String>,
 }
 
-impl CommandExecute for UpdateAclSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        if (self.cluster_name.is_none() && self.broker_addr.is_none())
-            || (self.cluster_name.is_some() && self.broker_addr.is_some())
-        {
+#[derive(Clone)]
+struct ParsedUpdateAclSubCommand {
+    cluster_name: Option<String>,
+    broker_addr: Option<String>,
+    subject: CheetahString,
+    resources: Vec<CheetahString>,
+    actions: Vec<CheetahString>,
+    decision: CheetahString,
+    source_ips: Vec<CheetahString>,
+}
+
+impl ParsedUpdateAclSubCommand {
+    fn new(command: &UpdateAclSubCommand) -> Result<Self, RocketMQError> {
+        let cluster_name: Option<String> = command
+            .cluster_name
+            .as_ref()
+            .map(|cluster_name| cluster_name.trim())
+            .filter(|cluster_name| !cluster_name.is_empty())
+            .map(|cluster_name| cluster_name.into());
+        let broker_addr: Option<String> = command
+            .broker_addr
+            .as_ref()
+            .map(|broker_addr| broker_addr.trim())
+            .filter(|broker_addr| !broker_addr.is_empty())
+            .map(|broker_addr| broker_addr.into());
+        if (cluster_name.is_none() && broker_addr.is_none()) || (cluster_name.is_some() && broker_addr.is_some()) {
             return Err(RocketMQError::IllegalArgument(
                 "UpdateAclSubCommand: Specify exactly one of --brokerAddr (-b) or --clusterName (-c)".into(),
             ));
         }
+
+        let subject: CheetahString = {
+            let subject = command.subject.trim();
+            if subject.is_empty() {
+                return Err(RocketMQError::IllegalArgument(
+                    "UpdateAclSubCommand: subject cannot be empty".into(),
+                ));
+            } else {
+                subject.into()
+            }
+        };
+
+        let resources: Vec<CheetahString> = command
+            .resources
+            .split(",")
+            .map(|resource| resource.trim())
+            .filter(|resource| !resource.is_empty())
+            .map(|resource| resource.into())
+            .collect();
+        if resources.is_empty() {
+            return Err(RocketMQError::IllegalArgument(
+                "UpdateAclSubCommand: resources cannot be empty".into(),
+            ));
+        }
+
+        let actions: Vec<CheetahString> = command
+            .actions
+            .split(",")
+            .map(|action| action.trim())
+            .filter(|action| !action.is_empty())
+            .map(|action| action.into())
+            .collect();
+        if actions.is_empty() {
+            return Err(RocketMQError::IllegalArgument(
+                "UpdateAclSubCommand: actions cannot be empty".into(),
+            ));
+        }
+
+        let source_ips: Vec<CheetahString> = if let Some(ref source_ips) = command.source_ip {
+            source_ips
+                .split(",")
+                .map(|source_ip| source_ip.trim())
+                .filter(|source_ip| !source_ip.is_empty())
+                .map(|source_ip| source_ip.into())
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let decision: CheetahString = command.decision.trim().into();
+        if decision.is_empty() {
+            return Err(RocketMQError::IllegalArgument(
+                "UpdateAclSubCommand: decision cannot be empty".into(),
+            ));
+        }
+
+        Ok(Self {
+            cluster_name,
+            broker_addr,
+            subject,
+            resources,
+            actions,
+            decision,
+            source_ips,
+        })
+    }
+}
+
+impl CommandExecute for UpdateAclSubCommand {
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+        let command = ParsedUpdateAclSubCommand::new(self)?;
 
         let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
             DefaultMQAdminExt::with_rpc_hook(rpc_hook)
@@ -74,108 +166,95 @@ impl CommandExecute for UpdateAclSubCommand {
             .client_config_mut()
             .set_instance_name(get_current_millis().to_string().into());
 
+        MQAdminExt::start(&mut default_mqadmin_ext)
+            .await
+            .map_err(|e| RocketMQError::Internal(format!("UpdateAclSubCommand: Failed to start MQAdminExt: {}", e)))?;
+
         let operation_result = async {
-            let subject = self.subject.trim();
-
-            let resources: Vec<CheetahString> = self
-                .resources
-                .split(",")
-                .map(|resource| resource.trim())
-                .map(|resource| resource.into())
-                .collect();
-
-            let actions: Vec<CheetahString> = self
-                .actions
-                .split(",")
-                .map(|action| action.trim())
-                .map(|action| action.into())
-                .collect();
-
-            let source_ips: Vec<CheetahString> = if let Some(ref source_ips) = self.source_ip {
-                source_ips
-                    .split(",")
-                    .map(|source_ip| source_ip.trim())
-                    .map(|source_ip| source_ip.into())
-                    .collect()
+            if let Some(broker_addr) = &command.broker_addr {
+                update_broker(&command, &default_mqadmin_ext, broker_addr).await
+            } else if let Some(cluster_name) = &command.cluster_name {
+                update_cluster(&command, &default_mqadmin_ext, cluster_name).await
             } else {
-                Vec::new()
-            };
-
-            let decision: CheetahString = self.decision.trim().into();
-
-            if let Some(ref broker_addr) = self.broker_addr {
-                MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                    RocketMQError::Internal(format!("UpdateAclSubCommand: Failed to start MQAdminExt: {}", e))
-                })?;
-
-                match default_mqadmin_ext
-                    .update_acl(
-                        broker_addr.as_str().into(),
-                        subject.into(),
-                        resources,
-                        actions,
-                        source_ips,
-                        decision,
-                    )
-                    .await
-                {
-                    Ok(_) => {
-                        println!("Update access control list (ACL) for {} was successful.", broker_addr);
-                    }
-                    Err(e) => {
-                        return Err(RocketMQError::Internal(format!(
-                            "UpdateAclSubCommand: Failed to update access control list (ACL): {}",
-                            e
-                        )))
-                    }
-                }
-            } else if let Some(ref cluster_name) = self.cluster_name {
-                MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                    RocketMQError::Internal(format!("UpdateAclSubCommand: Failed to start MQAdminExt: {}", e))
-                })?;
-
-                let cluster_info = default_mqadmin_ext.examine_broker_cluster_info().await?;
-                match CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name.as_str()) {
-                    Ok(addresses) => {
-                        for addr in addresses {
-                            if let Err(e) = default_mqadmin_ext
-                                .update_acl(
-                                    addr.as_str().into(),
-                                    subject.into(),
-                                    resources.clone(),
-                                    actions.clone(),
-                                    source_ips.clone(),
-                                    decision.clone(),
-                                )
-                                .await
-                            {
-                                eprintln!(
-                                    "UpdateAclSubCommand: Failed to update access control list (ACL) for broker with \
-                                     address {}: {}",
-                                    addr, e
-                                )
-                            } else {
-                                println!(
-                                    "Updated access control list (ACL) at broker with address {} successfully.",
-                                    addr
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        return Err(RocketMQError::Internal(format!(
-                            "UpdateAclSubCommand: Failed to update access control list (ACL): {}",
-                            e
-                        )));
-                    }
-                }
+                // This case can not happen.
+                Err(RocketMQError::Internal(
+                    "UpdateAclSubCommand: Failed to start MQAdminExt:".into(),
+                ))
             }
-
-            Ok(())
         }
         .await;
         MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
         operation_result
+    }
+}
+
+async fn update_broker(
+    parsed_command: &ParsedUpdateAclSubCommand,
+    default_mqadmin_ext: &DefaultMQAdminExt,
+    broker_addr: &str,
+) -> Result<(), RocketMQError> {
+    let broker_update_result = {
+        match default_mqadmin_ext
+            .update_acl(
+                broker_addr.into(),
+                parsed_command.subject.clone(),
+                parsed_command.resources.clone(),
+                parsed_command.actions.clone(),
+                parsed_command.source_ips.clone(),
+                parsed_command.decision.clone(),
+            )
+            .await
+        {
+            Ok(_) => {
+                println!("Update access control list (ACL) for {} was successful.", broker_addr);
+                Ok(())
+            }
+            Err(e) => Err(RocketMQError::Internal(format!(
+                "UpdateAclSubCommand: Failed to update access control list (ACL) for broker {}: {}",
+                broker_addr, e
+            ))),
+        }
+    };
+    broker_update_result
+}
+
+async fn update_cluster(
+    parsed_command: &ParsedUpdateAclSubCommand,
+    default_mqadmin_ext: &DefaultMQAdminExt,
+    cluster_name: &str,
+) -> Result<(), RocketMQError> {
+    let cluster_info = default_mqadmin_ext.examine_broker_cluster_info().await?;
+
+    match CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name) {
+        Ok(addresses) => {
+            let error_addr: Vec<CheetahString> = futures::future::join_all(addresses.into_iter().map(|addr| async {
+                if update_broker(parsed_command, default_mqadmin_ext, addr.as_str())
+                    .await
+                    .is_err()
+                {
+                    Some(addr)
+                } else {
+                    None
+                }
+            }))
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
+
+            if error_addr.is_empty() {
+                Ok(())
+            } else {
+                Err(RocketMQError::Internal(format!(
+                    "UpdateAclSubCommand: Failed to update access control list (ACL) for brokers {}",
+                    error_addr.join(", ")
+                )))
+            }
+        }
+        Err(e) => Err(RocketMQError::Internal(format!(
+            "UpdateAclSubCommand: Failed to update access control list (ACL): {}",
+            e
+        ))),
     }
 }
 
