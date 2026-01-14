@@ -56,7 +56,7 @@ pub struct UpdateAclSubCommand {
 }
 
 impl CommandExecute for UpdateAclSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         if (self.cluster_name.is_none() && self.broker_addr.is_none())
             || (self.cluster_name.is_some() && self.broker_addr.is_some())
         {
@@ -65,7 +65,11 @@ impl CommandExecute for UpdateAclSubCommand {
             ));
         }
 
-        let mut default_mqadmin_ext = DefaultMQAdminExt::new();
+        let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
+            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
+        } else {
+            DefaultMQAdminExt::new()
+        };
         default_mqadmin_ext
             .client_config_mut()
             .set_instance_name(get_current_millis().to_string().into());
@@ -137,7 +141,7 @@ impl CommandExecute for UpdateAclSubCommand {
                             if let Err(e) = default_mqadmin_ext
                                 .update_acl(
                                     addr.as_str().into(),
-                                    self.subject.clone().into(),
+                                    subject.into(),
                                     resources.clone(),
                                     actions.clone(),
                                     source_ips.clone(),
@@ -152,7 +156,7 @@ impl CommandExecute for UpdateAclSubCommand {
                                 )
                             } else {
                                 println!(
-                                    "Updated access control list (ACL)  at broker with address {} successfully.",
+                                    "Updated access control list (ACL) at broker with address {} successfully.",
                                     addr
                                 );
                             }
@@ -160,7 +164,7 @@ impl CommandExecute for UpdateAclSubCommand {
                     }
                     Err(e) => {
                         return Err(RocketMQError::Internal(format!(
-                            "UpdateAclSubCommand: UpdateAclSubCommand: Failed to update access control list (ACL): {}",
+                            "UpdateAclSubCommand: Failed to update access control list (ACL): {}",
                             e
                         )));
                     }
