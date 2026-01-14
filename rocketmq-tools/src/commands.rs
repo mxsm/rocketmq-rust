@@ -101,8 +101,8 @@ impl CommandExecute for Commands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
             Commands::Auth(value) => value.execute(rpc_hook).await,
-            Commands::Controller(value) => value.execute(rpc_hook).await,
             Commands::Consumer(value) => value.execute(rpc_hook).await,
+            Commands::Controller(value) => value.execute(rpc_hook).await,
             Commands::NameServer(value) => value.execute(rpc_hook).await,
             Commands::Topic(value) => value.execute(rpc_hook).await,
             Commands::Show(value) => value.execute(rpc_hook).await,
