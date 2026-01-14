@@ -52,7 +52,7 @@ zstd      = "0.13"
 byteorder = "1.5.0"
 
 local-ip-address = "0.6.8"
-chrono           = "0.4.42"
+chrono           = "0.4.43"
 chrono-tz        = "0.10.4"
 time             = "0.3.44"
 iana-time-zone   = "0.1"
