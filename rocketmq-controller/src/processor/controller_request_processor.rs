@@ -82,13 +82,16 @@
 //!    - String property parsing utility (string2properties)
 //!    - Configuration update/get methods
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
 use crate::manager::ControllerManager;
+use crate::typ::ControllerRequest;
 use crate::Controller;
+use rocketmq_common::common::mix_all::string_to_properties;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -104,8 +107,6 @@ use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use tracing::info;
 use tracing::warn;
-use rocketmq_common::common::mix_all::string_to_properties;
-use crate::typ::ControllerRequest;
 // Note: These types need to be implemented in their respective modules
 // Placeholder imports that need actual implementation:
 // - SyncStateSet in rocketmq-remoting::protocol::body
@@ -485,15 +486,14 @@ impl ControllerRequestProcessor {
         _ctx: ConnectionHandlerContext,
         _request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-
         let response = RemotingCommand::create_response_command();
-
 
         if let Some(body) = _request.get_body() {
             let body_str = match String::from_utf8(body.as_ref().to_vec()) {
                 Ok(s) => s,
                 Err(e) => {
-                    let response_tobe_sent = response.set_code(ResponseCode::SystemError)
+                    let response_tobe_sent = response
+                        .set_code(ResponseCode::SystemError)
                         .set_remark(format!("UnsupportedEncodingException {}", e));
                     return Ok(Some(response_tobe_sent));
                 }
@@ -501,35 +501,33 @@ impl ControllerRequestProcessor {
 
             let properties = string_to_properties(&body_str);
 
-            if(properties.clone().unwrap().is_empty())
-            {
-                let response_tobe_sent = response.set_code(ResponseCode::SystemError)
+            if (properties.clone().unwrap().is_empty()) {
+                let response_tobe_sent = response
+                    .set_code(ResponseCode::SystemError)
                     .set_remark("string2Properties error");
                 return Ok(Some(response_tobe_sent));
             }
 
             if let Some(props) = &properties {
-                let string_properties: HashMap<String, String> = props
-                    .iter()
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-                    .collect();
+                let string_properties: HashMap<String, String> =
+                    props.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
 
                 if self.validate_blacklist_config_exist(&string_properties) {
-
-                    let response_tobe_sent = response.set_code(ResponseCode::NoPermission)
+                    let response_tobe_sent = response
+                        .set_code(ResponseCode::NoPermission)
                         .set_remark("Can not update config in black list.");
                     return Ok(Some(response_tobe_sent));
                 }
 
-               // call to the controller to update properties but configuration object not implemented yet
-                // self.controller_manager.get_configuration().update(properties);
+                // call to the controller to update properties but configuration object not
+                // implemented yet self.controller_manager.get_configuration().
+                // update(properties);
             }
 
             let response_tobe_sent = response.set_code(ResponseCode::Success);
-            return Ok(Some(response_tobe_sent));;
-        }
-        else {
-             Ok(Some(response))
+            return Ok(Some(response_tobe_sent));
+        } else {
+            Ok(Some(response))
         }
     }
 
