@@ -501,31 +501,38 @@ impl ControllerRequestProcessor {
 
             let properties = string_to_properties(&body_str);
 
-            if (properties.clone().unwrap().is_empty()) {
+            let properties = match string_to_properties(&body_str) {
+                Some(props) if props.is_empty() => {
+                    let response_tobe_sent = response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("Properties are empty");
+                    return Ok(Some(response_tobe_sent));
+                }
+                Some(props) => props,
+                None => {
+                    let response_tobe_sent = response
+                        .set_code(ResponseCode::SystemError)
+                        .set_remark("string2Properties error: invalid format");
+                    return Ok(Some(response_tobe_sent));
+                }
+            };
+
+            let string_properties: HashMap<String, String> =
+                properties.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+
+            if self.validate_blacklist_config_exist(&string_properties) {
                 let response_tobe_sent = response
-                    .set_code(ResponseCode::SystemError)
-                    .set_remark("string2Properties error");
+                    .set_code(ResponseCode::NoPermission)
+                    .set_remark("Can not update config in black list.");
                 return Ok(Some(response_tobe_sent));
             }
 
-            if let Some(props) = &properties {
-                let string_properties: HashMap<String, String> =
-                    props.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-
-                if self.validate_blacklist_config_exist(&string_properties) {
-                    let response_tobe_sent = response
-                        .set_code(ResponseCode::NoPermission)
-                        .set_remark("Can not update config in black list.");
-                    return Ok(Some(response_tobe_sent));
-                }
-
-                // call to the controller to update properties but configuration object not
-                // implemented yet self.controller_manager.get_configuration().
-                // update(properties);
-            }
+            // TODO: call to the controller to update properties but configuration object not
+            // implemented yet
+            // self.controller_manager.get_configuration().update(properties);
 
             let response_tobe_sent = response.set_code(ResponseCode::Success);
-            return Ok(Some(response_tobe_sent));
+            Ok(Some(response_tobe_sent))
         } else {
             let response_tobe_sent = response
                 .set_code(ResponseCode::SystemError)
