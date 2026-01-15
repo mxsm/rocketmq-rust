@@ -527,7 +527,10 @@ impl ControllerRequestProcessor {
             let response_tobe_sent = response.set_code(ResponseCode::Success);
             return Ok(Some(response_tobe_sent));
         } else {
-            Ok(Some(response))
+            let response_tobe_sent = response
+                .set_code(ResponseCode::SystemError)
+                .set_remark("Request body is empty");
+            Ok(Some(response_tobe_sent))
         }
     }
 
