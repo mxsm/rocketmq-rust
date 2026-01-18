@@ -24,7 +24,6 @@ use rocketmq_namesrv::RouteInfoManagerWrapper;
 #[test]
 fn test_v2_type_exists() {
     // Test that RouteInfoManagerV2 type exists and can be referenced
-    // This confirms Phase 4 integration is complete at the type level
     let type_name = std::any::type_name::<RouteInfoManagerV2>();
     assert!(type_name.contains("RouteInfoManagerV2"));
 }

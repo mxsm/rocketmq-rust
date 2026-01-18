@@ -116,7 +116,7 @@ pub struct RouteInfoManagerV2 {
     broker_locks: SegmentedLock,
     topic_locks: SegmentedLock,
 
-    // Legacy components (will be migrated in later phases)
+    // Legacy components
     name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
     un_register_service: ArcMut<BatchUnregistrationService>,
 }
