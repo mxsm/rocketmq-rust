@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod get_controller_metadata_sub_command;
+mod update_controller_config_sub_command;
 
 use std::sync::Arc;
 
@@ -21,6 +22,7 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::controller_commands::get_controller_metadata_sub_command::GetControllerMetadataSubCommand;
+use crate::commands::controller_commands::update_controller_config_sub_command::UpdateControllerConfigSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
@@ -31,12 +33,20 @@ pub enum ControllerCommands {
         long_about = None,
     )]
     GetControllerMetadataSubCommand(GetControllerMetadataSubCommand),
+
+    #[command(
+        name = "updateControllerConfig",
+        about = "update controller config",
+        long_about = None,
+    )]
+    UpdateControllerConfigSubCommand(UpdateControllerConfigSubCommand),
 }
 
 impl CommandExecute for ControllerCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
             ControllerCommands::GetControllerMetadataSubCommand(value) => value.execute(rpc_hook).await,
+            ControllerCommands::UpdateControllerConfigSubCommand(value) => value.execute(rpc_hook).await,
         }
     }
 }
