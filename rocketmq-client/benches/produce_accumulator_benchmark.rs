@@ -21,10 +21,10 @@
 //! Run with: cargo bench --bench produce_accumulator_benchmark
 
 use std::collections::HashMap;
+use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
 
-use criterion::black_box;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::BenchmarkId;
