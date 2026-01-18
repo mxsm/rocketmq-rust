@@ -32,6 +32,7 @@ use crate::controller::broker_heartbeat_manager::DEFAULT_BROKER_CHANNEL_EXPIRED_
 use crate::heartbeat::broker_identity_info::BrokerIdentityInfo;
 use crate::heartbeat::broker_live_info::BrokerLiveInfo;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
+use crate::helper::broker_valid_predicate::BrokerValidPredicate;
 
 /// Default implementation of BrokerHeartbeatManager
 ///
@@ -357,6 +358,12 @@ impl BrokerHeartbeatManager for DefaultBrokerHeartbeatManager {
         }
 
         result
+    }
+}
+
+impl BrokerValidPredicate for DefaultBrokerHeartbeatManager {
+    fn check(&self, cluster_name: &str, broker_name: &str, broker_id: Option<i64>) -> bool {
+        self.is_broker_active(cluster_name, broker_name, broker_id.unwrap_or_default())
     }
 }
 

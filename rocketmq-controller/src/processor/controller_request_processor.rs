@@ -90,6 +90,7 @@ use crate::controller::broker_heartbeat_manager::BrokerHeartbeatManager;
 use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
 use crate::manager::ControllerManager;
 use crate::Controller;
+use cheetah_string::CheetahString;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -461,9 +462,19 @@ impl ControllerRequestProcessor {
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
-        _request: &mut RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        unimplemented!("unimplemented handle_get_sync_state_data")
+        if let Some(body) = request.body() {
+            let broker_names: Vec<CheetahString> = serde_json::from_slice(body).unwrap_or_default();
+            if !broker_names.is_empty() {
+                return self
+                    .controller_manager
+                    .controller()
+                    .get_sync_state_data(&broker_names)
+                    .await;
+            }
+        }
+        Ok(Some(RemotingCommand::create_response_command()))
     }
 
     /// Handle UPDATE_CONTROLLER_CONFIG request
