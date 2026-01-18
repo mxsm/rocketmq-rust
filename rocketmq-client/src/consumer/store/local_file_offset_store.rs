@@ -20,12 +20,12 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use once_cell::sync::Lazy;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::utils::file_utils;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_rust::ArcMut;
+use std::sync::LazyLock;
 use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
@@ -37,7 +37,7 @@ use crate::consumer::store::offset_store::OffsetStoreTrait;
 use crate::consumer::store::read_offset_type::ReadOffsetType;
 use crate::factory::mq_client_instance::MQClientInstance;
 
-static LOCAL_OFFSET_STORE_DIR: Lazy<PathBuf> = Lazy::new(|| {
+static LOCAL_OFFSET_STORE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     #[cfg(target_os = "windows")]
     let home = std::env::var("USERPROFILE").map_or(PathBuf::from("C:\\tmp\\.rocketmq_offsets"), |home| {
         PathBuf::from(home).join(".rocketmq_offsets")

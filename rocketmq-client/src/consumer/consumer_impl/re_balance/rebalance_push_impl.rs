@@ -18,7 +18,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
-use once_cell::sync::Lazy;
 use rocketmq_common::common::constant::consume_init_mode::ConsumeInitMode;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -32,6 +31,7 @@ use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
+use std::sync::LazyLock;
 use tokio::sync::RwLock;
 use tracing::error;
 use tracing::info;
@@ -50,7 +50,7 @@ use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::store::read_offset_type::ReadOffsetType;
 use crate::factory::mq_client_instance::MQClientInstance;
 
-static UNLOCK_DELAY_TIME_MILLS: Lazy<u64> = Lazy::new(|| {
+static UNLOCK_DELAY_TIME_MILLS: LazyLock<u64> = LazyLock::new(|| {
     std::env::var("rocketmq.client.unlockDelayTimeMills")
         .unwrap_or_else(|_| "20000".into())
         .parse::<u64>()

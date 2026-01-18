@@ -18,7 +18,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
-use once_cell::sync::Lazy;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
@@ -32,6 +31,7 @@ use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioMutex;
+use std::sync::LazyLock;
 use tracing::info;
 use tracing::warn;
 
@@ -51,7 +51,7 @@ use crate::consumer::mq_consumer_inner::MQConsumerInnerLocal;
 use crate::hook::consume_message_context::ConsumeMessageContext;
 use crate::producer::mq_producer::MQProducer;
 
-static MAX_TIME_CONSUME_CONTINUOUSLY: Lazy<u64> = Lazy::new(|| {
+static MAX_TIME_CONSUME_CONTINUOUSLY: LazyLock<u64> = LazyLock::new(|| {
     std::env::var("rocketmq.client.maxTimeConsumeContinuously")
         .unwrap_or("60000".to_string())
         .parse()
