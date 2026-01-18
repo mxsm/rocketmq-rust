@@ -682,7 +682,7 @@ impl Builder {
 
 /// Internal runtime state shared across components
 ///
-/// **Phase 4 Optimization**: Separates immutable from mutable components.
+/// Separates immutable from mutable components.
 /// Note: Config kept mutable to support runtime updates via management commands.
 pub(crate) struct NameServerRuntimeInner {
     // Configuration (mutable to support runtime updates)
