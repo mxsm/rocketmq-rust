@@ -29,7 +29,7 @@ pub struct UpdateControllerConfigSubCommand {
 }
 
 impl CommandExecute for UpdateControllerConfigSubCommand {
-    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         let mut default_mqadmin_ext = DefaultMQAdminExt::new();
         default_mqadmin_ext
             .client_config_mut()
