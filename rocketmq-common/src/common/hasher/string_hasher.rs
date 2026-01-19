@@ -16,13 +16,13 @@ pub struct JavaStringHasher;
 
 impl JavaStringHasher {
     pub fn hash_str(s: &str) -> i32 {
-        let mut state = 0i32;
+        let mut h = 0i32;
         if !s.is_empty() {
-            for c in s.chars() {
-                state = state.wrapping_mul(31).wrapping_add(c as i32);
+            for c in s.encode_utf16() {
+                h = h.wrapping_mul(31).wrapping_add(c as i32);
             }
         }
-        state
+        h
     }
 }
 
