@@ -19,6 +19,8 @@
 
 pub mod hash_function;
 pub mod node;
+pub mod virtual_node;
 
 pub use hash_function::HashFunction;
 pub use node::Node;
+pub use virtual_node::VirtualNode;
