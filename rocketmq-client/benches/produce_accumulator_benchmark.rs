@@ -14,9 +14,6 @@
 
 //! ProduceAccumulator Performance Benchmark
 //!
-//! This benchmark tests the performance improvements from:
-//! - P0/P1: tokio::Mutex + Notify (vs parking_lot::Mutex + polling)
-//! - P2: DashMap (vs Arc<Mutex<HashMap>>)
 //!
 //! Run with: cargo bench --bench produce_accumulator_benchmark
 
@@ -111,7 +108,7 @@ async fn bench_hashmap_mutex_concurrent_insert(num_keys: usize, operations_per_k
     start.elapsed()
 }
 
-/// Benchmark: DashMap (After P2 optimization)
+/// Benchmark: DashMap
 async fn bench_dashmap_concurrent_insert(num_keys: usize, operations_per_key: usize) -> Duration {
     let map: Arc<DashMap<TestKey, Arc<Mutex<TestBatch>>>> = Arc::new(DashMap::new());
 
