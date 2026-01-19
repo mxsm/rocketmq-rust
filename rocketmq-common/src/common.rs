@@ -28,6 +28,7 @@ pub mod attribute;
 pub mod base;
 pub mod boundary_type;
 pub mod broker;
+pub mod coldctr;
 pub mod compression;
 pub mod config;
 pub mod config_manager;
