@@ -612,4 +612,45 @@ mod tests {
         let body = msg.body().unwrap();
         assert_eq!(body.as_ptr(), original_bytes.as_ptr());
     }
+
+    #[test]
+    fn test_put_user_property_error_handling() {
+        use rocketmq_error::RocketMQError;
+
+        let mut msg = Message::new("test_topic", b"test body");
+
+        // Test empty name
+        let result = msg.put_user_property(CheetahString::empty(), CheetahString::from_slice("value"));
+        assert!(result.is_err());
+        if let Err(RocketMQError::InvalidProperty(e)) = result {
+            assert!(e.contains("null or blank"));
+        }
+
+        // Test empty value
+        let result = msg.put_user_property(CheetahString::from_slice("name"), CheetahString::empty());
+        assert!(result.is_err());
+        if let Err(RocketMQError::InvalidProperty(e)) = result {
+            assert!(e.contains("null or blank"));
+        }
+
+        // Test system reserved property
+        let result = msg.put_user_property(CheetahString::from_slice("KEYS"), CheetahString::from_slice("value"));
+        assert!(result.is_err());
+        if let Err(RocketMQError::InvalidProperty(e)) = result {
+            assert!(e.contains("used by system"));
+        }
+
+        // Test valid user property
+        let result = msg.put_user_property(
+            CheetahString::from_slice("my_custom_key"),
+            CheetahString::from_slice("my_value"),
+        );
+        assert!(result.is_ok());
+        assert_eq!(
+            msg.get_user_property(CheetahString::from_slice("my_custom_key"))
+                .unwrap()
+                .as_str(),
+            "my_value"
+        );
+    }
 }

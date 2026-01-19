@@ -752,10 +752,12 @@ where
             }
         }
 
-        msg_ext.put_user_property(
-            CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_CHECK_TIMES),
-            check_time.to_string().into(),
-        );
+        msg_ext
+            .put_user_property(
+                CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_CHECK_TIMES),
+                check_time.to_string().into(),
+            )
+            .ok();
         false
     }
 

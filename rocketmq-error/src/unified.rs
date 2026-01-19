@@ -127,6 +127,13 @@ pub enum RocketMQError {
     Controller(#[from] ControllerError),
 
     // ============================================================================
+    // Message Property Errors
+    // ============================================================================
+    /// Invalid message property
+    #[error("Invalid message property: {0}")]
+    InvalidProperty(String),
+
+    // ============================================================================
     // Broker Errors
     // ============================================================================
     /// Broker not found

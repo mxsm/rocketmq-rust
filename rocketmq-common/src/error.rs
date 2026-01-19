@@ -12,12 +12,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use config::ConfigError;
-
-pub type RocketMQResult<T> = Result<T, CommonError>;
-
-#[derive(thiserror::Error, Debug)]
-pub enum CommonError {
-    #[error("Config error: {0}")]
-    ConfigError(#[from] ConfigError),
-}
+// This module has been deprecated. Use rocketmq_error::RocketMQError and
+// rocketmq_error::RocketMQResult instead.

@@ -24,6 +24,8 @@ use std::sync::LazyLock;
 use bytes::Buf;
 use bytes::Bytes;
 use cheetah_string::CheetahString;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
 
 pub mod message_accessor;
 pub mod message_batch;
@@ -74,14 +76,23 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// * `name` - The name of the user property, converted into a `String`.
     /// * `value` - The value of the user property, converted into a `String`.
-    fn put_user_property(&mut self, name: CheetahString, value: CheetahString) {
-        if STRING_HASH_SET.contains(name.as_str()) {
-            panic!("The Property<{name}> is used by system, input another please");
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the property name is reserved by the system or if name/value is empty.
+    fn put_user_property(&mut self, name: CheetahString, value: CheetahString) -> RocketMQResult<()> {
+        if name.is_empty() || value.is_empty() {
+            return Err(RocketMQError::InvalidProperty(
+                "The name or value of property can not be null or blank string!".to_string(),
+            ));
         }
-        if value.is_empty() || name.is_empty() {
-            panic!("The name or value of property can not be null or blank string!");
+        if STRING_HASH_SET.contains(name.as_str()) {
+            return Err(RocketMQError::InvalidProperty(format!(
+                "The Property<{name}> is used by system, input another please"
+            )));
         }
         self.put_property(name, value);
+        Ok(())
     }
 
     /// Retrieves a user-defined property from the message.
@@ -163,11 +174,10 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// # Returns
     ///
-    /// An `i32` representing the delay time level.
+    /// An `i32` representing the delay time level, defaults to 0 if not set or invalid.
     fn get_delay_time_level(&self) -> i32 {
         self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL))
-            .unwrap_or(CheetahString::from_slice("0"))
-            .parse()
+            .and_then(|v| v.parse().ok())
             .unwrap_or(0)
     }
 
@@ -188,12 +198,12 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Returns
     ///
     /// `true` if the message should wait for store acknowledgment; `false` otherwise.
+    /// Defaults to `true` if not set.
     fn is_wait_store_msg_ok(&self) -> bool {
         self.get_property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_WAIT_STORE_MSG_OK,
         ))
-        .unwrap_or(CheetahString::from_slice("true"))
-        .parse()
+        .map(|v| v.as_str() != "false")
         .unwrap_or(true)
     }
 
@@ -314,11 +324,10 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// # Returns
     ///
-    /// The delay time in seconds.
+    /// The delay time in seconds, defaults to 0 if not set or invalid.
     fn get_delay_time_sec(&self) -> u64 {
         self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_SEC))
-            .unwrap_or(CheetahString::from_slice("0"))
-            .parse()
+            .and_then(|v| v.parse().ok())
             .unwrap_or(0)
     }
 
@@ -338,11 +347,10 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// # Returns
     ///
-    /// The delay time in milliseconds.
+    /// The delay time in milliseconds, defaults to 0 if not set or invalid.
     fn get_delay_time_ms(&self) -> u64 {
         self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_MS))
-            .unwrap_or(CheetahString::from_slice("0"))
-            .parse()
+            .and_then(|v| v.parse().ok())
             .unwrap_or(0)
     }
 
@@ -362,11 +370,10 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// # Returns
     ///
-    /// The delivery time in milliseconds.
+    /// The delivery time in milliseconds, defaults to 0 if not set or invalid.
     fn get_deliver_time_ms(&self) -> u64 {
         self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVER_MS))
-            .unwrap_or(CheetahString::from_slice("0"))
-            .parse()
+            .and_then(|v| v.parse().ok())
             .unwrap_or(0)
     }
 
