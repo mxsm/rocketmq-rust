@@ -15,17 +15,17 @@
 //! Integration tests for OpenRaft implementation
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use rocketmq_controller::config::ControllerConfig;
 use rocketmq_controller::openraft::RaftNodeManager;
 use rocketmq_controller::typ::ControllerRequest;
 use rocketmq_controller::typ::Node;
+use rocketmq_rust::ArcMut;
 
 #[tokio::test]
 async fn test_node_creation() {
     // Create a test configuration
-    let config = Arc::new(
+    let config = ArcMut::new(
         ControllerConfig::default()
             .with_node_info(1, "127.0.0.1:9876".parse().unwrap())
             .with_election_timeout_ms(1000)
@@ -44,7 +44,7 @@ async fn test_node_creation() {
 #[tokio::test]
 async fn test_cluster_initialization() {
     // Create configuration for node 1
-    let config = Arc::new(
+    let config = ArcMut::new(
         ControllerConfig::default()
             .with_node_info(1, "127.0.0.1:19876".parse().unwrap())
             .with_election_timeout_ms(1000)
@@ -154,7 +154,7 @@ async fn test_storage_operations() {
 #[tokio::test]
 async fn test_client_write() {
     // Create configuration
-    let config = Arc::new(
+    let config = ArcMut::new(
         ControllerConfig::default()
             .with_node_info(1, "127.0.0.1:29876".parse().unwrap())
             .with_election_timeout_ms(1000)

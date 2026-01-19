@@ -21,6 +21,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use openraft::Config;
+use rocketmq_rust::ArcMut;
 use tracing::info;
 
 use crate::config::ControllerConfig;
@@ -51,7 +52,7 @@ pub struct RaftNodeManager {
 
 impl RaftNodeManager {
     /// Create a new Raft node manager
-    pub async fn new(config: Arc<ControllerConfig>) -> Result<Self> {
+    pub async fn new(config: ArcMut<ControllerConfig>) -> Result<Self> {
         let node_id = config.node_id;
 
         // Create storage

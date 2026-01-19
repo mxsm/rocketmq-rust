@@ -82,6 +82,7 @@
 //!    - String property parsing utility (string2properties)
 //!    - Configuration update/get methods
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -481,11 +482,54 @@ impl ControllerRequestProcessor {
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
-        _request: &mut RemotingCommand,
+        request: &mut RemotingCommand,
     ) -> RocketMQResult<Option<RemotingCommand>> {
-        unimplemented!("unimplemented handle_update_controller_config")
-    }
+        // Parse request body as properties
+        let properties = if let Some(body) = request.body() {
+            // Convert body to properties map
+            // Format: "key1=value1\nkey2=value2"
+            Self::parse_properties_from_string(body).await?
+        } else {
+            return Err(RocketMQError::request_body_invalid(
+                "UPDATE_CONTROLLER_CONFIG",
+                "request body not exist",
+            ));
+        };
+        if properties.is_empty() {
+            return Err(RocketMQError::request_body_invalid(
+                "UPDATE_CONTROLLER_CONFIG",
+                "update config found empty config",
+            ));
+        }
+        // Validate against blacklist
+        if self.validate_blacklist_config_exist(&properties) {
+            return Ok(Some(RemotingCommand::create_response_command_with_code_remark(
+                ResponseCode::NoPermission,
+                "Cannot update blacklisted configuration".to_string(),
+            )));
+        }
 
+        // Apply configuration updates
+        let controller_config = &mut self.controller_manager.config();
+        controller_config.update(properties).await?;
+
+        // Return success
+        Ok(Some(RemotingCommand::create_response_command()))
+    }
+    // Helper function to parse properties
+    async fn parse_properties_from_string(body: &[u8]) -> RocketMQResult<HashMap<String, String>> {
+        let content = String::from_utf8(body.to_vec())
+            .map_err(|e| RocketMQError::Internal(format!("parse property string err {}", e)))?;
+        let mut properties = HashMap::new();
+
+        for line in content.lines() {
+            if let Some((key, value)) = line.split_once('=') {
+                properties.insert(key.trim().to_string(), value.trim().to_string());
+            }
+        }
+
+        Ok(properties)
+    }
     /// Handle GET_CONTROLLER_CONFIG request
     ///
     /// Returns all controller configurations as formatted string.

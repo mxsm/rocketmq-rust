@@ -87,12 +87,14 @@ impl RequestProcessor for GetMetadataProcessor {
 
 #[cfg(test)]
 mod tests {
+    use rocketmq_rust::ArcMut;
+
     use super::*;
     use crate::config::ControllerConfig;
 
     #[tokio::test]
     async fn test_get_metadata_processor() {
-        let config = Arc::new(ControllerConfig::test_config());
+        let config = ArcMut::new(ControllerConfig::test_config());
 
         let metadata = Arc::new(MetadataStore::new(config.clone()).await.unwrap());
         let processor = GetMetadataProcessor::new(metadata);

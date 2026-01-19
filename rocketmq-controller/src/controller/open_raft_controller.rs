@@ -42,6 +42,7 @@ use rocketmq_remoting::protocol::header::controller::get_replica_info_request_he
 use rocketmq_remoting::protocol::header::controller::register_broker_to_controller_request_header::RegisterBrokerToControllerRequestHeader;
 use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_rust::ArcMut;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tonic::transport::Server;
@@ -56,7 +57,7 @@ use tracing::info;
 /// 2. Waits for Raft node to shutdown cleanly
 /// 3. Waits for gRPC server task to complete (with 10s timeout)
 pub struct OpenRaftController {
-    config: Arc<ControllerConfig>,
+    config: ArcMut<ControllerConfig>,
     /// Raft node manager
     node: Option<Arc<RaftNodeManager>>,
     /// gRPC server task handle
@@ -68,7 +69,7 @@ pub struct OpenRaftController {
 }
 
 impl OpenRaftController {
-    pub fn new(config: Arc<ControllerConfig>) -> Self {
+    pub fn new(config: ArcMut<ControllerConfig>) -> Self {
         let replica_info_manager = Arc::new(ReplicasInfoManager::new(config.clone()));
 
         Self {
@@ -85,7 +86,7 @@ impl Controller for OpenRaftController {
     async fn startup(&mut self) -> RocketMQResult<()> {
         info!("Starting OpenRaft controller on {}", self.config.listen_addr);
 
-        let node = Arc::new(RaftNodeManager::new(Arc::clone(&self.config)).await?);
+        let node = Arc::new(RaftNodeManager::new(self.config.clone()).await?);
         let service = GrpcRaftService::new(node.raft());
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel();

@@ -18,6 +18,7 @@ use std::time::Duration;
 use std::time::SystemTime;
 
 use dashmap::DashMap;
+use rocketmq_rust::ArcMut;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::time;
@@ -70,7 +71,7 @@ pub struct BrokerManager {
     brokers: Arc<DashMap<String, BrokerInfo>>,
 
     /// Configuration
-    config: Arc<ControllerConfig>,
+    config: ArcMut<ControllerConfig>,
 
     /// Heartbeat timeout duration
     heartbeat_timeout: Duration,
@@ -78,7 +79,7 @@ pub struct BrokerManager {
 
 impl BrokerManager {
     /// Create a new broker manager
-    pub fn new(config: Arc<ControllerConfig>) -> Self {
+    pub fn new(config: ArcMut<ControllerConfig>) -> Self {
         Self {
             brokers: Arc::new(DashMap::new()),
             config,
@@ -211,7 +212,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_broker_registration() {
-        let config = Arc::new(ControllerConfig::test_config());
+        let config = ArcMut::new(ControllerConfig::test_config());
 
         let manager = BrokerManager::new(config);
 

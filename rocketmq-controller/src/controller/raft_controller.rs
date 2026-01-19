@@ -48,7 +48,7 @@ pub enum RaftController {
 
 impl RaftController {
     /// Create a new OpenRaft-based controller
-    pub fn new_open_raft(config: Arc<ControllerConfig>) -> Self {
+    pub fn new_open_raft(config: ArcMut<ControllerConfig>) -> Self {
         Self::OpenRaft(ArcMut::new(OpenRaftController::new(config)))
     }
 

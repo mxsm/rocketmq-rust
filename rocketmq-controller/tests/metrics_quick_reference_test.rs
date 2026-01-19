@@ -16,16 +16,16 @@
 
 #[cfg(test)]
 mod quick_reference_tests {
-    use std::sync::Arc;
     use std::time::Instant;
 
     use rocketmq_controller::config::ControllerConfig;
     use rocketmq_controller::metrics::controller_metrics_manager::ControllerMetricsManager;
     use rocketmq_controller::metrics::*;
+    use rocketmq_rust::ArcMut;
 
     #[test]
     fn test_initialization() {
-        let config = Arc::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
+        let config = ArcMut::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
         let _metrics = ControllerMetricsManager::get_instance(config);
     }
 
@@ -38,7 +38,7 @@ mod quick_reference_tests {
 
     #[test]
     fn test_request_metrics() {
-        let config = Arc::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
+        let config = ArcMut::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
         let metrics = ControllerMetricsManager::get_instance(config);
 
         metrics.inc_request_total("controller_register_broker", RequestHandleStatus::Success);
@@ -50,7 +50,7 @@ mod quick_reference_tests {
 
     #[test]
     fn test_dledger_metrics() {
-        let config = Arc::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
+        let config = ArcMut::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
         let metrics = ControllerMetricsManager::get_instance(config);
 
         metrics.inc_dledger_op_total(DLedgerOperation::Append, DLedgerOperationStatus::Success);
@@ -62,7 +62,7 @@ mod quick_reference_tests {
 
     #[test]
     fn test_election_metrics() {
-        let config = Arc::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
+        let config = ArcMut::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
         let metrics = ControllerMetricsManager::get_instance(config);
 
         metrics.inc_election_total(ElectionResult::NewMasterElected);
@@ -73,7 +73,7 @@ mod quick_reference_tests {
 
     #[test]
     fn test_request_with_timing() {
-        let config = Arc::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
+        let config = ArcMut::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
         let metrics = ControllerMetricsManager::get_instance(config);
 
         let start = Instant::now();
@@ -88,7 +88,7 @@ mod quick_reference_tests {
 
     #[test]
     fn test_all_request_statuses() {
-        let config = Arc::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
+        let config = ArcMut::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
         let metrics = ControllerMetricsManager::get_instance(config);
 
         metrics.inc_request_total("test", RequestHandleStatus::Success);
@@ -98,7 +98,7 @@ mod quick_reference_tests {
 
     #[test]
     fn test_all_dledger_statuses() {
-        let config = Arc::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
+        let config = ArcMut::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
         let metrics = ControllerMetricsManager::get_instance(config);
 
         metrics.inc_dledger_op_total(DLedgerOperation::Append, DLedgerOperationStatus::Success);
@@ -108,7 +108,7 @@ mod quick_reference_tests {
 
     #[test]
     fn test_all_election_results() {
-        let config = Arc::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
+        let config = ArcMut::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
         let metrics = ControllerMetricsManager::get_instance(config);
 
         metrics.inc_election_total(ElectionResult::NewMasterElected);
@@ -120,7 +120,7 @@ mod quick_reference_tests {
     fn test_thread_safety() {
         use std::thread;
 
-        let config = Arc::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
+        let config = ArcMut::new(ControllerConfig::default().with_node_info(1, "127.0.0.1:9876".parse().unwrap()));
         let _metrics = ControllerMetricsManager::get_instance(config);
 
         let handles: Vec<_> = (0..10)
