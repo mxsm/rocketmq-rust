@@ -106,9 +106,10 @@ impl RouteInfoManagerWrapper {
     pub fn connection_disconnected(&mut self, socket_addr: SocketAddr) {
         match self {
             RouteInfoManagerWrapper::V1(manager) => manager.connection_disconnected(socket_addr),
-            RouteInfoManagerWrapper::V2(manager) => {
-                // V2's on_channel_destroy matches Java's onChannelDestroy behavior
-                manager.on_channel_destroy(socket_addr);
+            RouteInfoManagerWrapper::V2(_manager) => {
+                // V2 doesn't support socket_addr directly, needs channel
+                // This method is kept for v1 compatibility
+                // V2 should use on_channel_destroy instead
             }
         }
     }
@@ -118,8 +119,7 @@ impl RouteInfoManagerWrapper {
         match self {
             RouteInfoManagerWrapper::V1(manager) => manager.on_channel_destroy(channel),
             RouteInfoManagerWrapper::V2(manager) => {
-                let socket_addr = channel.remote_address();
-                manager.on_channel_destroy(socket_addr);
+                manager.on_channel_destroy(channel);
             }
         }
     }
