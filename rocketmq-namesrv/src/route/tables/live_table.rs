@@ -16,11 +16,14 @@
 //!
 //! Manages broker live status and heartbeat information.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_remoting::net::channel::Channel;
+use rocketmq_remoting::net::channel::ChannelId;
 use rocketmq_remoting::protocol::DataVersion;
 
 use crate::route_info::broker_addr_info::BrokerAddrInfo;
@@ -38,6 +41,12 @@ pub struct BrokerLiveInfo {
     pub data_version: DataVersion,
     /// HA server address (optional)
     pub ha_server_addr: Option<CheetahString>,
+
+    /// Remote socket address of the broker
+    pub remote_addr: SocketAddr,
+
+    /// Channel ID for the broker connection
+    pub channel_id: ChannelId,
 }
 
 impl BrokerLiveInfo {
@@ -46,12 +55,14 @@ impl BrokerLiveInfo {
     /// # Arguments
     /// * `timestamp` - Current timestamp in milliseconds
     /// * `data_version` - Data version
-    pub fn new(timestamp: u64, data_version: DataVersion) -> Self {
+    pub fn new(timestamp: u64, data_version: DataVersion, remote_addr: SocketAddr, channel_id: ChannelId) -> Self {
         Self {
             last_update_timestamp: timestamp,
             heartbeat_timeout_millis: 120_000, // 2 minutes default
             data_version,
             ha_server_addr: None,
+            remote_addr,
+            channel_id,
         }
     }
 
@@ -298,18 +309,46 @@ impl BrokerLiveTable {
         None
     }
 
+    /// Retrieve broker address information by channel.
+    ///
+    /// This method iterates through the broker live table to find the broker
+    /// address information associated with the given channel.
+    ///
+    /// # Arguments
+    /// * `channel` - A reference to the `Channel` object to search for.
+    ///
+    /// # Returns
+    /// * `Some(Arc<BrokerAddrInfo>)` - If a matching broker address information is found.
+    /// * `None` - If no matching broker address information is found.
+    pub fn get_broker_info_by_channel(&self, channel: &Channel) -> Option<Arc<BrokerAddrInfo>> {
+        for entry in self.inner.iter() {
+            let key_addr: &str = entry.value().channel_id.as_ref();
+            if key_addr == channel.channel_id() {
+                return Some(Arc::clone(entry.key()));
+            }
+        }
+        None
+    }
+
     /// Update last update timestamp for a broker (v1 compatibility)
     ///
     /// # Arguments
     /// * `broker_addr` - Broker address string
     /// * `timestamp` - New timestamp in milliseconds
-    pub fn update_last_update_timestamp(&self, broker_addr: &str, timestamp: u64) {
+    pub fn update_last_update_timestamp(
+        &self,
+        broker_addr: &str,
+        timestamp: u64,
+        remote_addr: SocketAddr,
+        channel_id: ChannelId,
+    ) {
         for mut entry in self.inner.iter_mut() {
             let key_addr: &str = entry.key().broker_addr.as_ref();
             if key_addr == broker_addr {
                 // Create new BrokerLiveInfo with updated timestamp
                 let old_info = entry.value();
-                let new_info = BrokerLiveInfo::new(timestamp, old_info.data_version.clone());
+                let new_info = BrokerLiveInfo::new(timestamp, old_info.data_version.clone(), remote_addr, channel_id);
+
                 *entry.value_mut() = Arc::new(new_info);
                 return;
             }
@@ -326,9 +365,14 @@ impl BrokerLiveTable {
         if let Some(mut entry) = self.inner.get_mut(broker_addr_info) {
             let current_time = get_current_millis();
             let old_info = entry.value();
-            let new_info = BrokerLiveInfo::new(current_time, old_info.data_version.clone())
-                .with_timeout(old_info.heartbeat_timeout_millis)
-                .with_ha_server(old_info.ha_server_addr.clone().unwrap_or_default());
+            let new_info = BrokerLiveInfo {
+                last_update_timestamp: current_time,
+                heartbeat_timeout_millis: old_info.heartbeat_timeout_millis,
+                data_version: old_info.data_version.clone(),
+                ha_server_addr: old_info.ha_server_addr.clone(),
+                remote_addr: old_info.remote_addr,
+                channel_id: old_info.channel_id.clone(),
+            };
             *entry.value_mut() = Arc::new(new_info);
         }
     }
@@ -342,6 +386,9 @@ impl Default for BrokerLiveTable {
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+    use std::str::FromStr;
+
     use super::*;
 
     fn create_test_broker_addr_info(name: &str, _id: u64) -> Arc<BrokerAddrInfo> {
@@ -349,7 +396,9 @@ mod tests {
     }
 
     fn create_test_live_info(timestamp: u64) -> BrokerLiveInfo {
-        BrokerLiveInfo::new(timestamp, DataVersion::default())
+        let remote_addr = SocketAddr::from_str("127.0.0.1:10911").unwrap();
+        let channel_id = CheetahString::from_static_str("test-channel-001");
+        BrokerLiveInfo::new(timestamp, DataVersion::default(), remote_addr, channel_id)
     }
 
     #[test]
@@ -385,7 +434,7 @@ mod tests {
 
     #[test]
     fn test_is_alive() {
-        let live_info = BrokerLiveInfo::new(1000, DataVersion::default());
+        let live_info = create_test_live_info(1000);
 
         // Within timeout
         assert!(live_info.is_alive(1000 + 60_000)); // 1 minute later
@@ -396,7 +445,7 @@ mod tests {
 
     #[test]
     fn test_custom_timeout() {
-        let live_info = BrokerLiveInfo::new(1000, DataVersion::default()).with_timeout(30_000); // 30 seconds
+        let live_info = create_test_live_info(1000).with_timeout(30_000); // 30 seconds
 
         assert!(live_info.is_alive(1000 + 20_000)); // 20s later - alive
         assert!(!live_info.is_alive(1000 + 40_000)); // 40s later - dead
@@ -438,7 +487,7 @@ mod tests {
 
     #[test]
     fn test_with_ha_server() {
-        let live_info = BrokerLiveInfo::new(1000, DataVersion::default()).with_ha_server("ha-server:10912");
+        let live_info = create_test_live_info(1000).with_ha_server("ha-server:10912");
 
         assert_eq!(
             live_info.ha_server_addr,
