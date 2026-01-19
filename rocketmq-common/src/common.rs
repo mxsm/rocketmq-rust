@@ -32,6 +32,7 @@ pub mod coldctr;
 pub mod compression;
 pub mod config;
 pub mod config_manager;
+pub mod consistenthash;
 pub mod constant;
 pub mod consumer;
 pub mod controller;
