@@ -104,14 +104,19 @@ impl BrokerLiveInfo {
 ///
 /// # Example
 /// ```no_run
+/// use std::net::SocketAddr;
+/// use std::str::FromStr;
 /// use std::sync::Arc;
 ///
+/// use cheetah_string::CheetahString;
 /// use rocketmq_namesrv::route::tables::BrokerLiveInfo;
 /// use rocketmq_namesrv::route::tables::BrokerLiveTable;
 /// use rocketmq_remoting::protocol::DataVersion;
 ///
 /// let table = BrokerLiveTable::new();
-/// let info = BrokerLiveInfo::new(1000000, DataVersion::default());
+/// let remote_addr = SocketAddr::from_str("127.0.0.1:10911").unwrap();
+/// let channel_id = CheetahString::from_static_str("test-channel-001");
+/// let info = BrokerLiveInfo::new(1000000, DataVersion::default(), remote_addr, channel_id);
 /// // Thread-safe operations
 /// ```
 #[derive(Clone)]
