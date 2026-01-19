@@ -439,7 +439,17 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         group_name: CheetahString,
         remove_offset: Option<bool>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .delete_subscription_group(
+                &addr,
+                group_name,
+                remove_offset.unwrap_or(false),
+                self.timeout_millis.as_millis() as u64,
+            )
+            .await
     }
 
     async fn create_and_update_kv_config(
