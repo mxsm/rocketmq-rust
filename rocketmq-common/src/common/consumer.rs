@@ -13,3 +13,4 @@
 // limitations under the License.
 
 pub mod consume_from_where;
+pub mod receipt_handle;
