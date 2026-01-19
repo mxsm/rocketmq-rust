@@ -108,6 +108,21 @@ pub trait MessageTrait: Any + Display + Debug {
         self.get_property(name)
     }
 
+    /// Retrieves a reference to a user-defined property from the message.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - A reference to a `CheetahString` representing the name of the user property to
+    ///   retrieve.
+    ///
+    /// # Returns
+    ///
+    /// An `Option<&CheetahString>` containing a reference to the property value if it exists,
+    /// otherwise `None`.
+    fn get_user_property_ref(&self, name: &CheetahString) -> Option<&CheetahString> {
+        self.get_property_ref(name)
+    }
+
     /// Retrieves a property from the message.
     ///
     /// # Arguments
@@ -118,6 +133,19 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// An `Option<String>` containing the property value if it exists, otherwise `None`.
     fn get_property(&self, name: &CheetahString) -> Option<CheetahString>;
+
+    /// Retrieves a reference to a property value from the message.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - A reference to a `CheetahString` representing the name of the property to
+    ///   retrieve.
+    ///
+    /// # Returns
+    ///
+    /// An `Option<&CheetahString>` containing a reference to the property value if it exists,
+    /// otherwise `None`.
+    fn get_property_ref(&self, name: &CheetahString) -> Option<&CheetahString>;
 
     /// Retrieves the topic of the message.
     ///

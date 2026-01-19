@@ -385,6 +385,10 @@ impl MessageTrait for Message {
         self.properties.get(name).cloned()
     }
 
+    fn get_property_ref(&self, name: &CheetahString) -> Option<&CheetahString> {
+        self.properties.get(name)
+    }
+
     #[inline]
     fn get_topic(&self) -> &CheetahString {
         &self.topic
