@@ -17,6 +17,8 @@
 //! Provides traits and implementations for consistent hashing,
 //! commonly used for distributed load balancing and data partitioning.
 
+pub mod hash_function;
 pub mod node;
 
+pub use hash_function::HashFunction;
 pub use node::Node;
