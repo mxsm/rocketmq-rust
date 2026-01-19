@@ -1,4 +1,4 @@
-// Copyright 2023 The RocketMQ Rust Authors
+// Copyright 2026 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 mod clean_broker_metadata_command;
 mod get_controller_config_sub_command;
 mod get_controller_metadata_sub_command;
+mod update_controller_config_sub_command;
 
 use std::sync::Arc;
 
@@ -22,6 +23,8 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
+use crate::commands::controller_commands::get_controller_metadata_sub_command::GetControllerMetadataSubCommand;
+use crate::commands::controller_commands::update_controller_config_sub_command::UpdateControllerConfigSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
@@ -45,7 +48,14 @@ pub enum ControllerCommands {
         about = "Get meta data of controller",
         long_about = None,
     )]
-    GetControllerMetadataSubCommand(get_controller_metadata_sub_command::GetControllerMetadataSubCommand),
+    GetControllerMetadataSubCommand(GetControllerMetadataSubCommand),
+
+    #[command(
+        name = "updateControllerConfig",
+        about = "update controller config",
+        long_about = None,
+    )]
+    UpdateControllerConfigSubCommand(UpdateControllerConfigSubCommand),
 }
 
 impl CommandExecute for ControllerCommands {
@@ -54,6 +64,7 @@ impl CommandExecute for ControllerCommands {
             ControllerCommands::CleanBrokerMetadata(cmd) => cmd.execute(rpc_hook).await,
             ControllerCommands::GetControllerConfigSubCommand(value) => value.execute(rpc_hook).await,
             ControllerCommands::GetControllerMetadataSubCommand(value) => value.execute(rpc_hook).await,
+            ControllerCommands::UpdateControllerConfigSubCommand(value) => value.execute(rpc_hook).await,
         }
     }
 }
