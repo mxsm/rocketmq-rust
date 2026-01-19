@@ -304,6 +304,10 @@ impl MessageTrait for MessageExt {
         self.message.get_property(name)
     }
 
+    fn get_property_ref(&self, name: &CheetahString) -> Option<&CheetahString> {
+        self.message.get_property_ref(name)
+    }
+
     fn get_topic(&self) -> &CheetahString {
         self.message.get_topic()
     }
