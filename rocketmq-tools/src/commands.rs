@@ -123,6 +123,11 @@ impl CommandExecute for ClassificationTablePrint {
         let commands: Vec<Command> = vec![
             Command {
                 category: "Consumer",
+                command: "updateSubGroup",
+                remark: "Update consumer sub group.",
+            },
+            Command {
+                category: "Consumer",
                 command: "deleteSubGroup",
                 remark: "Delete subscription group from broker.",
             },

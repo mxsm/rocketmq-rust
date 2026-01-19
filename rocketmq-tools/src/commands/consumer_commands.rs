@@ -1,4 +1,4 @@
-// Copyright 2023 The RocketMQ Rust Authors
+// Copyright 2026 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod delete_subscription_group_sub_command;
+mod update_sub_group_sub_command;
 
 use std::sync::Arc;
 
@@ -20,6 +21,7 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
+use crate::commands::consumer_commands::update_sub_group_sub_command::UpdateSubGroupSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
@@ -30,11 +32,18 @@ pub enum ConsumerCommands {
         long_about = r#"Delete subscription group from broker."#
     )]
     DeleteSubGroup(delete_subscription_group_sub_command::DeleteSubscriptionGroupSubCommand),
+    #[command(
+        name = "updateSubGroup",
+        about = "Update or create subscription group.",
+        long_about = None,
+    )]
+    UpdateSubGroupSubCommand(UpdateSubGroupSubCommand),
 }
 
 impl CommandExecute for ConsumerCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
+            ConsumerCommands::UpdateSubGroupSubCommand(value) => value.execute(rpc_hook).await,
             ConsumerCommands::DeleteSubGroup(cmd) => cmd.execute(rpc_hook).await,
         }
     }
