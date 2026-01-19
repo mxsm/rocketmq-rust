@@ -18,8 +18,6 @@ use std::path::PathBuf;
 use config::Config;
 use serde::Deserialize;
 
-use crate::error::CommonError;
-
 pub fn parse_config_file<'de, C>(config_file: PathBuf) -> rocketmq_error::RocketMQResult<C>
 where
     C: Debug + Deserialize<'de>,

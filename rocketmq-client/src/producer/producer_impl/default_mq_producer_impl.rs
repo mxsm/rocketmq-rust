@@ -1912,7 +1912,8 @@ impl DefaultMQProducerImpl {
                     msg.put_user_property(
                         CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_ID),
                         CheetahString::from_string(transaction_id.to_owned()),
-                    );
+                    )
+                    .map_err(|e| mq_client_err!(e.to_string()))?;
                 }
                 let transaction_id = msg.get_property(&CheetahString::from_static_str(
                     MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
