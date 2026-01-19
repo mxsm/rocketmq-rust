@@ -17,10 +17,13 @@
 //! Provides traits and implementations for consistent hashing,
 //! commonly used for distributed load balancing and data partitioning.
 
+pub mod consistent_hash_router;
 pub mod hash_function;
 pub mod node;
 pub mod virtual_node;
 
+pub use consistent_hash_router::ConsistentHashRouter;
+pub use consistent_hash_router::MD5Hash;
 pub use hash_function::HashFunction;
 pub use node::Node;
 pub use virtual_node::VirtualNode;
