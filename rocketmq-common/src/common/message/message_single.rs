@@ -62,18 +62,50 @@ impl Default for Message {
 }
 
 impl Message {
+    /// Create a new message with topic and body slice (will copy)
+    #[inline]
     pub fn new(topic: impl Into<CheetahString>, body: &[u8]) -> Self {
-        Self::with_details(topic, CheetahString::new(), CheetahString::new(), 0, body, true)
+        Self::with_details(topic, CheetahString::empty(), CheetahString::empty(), 0, body, true)
     }
 
+    /// Create a new message with topic and Bytes (zero-copy)
+    #[inline]
+    pub fn new_with_bytes(topic: impl Into<CheetahString>, body: Bytes) -> Self {
+        Self::with_details_bytes(topic, CheetahString::empty(), CheetahString::empty(), 0, body, true)
+    }
+
+    /// Create a new message with topic and Vec<u8> (zero-copy conversion to Bytes)
+    #[inline]
+    pub fn new_with_vec(topic: impl Into<CheetahString>, body: Vec<u8>) -> Self {
+        Self::with_details_bytes(
+            topic,
+            CheetahString::empty(),
+            CheetahString::empty(),
+            0,
+            Bytes::from(body),
+            true,
+        )
+    }
+
+    #[inline]
     pub fn new_body(topic: impl Into<CheetahString>, body: Option<Bytes>) -> Self {
-        Self::with_details_body(topic, CheetahString::new(), CheetahString::new(), 0, body, true)
+        Self::with_details_body(topic, CheetahString::empty(), CheetahString::empty(), 0, body, true)
     }
 
+    /// Create a message with tags and body slice (will copy)
+    #[inline]
     pub fn with_tags(topic: impl Into<CheetahString>, tags: impl Into<CheetahString>, body: &[u8]) -> Self {
-        Self::with_details(topic, tags, String::new(), 0, body, true)
+        Self::with_details(topic, tags, CheetahString::empty(), 0, body, true)
     }
 
+    /// Create a message with tags and Bytes (zero-copy)
+    #[inline]
+    pub fn with_tags_bytes(topic: impl Into<CheetahString>, tags: impl Into<CheetahString>, body: Bytes) -> Self {
+        Self::with_details_bytes(topic, tags, CheetahString::empty(), 0, body, true)
+    }
+
+    /// Create a message with keys and body slice (will copy)
+    #[inline]
     pub fn with_keys(
         topic: impl Into<CheetahString>,
         tags: impl Into<CheetahString>,
@@ -83,6 +115,18 @@ impl Message {
         Self::with_details(topic, tags, keys, 0, body, true)
     }
 
+    /// Create a message with keys and Bytes (zero-copy)
+    #[inline]
+    pub fn with_keys_bytes(
+        topic: impl Into<CheetahString>,
+        tags: impl Into<CheetahString>,
+        keys: impl Into<CheetahString>,
+        body: Bytes,
+    ) -> Self {
+        Self::with_details_bytes(topic, tags, keys, 0, body, true)
+    }
+
+    /// Create message with body slice (will copy data)
     pub fn with_details(
         topic: impl Into<CheetahString>,
         tags: impl Into<CheetahString>,
@@ -91,26 +135,52 @@ impl Message {
         body: &[u8],
         wait_store_msg_ok: bool,
     ) -> Self {
+        Self::with_details_bytes(topic, tags, keys, flag, Bytes::copy_from_slice(body), wait_store_msg_ok)
+    }
+
+    /// Create message with Bytes (zero-copy)
+    pub fn with_details_bytes(
+        topic: impl Into<CheetahString>,
+        tags: impl Into<CheetahString>,
+        keys: impl Into<CheetahString>,
+        flag: i32,
+        body: Bytes,
+        wait_store_msg_ok: bool,
+    ) -> Self {
         let topic = topic.into();
         let tags = tags.into();
         let keys = keys.into();
-        let mut message = Message {
+
+        // Pre-allocate HashMap with estimated capacity to avoid reallocation
+        let has_tags = !tags.is_empty();
+        let has_keys = !keys.is_empty();
+        let initial_capacity = (has_tags as usize) + (has_keys as usize) + 1;
+        let mut properties = HashMap::with_capacity(initial_capacity);
+
+        // Use static strings for keys to avoid allocations
+        if has_tags {
+            properties.insert(CheetahString::from_static_str(MessageConst::PROPERTY_TAGS), tags);
+        }
+
+        if has_keys {
+            properties.insert(CheetahString::from_static_str(MessageConst::PROPERTY_KEYS), keys);
+        }
+
+        if !wait_store_msg_ok {
+            properties.insert(
+                CheetahString::from_static_str(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
+                CheetahString::from_static_str("false"),
+            );
+        }
+
+        Message {
             topic,
             flag,
-            body: Some(bytes::Bytes::copy_from_slice(body)),
-            ..Default::default()
-        };
-
-        if !tags.is_empty() {
-            message.set_tags(tags);
+            properties,
+            body: Some(body),
+            compressed_body: None,
+            transaction_id: None,
         }
-
-        if !keys.is_empty() {
-            message.set_keys(keys);
-        }
-
-        message.set_wait_store_msg_ok(wait_store_msg_ok);
-        message
     }
 
     pub fn with_details_body(
@@ -124,23 +194,36 @@ impl Message {
         let topic = topic.into();
         let tags = tags.into();
         let keys = keys.into();
-        let mut message = Message {
+
+        // Pre-allocate HashMap with estimated capacity
+        let has_tags = !tags.is_empty();
+        let has_keys = !keys.is_empty();
+        let initial_capacity = (has_tags as usize) + (has_keys as usize) + 1;
+        let mut properties = HashMap::with_capacity(initial_capacity);
+
+        if has_tags {
+            properties.insert(CheetahString::from_static_str(MessageConst::PROPERTY_TAGS), tags);
+        }
+
+        if has_keys {
+            properties.insert(CheetahString::from_static_str(MessageConst::PROPERTY_KEYS), keys);
+        }
+
+        if !wait_store_msg_ok {
+            properties.insert(
+                CheetahString::from_static_str(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
+                CheetahString::from_static_str("false"),
+            );
+        }
+
+        Message {
             topic,
             flag,
+            properties,
             body,
-            ..Default::default()
-        };
-
-        if !tags.is_empty() {
-            message.set_tags(tags);
+            compressed_body: None,
+            transaction_id: None,
         }
-
-        if !keys.is_empty() {
-            message.set_keys(keys);
-        }
-
-        message.set_wait_store_msg_ok(wait_store_msg_ok);
-        message
     }
 
     #[inline]
@@ -202,11 +285,18 @@ impl Message {
 
     #[inline]
     pub fn is_wait_store_msg_ok(&self) -> bool {
-        match self.get_property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_WAIT_STORE_MSG_OK,
-        )) {
-            None => true,
-            Some(value) => value.parse().unwrap_or(true),
+        self.properties
+            .get(MessageConst::PROPERTY_WAIT_STORE_MSG_OK)
+            .is_none_or(|value| value != "false")
+    }
+
+    #[inline]
+    fn set_wait_store_msg_ok(&mut self, wait_store_msg_ok: bool) {
+        if !wait_store_msg_ok {
+            self.properties.insert(
+                CheetahString::from_static_str(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
+                CheetahString::from_static_str("false"),
+            );
         }
     }
 
@@ -393,4 +483,133 @@ pub fn tags_string2tags_code(tags: Option<&CheetahString>) -> i64 {
         return 0;
     }
     JavaStringHasher::hash_str(tags.as_str()) as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+
+    use super::*;
+
+    #[test]
+    fn test_message_new() {
+        let msg = Message::new("test_topic", b"test_body");
+        assert_eq!(msg.topic().as_str(), "test_topic");
+        assert_eq!(msg.body().unwrap().as_ref(), b"test_body");
+    }
+
+    #[test]
+    fn test_message_new_with_bytes() {
+        let body = Bytes::from_static(b"test_body");
+        let msg = Message::new_with_bytes("test_topic", body.clone());
+        assert_eq!(msg.topic().as_str(), "test_topic");
+        assert_eq!(msg.body().unwrap(), body);
+    }
+
+    #[test]
+    fn test_message_new_with_vec() {
+        let body = vec![1u8, 2, 3, 4, 5];
+        let msg = Message::new_with_vec("test_topic", body.clone());
+        assert_eq!(msg.topic().as_str(), "test_topic");
+        assert_eq!(msg.body().unwrap().as_ref(), body.as_slice());
+    }
+
+    #[test]
+    fn test_message_with_tags() {
+        let msg = Message::with_tags("test_topic", "tag1", b"test_body");
+        assert_eq!(msg.topic().as_str(), "test_topic");
+        assert_eq!(msg.get_tags().unwrap().as_str(), "tag1");
+    }
+
+    #[test]
+    fn test_message_with_tags_bytes() {
+        let body = Bytes::from_static(b"test_body");
+        let msg = Message::with_tags_bytes("test_topic", "tag1", body.clone());
+        assert_eq!(msg.topic().as_str(), "test_topic");
+        assert_eq!(msg.get_tags().unwrap().as_str(), "tag1");
+        assert_eq!(msg.body().unwrap(), body);
+    }
+
+    #[test]
+    fn test_message_with_keys() {
+        let msg = Message::with_keys("test_topic", "tag1", "key1", b"test_body");
+        assert_eq!(msg.topic().as_str(), "test_topic");
+        assert_eq!(msg.get_tags().unwrap().as_str(), "tag1");
+        assert_eq!(
+            msg.properties().get(MessageConst::PROPERTY_KEYS).unwrap().as_str(),
+            "key1"
+        );
+    }
+
+    #[test]
+    fn test_message_with_keys_bytes() {
+        let body = Bytes::from_static(b"test_body");
+        let msg = Message::with_keys_bytes("test_topic", "tag1", "key1", body.clone());
+        assert_eq!(msg.topic().as_str(), "test_topic");
+        assert_eq!(msg.get_tags().unwrap().as_str(), "tag1");
+        assert_eq!(msg.body().unwrap(), body);
+    }
+
+    #[test]
+    fn test_message_with_details() {
+        let msg = Message::with_details("test_topic", "tag1", "key1", 0, b"test_body", true);
+        assert_eq!(msg.topic().as_str(), "test_topic");
+        assert_eq!(msg.get_tags().unwrap().as_str(), "tag1");
+        assert!(msg.is_wait_store_msg_ok());
+    }
+
+    #[test]
+    fn test_message_with_details_bytes() {
+        let body = Bytes::from_static(b"test_body");
+        let msg = Message::with_details_bytes("test_topic", "tag1", "key1", 0, body.clone(), false);
+        assert_eq!(msg.topic().as_str(), "test_topic");
+        assert!(!msg.is_wait_store_msg_ok());
+        assert_eq!(msg.body().unwrap(), body);
+    }
+
+    #[test]
+    fn test_properties_capacity_optimization() {
+        // Test with no tags or keys
+        let msg1 = Message::with_details_bytes(
+            "topic",
+            CheetahString::empty(),
+            CheetahString::empty(),
+            0,
+            Bytes::from_static(b"body"),
+            true,
+        );
+        assert_eq!(msg1.properties().len(), 0);
+
+        // Test with tags
+        let msg2 = Message::with_details_bytes(
+            "topic",
+            "tag1",
+            CheetahString::empty(),
+            0,
+            Bytes::from_static(b"body"),
+            true,
+        );
+        assert_eq!(msg2.properties().len(), 1);
+
+        // Test with tags and keys
+        let msg3 = Message::with_details_bytes("topic", "tag1", "key1", 0, Bytes::from_static(b"body"), true);
+        assert_eq!(msg3.properties().len(), 2);
+
+        // Test with wait_store_msg_ok = false
+        let msg4 = Message::with_details_bytes("topic", "tag1", "key1", 0, Bytes::from_static(b"body"), false);
+        assert_eq!(msg4.properties().len(), 3);
+    }
+
+    #[test]
+    fn test_zero_copy_bytes() {
+        let original_bytes = Bytes::from_static(b"test_data");
+        let bytes_clone = original_bytes.clone();
+
+        // Creating message with Bytes should not copy
+        let msg = Message::new_with_bytes("topic", bytes_clone);
+
+        // The body should share the same underlying data
+        let body = msg.body().unwrap();
+        assert_eq!(body.as_ptr(), original_bytes.as_ptr());
+    }
 }
