@@ -20,3 +20,28 @@ pub enum UnaryType {
     BooleanCast,
     Like,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_unary_type_debug() {
+        assert_eq!(format!("{:?}", UnaryType::Negate), "Negate");
+        assert_eq!(format!("{:?}", UnaryType::In), "In");
+        assert_eq!(format!("{:?}", UnaryType::Not), "Not");
+        assert_eq!(format!("{:?}", UnaryType::BooleanCast), "BooleanCast");
+        assert_eq!(format!("{:?}", UnaryType::Like), "Like");
+    }
+
+    #[test]
+    fn test_unary_type_clone_and_copy() {
+        let original = UnaryType::Not;
+        let cloned = original;
+        assert_eq!(original, cloned);
+
+        let original = UnaryType::Like;
+        let copied = original;
+        assert_eq!(original, copied);
+    }
+}
