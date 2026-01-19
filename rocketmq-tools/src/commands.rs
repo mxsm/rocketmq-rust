@@ -121,6 +121,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Controller",
+                command: "getControllerConfig",
+                remark: "Get configuration of controller(s).",
+            },
+            Command {
+                category: "Controller",
                 command: "getControllerMetaData",
                 remark: "Get meta data of controller.",
             },

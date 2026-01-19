@@ -762,7 +762,29 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         &self,
         controller_servers: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>> {
-        todo!()
+        if let Some(ref mq_client_instance) = self.client_instance {
+            let mut result: HashMap<CheetahString, HashMap<CheetahString, CheetahString>> = HashMap::new();
+            let mq_client_api = mq_client_instance.get_mq_client_api_impl();
+            let timeout_millis = self.timeout_millis.as_millis() as u64;
+
+            for controller_addr in controller_servers {
+                match mq_client_api
+                    .get_controller_config(controller_addr.clone(), timeout_millis)
+                    .await
+                {
+                    Ok(config) => {
+                        result.insert(controller_addr, config);
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to get config from controller {}: {}", controller_addr, e);
+                    }
+                }
+            }
+
+            Ok(result)
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn update_controller_config(

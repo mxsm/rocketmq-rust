@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod clean_broker_metadata_command;
+mod get_controller_config_sub_command;
 mod get_controller_metadata_sub_command;
 
 use std::sync::Arc;
@@ -33,6 +34,13 @@ pub enum ControllerCommands {
     CleanBrokerMetadata(clean_broker_metadata_command::CleanBrokerMetadataCommand),
 
     #[command(
+        name = "getControllerConfig",
+        about = "Get configuration of controller(s)",
+        long_about = None,
+    )]
+    GetControllerConfigSubCommand(get_controller_config_sub_command::GetControllerConfigSubCommand),
+
+    #[command(
         name = "getControllerMetadata",
         about = "Get meta data of controller",
         long_about = None,
@@ -44,6 +52,7 @@ impl CommandExecute for ControllerCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
             ControllerCommands::CleanBrokerMetadata(cmd) => cmd.execute(rpc_hook).await,
+            ControllerCommands::GetControllerConfigSubCommand(value) => value.execute(rpc_hook).await,
             ControllerCommands::GetControllerMetadataSubCommand(value) => value.execute(rpc_hook).await,
         }
     }

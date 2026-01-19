@@ -2060,6 +2060,43 @@ impl MQClientAPIImpl {
             )),
         }
     }
+
+    pub async fn get_controller_config(
+        &self,
+        controller_address: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<HashMap<CheetahString, CheetahString>> {
+        let request = RemotingCommand::create_remoting_command(RequestCode::GetControllerConfig);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&controller_address), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                let mut config_map: HashMap<CheetahString, CheetahString> = HashMap::new();
+                if let Some(body) = response.body() {
+                    let body_str = String::from_utf8_lossy(body);
+                    for line in body_str.lines() {
+                        let line = line.trim();
+                        if line.is_empty() || line.starts_with('#') {
+                            continue;
+                        }
+                        if let Some(pos) = line.find('=') {
+                            let key = line[..pos].trim();
+                            let value = line[pos + 1..].trim();
+                            config_map.insert(CheetahString::from(key), CheetahString::from(value));
+                        }
+                    }
+                }
+                Ok(config_map)
+            }
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string())
+            )),
+        }
+    }
 }
 
 fn build_queue_offset_sorted_map(
