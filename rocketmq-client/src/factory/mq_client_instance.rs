@@ -17,7 +17,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
@@ -45,7 +44,6 @@ use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioMutex;
-use tokio::runtime::Handle;
 use tokio::sync::RwLock;
 use tracing::error;
 use tracing::info;
@@ -129,11 +127,10 @@ impl MQClientInstance {
             Some(tx),
         ));
         if let Some(namesrv_addr) = client_config.namesrv_addr.as_deref() {
-            let handle = Handle::current();
             let mq_client_api_impl_cloned = mq_client_api_impl.clone();
             let namesrv_addr = namesrv_addr.to_string();
-            thread::spawn(move || {
-                handle.block_on(async move {
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async move {
                     mq_client_api_impl_cloned
                         .update_name_server_address_list(namesrv_addr.as_str())
                         .await;
@@ -228,11 +225,9 @@ impl MQClientInstance {
         ));
         instance.mq_client_api_impl = Some(mq_client_api_impl.clone());
         if let Some(namesrv_addr) = client_config.namesrv_addr.as_deref() {
-            let handle = Handle::current();
-
             let namesrv_addr = namesrv_addr.to_string();
-            thread::spawn(move || {
-                handle.block_on(async move {
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async move {
                     mq_client_api_impl
                         .update_name_server_address_list(namesrv_addr.as_str())
                         .await;
