@@ -356,7 +356,17 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         }
 
         // Use latency tracker to select best nameserver
-        let selected_addr = self.latency_tracker.select_best(addr_list)?;
+        let selected_addr = match self.latency_tracker.select_best(addr_list) {
+            Some(addr) => addr,
+            None => {
+                error!(
+                    "Failed to select healthy nameserver. Available list: {:?}, Available set: {:?}",
+                    addr_list,
+                    self.available_namesrv_addr_set.as_ref()
+                );
+                return None;
+            }
+        };
 
         info!(
             "Selected nameserver: {} (P99: {:?}, errors: {})",
@@ -881,7 +891,19 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         // === Get client connection ===
         let mut client = self.get_and_create_client(addr).await.ok_or_else(|| {
             let target = addr.map(|a| a.as_str()).unwrap_or("<nameserver>");
-            error!("Failed to get client for {}", target);
+
+            if target == "<nameserver>" {
+                error!(
+                    "Failed to get client for <nameserver>. Diagnostics: configured_list={:?}, available_set={:?}, \
+                     cached_choice={:?}, connections={}",
+                    self.namesrv_addr_list.as_ref(),
+                    self.available_namesrv_addr_set.as_ref(),
+                    self.namesrv_addr_choosed.as_ref(),
+                    self.connection_tables.len()
+                );
+            } else {
+                error!("Failed to get client for {}", target);
+            }
 
             // Record connection error
             if let Some(ref addr) = target_addr {
