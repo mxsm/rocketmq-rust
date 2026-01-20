@@ -21,6 +21,7 @@ use std::thread;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use futures::future;
 use rand::seq::IndexedRandom;
 use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::constant::PermName;
@@ -248,7 +249,7 @@ impl MQClientInstance {
                             for (broker_name, broker_addrs) in broker_addr_table.iter() {
                                 for (id, addr) in broker_addrs.iter() {
                                     if addr == remote_address.to_string().as_str()
-                                        && instance_.send_heartbeat_to_broker(*id, broker_name, addr).await
+                                        && instance_.send_heartbeat_to_broker(*id, broker_name, addr, false).await
                                     {
                                         instance_.re_balance_immediately();
                                     }
@@ -773,29 +774,41 @@ impl MQClientInstance {
             }
         }
     }
-    pub async fn send_heartbeat_to_all_broker_with_lock(&mut self) -> bool {
-        if let Some(lock) = self.lock_heartbeat.try_lock().await {
-            if self.client_config.use_heartbeat_v2 {
-                self.send_heartbeat_to_all_broker_v2(false).await
-            } else {
-                self.send_heartbeat_to_all_broker().await
+    pub async fn send_heartbeat_to_all_broker_with_lock(&self) -> bool {
+        let _guard = match self.lock_heartbeat.try_lock().await {
+            Some(g) => g,
+            None => {
+                warn!("lock heartBeat, but failed. [{}]", self.client_id);
+                return false;
             }
+        };
+
+        // Check if concurrent heartbeat is enabled
+        if self.client_config.enable_concurrent_heartbeat {
+            return self.send_heartbeat_to_all_broker_concurrently().await;
+        }
+
+        // Use V2 or V1 protocol based on configuration
+        if self.client_config.use_heartbeat_v2 {
+            self.send_heartbeat_to_all_broker_v2(false).await
         } else {
-            warn!("lock heartBeat, but failed. [{}]", self.client_id);
-            false
+            self.send_heartbeat_to_all_broker().await
         }
     }
 
-    pub async fn send_heartbeat_to_all_broker_with_lock_v2(&mut self, is_rebalance: bool) -> bool {
-        if let Some(lock) = self.lock_heartbeat.try_lock_timeout(Duration::from_secs(2)).await {
-            if self.client_config.use_heartbeat_v2 {
-                self.send_heartbeat_to_all_broker_v2(is_rebalance).await
-            } else {
-                self.send_heartbeat_to_all_broker().await
+    pub async fn send_heartbeat_to_all_broker_with_lock_v2(&self, is_rebalance: bool) -> bool {
+        let _guard = match self.lock_heartbeat.try_lock_timeout(Duration::from_secs(2)).await {
+            Some(g) => g,
+            None => {
+                warn!("lock heartBeat, but failed. [{}]", self.client_id);
+                return false;
             }
+        };
+
+        if self.client_config.use_heartbeat_v2 {
+            self.send_heartbeat_to_all_broker_v2(is_rebalance).await
         } else {
-            warn!("lock heartBeat, but failed. [{}]", self.client_id);
-            false
+            self.send_heartbeat_to_all_broker().await
         }
     }
 
@@ -826,7 +839,216 @@ impl MQClientInstance {
     }
 
     async fn send_heartbeat_to_all_broker_v2(&self, is_rebalance: bool) -> bool {
-        unimplemented!()
+        let heartbeat_data_with_sub = self.prepare_heartbeat_data(false).await;
+        let producer_empty = heartbeat_data_with_sub.producer_data_set.is_empty();
+        let consumer_empty = heartbeat_data_with_sub.consumer_data_set.is_empty();
+
+        if producer_empty && consumer_empty {
+            warn!(
+                "sendHeartbeatToAllBrokerV2 sending heartbeat, but no consumer and no producer. [{}]",
+                self.client_id
+            );
+            return false;
+        }
+
+        let broker_addr_table = self.broker_addr_table.read().await;
+        if broker_addr_table.is_empty() {
+            return false;
+        }
+
+        // Reset fingerprint map on rebalance
+        if is_rebalance {
+            self.reset_broker_addr_heartbeat_fingerprint_map().await;
+        }
+
+        // Compute fingerprint for current heartbeat
+        let current_fingerprint = heartbeat_data_with_sub.compute_heartbeat_fingerprint();
+
+        // Send to all brokers
+        for (broker_name, broker_addrs) in broker_addr_table.iter() {
+            if broker_addrs.is_empty() {
+                continue;
+            }
+
+            for (id, addr) in broker_addrs.iter() {
+                if addr.is_empty() {
+                    continue;
+                }
+                // Skip non-master brokers for consumer-only clients
+                if consumer_empty && *id != mix_all::MASTER_ID {
+                    continue;
+                }
+
+                // Clone heartbeat data for this broker
+                let mut heartbeat_data = heartbeat_data_with_sub.clone();
+                heartbeat_data.heartbeat_fingerprint = current_fingerprint;
+
+                self.send_heartbeat_to_broker_v2(*id, broker_name, addr, heartbeat_data)
+                    .await;
+            }
+        }
+
+        true
+    }
+
+    async fn reset_broker_addr_heartbeat_fingerprint_map(&self) {
+        self.broker_heartbeat_fingerprint_table.write().await.clear();
+    }
+
+    /// Send heartbeat to all brokers concurrently
+    async fn send_heartbeat_to_all_broker_concurrently(&self) -> bool {
+        let heartbeat_data = self.prepare_heartbeat_data(false).await;
+        let producer_empty = heartbeat_data.producer_data_set.is_empty();
+        let consumer_empty = heartbeat_data.consumer_data_set.is_empty();
+
+        if producer_empty && consumer_empty {
+            warn!(
+                "sending heartbeat concurrently, but no consumer and no producer. [{}]",
+                self.client_id
+            );
+            return false;
+        }
+
+        // Collect broker list without holding lock during task execution
+        let broker_list: Vec<(u64, CheetahString, CheetahString)> = {
+            let broker_addr_table = self.broker_addr_table.read().await;
+            if broker_addr_table.is_empty() {
+                return false;
+            }
+
+            let mut list = Vec::new();
+            for (broker_name, broker_addrs) in broker_addr_table.iter() {
+                if broker_addrs.is_empty() {
+                    continue;
+                }
+
+                for (id, addr) in broker_addrs.iter() {
+                    if addr.is_empty() {
+                        continue;
+                    }
+                    // Skip non-master brokers for consumer-only clients
+                    if consumer_empty && *id != mix_all::MASTER_ID {
+                        continue;
+                    }
+                    list.push((*id, broker_name.clone(), addr.clone()));
+                }
+            }
+            list
+        }; // broker_addr_table lock released here
+
+        if broker_list.is_empty() {
+            return false;
+        }
+
+        let task_count = broker_list.len();
+
+        // Collect all heartbeat tasks
+        let mut tasks = Vec::new();
+        for (broker_id, broker_name, addr) in broker_list {
+            // Clone necessary data for the async task
+            let heartbeat_data = heartbeat_data.clone();
+            let client_id = self.client_id.clone();
+            let mq_client_api = self.mq_client_api_impl.as_ref().unwrap().clone();
+            let timeout = self.client_config.mq_client_api_timeout;
+            let send_heartbeat_times_total = self.send_heartbeat_times_total.clone();
+            let topic_route_table = self.topic_route_table.clone();
+
+            // Spawn independent task for each broker
+            // Returns: (broker_name, addr, version, success)
+            let task = tokio::spawn(async move {
+                match mq_client_api
+                    .mut_from_ref()
+                    .send_heartbeat(&addr, &heartbeat_data, timeout)
+                    .await
+                {
+                    Ok((version, _response)) => {
+                        let times = send_heartbeat_times_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if times % 20 == 0 {
+                            info!(
+                                "send heart beat to broker[{} {} {}] success (concurrent)",
+                                broker_name, broker_id, addr
+                            );
+                        }
+                        (broker_name, addr, Some(version), true)
+                    }
+                    Err(_) => {
+                        // Check if broker is in name server
+                        let is_in_ns = {
+                            let route_table = topic_route_table.read().await;
+                            route_table.iter().any(|(_, route_data)| {
+                                route_data.broker_datas.iter().any(|bd| {
+                                    bd.broker_addrs()
+                                        .iter()
+                                        .any(|(_, broker_addr)| broker_addr.as_str() == addr.as_str())
+                                })
+                            })
+                        };
+
+                        if is_in_ns {
+                            warn!(
+                                "send heart beat to broker[{} {} {}] failed (concurrent)",
+                                broker_name, broker_id, addr
+                            );
+                        } else {
+                            warn!(
+                                "send heart beat to broker[{} {} {}] exception, because the broker not up, forget it \
+                                 (concurrent)",
+                                broker_name, broker_id, addr
+                            );
+                        }
+                        (broker_name, addr, None, false)
+                    }
+                }
+            });
+
+            tasks.push(task);
+        }
+
+        // Wait for all tasks with timeout (3 seconds)
+        let results = match tokio::time::timeout(Duration::from_millis(3000), future::join_all(tasks)).await {
+            Ok(results) => results,
+            Err(_) => {
+                warn!(
+                    "Concurrent heartbeat timeout after 3000ms for client [{}]",
+                    self.client_id
+                );
+                return false;
+            }
+        };
+
+        // Update broker version table after all tasks complete
+        // This avoids lock contention during task execution
+        let mut broker_version_table = self.broker_version_table.write().await;
+        let mut success_count = 0;
+
+        for result in results {
+            match result {
+                Ok((broker_name, addr, version_opt, success)) => {
+                    if success {
+                        success_count += 1;
+                        if let Some(version) = version_opt {
+                            broker_version_table
+                                .entry(broker_name)
+                                .or_insert_with(HashMap::new)
+                                .insert(addr, version);
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Concurrent heartbeat task panicked: {:?}", e);
+                }
+            }
+        }
+
+        drop(broker_version_table); // Explicitly release write lock
+
+        info!(
+            "Concurrent heartbeat completed for client [{}]: {}/{} succeeded",
+            self.client_id, success_count, task_count
+        );
+
+        // Return true if at least one heartbeat succeeded
+        success_count > 0
     }
 
     async fn send_heartbeat_to_all_broker(&self) -> bool {
@@ -863,34 +1085,46 @@ impl MQClientInstance {
         true
     }
 
-    pub async fn send_heartbeat_to_broker(&self, id: u64, broker_name: &CheetahString, addr: &CheetahString) -> bool {
-        if let Some(lock) = self.lock_heartbeat.try_lock().await {
-            let heartbeat_data = self.prepare_heartbeat_data(false).await;
-            let producer_empty = heartbeat_data.producer_data_set.is_empty();
-            let consumer_empty = heartbeat_data.consumer_data_set.is_empty();
-            if producer_empty && consumer_empty {
-                warn!(
-                    "sending heartbeat, but no consumer and no producer. [{}]",
-                    self.client_id
-                );
+    pub async fn send_heartbeat_to_broker(
+        &self,
+        id: u64,
+        broker_name: &CheetahString,
+        addr: &CheetahString,
+        strict_lock_mode: bool,
+    ) -> bool {
+        let _guard = match self.lock_heartbeat.try_lock().await {
+            Some(g) => g,
+            None => {
+                if strict_lock_mode {
+                    warn!("lock heartBeat, but failed. [{}]", self.client_id);
+                }
                 return false;
             }
+        };
 
-            if self.client_config.use_heartbeat_v2 {
-                self.send_heartbeat_to_broker_v2(id, broker_name, addr, heartbeat_data)
-                    .await
-            } else {
-                let (result, _) = self
-                    .send_heartbeat_to_broker_inner(id, broker_name, addr, &heartbeat_data)
-                    .await;
-                result
-            }
+        let heartbeat_data = self.prepare_heartbeat_data(false).await;
+        let producer_empty = heartbeat_data.producer_data_set.is_empty();
+        let consumer_empty = heartbeat_data.consumer_data_set.is_empty();
+        if producer_empty && consumer_empty {
+            warn!(
+                "sending heartbeat, but no consumer and no producer. [{}]",
+                self.client_id
+            );
+            return false;
+        }
+
+        if self.client_config.use_heartbeat_v2 {
+            self.send_heartbeat_to_broker_v2(id, broker_name, addr, heartbeat_data)
+                .await
         } else {
-            false
+            let (result, _) = self
+                .send_heartbeat_to_broker_inner(id, broker_name, addr, &heartbeat_data)
+                .await;
+            result
         }
     }
 
-    /// Send HeartbeatV2 with fingerprint optimization
+    /// Send HeartbeatV2 to broker
     async fn send_heartbeat_to_broker_v2(
         &self,
         id: u64,

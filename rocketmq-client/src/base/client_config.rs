@@ -51,6 +51,7 @@ pub struct ClientConfig {
     pub decode_decompress_body: bool,
     pub vip_channel_enabled: bool,
     pub use_heartbeat_v2: bool,
+    pub enable_concurrent_heartbeat: bool,
     pub use_tls: bool,
     pub socks_proxy_config: CheetahString,
     pub mq_client_api_timeout: u64,
@@ -81,6 +82,7 @@ impl ClientConfig {
     pub const SEND_LATENCY_ENABLE: &'static str = "com.rocketmq.sendLatencyEnable";
     pub const START_DETECTOR_ENABLE: &'static str = "com.rocketmq.startDetectorEnable";
     pub const HEART_BEAT_V2: &'static str = "com.rocketmq.heartbeat.v2";
+    pub const ENABLE_CONCURRENT_HEARTBEAT: &'static str = "com.rocketmq.enableConcurrentHeartbeat";
 
     pub fn new() -> Self {
         ClientConfig {
@@ -113,6 +115,10 @@ impl ClientConfig {
                 .parse::<bool>()
                 .unwrap_or(false),
             use_heartbeat_v2: env::var(Self::HEART_BEAT_V2)
+                .unwrap_or_else(|_| "false".to_string())
+                .parse::<bool>()
+                .unwrap_or(false),
+            enable_concurrent_heartbeat: env::var(Self::ENABLE_CONCURRENT_HEARTBEAT)
                 .unwrap_or_else(|_| "false".to_string())
                 .parse::<bool>()
                 .unwrap_or(false),
