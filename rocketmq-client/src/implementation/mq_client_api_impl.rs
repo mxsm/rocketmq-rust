@@ -1057,7 +1057,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         heartbeat_data: &HeartbeatData,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<i32> {
+    ) -> rocketmq_error::RocketMQResult<(i32, Option<RemotingCommand>)> {
         let request =
             RemotingCommand::create_request_command(RequestCode::HeartBeat, HeartbeatRequestHeader::default())
                 .set_language(self.client_config.language)
@@ -1067,7 +1067,7 @@ impl MQClientAPIImpl {
             .invoke_request(Some(addr), request, timeout_millis)
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
-            return Ok(response.version());
+            return Ok((response.version(), Some(response)));
         }
         Err(client_broker_err!(
             response.code(),

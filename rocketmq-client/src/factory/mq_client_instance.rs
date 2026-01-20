@@ -104,6 +104,10 @@ pub struct MQClientInstance {
         Arc<RwLock<HashMap<CheetahString /* Broker Name */, HashMap<CheetahString /* address */, i32>>>>,
     send_heartbeat_times_total: Arc<AtomicI64>,
     scheduled_task_manager: ScheduledTaskManager,
+    /// HeartbeatV2: Cache of broker address -> last fingerprint
+    broker_heartbeat_fingerprint_table: Arc<RwLock<HashMap<CheetahString, i32>>>,
+    /// HeartbeatV2: Set of brokers that support V2 protocol
+    broker_support_v2_heartbeat_set: Arc<RwLock<HashSet<CheetahString>>>,
 }
 
 impl MQClientInstance {
@@ -206,6 +210,8 @@ impl MQClientInstance {
             broker_version_table: Arc::new(Default::default()),
             send_heartbeat_times_total: Arc::new(AtomicI64::new(0)),
             scheduled_task_manager: ScheduledTaskManager::new(),
+            broker_heartbeat_fingerprint_table: Arc::new(RwLock::new(HashMap::new())),
+            broker_support_v2_heartbeat_set: Arc::new(RwLock::new(HashSet::new())),
         });
         let instance_clone = instance.clone();
         instance.mq_admin_impl.set_client(instance_clone);
@@ -871,14 +877,80 @@ impl MQClientInstance {
             }
 
             if self.client_config.use_heartbeat_v2 {
-                unimplemented!("sendHeartbeatToBrokerV2")
-            } else {
-                self.send_heartbeat_to_broker_inner(id, broker_name, addr, &heartbeat_data)
+                self.send_heartbeat_to_broker_v2(id, broker_name, addr, heartbeat_data)
                     .await
+            } else {
+                let (result, _) = self
+                    .send_heartbeat_to_broker_inner(id, broker_name, addr, &heartbeat_data)
+                    .await;
+                result
             }
         } else {
             false
         }
+    }
+
+    /// Send HeartbeatV2 with fingerprint optimization
+    async fn send_heartbeat_to_broker_v2(
+        &self,
+        id: u64,
+        broker_name: &CheetahString,
+        addr: &CheetahString,
+        mut heartbeat_data_with_sub: HeartbeatData,
+    ) -> bool {
+        // Calculate current fingerprint
+        let current_fingerprint = heartbeat_data_with_sub.compute_heartbeat_fingerprint();
+        heartbeat_data_with_sub.heartbeat_fingerprint = current_fingerprint;
+
+        // Check if this broker supports V2
+        let broker_support_v2 = self.broker_support_v2_heartbeat_set.read().await.contains(addr);
+
+        // Get last fingerprint for this broker
+        let last_fingerprint = self.broker_heartbeat_fingerprint_table.read().await.get(addr).copied();
+
+        // Determine if we should send minimal heartbeat (without subscription)
+        let should_send_minimal =
+            broker_support_v2 && last_fingerprint.is_some() && last_fingerprint.unwrap() == current_fingerprint;
+
+        let heartbeat_data = if should_send_minimal {
+            // Send minimal heartbeat without subscription data
+            let mut minimal = self.prepare_heartbeat_data(true).await;
+            minimal.heartbeat_fingerprint = current_fingerprint;
+            minimal
+        } else {
+            // Send full heartbeat with subscription data
+            heartbeat_data_with_sub.clone()
+        };
+
+        // Send heartbeat and get result with V2 support info
+        let (result, support_v2) = self
+            .send_heartbeat_to_broker_inner(id, broker_name, addr, &heartbeat_data)
+            .await;
+
+        if result {
+            if let Some(support_v2) = support_v2 {
+                if support_v2 {
+                    // Update V2 support set
+                    self.broker_support_v2_heartbeat_set.write().await.insert(addr.clone());
+
+                    // Update fingerprint cache only when sending full data
+                    if !should_send_minimal {
+                        self.broker_heartbeat_fingerprint_table
+                            .write()
+                            .await
+                            .insert(addr.clone(), current_fingerprint);
+                    }
+                } else {
+                    // Broker doesn't support V2, remove from set and clear fingerprint
+                    self.broker_support_v2_heartbeat_set.write().await.remove(addr);
+                    self.broker_heartbeat_fingerprint_table.write().await.remove(addr);
+
+                    warn!("Broker {} does not support HeartbeatV2, downgrading to V1", addr);
+                }
+            }
+        }
+
+        result
     }
 
     async fn send_heartbeat_to_broker_inner(
@@ -887,8 +959,8 @@ impl MQClientInstance {
         broker_name: &CheetahString,
         addr: &CheetahString,
         heartbeat_data: &HeartbeatData,
-    ) -> bool {
-        if let Ok(version) = self
+    ) -> (bool, Option<bool>) {
+        match self
             .mq_client_api_impl
             .as_ref()
             .unwrap()
@@ -896,33 +968,48 @@ impl MQClientInstance {
             .send_heartbeat(addr, heartbeat_data, self.client_config.mq_client_api_timeout)
             .await
         {
-            let mut broker_version_table = self.broker_version_table.write().await;
-            let map = broker_version_table.get_mut(broker_name);
-            if let Some(map) = map {
-                map.insert(addr.clone(), version);
-            } else {
-                let mut map = HashMap::new();
-                map.insert(addr.clone(), version);
-                broker_version_table.insert(broker_name.clone(), map);
-            }
+            Ok((version, response)) => {
+                // Update broker version table
+                let mut broker_version_table = self.broker_version_table.write().await;
+                let map = broker_version_table.get_mut(broker_name);
+                if let Some(map) = map {
+                    map.insert(addr.clone(), version);
+                } else {
+                    let mut map = HashMap::new();
+                    map.insert(addr.clone(), version);
+                    broker_version_table.insert(broker_name.clone(), map);
+                }
 
-            let times = self
-                .send_heartbeat_times_total
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if times % 20 == 0 {
-                info!("send heart beat to broker[{} {} {}] success", broker_name, id, addr,);
+                let times = self
+                    .send_heartbeat_times_total
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if times % 20 == 0 {
+                    info!("send heart beat to broker[{} {} {}] success", broker_name, id, addr);
+                }
+
+                // Check if broker supports HeartbeatV2
+                let support_v2 = response.and_then(|resp| {
+                    resp.ext_fields().and_then(|fields| {
+                        fields
+                            .get(rocketmq_common::common::mix_all::IS_SUPPORT_HEART_BEAT_V2)
+                            .and_then(|v| v.parse::<bool>().ok())
+                    })
+                });
+
+                (true, support_v2)
             }
-            return true;
+            Err(_) => {
+                if self.is_broker_in_name_server(addr).await {
+                    warn!("send heart beat to broker[{} {} {}] failed", broker_name, id, addr);
+                } else {
+                    warn!(
+                        "send heart beat to broker[{} {} {}] exception, because the broker not up, forget it",
+                        broker_name, id, addr
+                    );
+                }
+                (false, None)
+            }
         }
-        if self.is_broker_in_name_server(addr).await {
-            warn!("send heart beat to broker[{} {} {}] failed", broker_name, id, addr);
-        } else {
-            warn!(
-                "send heart beat to broker[{} {} {}] exception, because the broker not up, forget it",
-                broker_name, id, addr
-            )
-        }
-        false
     }
 
     async fn is_broker_in_name_server(&self, broker_name: &str) -> bool {
