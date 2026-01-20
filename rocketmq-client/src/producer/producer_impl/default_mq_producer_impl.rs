@@ -1853,9 +1853,12 @@ impl DefaultMQProducerImpl {
             CheetahString::from_static_str(MessageConst::PROPERTY_MESSAGE_TTL),
             CheetahString::from_string(timeout.to_string()),
         );
-        let guard = self.client_instance.as_mut().unwrap().topic_route_table.read().await;
-        let has_route_data = guard.contains_key(msg.get_topic().as_str());
-        drop(guard);
+        let has_route_data = self
+            .client_instance
+            .as_mut()
+            .unwrap()
+            .topic_route_table
+            .contains_key(msg.get_topic().as_str());
         if !has_route_data {
             let begin_timestamp = Instant::now();
             self.try_to_find_topic_publish_info(msg.get_topic()).await;

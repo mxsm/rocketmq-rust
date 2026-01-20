@@ -338,17 +338,17 @@ impl PullAPIWrapper {
         topic: &CheetahString,
         broker_addr: &CheetahString,
     ) -> rocketmq_error::RocketMQResult<CheetahString> {
-        let topic_route_table = self.client_instance.topic_route_table.read().await;
-        let topic_route_data = topic_route_table.get(topic);
-        let vec = topic_route_data.unwrap().filter_server_table.get(broker_addr);
-        if let Some(vec) = vec {
-            return vec.get(random_num() as usize % vec.len()).map_or(
-                Err(mq_client_err!(format!(
-                    "Find Filter Server Failed, Broker Addr: {},topic:{}",
-                    broker_addr, topic
-                ))),
-                |v| Ok(v.clone()),
-            );
+        if let Some(topic_route_data) = self.client_instance.topic_route_table.get(topic) {
+            let vec = topic_route_data.value().filter_server_table.get(broker_addr);
+            if let Some(vec) = vec {
+                return vec.get(random_num() as usize % vec.len()).map_or(
+                    Err(mq_client_err!(format!(
+                        "Find Filter Server Failed, Broker Addr: {},topic:{}",
+                        broker_addr, topic
+                    ))),
+                    |v| Ok(v.clone()),
+                );
+            }
         }
         Err(mq_client_err!(format!(
             "Find Filter Server Failed, Broker Addr: {},topic:{}",

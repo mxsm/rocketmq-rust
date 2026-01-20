@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use futures::future;
 use rand::seq::IndexedRandom;
 use rocketmq_common::common::base::service_state::ServiceState;
@@ -44,7 +45,6 @@ use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioMutex;
-use tokio::sync::RwLock;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -74,22 +74,22 @@ pub struct MQClientInstance {
      * The container of the producer in the current client. The key is the name of
      * producerGroup.
      */
-    producer_table: Arc<RwLock<HashMap<CheetahString, MQProducerInnerImpl>>>,
+    producer_table: Arc<DashMap<CheetahString, MQProducerInnerImpl>>,
     /**
      * The container of the consumer in the current client. The key is the name of
      * consumer_group.
      */
-    consumer_table: Arc<RwLock<HashMap<CheetahString, MQConsumerInnerImpl>>>,
+    consumer_table: Arc<DashMap<CheetahString, MQConsumerInnerImpl>>,
     /**
      * The container of the adminExt in the current client. The key is the name of
      * adminExtGroup.
      */
-    admin_ext_table: Arc<RwLock<HashMap<CheetahString, MQAdminExtInnerImpl>>>,
+    admin_ext_table: Arc<DashMap<CheetahString, MQAdminExtInnerImpl>>,
     pub(crate) mq_client_api_impl: Option<ArcMut<MQClientAPIImpl>>,
     pub(crate) mq_admin_impl: ArcMut<MQAdminImpl>,
-    pub(crate) topic_route_table: Arc<RwLock<HashMap<CheetahString /* Topic */, TopicRouteData>>>,
+    pub(crate) topic_route_table: Arc<DashMap<CheetahString /* Topic */, TopicRouteData>>,
     topic_end_points_table:
-        Arc<RwLock<HashMap<CheetahString /* Topic */, HashMap<MessageQueue, CheetahString /* brokerName */>>>>,
+        Arc<DashMap<CheetahString /* Topic */, HashMap<MessageQueue, CheetahString /* brokerName */>>>,
     lock_namesrv: Arc<RocketMQTokioMutex<()>>,
     lock_heartbeat: Arc<RocketMQTokioMutex<()>>,
 
@@ -98,15 +98,14 @@ pub struct MQClientInstance {
     rebalance_service: RebalanceService,
     pub(crate) default_producer: ArcMut<DefaultMQProducer>,
     instance_runtime: Arc<RocketMQRuntime>,
-    broker_addr_table: Arc<RwLock<HashMap<CheetahString, HashMap<u64, CheetahString>>>>,
-    broker_version_table:
-        Arc<RwLock<HashMap<CheetahString /* Broker Name */, HashMap<CheetahString /* address */, i32>>>>,
+    broker_addr_table: Arc<DashMap<CheetahString, HashMap<u64, CheetahString>>>,
+    broker_version_table: Arc<DashMap<CheetahString /* Broker Name */, HashMap<CheetahString /* address */, i32>>>,
     send_heartbeat_times_total: Arc<AtomicI64>,
     scheduled_task_manager: ScheduledTaskManager,
     /// HeartbeatV2: Cache of broker address -> last fingerprint
-    broker_heartbeat_fingerprint_table: Arc<RwLock<HashMap<CheetahString, i32>>>,
+    broker_heartbeat_fingerprint_table: Arc<DashMap<CheetahString, i32>>,
     /// HeartbeatV2: Set of brokers that support V2 protocol
-    broker_support_v2_heartbeat_set: Arc<RwLock<HashSet<CheetahString>>>,
+    broker_support_v2_heartbeat_set: Arc<DashMap<CheetahString, ()>>,
 }
 
 impl MQClientInstance {
@@ -180,18 +179,18 @@ impl MQClientInstance {
         client_id: impl Into<CheetahString>,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> ArcMut<MQClientInstance> {
-        let broker_addr_table = Arc::new(Default::default());
+        let broker_addr_table = Arc::new(DashMap::new());
         let mut instance = ArcMut::new(MQClientInstance {
             client_config: ArcMut::new(client_config.clone()),
             client_id: client_id.into(),
             boot_timestamp: get_current_millis(),
-            producer_table: Arc::new(RwLock::new(HashMap::new())),
-            consumer_table: Arc::new(Default::default()),
-            admin_ext_table: Arc::new(Default::default()),
+            producer_table: Arc::new(DashMap::new()),
+            consumer_table: Arc::new(DashMap::new()),
+            admin_ext_table: Arc::new(DashMap::new()),
             mq_client_api_impl: None,
             mq_admin_impl: ArcMut::new(MQAdminImpl::new()),
-            topic_route_table: Arc::new(Default::default()),
-            topic_end_points_table: Arc::new(Default::default()),
+            topic_route_table: Arc::new(DashMap::new()),
+            topic_end_points_table: Arc::new(DashMap::new()),
             lock_namesrv: Default::default(),
             lock_heartbeat: Default::default(),
             service_state: ServiceState::CreateJust,
@@ -205,11 +204,11 @@ impl MQClientInstance {
             ),
             instance_runtime: Arc::new(RocketMQRuntime::new_multi(num_cpus::get(), "mq-client-instance")),
             broker_addr_table,
-            broker_version_table: Arc::new(Default::default()),
+            broker_version_table: Arc::new(DashMap::new()),
             send_heartbeat_times_total: Arc::new(AtomicI64::new(0)),
             scheduled_task_manager: ScheduledTaskManager::new(),
-            broker_heartbeat_fingerprint_table: Arc::new(RwLock::new(HashMap::new())),
-            broker_support_v2_heartbeat_set: Arc::new(RwLock::new(HashSet::new())),
+            broker_heartbeat_fingerprint_table: Arc::new(DashMap::new()),
+            broker_support_v2_heartbeat_set: Arc::new(DashMap::new()),
         });
         let instance_clone = instance.clone();
         instance.mq_admin_impl.set_client(instance_clone);
@@ -240,14 +239,23 @@ impl MQClientInstance {
                     match value {
                         ConnectionNetEvent::CONNECTED(remote_address) => {
                             info!("ConnectionNetEvent CONNECTED");
-                            let broker_addr_table = instance_.broker_addr_table.read().await;
-                            for (broker_name, broker_addrs) in broker_addr_table.iter() {
-                                for (id, addr) in broker_addrs.iter() {
-                                    if addr == remote_address.to_string().as_str()
-                                        && instance_.send_heartbeat_to_broker(*id, broker_name, addr, false).await
-                                    {
-                                        instance_.re_balance_immediately();
-                                    }
+
+                            let matched_brokers: Vec<_> = instance_
+                                .broker_addr_table
+                                .iter()
+                                .flat_map(|entry| {
+                                    let (name, addrs) = entry.pair();
+                                    addrs
+                                        .iter()
+                                        .filter(|(_, addr)| addr.as_str() == remote_address.to_string().as_str())
+                                        .map(|(id, addr)| (*id, name.clone(), addr.clone()))
+                                        .collect::<Vec<_>>()
+                                })
+                                .collect();
+
+                            for (id, broker_name, addr) in matched_brokers {
+                                if instance_.send_heartbeat_to_broker(id, &broker_name, &addr, false).await {
+                                    instance_.re_balance_immediately();
                                 }
                             }
                         }
@@ -393,14 +401,14 @@ impl MQClientInstance {
         );
 
         info!("MQClientInstance[{}] clearing all registration tables", self.client_id);
-        self.producer_table.write().await.clear();
-        self.consumer_table.write().await.clear();
-        self.admin_ext_table.write().await.clear();
+        self.producer_table.clear();
+        self.consumer_table.clear();
+        self.admin_ext_table.clear();
 
-        self.topic_route_table.write().await.clear();
-        self.topic_end_points_table.write().await.clear();
-        self.broker_addr_table.write().await.clear();
-        self.broker_version_table.write().await.clear();
+        self.topic_route_table.clear();
+        self.topic_end_points_table.clear();
+        self.broker_addr_table.clear();
+        self.broker_version_table.clear();
 
         self.service_state = ServiceState::ShutdownAlready;
 
@@ -410,10 +418,7 @@ impl MQClientInstance {
     /// Unregister all producers from broker
     async fn unregister_all_producers(&mut self) {
         // Get all producer groups before removing from table
-        let producer_groups: Vec<CheetahString> = {
-            let producer_table = self.producer_table.read().await;
-            producer_table.keys().cloned().collect()
-        };
+        let producer_groups: Vec<CheetahString> = self.producer_table.iter().map(|entry| entry.key().clone()).collect();
 
         // Unregister each producer (removes from table and notifies broker)
         for group in producer_groups {
@@ -425,10 +430,7 @@ impl MQClientInstance {
     /// Unregister all consumers from broker
     async fn unregister_all_consumers(&mut self) {
         // Get all consumer groups before removing from table
-        let consumer_groups: Vec<CheetahString> = {
-            let consumer_table = self.consumer_table.read().await;
-            consumer_table.keys().cloned().collect()
-        };
+        let consumer_groups: Vec<CheetahString> = self.consumer_table.iter().map(|entry| entry.key().clone()).collect();
 
         // Unregister each consumer (removes from table and notifies broker)
         for group in consumer_groups {
@@ -441,12 +443,11 @@ impl MQClientInstance {
         if group.is_empty() {
             return false;
         }
-        let mut producer_table = self.producer_table.write().await;
-        if producer_table.contains_key(group) {
+        if self.producer_table.contains_key(group) {
             warn!("the producer group[{}] exist already.", group);
             return false;
         }
-        producer_table.insert(group.into(), producer);
+        self.producer_table.insert(group.into(), producer);
         true
     }
 
@@ -454,12 +455,11 @@ impl MQClientInstance {
         if group.is_empty() {
             return false;
         }
-        let mut admin_ext_table = self.admin_ext_table.write().await;
-        if admin_ext_table.contains_key(group) {
+        if self.admin_ext_table.contains_key(group) {
             warn!("the admin group[{}] exist already.", group);
             return false;
         }
-        admin_ext_table.insert(group.into(), admin);
+        self.admin_ext_table.insert(group.into(), admin);
         true
     }
 
@@ -529,20 +529,14 @@ impl MQClientInstance {
     pub async fn update_topic_route_info_from_name_server(&mut self) {
         let mut topic_list = HashSet::new();
 
-        {
-            let producer_table = self.producer_table.read().await;
-            for (_, value) in producer_table.iter() {
-                topic_list.extend(value.get_publish_topic_list());
-            }
+        for entry in self.producer_table.iter() {
+            topic_list.extend(entry.value().get_publish_topic_list());
         }
 
-        {
-            let consumer_table = self.consumer_table.read().await;
-            for (_, value) in consumer_table.iter() {
-                value.subscriptions().iter().for_each(|sub| {
-                    topic_list.insert(sub.topic.clone());
-                });
-            }
+        for entry in self.consumer_table.iter() {
+            entry.value().subscriptions().iter().for_each(|sub| {
+                topic_list.insert(sub.topic.clone());
+            });
         }
 
         for topic in topic_list.iter() {
@@ -589,9 +583,8 @@ impl MQClientInstance {
     }
 
     pub async fn find_broker_addr_by_topic(&self, topic: &str) -> Option<CheetahString> {
-        let topic_route_table = self.topic_route_table.read().await;
-        if let Some(topic_route_data) = topic_route_table.get(topic) {
-            let brokers = &topic_route_data.broker_datas;
+        if let Some(topic_route_data) = self.topic_route_table.get(topic) {
+            let brokers = &topic_route_data.value().broker_datas;
             if !brokers.is_empty() {
                 let bd = brokers.choose(&mut rand::rng());
                 if let Some(bd) = bd {
@@ -643,9 +636,8 @@ impl MQClientInstance {
                 .unwrap_or(None)
         };
         if let Some(mut topic_route_data) = topic_route_data {
-            let mut topic_route_table = self.topic_route_table.write().await;
-            let old = topic_route_table.get(topic);
-            let mut changed = topic_route_data.topic_route_data_changed(old);
+            let old = self.topic_route_table.get(topic).map(|entry| entry.value().clone());
+            let mut changed = topic_route_data.topic_route_data_changed(old.as_ref());
             if !changed {
                 changed = self.is_need_update_topic_route_info(topic).await;
             } else {
@@ -655,11 +647,10 @@ impl MQClientInstance {
                 )
             }
             if changed {
-                let mut broker_addr_table = self.broker_addr_table.write().await;
                 for bd in topic_route_data.broker_datas.iter() {
-                    broker_addr_table.insert(bd.broker_name().clone(), bd.broker_addrs().clone());
+                    self.broker_addr_table
+                        .insert(bd.broker_name().clone(), bd.broker_addrs().clone());
                 }
-                drop(broker_addr_table);
 
                 // Update endpoint map
                 {
@@ -667,8 +658,7 @@ impl MQClientInstance {
                         ClientMetadata::topic_route_data2endpoints_for_static_topic(topic, &topic_route_data);
                     if let Some(mq_end_points) = mq_end_points {
                         if !mq_end_points.is_empty() {
-                            let mut topic_end_points_table = self.topic_end_points_table.write().await;
-                            topic_end_points_table.insert(topic.into(), mq_end_points);
+                            self.topic_end_points_table.insert(topic.into(), mq_end_points);
                         }
                     }
                 }
@@ -677,24 +667,27 @@ impl MQClientInstance {
                 {
                     let mut publish_info = topic_route_data2topic_publish_info(topic, &mut topic_route_data);
                     publish_info.have_topic_router_info = true;
-                    let mut producer_table = self.producer_table.write().await;
-                    for (_, value) in producer_table.iter_mut() {
-                        value.update_topic_publish_info(topic.to_string(), Some(publish_info.clone()));
+                    for mut entry in self.producer_table.iter_mut() {
+                        entry
+                            .value_mut()
+                            .update_topic_publish_info(topic.to_string(), Some(publish_info.clone()));
                     }
                 }
 
                 // Update sub info
-                {
-                    let consumer_table = self.consumer_table.read().await;
-                    if !consumer_table.is_empty() {
-                        let subscribe_info = topic_route_data2topic_subscribe_info(topic, &topic_route_data);
-                        for (_, value) in consumer_table.iter() {
-                            value.update_topic_subscribe_info(topic.clone(), &subscribe_info).await;
-                        }
+                if !self.consumer_table.is_empty() {
+                    let subscribe_info = topic_route_data2topic_subscribe_info(topic, &topic_route_data);
+
+                    let consumers: Vec<_> = self.consumer_table.iter().map(|entry| entry.value().clone()).collect();
+
+                    for consumer in consumers {
+                        consumer
+                            .update_topic_subscribe_info(topic.clone(), &subscribe_info)
+                            .await;
                     }
                 }
                 let clone_topic_route_data = TopicRouteData::from_existing(&topic_route_data);
-                topic_route_table.insert(topic.clone(), clone_topic_route_data);
+                self.topic_route_table.insert(topic.clone(), clone_topic_route_data);
                 return true;
             }
         } else {
@@ -709,32 +702,23 @@ impl MQClientInstance {
     }
 
     async fn is_need_update_topic_route_info(&self, topic: &CheetahString) -> bool {
-        let mut result = false;
-        let producer_table = self.producer_table.read().await;
-        for (key, value) in producer_table.iter() {
-            if !result {
-                result = value.is_publish_topic_need_update(topic);
-                break;
+        for entry in self.producer_table.iter() {
+            if entry.value().is_publish_topic_need_update(topic) {
+                return true;
             }
-        }
-        if result {
-            return true;
         }
 
-        let consumer_table = self.consumer_table.read().await;
-        for (key, value) in consumer_table.iter() {
-            if !result {
-                result = value.is_subscribe_topic_need_update(topic).await;
-                break;
+        for entry in self.consumer_table.iter() {
+            if entry.value().is_subscribe_topic_need_update(topic).await {
+                return true;
             }
         }
-        result
+        false
     }
 
     pub async fn persist_all_consumer_offset(&mut self) {
-        let consumer_table = self.consumer_table.read().await;
-        for (_, value) in consumer_table.iter() {
-            value.persist_consumer_offset().await;
+        for entry in self.consumer_table.iter() {
+            entry.value().persist_consumer_offset().await;
         }
     }
 
@@ -744,10 +728,11 @@ impl MQClientInstance {
             .try_lock_timeout(Duration::from_millis(LOCK_TIMEOUT_MILLIS))
             .await;
         if let Some(lock) = lock {
-            let mut broker_addr_table = self.broker_addr_table.write().await;
-            let mut updated_table = HashMap::with_capacity(broker_addr_table.len());
+            let mut updated_table = HashMap::new();
             let mut broker_name_set = HashSet::new();
-            for (broker_name, one_table) in broker_addr_table.iter() {
+
+            for broker_entry in self.broker_addr_table.iter() {
+                let (broker_name, one_table) = broker_entry.pair();
                 let mut clone_addr_table = one_table.clone();
                 let mut remove_id_set = HashSet::new();
                 for (id, addr) in one_table.iter() {
@@ -763,9 +748,13 @@ impl MQClientInstance {
                     updated_table.insert(broker_name.clone(), clone_addr_table);
                 }
             }
-            broker_addr_table.retain(|k, _| !broker_name_set.contains(k));
-            if !updated_table.is_empty() {
-                broker_addr_table.extend(updated_table);
+
+            // Remove offline brokers and update with new data
+            for broker_name in broker_name_set {
+                self.broker_addr_table.remove(&broker_name);
+            }
+            for (broker_name, addrs) in updated_table {
+                self.broker_addr_table.insert(broker_name, addrs);
             }
         }
     }
@@ -812,9 +801,8 @@ impl MQClientInstance {
     }
 
     pub async fn get_broker_name_from_message_queue(&self, message_queue: &MessageQueue) -> CheetahString {
-        let guard = self.topic_end_points_table.read().await;
-        if let Some(broker_name) = guard.get(message_queue.get_topic()) {
-            if let Some(addr) = broker_name.get(message_queue) {
+        if let Some(broker_name) = self.topic_end_points_table.get(message_queue.get_topic()) {
+            if let Some(addr) = broker_name.value().get(message_queue) {
                 return addr.clone();
             }
         }
@@ -825,8 +813,7 @@ impl MQClientInstance {
         if broker_name.is_empty() {
             return None;
         }
-        let guard = self.broker_addr_table.read().await;
-        let map = guard.get(broker_name);
+        let map = self.broker_addr_table.get(broker_name);
         if let Some(map) = map {
             return map.get(&(mix_all::MASTER_ID)).cloned();
         }
@@ -846,8 +833,7 @@ impl MQClientInstance {
             return false;
         }
 
-        let broker_addr_table = self.broker_addr_table.read().await;
-        if broker_addr_table.is_empty() {
+        if self.broker_addr_table.is_empty() {
             return false;
         }
 
@@ -860,7 +846,8 @@ impl MQClientInstance {
         let current_fingerprint = heartbeat_data_with_sub.compute_heartbeat_fingerprint();
 
         // Send to all brokers
-        for (broker_name, broker_addrs) in broker_addr_table.iter() {
+        for broker_entry in self.broker_addr_table.iter() {
+            let (broker_name, broker_addrs) = broker_entry.pair();
             if broker_addrs.is_empty() {
                 continue;
             }
@@ -887,7 +874,7 @@ impl MQClientInstance {
     }
 
     async fn reset_broker_addr_heartbeat_fingerprint_map(&self) {
-        self.broker_heartbeat_fingerprint_table.write().await.clear();
+        self.broker_heartbeat_fingerprint_table.clear();
     }
 
     /// Send heartbeat to all brokers concurrently
@@ -906,13 +893,13 @@ impl MQClientInstance {
 
         // Collect broker list without holding lock during task execution
         let broker_list: Vec<(u64, CheetahString, CheetahString)> = {
-            let broker_addr_table = self.broker_addr_table.read().await;
-            if broker_addr_table.is_empty() {
+            if self.broker_addr_table.is_empty() {
                 return false;
             }
 
             let mut list = Vec::new();
-            for (broker_name, broker_addrs) in broker_addr_table.iter() {
+            for broker_entry in self.broker_addr_table.iter() {
+                let (broker_name, broker_addrs) = broker_entry.pair();
                 if broker_addrs.is_empty() {
                     continue;
                 }
@@ -929,7 +916,7 @@ impl MQClientInstance {
                 }
             }
             list
-        }; // broker_addr_table lock released here
+        };
 
         if broker_list.is_empty() {
             return false;
@@ -946,7 +933,7 @@ impl MQClientInstance {
             let mq_client_api = self.mq_client_api_impl.as_ref().unwrap().clone();
             let timeout = self.client_config.mq_client_api_timeout;
             let send_heartbeat_times_total = self.send_heartbeat_times_total.clone();
-            let topic_route_table = self.topic_route_table.clone();
+            let topic_route_table_clone = self.topic_route_table.clone();
 
             // Spawn independent task for each broker
             // Returns: (broker_name, addr, version, success)
@@ -968,16 +955,13 @@ impl MQClientInstance {
                     }
                     Err(_) => {
                         // Check if broker is in name server
-                        let is_in_ns = {
-                            let route_table = topic_route_table.read().await;
-                            route_table.iter().any(|(_, route_data)| {
-                                route_data.broker_datas.iter().any(|bd| {
-                                    bd.broker_addrs()
-                                        .iter()
-                                        .any(|(_, broker_addr)| broker_addr.as_str() == addr.as_str())
-                                })
+                        let is_in_ns = topic_route_table_clone.iter().any(|route_entry| {
+                            route_entry.value().broker_datas.iter().any(|bd| {
+                                bd.broker_addrs()
+                                    .iter()
+                                    .any(|(_, broker_addr)| broker_addr.as_str() == addr.as_str())
                             })
-                        };
+                        });
 
                         if is_in_ns {
                             warn!(
@@ -1013,7 +997,6 @@ impl MQClientInstance {
 
         // Update broker version table after all tasks complete
         // This avoids lock contention during task execution
-        let mut broker_version_table = self.broker_version_table.write().await;
         let mut success_count = 0;
 
         for result in results {
@@ -1022,9 +1005,9 @@ impl MQClientInstance {
                     if success {
                         success_count += 1;
                         if let Some(version) = version_opt {
-                            broker_version_table
-                                .entry(broker_name)
-                                .or_insert_with(HashMap::new)
+                            self.broker_version_table
+                                .entry(broker_name.clone())
+                                .or_default()
                                 .insert(addr, version);
                         }
                     }
@@ -1034,8 +1017,6 @@ impl MQClientInstance {
                 }
             }
         }
-
-        drop(broker_version_table); // Explicitly release write lock
 
         info!(
             "Concurrent heartbeat completed for client [{}]: {}/{} succeeded",
@@ -1057,11 +1038,11 @@ impl MQClientInstance {
             );
             return false;
         }
-        let broker_addr_table = self.broker_addr_table.read().await;
-        if broker_addr_table.is_empty() {
+        if self.broker_addr_table.is_empty() {
             return false;
         }
-        for (broker_name, broker_addrs) in broker_addr_table.iter() {
+        for broker_entry in self.broker_addr_table.iter() {
+            let (broker_name, broker_addrs) = broker_entry.pair();
             if broker_addrs.is_empty() {
                 continue;
             }
@@ -1132,10 +1113,13 @@ impl MQClientInstance {
         heartbeat_data_with_sub.heartbeat_fingerprint = current_fingerprint;
 
         // Check if this broker supports V2
-        let broker_support_v2 = self.broker_support_v2_heartbeat_set.read().await.contains(addr);
+        let broker_support_v2 = self.broker_support_v2_heartbeat_set.contains_key(addr);
 
         // Get last fingerprint for this broker
-        let last_fingerprint = self.broker_heartbeat_fingerprint_table.read().await.get(addr).copied();
+        let last_fingerprint = self
+            .broker_heartbeat_fingerprint_table
+            .get(addr)
+            .map(|entry| *entry.value());
 
         // Determine if we should send minimal heartbeat (without subscription)
         let should_send_minimal =
@@ -1160,19 +1144,17 @@ impl MQClientInstance {
             if let Some(support_v2) = support_v2 {
                 if support_v2 {
                     // Update V2 support set
-                    self.broker_support_v2_heartbeat_set.write().await.insert(addr.clone());
+                    self.broker_support_v2_heartbeat_set.insert(addr.clone(), ());
 
                     // Update fingerprint cache only when sending full data
                     if !should_send_minimal {
                         self.broker_heartbeat_fingerprint_table
-                            .write()
-                            .await
                             .insert(addr.clone(), current_fingerprint);
                     }
                 } else {
                     // Broker doesn't support V2, remove from set and clear fingerprint
-                    self.broker_support_v2_heartbeat_set.write().await.remove(addr);
-                    self.broker_heartbeat_fingerprint_table.write().await.remove(addr);
+                    self.broker_support_v2_heartbeat_set.remove(addr);
+                    self.broker_heartbeat_fingerprint_table.remove(addr);
 
                     warn!("Broker {} does not support HeartbeatV2, downgrading to V1", addr);
                 }
@@ -1198,16 +1180,10 @@ impl MQClientInstance {
             .await
         {
             Ok((version, response)) => {
-                // Update broker version table
-                let mut broker_version_table = self.broker_version_table.write().await;
-                let map = broker_version_table.get_mut(broker_name);
-                if let Some(map) = map {
-                    map.insert(addr.clone(), version);
-                } else {
-                    let mut map = HashMap::new();
-                    map.insert(addr.clone(), version);
-                    broker_version_table.insert(broker_name.clone(), map);
-                }
+                self.broker_version_table
+                    .entry(broker_name.clone())
+                    .or_default()
+                    .insert(addr.clone(), version);
 
                 let times = self
                     .send_heartbeat_times_total
@@ -1242,9 +1218,8 @@ impl MQClientInstance {
     }
 
     async fn is_broker_in_name_server(&self, broker_name: &str) -> bool {
-        let broker_addr_table = self.topic_route_table.read().await;
-        for (_, value) in broker_addr_table.iter() {
-            for bd in value.broker_datas.iter() {
+        for entry in self.topic_route_table.iter() {
+            for bd in entry.value().broker_datas.iter() {
                 for (_, value) in bd.broker_addrs().iter() {
                     if value.as_str() == broker_name {
                         return true;
@@ -1261,50 +1236,44 @@ impl MQClientInstance {
             ..Default::default()
         };
 
-        let consumer_table = self.consumer_table.read().await;
-        for (_, value) in consumer_table.iter() {
+        for entry in self.consumer_table.iter() {
             let mut consumer_data = ConsumerData {
-                group_name: value.group_name(),
-                consume_type: value.consume_type(),
-                message_model: value.message_model(),
-                consume_from_where: value.consume_from_where(),
-                subscription_data_set: value.subscriptions(),
-                unit_mode: value.is_unit_mode(),
+                group_name: entry.value().group_name(),
+                consume_type: entry.value().consume_type(),
+                message_model: entry.value().message_model(),
+                consume_from_where: entry.value().consume_from_where(),
+                subscription_data_set: entry.value().subscriptions(),
+                unit_mode: entry.value().is_unit_mode(),
             };
             if !is_without_sub {
-                value.subscriptions().iter().for_each(|sub| {
+                entry.value().subscriptions().iter().for_each(|sub| {
                     consumer_data.subscription_data_set.insert(sub.clone());
                 });
             }
             heartbeat_data.consumer_data_set.insert(consumer_data);
         }
-        drop(consumer_table);
-        let producer_table = self.producer_table.read().await;
-        for (group_name, _) in producer_table.iter() {
+        for entry in self.producer_table.iter() {
             let producer_data = ProducerData {
-                group_name: group_name.clone(),
+                group_name: entry.key().clone(),
             };
             heartbeat_data.producer_data_set.insert(producer_data);
         }
-        drop(producer_table);
         heartbeat_data.is_without_sub = is_without_sub;
         heartbeat_data
     }
 
     pub async fn register_consumer(&mut self, group: &CheetahString, consumer: MQConsumerInnerImpl) -> bool {
-        let mut consumer_table = self.consumer_table.write().await;
-        if consumer_table.contains_key(group) {
+        if self.consumer_table.contains_key(group) {
             warn!("the consumer group[{}] exist already.", group);
             return false;
         }
-        consumer_table.insert(group.clone(), consumer);
+        self.consumer_table.insert(group.clone(), consumer);
         true
     }
 
     pub async fn check_client_in_broker(&mut self) -> rocketmq_error::RocketMQResult<()> {
-        let consumer_table = self.consumer_table.read().await;
-        for (key, value) in consumer_table.iter() {
-            let subscription_inner = value.subscriptions();
+        for entry in self.consumer_table.iter() {
+            let subscription_inner = entry.value().subscriptions();
             if subscription_inner.is_empty() {
                 return Ok(());
             }
@@ -1320,7 +1289,7 @@ impl MQClientInstance {
                         .unwrap()
                         .check_client_in_broker(
                             addr.as_str(),
-                            key,
+                            entry.key().as_str(),
                             self.client_id.as_str(),
                             subscription_data,
                             self.client_config.mq_client_api_timeout,
@@ -1352,16 +1321,19 @@ impl MQClientInstance {
 
     pub async fn do_rebalance(&mut self) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         let mut balanced = true;
-        let consumer_table = self.consumer_table.read().await;
-        for (key, value) in consumer_table.iter() {
-            match value.try_rebalance().await {
+        for entry in self.consumer_table.iter() {
+            match entry.value().try_rebalance().await {
                 Ok(result) => {
                     if !result {
                         balanced = false;
                     }
                 }
                 Err(e) => {
-                    error!("doRebalance for consumer group [{}] exception:{}", key, e.to_string());
+                    error!(
+                        "doRebalance for consumer group [{}] exception:{}",
+                        entry.key(),
+                        e.to_string()
+                    );
                     balanced = false;
                 }
             }
@@ -1390,30 +1362,34 @@ impl MQClientInstance {
         if broker_name.is_empty() {
             return None;
         }
-        let broker_addr_table = self.broker_addr_table.read().await;
-        let map = broker_addr_table.get(broker_name);
-        let mut broker_addr = None;
+
+        let mut broker_addr: Option<CheetahString> = None;
         let mut slave = false;
         let mut found = false;
 
-        if let Some(map) = map {
-            broker_addr = map.get(&broker_id);
-            slave = broker_id != mix_all::MASTER_ID;
-            found = broker_addr.is_some();
-            if !found && slave {
-                broker_addr = map.get(&(broker_id + 1));
-                found = broker_addr.is_some();
+        if let Some(map_ref) = self.broker_addr_table.get(broker_name) {
+            let map = map_ref.value();
+            if let Some(addr) = map.get(&broker_id) {
+                broker_addr = Some(addr.clone());
+                slave = broker_id != mix_all::MASTER_ID;
+                found = true;
+            } else if !found && broker_id != mix_all::MASTER_ID {
+                if let Some(addr) = map.get(&(broker_id + 1)) {
+                    broker_addr = Some(addr.clone());
+                    found = true;
+                }
             }
             if !found && !only_this_broker {
                 if let Some((key, value)) = map.iter().next() {
-                    //broker_addr = Some(value.clone());
+                    broker_addr = Some(value.clone());
                     slave = *key != mix_all::MASTER_ID;
                     found = !value.is_empty();
                 }
             }
         }
+
         if found {
-            let broker_addr = broker_addr.cloned()?;
+            let broker_addr = broker_addr?;
             let broker_version = self.find_broker_version(broker_name, broker_addr.as_str()).await;
             Some(FindBrokerResult {
                 broker_addr,
@@ -1425,9 +1401,8 @@ impl MQClientInstance {
         }
     }
     async fn find_broker_version(&self, broker_name: &str, broker_addr: &str) -> i32 {
-        let broker_version_table = self.broker_version_table.read().await;
-        if let Some(map) = broker_version_table.get(broker_name) {
-            if let Some(version) = map.get(broker_addr) {
+        if let Some(map) = self.broker_version_table.get(broker_name) {
+            if let Some(version) = map.value().get(broker_addr) {
                 return *version;
             }
         }
@@ -1435,13 +1410,11 @@ impl MQClientInstance {
     }
 
     pub async fn select_consumer(&self, group: &str) -> Option<MQConsumerInnerImpl> {
-        let consumer_table = self.consumer_table.read().await;
-        consumer_table.get(group).cloned()
+        self.consumer_table.get(group).map(|entry| entry.value().clone())
     }
 
     pub async fn select_producer(&self, group: &str) -> Option<MQProducerInnerImpl> {
-        let producer_table = self.producer_table.read().await;
-        producer_table.get(group).cloned()
+        self.producer_table.get(group).map(|entry| entry.value().clone())
     }
 
     pub async fn unregister_consumer(&mut self, group: impl Into<CheetahString>) -> bool {
@@ -1451,9 +1424,7 @@ impl MQClientInstance {
             return false;
         }
 
-        let mut consumer_table = self.consumer_table.write().await;
-        let removed = consumer_table.remove(&group).is_some();
-        drop(consumer_table);
+        let removed = self.consumer_table.remove(&group).is_some();
 
         if removed {
             info!("unregister consumer [{}] OK", group);
@@ -1472,9 +1443,7 @@ impl MQClientInstance {
             return false;
         }
 
-        let mut producer_table = self.producer_table.write().await;
-        let removed = producer_table.remove(&group).is_some();
-        drop(producer_table);
+        let removed = self.producer_table.remove(&group).is_some();
 
         if removed {
             info!("unregister producer [{}] OK", group);
@@ -1487,16 +1456,15 @@ impl MQClientInstance {
     }
 
     pub async fn unregister_admin_ext(&mut self, group: impl Into<CheetahString>) {
-        let mut write_guard = self.admin_ext_table.write().await;
-        let _ = write_guard.remove(&group.into());
+        let _ = self.admin_ext_table.remove(&group.into());
     }
     async fn unregister_client(
         &mut self,
         producer_group: Option<CheetahString>,
         consumer_group: Option<CheetahString>,
     ) {
-        let broker_addr_table = self.broker_addr_table.read().await;
-        for (broker_name, broker_addrs) in broker_addr_table.iter() {
+        for broker_entry in self.broker_addr_table.iter() {
+            let (broker_name, broker_addrs) = broker_entry.pair();
             for (id, addr) in broker_addrs.iter() {
                 if let Err(err) = self
                     .mq_client_api_impl
@@ -1522,9 +1490,8 @@ impl MQClientInstance {
     }
 
     async fn is_broker_addr_exist_in_topic_route_table(&self, addr: &str) -> bool {
-        let topic_route_table = self.topic_route_table.read().await;
-        for (_, value) in topic_route_table.iter() {
-            for bd in value.broker_datas.iter() {
+        for entry in self.topic_route_table.iter() {
+            for bd in entry.value().broker_datas.iter() {
                 for (_, value) in bd.broker_addrs().iter() {
                     if value.as_str() == addr {
                         return true;
@@ -1599,10 +1566,9 @@ impl MQClientInstance {
         consumer_group: &CheetahString,
         broker_name: Option<CheetahString>,
     ) -> Option<ConsumeMessageDirectlyResult> {
-        let consumer_table = self.consumer_table.read().await;
-        let consumer_inner = consumer_table.get(consumer_group);
-        if let Some(consumer) = consumer_inner {
-            consumer.consume_message_directly(message, broker_name).await;
+        let consumer_inner = self.consumer_table.get(consumer_group);
+        if let Some(entry) = consumer_inner {
+            entry.value().consume_message_directly(message, broker_name).await;
         }
 
         None
