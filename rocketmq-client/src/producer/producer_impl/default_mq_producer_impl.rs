@@ -90,6 +90,8 @@ use crate::producer::transaction_listener::TransactionListener;
 use crate::producer::transaction_send_result::TransactionSendResult;
 use tokio::task::JoinHandle;
 
+type Topic = CheetahString;
+
 /// Producer state machine (atomic)
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,7 +255,7 @@ pub struct DefaultMQProducerImpl {
     pending_end_transaction_hooks: parking_lot::Mutex<Option<Vec<Arc<dyn EndTransactionHook>>>>,
     pending_forbidden_hooks: parking_lot::Mutex<Option<Vec<Arc<dyn CheckForbiddenHook>>>>,
 
-    topic_publish_info_table: Arc<DashMap<CheetahString /* topic */, TopicPublishInfo>>,
+    topic_publish_info_table: Arc<DashMap<Topic, TopicPublishInfo>>,
 
     rpc_hook: Option<Arc<dyn RPCHook>>,
     client_instance: Option<ArcMut<MQClientInstance>>,
@@ -1344,7 +1346,7 @@ impl DefaultMQProducerImpl {
         Ok(())
     }
 
-    async fn try_to_find_topic_publish_info(&self, topic: &CheetahString) -> Option<TopicPublishInfo> {
+    async fn try_to_find_topic_publish_info(&self, topic: &Topic) -> Option<TopicPublishInfo> {
         let mut topic_publish_info = self.topic_publish_info_table.get(topic).map(|v| v.clone());
         if topic_publish_info.is_none() || !topic_publish_info.as_ref().unwrap().ok() {
             self.topic_publish_info_table
