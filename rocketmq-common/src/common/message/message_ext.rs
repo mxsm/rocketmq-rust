@@ -349,7 +349,7 @@ impl MessageTrait for MessageExt {
         self.message.set_transaction_id(transaction_id);
     }
 
-    fn get_compressed_body_mut(&mut self) -> &mut Option<Bytes> {
+    fn get_compressed_body_mut(&mut self) -> Option<&mut Bytes> {
         self.message.get_compressed_body_mut()
     }
 
@@ -360,7 +360,6 @@ impl MessageTrait for MessageExt {
     fn set_compressed_body_mut(&mut self, compressed_body: Bytes) {
         self.message.set_compressed_body_mut(compressed_body);
     }
-
     #[inline]
     fn take_body(&mut self) -> Option<Bytes> {
         self.message.take_body()

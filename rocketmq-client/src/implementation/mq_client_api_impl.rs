@@ -541,11 +541,12 @@ impl MQClientAPIImpl {
         };
 
         // if compressed_body is not None, set request body to compressed_body
-        if msg.get_compressed_body_mut().is_some() {
-            let compressed_body = std::mem::take(msg.get_compressed_body_mut());
-            request.set_body_mut_ref(compressed_body.unwrap());
+        if let Some(compressed_body) = msg.get_compressed_body() {
+            request.set_body_mut_ref(compressed_body.clone());
+        } else if let Some(body) = msg.get_body() {
+            request.set_body_mut_ref(body.clone());
         } else {
-            request.set_body_mut_ref(msg.get_body().cloned().unwrap());
+            return Err(mq_client_err!(-1, "Message body is None"));
         }
         match communication_mode {
             CommunicationMode::Sync => {
