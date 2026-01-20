@@ -307,7 +307,6 @@ impl TransactionMQProducerBuilder {
             check_thread_pool_min_size: 0,
             check_thread_pool_max_size: 0,
             check_request_hold_max: 0,
-            check_runtime: self.check_runtime,
         };
         TransactionMQProducer::new(transaction_producer_config, mq_producer)
     }

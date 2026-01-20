@@ -53,7 +53,6 @@ use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader;
 use rocketmq_remoting::runtime::RPCHook;
-use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
 use tokio::sync::Semaphore;
@@ -266,7 +265,6 @@ pub struct DefaultMQProducerImpl {
     semaphore_async_send_size: Arc<Semaphore>,
     default_mqproducer_impl_inner: Option<WeakArcMut<DefaultMQProducerImpl>>,
     transaction_listener: Option<Arc<Box<dyn TransactionListener>>>,
-    check_runtime: Option<Arc<RocketMQRuntime>>,
 }
 
 #[allow(unused_must_use)]
@@ -302,7 +300,6 @@ impl DefaultMQProducerImpl {
             semaphore_async_send_size: Arc::new(semaphore_async_send_size),
             default_mqproducer_impl_inner: None,
             transaction_listener: None,
-            check_runtime: None,
         }
     }
 
@@ -1946,17 +1943,6 @@ impl DefaultMQProducerImpl {
         Ok(transaction_send_result)
     }
 
-    pub fn init_transaction_env(&mut self, check_runtime: Option<Arc<RocketMQRuntime>>) {
-        if check_runtime.is_some() {
-            self.check_runtime = check_runtime;
-        } else {
-            self.check_runtime = Some(Arc::new(RocketMQRuntime::new_multi(
-                num_cpus::get(),
-                "thread-transaction-check-",
-            )));
-        }
-    }
-
     pub async fn end_transaction(
         &mut self,
         msg: &dyn MessageTrait,
@@ -2059,10 +2045,6 @@ impl DefaultMQProducerImpl {
     pub fn set_transaction_listener(&mut self, transaction_listener: Arc<Box<dyn TransactionListener>>) {
         self.transaction_listener = Some(transaction_listener);
     }
-
-    pub fn set_check_runtime(&mut self, check_runtime: Arc<RocketMQRuntime>) {
-        self.check_runtime = Some(check_runtime);
-    }
 }
 
 impl MQProducerInner for DefaultMQProducerImpl {
@@ -2080,8 +2062,8 @@ impl MQProducerInner for DefaultMQProducerImpl {
         true
     }
 
-    fn get_check_listener(&self) -> Arc<Box<dyn TransactionListener>> {
-        todo!()
+    fn get_check_listener(&self) -> Option<Arc<Box<dyn TransactionListener>>> {
+        self.transaction_listener.clone()
     }
 
     fn check_transaction_state(
@@ -2090,7 +2072,10 @@ impl MQProducerInner for DefaultMQProducerImpl {
         msg: MessageExt,
         check_request_header: CheckTransactionStateRequestHeader,
     ) {
-        let transaction_listener = self.transaction_listener.clone().unwrap();
+        let Some(transaction_listener) = self.transaction_listener.clone() else {
+            warn!("TransactionListener is null, cannot check transaction state");
+            return;
+        };
         let Some(mut producer_impl_inner) = self
             .default_mqproducer_impl_inner
             .as_ref()
@@ -2100,14 +2085,31 @@ impl MQProducerInner for DefaultMQProducerImpl {
             return;
         };
         let broker_addr = broker_addr.clone();
-        self.check_runtime.as_ref().unwrap().get_handle().spawn(async move {
+        let group = self.producer_config.producer_group().clone();
+
+        // Spawn independent task without storing handle (matches Java's executor.submit behavior)
+        tokio::spawn(async move {
             let mut unique_key = msg.get_property(&CheetahString::from_static_str(
                 MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
             ));
             if unique_key.is_none() {
                 unique_key = Some(msg.msg_id.clone());
             }
-            let transaction_state = transaction_listener.check_local_transaction(&msg);
+
+            // Check local transaction state with exception handling
+            let transaction_state = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                transaction_listener.check_local_transaction(&msg)
+            })) {
+                Ok(state) => state,
+                Err(e) => {
+                    tracing::error!(
+                        "Broker call checkTransactionState, but checkLocalTransaction panic: {:?}, group: {}",
+                        e,
+                        group
+                    );
+                    LocalTransactionState::Unknown
+                }
+            };
             let request_header = EndTransactionRequestHeader {
                 topic: check_request_header.topic.clone().unwrap_or_default(),
                 producer_group: CheetahString::from_string(
@@ -2128,6 +2130,7 @@ impl MQProducerInner for DefaultMQProducerImpl {
                     ..Default::default()
                 },
             };
+            // Execute end transaction hook
             producer_impl_inner.do_execute_end_transaction_hook(
                 &msg.message,
                 unique_key.as_ref().unwrap(),
@@ -2135,7 +2138,9 @@ impl MQProducerInner for DefaultMQProducerImpl {
                 transaction_state,
                 true,
             );
-            let _ = producer_impl_inner
+
+            // Send end transaction request with error handling
+            if let Err(e) = producer_impl_inner
                 .client_instance
                 .as_mut()
                 .unwrap()
@@ -2143,7 +2148,10 @@ impl MQProducerInner for DefaultMQProducerImpl {
                 .as_mut()
                 .unwrap()
                 .end_transaction_oneway(&broker_addr, request_header, CheetahString::from_static_str(""), 3000)
-                .await;
+                .await
+            {
+                tracing::error!("endTransactionOneway exception: {:?}", e);
+            }
         });
     }
 
@@ -2451,6 +2459,11 @@ impl DefaultMQProducerImpl {
             return Err(mq_client_err!("Transactional messages do not support delayed delivery"));
         }
         Ok(())
+    }
+
+    pub async fn destroy_transaction_env(&mut self) {
+        // Transaction check tasks are independent, no cleanup needed
+        // Tasks will complete naturally when spawned
     }
 }
 

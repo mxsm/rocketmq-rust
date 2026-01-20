@@ -634,6 +634,12 @@ impl MQProducer for DefaultMQProducer {
     }
 
     async fn shutdown(&mut self) {
+        if let Some(ref mut default_mqproducer_impl) = self.default_mqproducer_impl {
+            if let Err(e) = default_mqproducer_impl.shutdown().await {
+                error!("DefaultMQProducerImpl shutdown error: {:?}", e);
+            }
+        }
+
         if let Some(ref mut produce_accumulator) = self.producer_config.produce_accumulator {
             produce_accumulator.shutdown();
         }
