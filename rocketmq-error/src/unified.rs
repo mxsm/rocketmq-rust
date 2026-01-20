@@ -409,10 +409,7 @@ impl RocketMQError {
     /// Create a network timeout error
     #[inline]
     pub fn network_timeout(addr: impl Into<String>, timeout: std::time::Duration) -> Self {
-        Self::Network(NetworkError::request_timeout(
-            addr,
-            timeout.as_millis() as u64,
-        ))
+        Self::Network(NetworkError::request_timeout(addr, timeout.as_millis() as u64))
     }
 
     /// Create a network request failed error

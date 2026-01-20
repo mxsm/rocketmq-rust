@@ -19,11 +19,11 @@ use std::str::FromStr;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use reqwest::Client;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
 use reqwest::header::CONTENT_TYPE;
+use reqwest::Client;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 
@@ -97,16 +97,12 @@ impl HttpTinyClient {
     /// Ensures the URL is not empty and is a valid HTTP/HTTPS URL
     fn validate_url(url: &str) -> RocketMQResult<()> {
         if url.is_empty() {
-            return Err(RocketMQError::validation_failed(
-                "url",
-                "URL cannot be empty",
-            ));
+            return Err(RocketMQError::validation_failed("url", "URL cannot be empty"));
         }
 
         // Parse URL to validate format
-        reqwest::Url::parse(url).map_err(|e| {
-            RocketMQError::validation_failed("url", format!("Invalid URL format: {}", e))
-        })?;
+        reqwest::Url::parse(url)
+            .map_err(|e| RocketMQError::validation_failed("url", format!("Invalid URL format: {}", e)))?;
 
         Ok(())
     }
@@ -142,10 +138,7 @@ impl HttpTinyClient {
     /// Only supports common encodings to prevent errors
     fn validate_encoding(encoding: &str) -> RocketMQResult<()> {
         if encoding.is_empty() {
-            return Err(RocketMQError::validation_failed(
-                "encoding",
-                "Encoding cannot be empty",
-            ));
+            return Err(RocketMQError::validation_failed("encoding", "Encoding cannot be empty"));
         }
 
         // Support common encodings (case-insensitive)
@@ -154,7 +147,10 @@ impl HttpTinyClient {
             "UTF-8" | "UTF8" | "GBK" | "GB2312" | "GB18030" | "ISO-8859-1" | "US-ASCII" => Ok(()),
             _ => Err(RocketMQError::validation_failed(
                 "encoding",
-                format!("Unsupported encoding: '{}'. Supported: UTF-8, GBK, GB2312, GB18030, ISO-8859-1, US-ASCII", encoding),
+                format!(
+                    "Unsupported encoding: '{}'. Supported: UTF-8, GBK, GB2312, GB18030, ISO-8859-1, US-ASCII",
+                    encoding
+                ),
             )),
         }
     }
@@ -228,9 +224,10 @@ impl HttpTinyClient {
         })?;
 
         let status_code = response.status().as_u16() as i32;
-        let content = response.text().await.map_err(|e| {
-            RocketMQError::deserialization_failed("response_body", e.to_string())
-        })?;
+        let content = response
+            .text()
+            .await
+            .map_err(|e| RocketMQError::deserialization_failed("response_body", e.to_string()))?;
 
         Ok(HttpResult::new(status_code, content))
     }
@@ -279,9 +276,10 @@ impl HttpTinyClient {
         })?;
 
         let status_code = response.status().as_u16() as i32;
-        let content = response.text().await.map_err(|e| {
-            RocketMQError::deserialization_failed("response_body", e.to_string())
-        })?;
+        let content = response
+            .text()
+            .await
+            .map_err(|e| RocketMQError::deserialization_failed("response_body", e.to_string()))?;
 
         Ok(HttpResult::new(status_code, content))
     }
@@ -357,10 +355,7 @@ impl HttpTinyClient {
     }
 
     /// Encode parameters for URL or form data using form_urlencoded
-    fn encoding_params(
-        param_values: Option<&[String]>,
-        _encoding: &str,
-    ) -> RocketMQResult<Option<String>> {
+    fn encoding_params(param_values: Option<&[String]>, _encoding: &str) -> RocketMQResult<Option<String>> {
         let params = match param_values {
             Some(params) if !params.is_empty() => params,
             _ => return Ok(None),
@@ -401,12 +396,10 @@ impl HttpTinyClient {
             }
         }
 
-        request_builder = request_builder
-            .header("Client-Version", CURRENT_VERSION.name())
-            .header(
-                "Content-Type",
-                format!("application/x-www-form-urlencoded;charset={encoding}"),
-            );
+        request_builder = request_builder.header("Client-Version", CURRENT_VERSION.name()).header(
+            "Content-Type",
+            format!("application/x-www-form-urlencoded;charset={encoding}"),
+        );
 
         let timestamp = get_current_millis();
         request_builder = request_builder.header("Metaq-Client-RequestTS", timestamp.to_string());
@@ -422,14 +415,7 @@ mod tests {
     #[tokio::test]
     async fn test_http_get_async_basic() {
         // Test with httpbin.org (public test API)
-        let result = HttpTinyClient::http_get_async(
-            "https://httpbin.org/get",
-            None,
-            None,
-            "UTF-8",
-            10000,
-        )
-        .await;
+        let result = HttpTinyClient::http_get_async("https://httpbin.org/get", None, None, "UTF-8", 10000).await;
 
         match result {
             Ok(response) => {
@@ -453,14 +439,8 @@ mod tests {
             "value2".to_string(),
         ];
 
-        let result = HttpTinyClient::http_get_async(
-            "https://httpbin.org/get",
-            None,
-            Some(&params),
-            "UTF-8",
-            10000,
-        )
-        .await;
+        let result =
+            HttpTinyClient::http_get_async("https://httpbin.org/get", None, Some(&params), "UTF-8", 10000).await;
 
         match result {
             Ok(response) => {
@@ -485,14 +465,8 @@ mod tests {
             "testpass".to_string(),
         ];
 
-        let result = HttpTinyClient::http_post_async(
-            "https://httpbin.org/post",
-            None,
-            Some(&params),
-            "UTF-8",
-            10000,
-        )
-        .await;
+        let result =
+            HttpTinyClient::http_post_async("https://httpbin.org/post", None, Some(&params), "UTF-8", 10000).await;
 
         match result {
             Ok(response) => {
@@ -517,14 +491,8 @@ mod tests {
             "application/json".to_string(),
         ];
 
-        let result = HttpTinyClient::http_get_async(
-            "https://httpbin.org/get",
-            Some(&headers),
-            None,
-            "UTF-8",
-            10000,
-        )
-        .await;
+        let result =
+            HttpTinyClient::http_get_async("https://httpbin.org/get", Some(&headers), None, "UTF-8", 10000).await;
 
         match result {
             Ok(response) => {
@@ -611,8 +579,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_validation_invalid_url() {
-        let result =
-            HttpTinyClient::http_get_async("not-a-valid-url", None, None, "UTF-8", 5000).await;
+        let result = HttpTinyClient::http_get_async("not-a-valid-url", None, None, "UTF-8", 5000).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -621,8 +588,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_validation_malformed_url() {
-        let result =
-            HttpTinyClient::http_get_async("http://", None, None, "UTF-8", 5000).await;
+        let result = HttpTinyClient::http_get_async("http://", None, None, "UTF-8", 5000).await;
 
         assert!(result.is_err());
     }
@@ -636,14 +602,8 @@ mod tests {
             // Missing value for User-Agent
         ];
 
-        let result = HttpTinyClient::http_get_async(
-            "https://httpbin.org/get",
-            Some(&headers),
-            None,
-            "UTF-8",
-            5000,
-        )
-        .await;
+        let result =
+            HttpTinyClient::http_get_async("https://httpbin.org/get", Some(&headers), None, "UTF-8", 5000).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -658,14 +618,8 @@ mod tests {
             "value".to_string(),
         ];
 
-        let result = HttpTinyClient::http_get_async(
-            "https://httpbin.org/get",
-            Some(&headers),
-            None,
-            "UTF-8",
-            5000,
-        )
-        .await;
+        let result =
+            HttpTinyClient::http_get_async("https://httpbin.org/get", Some(&headers), None, "UTF-8", 5000).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -674,8 +628,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_validation_empty_encoding() {
-        let result =
-            HttpTinyClient::http_get_async("https://httpbin.org/get", None, None, "", 5000).await;
+        let result = HttpTinyClient::http_get_async("https://httpbin.org/get", None, None, "", 5000).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -684,14 +637,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_validation_unsupported_encoding() {
-        let result = HttpTinyClient::http_get_async(
-            "https://httpbin.org/get",
-            None,
-            None,
-            "INVALID-ENCODING",
-            5000,
-        )
-        .await;
+        let result =
+            HttpTinyClient::http_get_async("https://httpbin.org/get", None, None, "INVALID-ENCODING", 5000).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -706,19 +653,13 @@ mod tests {
         for encoding in encodings {
             // Just test validation passes, don't actually make request
             let result = HttpTinyClient::validate_encoding(encoding);
-            assert!(
-                result.is_ok(),
-                "Encoding '{}' should be supported",
-                encoding
-            );
+            assert!(result.is_ok(), "Encoding '{}' should be supported", encoding);
         }
     }
 
     #[tokio::test]
     async fn test_validation_zero_timeout() {
-        let result =
-            HttpTinyClient::http_get_async("https://httpbin.org/get", None, None, "UTF-8", 0)
-                .await;
+        let result = HttpTinyClient::http_get_async("https://httpbin.org/get", None, None, "UTF-8", 0).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -737,7 +678,8 @@ mod tests {
     fn test_validate_url_failure() {
         assert!(HttpTinyClient::validate_url("").is_err());
         assert!(HttpTinyClient::validate_url("not-a-url").is_err());
-        assert!(HttpTinyClient::validate_url("ftp://example.com").is_ok()); // Valid URL, just not HTTP
+        assert!(HttpTinyClient::validate_url("ftp://example.com").is_ok()); // Valid URL, just not
+                                                                            // HTTP
     }
 
     #[test]
@@ -811,14 +753,9 @@ mod tests {
         ];
 
         // This should pass all validations (though the request itself may fail due to network)
-        let result = HttpTinyClient::http_get_async(
-            "https://httpbin.org/get",
-            Some(&headers),
-            Some(&params),
-            "UTF-8",
-            5000,
-        )
-        .await;
+        let result =
+            HttpTinyClient::http_get_async("https://httpbin.org/get", Some(&headers), Some(&params), "UTF-8", 5000)
+                .await;
 
         // Either success or network error, but not validation error
         match result {

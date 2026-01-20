@@ -94,11 +94,7 @@ impl DefaultTopAddressing {
         url
     }
 
-    pub async fn fetch_ns_addr_inner_async(
-        &self,
-        verbose: bool,
-        timeout_millis: u64,
-    ) -> Option<String> {
+    pub async fn fetch_ns_addr_inner_async(&self, verbose: bool, timeout_millis: u64) -> Option<String> {
         let url = self.build_url();
         match HttpTinyClient::http_get_async(&url, None, None, "UTF-8", timeout_millis).await {
             Ok(response) => {
@@ -109,10 +105,7 @@ impl DefaultTopAddressing {
                         error!("fetch nameserver address is null");
                     }
                 } else {
-                    error!(
-                        "fetch nameserver address failed. statusCode={}",
-                        response.code
-                    );
+                    error!("fetch nameserver address failed. statusCode={}", response.code);
                 }
             }
             Err(e) => {
@@ -149,10 +142,7 @@ impl DefaultTopAddressing {
                         error!("fetch nameserver address is null");
                     }
                 } else {
-                    error!(
-                        "fetch nameserver address failed. statusCode={}",
-                        response.code
-                    );
+                    error!("fetch nameserver address failed. statusCode={}", response.code);
                 }
             }
             Err(e) => {
