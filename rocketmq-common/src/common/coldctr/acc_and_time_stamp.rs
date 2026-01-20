@@ -153,3 +153,68 @@ impl fmt::Display for AccAndTimeStamp {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn acc_and_time_stamp_new_and_default() {
+        let acc_and_time_stamp = AccAndTimeStamp::new(100);
+        assert_eq!(acc_and_time_stamp.get_cold_acc(), 100);
+        assert!(acc_and_time_stamp.get_last_cold_read_time_millis() > 0);
+        assert!(acc_and_time_stamp.get_create_time_millis() > 0);
+
+        let acc_and_time_stamp = AccAndTimeStamp::default_new();
+        assert_eq!(acc_and_time_stamp.get_cold_acc(), 0);
+
+        let acc_and_time_stamp = AccAndTimeStamp::default();
+        assert_eq!(acc_and_time_stamp.get_cold_acc(), 0);
+    }
+
+    #[test]
+    fn acc_and_time_stamp_cold_acc_methods() {
+        let acc_and_time_stamp = AccAndTimeStamp::default();
+        acc_and_time_stamp.set_cold_acc(100);
+        assert_eq!(acc_and_time_stamp.get_cold_acc(), 100);
+
+        let previous = acc_and_time_stamp.add_cold_acc(50);
+        assert_eq!(previous, 100);
+        assert_eq!(acc_and_time_stamp.get_cold_acc(), 150);
+
+        let atomic = acc_and_time_stamp.cold_acc_atomic();
+        atomic.store(200, Ordering::Relaxed);
+        assert_eq!(acc_and_time_stamp.get_cold_acc(), 200);
+    }
+
+    #[test]
+    fn acc_and_time_stamp_last_cold_read_time_methods() {
+        let acc_and_time_stamp = AccAndTimeStamp::default();
+        acc_and_time_stamp.set_last_cold_read_time_millis(123456789);
+        assert_eq!(acc_and_time_stamp.get_last_cold_read_time_millis(), 123456789);
+
+        let acc_and_time_stamp = AccAndTimeStamp::default();
+        let old_time = acc_and_time_stamp.get_last_cold_read_time_millis();
+        acc_and_time_stamp.update_last_cold_read_time();
+        let new_time = acc_and_time_stamp.get_last_cold_read_time_millis();
+        assert!(new_time >= old_time);
+    }
+
+    #[test]
+    fn acc_and_time_stamp_format() {
+        let acc_and_time_stamp = AccAndTimeStamp::new(100);
+        acc_and_time_stamp.set_last_cold_read_time_millis(200);
+
+        let display = format!("{}", acc_and_time_stamp);
+        assert!(display.contains("AccAndTimeStamp{"));
+        assert!(display.contains("coldAcc=100"));
+        assert!(display.contains("lastColdReadTimeMills=200"));
+        assert!(display.contains("createTimeMills="));
+
+        let debug = format!("{:?}", acc_and_time_stamp);
+        assert!(debug.contains("AccAndTimeStamp"));
+        assert!(debug.contains("cold_acc"));
+        assert!(debug.contains("last_cold_read_time_millis"));
+        assert!(debug.contains("create_time_millis"));
+    }
+}
