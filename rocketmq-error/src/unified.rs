@@ -406,6 +406,30 @@ impl RocketMQError {
         Self::Network(NetworkError::connection_failed(addr, reason))
     }
 
+    /// Create a network timeout error
+    #[inline]
+    pub fn network_timeout(addr: impl Into<String>, timeout: std::time::Duration) -> Self {
+        Self::Network(NetworkError::request_timeout(addr, timeout.as_millis() as u64))
+    }
+
+    /// Create a network request failed error
+    #[inline]
+    pub fn network_request_failed(addr: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self::Network(NetworkError::send_failed(addr, reason))
+    }
+
+    /// Create a deserialization failed error
+    #[inline]
+    pub fn deserialization_failed(format: &'static str, reason: impl Into<String>) -> Self {
+        Self::Serialization(SerializationError::decode_failed(format, reason))
+    }
+
+    /// Create a validation failed error
+    #[inline]
+    pub fn validation_failed(field: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self::Tools(ToolsError::validation_error(field, reason))
+    }
+
     /// Create a broker operation failed error
     #[inline]
     pub fn broker_operation_failed(operation: &'static str, code: i32, message: impl Into<String>) -> Self {
