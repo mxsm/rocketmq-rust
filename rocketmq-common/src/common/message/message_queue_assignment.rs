@@ -36,7 +36,9 @@ impl Hash for MessageQueueAssignment {
         self.message_queue.hash(state);
         self.mode.hash(state);
         if let Some(ref attachments) = self.attachments {
-            for (key, value) in attachments {
+            let mut sorted_attachments: Vec<_> = attachments.iter().collect();
+            sorted_attachments.sort_by_key(|(k, _)| k.as_str());
+            for (key, value) in sorted_attachments {
                 key.hash(state);
                 value.hash(state);
             }
@@ -54,6 +56,7 @@ impl Default for MessageQueueAssignment {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
