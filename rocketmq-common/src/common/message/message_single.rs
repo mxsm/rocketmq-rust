@@ -440,8 +440,8 @@ impl MessageTrait for Message {
     }
 
     #[inline]
-    fn get_compressed_body_mut(&mut self) -> &mut Option<Bytes> {
-        &mut self.compressed_body
+    fn get_compressed_body_mut(&mut self) -> Option<&mut Bytes> {
+        self.compressed_body.as_mut()
     }
 
     #[inline]

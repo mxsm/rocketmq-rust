@@ -408,8 +408,8 @@ pub trait MessageTrait: Any + Display + Debug {
     /// Retrieves a mutable reference to the compressed body of the message.
     ///
     /// # Returns
-    /// A mutable reference to an `Option<Bytes>` containing the compressed body, if it exists.
-    fn get_compressed_body_mut(&mut self) -> &mut Option<Bytes>;
+    /// An `Option<&mut Bytes>` containing the compressed body, if it exists.
+    fn get_compressed_body_mut(&mut self) -> Option<&mut Bytes>;
 
     /// Retrieves an immutable reference to the compressed body of the message.
     ///

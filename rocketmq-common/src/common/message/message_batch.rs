@@ -241,8 +241,8 @@ impl MessageTrait for MessageBatch {
     }
 
     #[inline]
-    fn get_compressed_body_mut(&mut self) -> &mut Option<Bytes> {
-        &mut self.final_message.compressed_body
+    fn get_compressed_body_mut(&mut self) -> Option<&mut Bytes> {
+        self.final_message.compressed_body.as_mut()
     }
 
     #[inline]
@@ -252,7 +252,7 @@ impl MessageTrait for MessageBatch {
 
     #[inline]
     fn set_compressed_body_mut(&mut self, compressed_body: Bytes) {
-        self.final_message.compressed_body = Some(compressed_body);
+        self.final_message.set_compressed_body_mut(compressed_body);
     }
 
     #[inline]

@@ -318,7 +318,7 @@ impl MessageTrait for MessageExtBrokerInner {
     }
 
     #[inline]
-    fn get_compressed_body_mut(&mut self) -> &mut Option<Bytes> {
+    fn get_compressed_body_mut(&mut self) -> Option<&mut Bytes> {
         self.message_ext_inner.get_compressed_body_mut()
     }
 
