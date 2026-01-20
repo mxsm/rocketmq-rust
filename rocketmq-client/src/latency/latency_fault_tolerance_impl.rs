@@ -69,18 +69,14 @@ where
         }
     }
 
+    #[inline]
     fn is_available(&self, name: &CheetahString) -> bool {
-        if let Some(fault_item) = self.fault_item_table.get(name) {
-            return fault_item.is_available();
-        }
-        true
+        self.fault_item_table.get(name).is_none_or(|item| item.is_available())
     }
 
+    #[inline]
     fn is_reachable(&self, name: &CheetahString) -> bool {
-        if let Some(fault_item) = self.fault_item_table.get(name) {
-            return fault_item.is_reachable();
-        }
-        true
+        self.fault_item_table.get(name).is_none_or(|item| item.is_reachable())
     }
 
     async fn remove(&mut self, name: &CheetahString) {
@@ -88,17 +84,19 @@ where
     }
 
     async fn pick_one_at_least(&self) -> Option<CheetahString> {
-        let mut reachable_names: Vec<CheetahString> = Vec::new();
+        use smallvec::SmallVec;
+
+        let mut reachable_names: SmallVec<[CheetahString; 4]> = SmallVec::new();
+
         for entry in self.fault_item_table.iter() {
-            if entry.value().reachable_flag.load(std::sync::atomic::Ordering::Acquire) {
+            if entry.value().is_reachable() {
                 reachable_names.push(entry.key().clone());
             }
         }
 
         if !reachable_names.is_empty() {
             use rand::seq::SliceRandom;
-            let mut rng = rand::rng();
-            reachable_names.shuffle(&mut rng);
+            reachable_names.shuffle(&mut rand::rng());
             return Some(reachable_names[0].clone());
         }
         None
@@ -121,6 +119,23 @@ where
 
     async fn detect_by_one_round(&self) {
         let mut remove_set = HashSet::new();
+
+        let resolver = match self.resolver.as_ref() {
+            Some(r) => r,
+            None => {
+                tracing::warn!("Resolver not configured, skipping detection round");
+                return;
+            }
+        };
+
+        let service_detector = match self.service_detector.as_ref() {
+            Some(d) => d,
+            None => {
+                tracing::debug!("ServiceDetector not configured, skipping service checks");
+                return;
+            }
+        };
+
         for entry in self.fault_item_table.iter() {
             let (name, fault_item) = (entry.key(), entry.value());
             if get_current_millis() as i64 - (fault_item.check_stamp.load(std::sync::atomic::Ordering::Relaxed) as i64)
@@ -132,27 +147,25 @@ where
                 get_current_millis() + self.detect_interval as u64,
                 std::sync::atomic::Ordering::Release,
             );
-            let broker_addr = self.resolver.as_ref().unwrap().resolve(fault_item.name.as_ref()).await;
-            if broker_addr.is_none() {
-                remove_set.insert(name.clone());
-                continue;
-            }
-            if self.service_detector.is_none() {
-                continue;
-            }
-            let service_ok = self
-                .service_detector
-                .as_ref()
-                .unwrap()
-                .detect(broker_addr.unwrap().as_str(), self.detect_timeout as u64)
+
+            let broker_addr = match resolver.resolve(fault_item.name.as_ref()).await {
+                Some(addr) => addr,
+                None => {
+                    remove_set.insert(name.clone());
+                    continue;
+                }
+            };
+
+            let service_ok = service_detector
+                .detect(broker_addr.as_str(), self.detect_timeout as u64)
                 .await;
-            if service_ok && fault_item.reachable_flag.load(std::sync::atomic::Ordering::Acquire) {
+
+            if service_ok && !fault_item.is_reachable() {
                 info!("{} is reachable now, then it can be used.", name);
-                fault_item
-                    .reachable_flag
-                    .store(true, std::sync::atomic::Ordering::Release);
+                fault_item.set_reachable(true);
             }
         }
+
         for name in remove_set {
             self.fault_item_table.remove(&name);
         }
@@ -201,23 +214,27 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_rust::ArcMut;
 use tracing::info;
 
+#[repr(C)]
 #[derive(Debug)]
 pub struct FaultItem {
-    name: CheetahString,
-    current_latency: std::sync::atomic::AtomicU64,
-    start_timestamp: std::sync::atomic::AtomicU64,
-    check_stamp: std::sync::atomic::AtomicU64,
     reachable_flag: std::sync::atomic::AtomicBool,
+    _padding1: [u8; 7],
+    start_timestamp: std::sync::atomic::AtomicU64,
+    current_latency: std::sync::atomic::AtomicU64,
+
+    check_stamp: std::sync::atomic::AtomicU64,
+    name: CheetahString,
 }
 
 impl FaultItem {
     pub fn new(name: CheetahString) -> Self {
         FaultItem {
-            name,
-            current_latency: std::sync::atomic::AtomicU64::new(0),
-            start_timestamp: std::sync::atomic::AtomicU64::new(0),
-            check_stamp: std::sync::atomic::AtomicU64::new(0),
             reachable_flag: std::sync::atomic::AtomicBool::new(true),
+            _padding1: [0; 7],
+            start_timestamp: std::sync::atomic::AtomicU64::new(0),
+            current_latency: std::sync::atomic::AtomicU64::new(0),
+            check_stamp: std::sync::atomic::AtomicU64::new(0),
+            name,
         }
     }
 
@@ -227,14 +244,14 @@ impl FaultItem {
             && now + not_available_duration > self.start_timestamp.load(std::sync::atomic::Ordering::Relaxed)
         {
             self.start_timestamp
-                .store(now + not_available_duration, std::sync::atomic::Ordering::Relaxed);
+                .store(now + not_available_duration, std::sync::atomic::Ordering::Release);
             info!("{} will be isolated for {} ms.", self.name, not_available_duration);
         }
     }
 
     pub fn set_reachable(&self, reachable_flag: bool) {
         self.reachable_flag
-            .store(reachable_flag, std::sync::atomic::Ordering::Relaxed);
+            .store(reachable_flag, std::sync::atomic::Ordering::Release);
     }
 
     pub fn set_check_stamp(&self, check_stamp: u64) {

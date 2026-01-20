@@ -35,6 +35,7 @@ tracing.workspace = true
 parking_lot = { workspace = true }
 bytes       = { workspace = true }
 dashmap     = { workspace = true }
+smallvec    = { workspace = true }
 
 futures        = { workspace = true }
 cheetah-string = { workspace = true }
