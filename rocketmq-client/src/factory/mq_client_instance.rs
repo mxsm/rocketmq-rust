@@ -953,13 +953,6 @@ impl MQClientInstance {
         result
     }
 
-    /// Check if broker supports HeartbeatV2 protocol from last response
-    async fn check_broker_support_v2(&self, _addr: &CheetahString) -> Result<Option<bool>, ()> {
-        // TODO: Parse response ext fields to check IS_SUPPORT_HEART_BEAT_V2
-        // For now, assume broker supports V2 if configured
-        Ok(Some(true))
-    }
-
     async fn send_heartbeat_to_broker_inner(
         &self,
         id: u64,
