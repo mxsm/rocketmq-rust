@@ -103,14 +103,13 @@ impl DefaultMQAdminExt {
         }
     }
 
-    pub fn with_rpc_hook(rpc_hook: impl RPCHook) -> Self {
+    pub fn with_rpc_hook(rpc_hook: Arc<dyn RPCHook>) -> Self {
         let admin_ext_group = CheetahString::from_static_str(ADMIN_EXT_GROUP);
-        let rpc_hook_inner: Arc<dyn RPCHook> = Arc::new(rpc_hook);
         let client_config = ArcMut::new(ClientConfig::new());
         Self {
             client_config: client_config.clone(),
             default_mqadmin_ext_impl: ArcMut::new(DefaultMQAdminExtImpl::new(
-                Some(rpc_hook_inner),
+                Some(rpc_hook),
                 Duration::from_millis(5000),
                 client_config,
                 admin_ext_group.clone(),
@@ -121,14 +120,13 @@ impl DefaultMQAdminExt {
         }
     }
 
-    pub fn with_rpc_hook_and_timeout(rpc_hook: impl RPCHook, timeout_millis: Duration) -> Self {
+    pub fn with_rpc_hook_and_timeout(rpc_hook: Arc<dyn RPCHook>, timeout_millis: Duration) -> Self {
         let admin_ext_group = CheetahString::from_static_str(ADMIN_EXT_GROUP);
-        let rpc_hook_inner: Arc<dyn RPCHook> = Arc::new(rpc_hook);
         let client_config = ArcMut::new(ClientConfig::new());
         Self {
             client_config: client_config.clone(),
             default_mqadmin_ext_impl: ArcMut::new(DefaultMQAdminExtImpl::new(
-                Some(rpc_hook_inner),
+                Some(rpc_hook),
                 timeout_millis,
                 client_config,
                 admin_ext_group.clone(),
@@ -822,7 +820,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         source_ips: Vec<CheetahString>,
         decision: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .update_acl(broker_addr, subject, resources, actions, source_ips, decision)
+            .await
     }
 
     async fn delete_acl(
