@@ -332,10 +332,8 @@ impl ConsumeMessagePopConcurrentlyService {
                 if ack_index >= consume_request.msgs.len() as i32 {
                     ack_index = consume_request.msgs.len() as i32 - 1;
                 }
-       
             }
             ConsumeConcurrentlyStatus::ReconsumeLater => {
-           
                 ack_index = -1;
             }
         }
