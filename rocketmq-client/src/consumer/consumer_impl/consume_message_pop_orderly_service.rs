@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::sync::atomic::AtomicBool;
@@ -23,17 +22,20 @@ use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
+use dashmap::DashSet;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::message::MessageTrait;
 use rocketmq_remoting::protocol::body::cm_result::CMResult;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
-use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
+use tokio::sync::Semaphore;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
+use crate::consumer::ack_result::AckResult;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
@@ -50,13 +52,23 @@ pub struct ConsumeMessagePopOrderlyService {
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     pub(crate) consumer_group: CheetahString,
     pub(crate) message_listener: ArcBoxMessageListenerOrderly,
-    pub(crate) consume_runtime: RocketMQRuntime,
-    pub(self) consume_request_set: HashSet<ConsumeRequest>,
+    pub(crate) concurrency_limiter: Arc<Semaphore>,
+    pub(self) consume_request_set: Arc<DashSet<ConsumeRequest>>,
     pub(crate) message_queue_lock: MessageQueueLock,
-    pub(crate) consume_request_lock: MessageQueueLock,
     pub(crate) stopped: Arc<AtomicBool>,
     pub(crate) active_tasks: Arc<AtomicUsize>,
     pub(crate) lock_refresh_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+/// Default callback implementation for acknowledgment operations
+struct DefaultAckCallback;
+
+impl crate::consumer::ack_callback::AckCallback for DefaultAckCallback {
+    fn on_success(&self, _ack_result: AckResult) {}
+
+    fn on_exception(&self, e: Box<dyn std::error::Error>) {
+        error!("change_invisible_time callback exception: {}", e);
+    }
 }
 
 impl ConsumeMessagePopOrderlyService {
@@ -68,17 +80,15 @@ impl ConsumeMessagePopOrderlyService {
         default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
     ) -> Self {
         let consume_thread = consumer_config.consume_thread_max;
-        let consumer_group_tag = format!("{}_{}", "PopConsumeMessageThread_", consumer_group);
         Self {
             default_mqpush_consumer_impl,
             client_config,
             consumer_config,
             consumer_group,
             message_listener,
-            consume_runtime: RocketMQRuntime::new_multi(consume_thread as usize, consumer_group_tag.as_str()),
-            consume_request_set: Default::default(),
+            concurrency_limiter: Arc::new(Semaphore::new(consume_thread as usize)),
+            consume_request_set: Arc::new(DashSet::new()),
             message_queue_lock: Default::default(),
-            consume_request_lock: Default::default(),
             stopped: Arc::new(AtomicBool::new(false)),
             active_tasks: Arc::new(AtomicUsize::new(0)),
             lock_refresh_task: None,
@@ -90,13 +100,23 @@ impl ConsumeMessagePopOrderlyService {
     }
 
     fn submit_consume_request(&mut self, this: ArcMut<Self>, mut request: ConsumeRequest, force: bool) {
+        if !force && !self.consume_request_set.insert(request.clone()) {
+            return;
+        }
+
         let stopped = self.stopped.clone();
         let active_tasks = self.active_tasks.clone();
+        let concurrency_limiter = self.concurrency_limiter.clone();
 
         tokio::spawn(async move {
             if stopped.load(Ordering::Acquire) {
                 return;
             }
+
+            let _permit = match concurrency_limiter.acquire().await {
+                Ok(permit) => permit,
+                Err(_) => return,
+            };
 
             active_tasks.fetch_add(1, Ordering::SeqCst);
 
@@ -116,6 +136,7 @@ impl ConsumeMessagePopOrderlyService {
         suspend_time_millis = suspend_time_millis.clamp(10, 30_000);
 
         let stopped = self.stopped.clone();
+        let consume_request_set = self.consume_request_set.clone();
 
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(suspend_time_millis)).await;
@@ -124,6 +145,7 @@ impl ConsumeMessagePopOrderlyService {
                 return;
             }
 
+            consume_request_set.insert(request.clone());
             this.mut_from_ref().submit_consume_request(this.clone(), request, true);
         });
     }
@@ -149,8 +171,14 @@ impl ConsumeMessagePopOrderlyService {
 
         for msg in msgs {
             let msg_mut = msg.mut_from_ref();
-            if msg_mut.reconsume_times >= max_times && !self.send_message_back(msg.as_ref()).await {
+            if msg_mut.reconsume_times >= max_times {
+                if !self.send_message_back(msg.as_ref()).await {
+                    suspend = true;
+                    msg_mut.reconsume_times += 1;
+                }
+            } else {
                 suspend = true;
+                msg_mut.reconsume_times += 1;
             }
         }
 
@@ -204,10 +232,27 @@ impl ConsumeMessagePopOrderlyService {
 
     async fn change_invisible_time(&self, msg: &MessageExt, invisible_time: u64) {
         if let Some(ref impl_) = self.default_mqpush_consumer_impl {
-            warn!(
-                "change_invisible_time not fully implemented, msg: {:?}, time: {}",
-                msg, invisible_time
-            );
+            if let Some(extra_info) = msg.get_property(&CheetahString::from_static_str("POP_CK")) {
+                let result = impl_
+                    .mut_from_ref()
+                    .change_pop_invisible_time_async(
+                        msg.get_topic(),
+                        &self.consumer_group,
+                        &extra_info,
+                        invisible_time,
+                        DefaultAckCallback,
+                    )
+                    .await;
+
+                if let Err(e) = result {
+                    error!(
+                        "change_invisible_time failed, msg: {:?}, time: {}, error: {}",
+                        msg, invisible_time, e
+                    );
+                }
+            } else {
+                warn!("change_invisible_time: message missing POP_CK property");
+            }
         }
     }
 
@@ -297,6 +342,8 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         );
 
         self.stopped.store(true, Ordering::Release);
+
+        self.concurrency_limiter.close();
 
         if let Some(task) = self.lock_refresh_task.take() {
             task.abort();
@@ -395,7 +442,8 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
         process_queue: &PopProcessQueue,
         message_queue: &MessageQueue,
     ) {
-        let request = ConsumeRequest::new(Arc::new(process_queue.clone()), message_queue.clone());
+        let arc_msgs: Vec<ArcMut<MessageExt>> = msgs.into_iter().map(ArcMut::new).collect();
+        let request = ConsumeRequest::new(Arc::new(process_queue.clone()), message_queue.clone(), arc_msgs);
         this.mut_from_ref().submit_consume_request(this.clone(), request, false);
     }
 }
@@ -405,14 +453,29 @@ struct ConsumeRequest {
     process_queue: Arc<PopProcessQueue>,
     message_queue: MessageQueue,
     sharding_key_index: i32,
+    msgs: Vec<ArcMut<MessageExt>>,
+}
+
+impl std::fmt::Debug for ConsumeRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConsumeRequest")
+            .field("message_queue", &self.message_queue)
+            .field("sharding_key_index", &self.sharding_key_index)
+            .finish()
+    }
 }
 
 impl ConsumeRequest {
-    pub fn new(process_queue: Arc<PopProcessQueue>, message_queue: MessageQueue) -> Self {
+    pub fn new(
+        process_queue: Arc<PopProcessQueue>,
+        message_queue: MessageQueue,
+        msgs: Vec<ArcMut<MessageExt>>,
+    ) -> Self {
         Self {
             process_queue,
             message_queue,
             sharding_key_index: 0,
+            msgs,
         }
     }
 
@@ -432,7 +495,7 @@ impl ConsumeRequest {
             .await;
         let _guard = lock.lock().await;
 
-        let msgs: Vec<ArcMut<MessageExt>> = vec![];
+        let msgs = &self.msgs;
 
         if msgs.is_empty() {
             consume_message_pop_orderly_service.submit_consume_request_later(
@@ -443,7 +506,7 @@ impl ConsumeRequest {
             return;
         }
 
-        let suspend = consume_message_pop_orderly_service.check_reconsume_times(&msgs).await;
+        let suspend = consume_message_pop_orderly_service.check_reconsume_times(msgs).await;
         if suspend {
             consume_message_pop_orderly_service.submit_consume_request_later(
                 consume_message_pop_orderly_service.clone(),
@@ -462,7 +525,7 @@ impl ConsumeRequest {
             .consume_message(&msg_refs, &mut context);
 
         let continue_consume = consume_message_pop_orderly_service
-            .process_consume_result(&msgs, status, &context)
+            .process_consume_result(msgs, status, &context)
             .await;
 
         if continue_consume {
@@ -490,8 +553,15 @@ impl ConsumeRequest {
 
 impl PartialEq for ConsumeRequest {
     fn eq(&self, other: &Self) -> bool {
-        self.sharding_key_index == other.sharding_key_index && Arc::ptr_eq(&self.process_queue, &other.process_queue)
-            || (self.message_queue.eq(&other.message_queue))
+        if self.sharding_key_index != other.sharding_key_index {
+            return false;
+        }
+
+        if !Arc::ptr_eq(&self.process_queue, &other.process_queue) {
+            return false;
+        }
+
+        self.message_queue == other.message_queue
     }
 }
 
@@ -502,5 +572,100 @@ impl Hash for ConsumeRequest {
         self.sharding_key_index.hash(state);
         self.process_queue.as_ref().hash(state);
         self.message_queue.hash(state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_consume_request_equality() {
+        let pq1 = Arc::new(PopProcessQueue::new());
+        let pq2 = Arc::new(PopProcessQueue::new());
+        let mq1 = MessageQueue::from_parts(
+            CheetahString::from_static_str("topic"),
+            CheetahString::from_static_str("broker"),
+            0,
+        );
+        let mq2 = MessageQueue::from_parts(
+            CheetahString::from_static_str("topic"),
+            CheetahString::from_static_str("broker"),
+            1,
+        );
+
+        let r1 = ConsumeRequest::new(pq1.clone(), mq1.clone(), vec![]);
+        let r2 = ConsumeRequest::new(pq1.clone(), mq1.clone(), vec![]);
+        let r3 = ConsumeRequest::new(pq2.clone(), mq1.clone(), vec![]);
+        let r4 = ConsumeRequest::new(pq1.clone(), mq2, vec![]);
+
+        assert_eq!(r1, r2, "Same process_queue and message_queue should be equal");
+        assert_ne!(r1, r3, "Different process_queue should not be equal");
+        assert_ne!(r1, r4, "Different message_queue should not be equal");
+    }
+
+    #[test]
+    fn test_suspend_time_clamping() {
+        assert!(5u64.clamp(10, 30_000) == 10, "Value below min should clamp to min");
+        assert!(
+            50_000u64.clamp(10, 30_000) == 30_000,
+            "Value above max should clamp to max"
+        );
+        assert!(
+            1000u64.clamp(10, 30_000) == 1000,
+            "Value in range should stay unchanged"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::mutable_key_type)]
+    fn test_consume_request_hash_consistency() {
+        use std::collections::HashSet;
+
+        let pq1 = Arc::new(PopProcessQueue::new());
+        let mq = MessageQueue::from_parts(
+            CheetahString::from_static_str("topic"),
+            CheetahString::from_static_str("broker"),
+            0,
+        );
+
+        let r1 = ConsumeRequest::new(pq1.clone(), mq.clone(), vec![]);
+        let r2 = ConsumeRequest::new(pq1.clone(), mq.clone(), vec![]);
+
+        let mut set = HashSet::new();
+        assert!(set.insert(r1.clone()));
+        assert!(!set.insert(r2), "Equal items should hash to same value");
+        assert!(set.contains(&r1));
+    }
+
+    #[test]
+    fn test_max_reconsume_times_default() {
+        let consumer_config = ConsumerConfig::default();
+        let max_times = if consumer_config.max_reconsume_times == -1 {
+            i32::MAX
+        } else {
+            consumer_config.max_reconsume_times
+        };
+        assert!(max_times > 0, "Max reconsume times should be positive");
+    }
+
+    #[test]
+    fn test_partial_eq_logic() {
+        let pq1 = Arc::new(PopProcessQueue::new());
+        let pq2 = Arc::new(PopProcessQueue::new());
+        let mq = MessageQueue::from_parts(
+            CheetahString::from_static_str("topic"),
+            CheetahString::from_static_str("broker"),
+            0,
+        );
+
+        let r1 = ConsumeRequest::new(pq1.clone(), mq.clone(), vec![]);
+        let r2 = ConsumeRequest::new(pq2, mq, vec![]);
+
+        assert_ne!(
+            r1, r2,
+            "Different process queues with same message queue should not be equal"
+        );
     }
 }
