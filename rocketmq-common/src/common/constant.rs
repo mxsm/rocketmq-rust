@@ -14,6 +14,9 @@
 
 pub mod common_constants;
 pub mod consume_init_mode;
+pub mod db_msg_constants;
+pub mod file_readahead_mode;
+pub mod ha_proxy_constants;
 
 use std::ops::Deref;
 
