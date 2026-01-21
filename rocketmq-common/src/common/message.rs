@@ -183,11 +183,19 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// # Returns
     ///
-    /// An `Option<String>` containing the keys if they exist, otherwise `None`.
+    /// An `Option<CheetahString>` containing the keys if they exist, otherwise `None`.
     fn get_keys(&self) -> Option<CheetahString> {
         self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_KEYS))
     }
-
+    /// Retrieves the keys associated with the message.
+    ///
+    /// # Returns
+    ///
+    /// An `Option<&CheetahString>` containing a reference to the keys if they exist, otherwise
+    /// `None`.
+    fn get_keys_ref(&self) -> Option<&CheetahString> {
+        self.get_property_ref(&CheetahString::from_static_str(MessageConst::PROPERTY_KEYS))
+    }
     /// Sets multiple keys from a collection for the message.
     ///
     /// # Arguments
