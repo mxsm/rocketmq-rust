@@ -433,12 +433,12 @@ impl ConsumeRequest {
                 .await;
         }
     }
-    
+
     fn execute_consume_with_error_handling(
         &self,
         msgs: &[&MessageExt],
         context: &ConsumeConcurrentlyContext,
-        has_exception: &mut bool
+        has_exception: &mut bool,
     ) -> Option<ConsumeConcurrentlyStatus> {
         match self.message_listener.consume_message(msgs, context) {
             Ok(status) => Some(status),
@@ -446,7 +446,10 @@ impl ConsumeRequest {
                 *has_exception = true;
                 error!(
                     "consumeMessage exception: {:?}, Group: {}, Msgs: {}, MQ: {}",
-                    e, self.consumer_group, self.msgs.len(), self.message_queue
+                    e,
+                    self.consumer_group,
+                    self.msgs.len(),
+                    self.message_queue
                 );
                 None
             }
