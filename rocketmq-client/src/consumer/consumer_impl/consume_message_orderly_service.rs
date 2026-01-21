@@ -196,12 +196,12 @@ impl ConsumeMessageOrderlyService {
 
         tokio::spawn(async move {
             tokio::time::sleep(delay).await;
-            
+
             if stopped.load(Ordering::Acquire) {
                 warn!("Service stopped, discard delayed consume request");
                 return;
             }
-            
+
             let this_ = this.clone();
             this.submit_consume_request(this_, vec![], process_queue, message_queue, true)
                 .await;
@@ -373,9 +373,9 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
 
     async fn shutdown(&mut self, await_terminate_millis: u64) {
         info!("{} ConsumeMessageOrderlyService shutdown started", self.consumer_group);
-        
+
         self.stopped.store(true, Ordering::Release);
-        
+
         if MessageModel::Clustering == self.consumer_config.message_model {
             let mut lock_handle_guard = self.lock_periodic_task_handle.lock().await;
             if let Some(handle) = lock_handle_guard.take() {
@@ -383,10 +383,10 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
             }
             drop(lock_handle_guard);
         }
-        
+
         let timeout = Duration::from_millis(await_terminate_millis);
         let start_time = Instant::now();
-        
+
         while self.active_tasks.load(Ordering::Acquire) > 0 {
             if start_time.elapsed() >= timeout {
                 warn!(
@@ -398,12 +398,15 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        
+
         if MessageModel::Clustering == self.consumer_config.message_model {
             self.unlock_all_mq().await;
         }
-        
-        info!("{} ConsumeMessageOrderlyService shutdown completed", self.consumer_group);
+
+        info!(
+            "{} ConsumeMessageOrderlyService shutdown completed",
+            self.consumer_group
+        );
     }
 
     #[allow(deprecated)]
@@ -468,7 +471,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
             warn!("Service stopped, reject new consume request");
             return;
         }
-        
+
         if !dispatch_to_consume {
             return;
         }
@@ -511,7 +514,7 @@ impl ConsumeRequest {
             );
             return;
         }
-        
+
         if self.process_queue.is_dropped() {
             warn!(
                 "run, the message queue not be able to consume, because it's dropped. {}",
@@ -519,24 +522,26 @@ impl ConsumeRequest {
             );
             return;
         }
-        
-        consume_message_orderly_service.active_tasks.fetch_add(1, Ordering::SeqCst);
+
+        consume_message_orderly_service
+            .active_tasks
+            .fetch_add(1, Ordering::SeqCst);
         let active_tasks = consume_message_orderly_service.active_tasks.clone();
-        
+
         struct TaskGuard {
             active_tasks: Arc<AtomicUsize>,
         }
-        
+
         impl Drop for TaskGuard {
             fn drop(&mut self) {
                 self.active_tasks.fetch_sub(1, Ordering::SeqCst);
             }
         }
-        
+
         let _guard = TaskGuard {
             active_tasks: active_tasks.clone(),
         };
-        
+
         let mut consume_message_orderly_service_inner = consume_message_orderly_service.clone();
         let lock = consume_message_orderly_service_inner
             .message_queue_lock
