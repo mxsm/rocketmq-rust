@@ -147,22 +147,22 @@ impl PullMessageService {
     /// # Errors
     /// Returns error if request processing fails
     async fn process_request(
-        mut request: Box<dyn MessageRequest + Send + 'static>,
+        request: Box<dyn MessageRequest + Send + 'static>,
         instance: &mut MQClientInstance,
     ) -> Result<(), RocketMQError> {
         match request.get_message_request_mode() {
             MessageRequestMode::Pull => {
                 // Safe downcast using Any trait
-                if let Some(pull_request) = request.as_any_mut().downcast_ref::<PullRequest>() {
-                    Self::pull_message(pull_request.clone(), instance).await;
+                if let Ok(pull_request) = request.into_any().downcast::<PullRequest>() {
+                    Self::pull_message(*pull_request, instance).await;
                     Ok(())
                 } else {
                     Err(RocketMQError::Internal("Failed to downcast to PullRequest".to_string()))
                 }
             }
             MessageRequestMode::Pop => {
-                if let Some(pop_request) = request.as_any_mut().downcast_ref::<PopRequest>() {
-                    Self::pop_message(pop_request.clone(), instance).await;
+                if let Ok(pop_request) = request.into_any().downcast::<PopRequest>() {
+                    Self::pop_message(*pop_request, instance).await;
                     Ok(())
                 } else {
                     Err(RocketMQError::Internal("Failed to downcast to PopRequest".to_string()))
