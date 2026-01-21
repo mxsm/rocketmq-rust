@@ -26,13 +26,12 @@ use crate::commands::CommonArgs;
 
 #[derive(Debug, Clone, Parser)]
 pub struct TopicStatusSubCommand {
-    /// Common arguments
     #[command(flatten)]
     common_args: CommonArgs,
-    /// Topic name
+
     #[arg(short = 't', long = "topic", required = true, help = "topic name")]
     topic: String,
-    /// Cluster name
+
     #[arg(
         short = 'c',
         long = "clusterName",

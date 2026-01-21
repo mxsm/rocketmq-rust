@@ -26,11 +26,9 @@ use crate::commands::CommonArgs;
 
 #[derive(Debug, Clone, Parser)]
 pub struct DeleteTopicSubCommand {
-    /// Common arguments
     #[command(flatten)]
     common_args: CommonArgs,
 
-    /// Cluster name
     #[arg(
         short = 'c',
         long = "clusterName",
@@ -40,7 +38,6 @@ pub struct DeleteTopicSubCommand {
     )]
     cluster_name: Option<String>,
 
-    /// Topic name
     #[arg(short = 't', long = "topic", required = true, help = "topic name")]
     topic: String,
 }

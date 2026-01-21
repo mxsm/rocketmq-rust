@@ -25,7 +25,6 @@ use crate::core::RocketMQResult;
 /// Add write permission for broker
 #[derive(Debug, Clone, Parser)]
 pub struct AddWritePermCommand {
-    /// Broker name
     #[arg(short = 'b', long = "broker-name", required = true)]
     pub broker_name: String,
 

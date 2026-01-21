@@ -38,6 +38,7 @@ pub struct UpdateSubGroupSubCommand {
         help = "create subscription group to which broker"
     )]
     broker_addr: Option<String>,
+
     #[arg(
         short = 'c',
         long = "clusterName",
@@ -45,6 +46,7 @@ pub struct UpdateSubGroupSubCommand {
         help = "create subscription group to which cluster"
     )]
     cluster_name: Option<String>,
+
     #[arg(short = 'g', long = "groupName", required = true, help = "consumer group name")]
     group_name: String,
 

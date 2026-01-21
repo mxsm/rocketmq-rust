@@ -24,13 +24,12 @@ use crate::commands::CommonArgs;
 
 #[derive(Debug, Clone, Parser)]
 pub struct UpdateOrderConfCommand {
-    /// Common arguments
     #[command(flatten)]
     common_args: CommonArgs,
-    /// Topic name
+
     #[arg(short = 't', long = "topic", required = true, help = "topic name")]
     topic: String,
-    /// Method
+
     #[arg(
         short = 'm',
         long = "method",
@@ -38,7 +37,7 @@ pub struct UpdateOrderConfCommand {
         help = "option type [eg. put|get|delete"
     )]
     method: String,
-    /// OrderConf
+
     #[arg(
         short = 'v',
         long = "orderConf",

@@ -32,15 +32,12 @@ pub struct UpdateNamesrvConfigCommand {
     #[arg(short = 'v', long = "value")]
     pub value: String,
 
-    /// NameServer address
     #[arg(short = 'n', long = "namesrvAddr", value_parser = validators::validate_namesrv_addr)]
     pub namesrv_addr: String,
 }
 
 impl UpdateNamesrvConfigCommand {
-    /// Execute the command
     pub async fn execute(&self) -> RocketMQResult<()> {
-        // Validate inputs
         self.validate()?;
 
         // Create admin client with RAII guard
@@ -75,14 +72,11 @@ impl UpdateNamesrvConfigCommand {
         Ok(())
     }
 
-    /// Validate command parameters
     fn validate(&self) -> RocketMQResult<()> {
-        // Validate key
         if self.key.trim().is_empty() {
             return Err(crate::core::ToolsError::validation_error("key", "Configuration key cannot be empty").into());
         }
 
-        // Validate value
         if self.value.trim().is_empty() {
             return Err(
                 crate::core::ToolsError::validation_error("value", "Configuration value cannot be empty").into(),
@@ -92,7 +86,6 @@ impl UpdateNamesrvConfigCommand {
         Ok(())
     }
 
-    /// Print success message
     fn print_success(&self) {
         println!("NameServer configuration updated successfully");
         println!("\nConfiguration:");

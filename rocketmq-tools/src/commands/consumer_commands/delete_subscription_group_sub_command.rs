@@ -30,11 +30,9 @@ use crate::commands::CommonArgs;
 
 #[derive(Debug, Clone, Parser)]
 pub struct DeleteSubscriptionGroupSubCommand {
-    /// Common arguments
     #[command(flatten)]
     common_args: CommonArgs,
 
-    /// Broker address
     #[arg(
         short = 'b',
         long = "brokerAddr",
@@ -44,7 +42,6 @@ pub struct DeleteSubscriptionGroupSubCommand {
     )]
     broker_addr: Option<String>,
 
-    /// Cluster name
     #[arg(
         short = 'c',
         long = "clusterName",

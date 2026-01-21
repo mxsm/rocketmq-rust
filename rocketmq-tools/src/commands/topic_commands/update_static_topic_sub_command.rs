@@ -32,13 +32,12 @@ use crate::commands::CommonArgs;
 
 #[derive(Debug, Clone, Parser)]
 pub struct UpdateStaticTopicSubCommand {
-    /// Common arguments
     #[command(flatten)]
     common_args: CommonArgs,
-    /// Topic name
+
     #[arg(short = 't', long = "topic", required = true, help = "topic name")]
     topic: String,
-    /// Broker address
+
     #[arg(
         short = 'b',
         long = "brokerAddr",
@@ -46,10 +45,10 @@ pub struct UpdateStaticTopicSubCommand {
         help = "create topic to which broker"
     )]
     broker_addr: String,
-    /// "totalQueueNum"
+
     #[arg(short = 'q', long = "totalQueueNum", required = true, help = "totalQueueNum")]
     queue_num: String,
-    /// Cluster name
+
     #[arg(
         short = 'c',
         long = "clusterName",
@@ -57,10 +56,10 @@ pub struct UpdateStaticTopicSubCommand {
         help = "create topic to which cluster"
     )]
     cluster_name: Option<String>,
-    /// Map file
+
     #[arg(short = 'm', long = "mapFile", required = false, help = "The mapping data file name")]
     mapping_file: Option<String>,
-    /// Force replace
+
     #[arg(
         short = 'f',
         long = "forceReplace",
