@@ -12,24 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
+use dashmap::DashMap;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use tokio::sync::Mutex;
 
 type LockObject = Arc<Mutex<()>>;
-type LockTable = Arc<Mutex<HashMap<MessageQueue, Arc<Mutex<HashMap<i32, LockObject>>>>>>;
 
 #[derive(Default)]
 pub(crate) struct MessageQueueLock {
-    mq_lock_table: LockTable,
+    mq_lock_table: Arc<DashMap<MessageQueue, Arc<DashMap<i32, LockObject>>>>,
 }
 
 impl MessageQueueLock {
     pub fn new() -> Self {
         MessageQueueLock {
-            mq_lock_table: Arc::new(Mutex::new(HashMap::new())),
+            mq_lock_table: Arc::new(DashMap::new()),
         }
     }
 
@@ -42,14 +41,21 @@ impl MessageQueueLock {
         mq: &MessageQueue,
         sharding_key_index: i32,
     ) -> Arc<Mutex<()>> {
-        let mut mq_lock_table = self.mq_lock_table.lock().await;
-        let obj_map = mq_lock_table
+        // Get or create the inner DashMap for this message queue
+        let inner_map = self
+            .mq_lock_table
             .entry(mq.clone())
-            .or_insert_with(|| Arc::new(Mutex::new(HashMap::new())));
-        let mut obj_map = obj_map.lock().await;
-        let lock = obj_map
+            .or_insert_with(|| Arc::new(DashMap::new()))
+            .value()
+            .clone();
+
+        // Get or create the lock for this sharding key
+        let lock = inner_map
             .entry(sharding_key_index)
-            .or_insert_with(|| Arc::new(Mutex::new(())));
-        lock.clone()
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .value()
+            .clone();
+
+        lock
     }
 }

@@ -41,7 +41,6 @@ use tracing::warn;
 use crate::base::client_config::ClientConfig;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
-use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 use crate::consumer::consumer_impl::process_queue::REBALANCE_LOCK_INTERVAL;
 use crate::consumer::default_mq_push_consumer::ConsumerConfig;
@@ -490,10 +489,10 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
         &self,
         this: ArcMut<Self>,
         msgs: Vec<MessageExt>,
-        process_queue: &PopProcessQueue,
+        process_queue: &crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue,
         message_queue: &MessageQueue,
     ) {
-        unimplemented!("ConsumeMessageConcurrentlyService not support submit_pop_consume_request");
+        unimplemented!("ConsumeMessageOrderlyService not support submit_pop_consume_request");
     }
 }
 
