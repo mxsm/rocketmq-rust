@@ -332,14 +332,10 @@ impl ConsumeMessagePopConcurrentlyService {
                 if ack_index >= consume_request.msgs.len() as i32 {
                     ack_index = consume_request.msgs.len() as i32 - 1;
                 }
-                /*int ok = ackIndex + 1;
-                int failed = consumeRequest.getMsgs().size() - ok;
-                this.getConsumerStatsManager().incConsumeOKTPS(consumerGroup, topic, ok);
-                this.getConsumerStatsManager().incConsumeFailedTPS(consumerGroup, topic, failed);*/
+       
             }
             ConsumeConcurrentlyStatus::ReconsumeLater => {
-                //this.getConsumerStatsManager().incConsumeFailedTPS(consumerGroup, topic, failed);
-                // Java code
+           
                 ack_index = -1;
             }
         }
