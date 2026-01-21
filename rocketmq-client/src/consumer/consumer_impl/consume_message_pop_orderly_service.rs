@@ -149,9 +149,7 @@ impl ConsumeMessagePopOrderlyService {
 
         for msg in msgs {
             let msg_mut = msg.mut_from_ref();
-            if msg_mut.reconsume_times >= max_times
-                && !self.send_message_back(msg.as_ref()).await
-            {
+            if msg_mut.reconsume_times >= max_times && !self.send_message_back(msg.as_ref()).await {
                 suspend = true;
             }
         }
