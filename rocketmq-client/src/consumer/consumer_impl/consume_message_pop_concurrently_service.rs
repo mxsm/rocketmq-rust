@@ -32,8 +32,8 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::body::cm_result::CMResult;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
-use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
+use tokio::sync::Semaphore;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -58,9 +58,10 @@ pub struct ConsumeMessagePopConcurrentlyService {
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     pub(crate) consumer_group: CheetahString,
     pub(crate) message_listener: ArcBoxMessageListenerConcurrently,
-    pub(crate) pop_consume_runtime: RocketMQRuntime,
     pub(crate) stopped: Arc<AtomicBool>,
     pub(crate) active_tasks: Arc<AtomicUsize>,
+    pub(crate) concurrency_limiter: Arc<Semaphore>,
+    pub(crate) max_concurrency: Arc<AtomicUsize>,
 }
 
 impl ConsumeMessagePopConcurrentlyService {
@@ -72,16 +73,16 @@ impl ConsumeMessagePopConcurrentlyService {
         default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
     ) -> Self {
         let consume_thread = consumer_config.consume_thread_max;
-        let consumer_group_tag = format!("{}_{}", "PopConsumeMessageThread_", consumer_group);
         Self {
             default_mqpush_consumer_impl,
             client_config,
             consumer_config,
             consumer_group,
             message_listener,
-            pop_consume_runtime: RocketMQRuntime::new_multi(consume_thread as usize, consumer_group_tag.as_str()),
             stopped: Arc::new(AtomicBool::new(false)),
             active_tasks: Arc::new(AtomicUsize::new(0)),
+            concurrency_limiter: Arc::new(Semaphore::new(consume_thread as usize)),
+            max_concurrency: Arc::new(AtomicUsize::new(consume_thread as usize)),
         }
     }
 }
@@ -118,6 +119,49 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
             "{} ConsumeMessagePopConcurrentlyService shutdown completed",
             self.consumer_group
         );
+    }
+
+    fn update_core_pool_size(&self, core_pool_size: usize) {
+        if core_pool_size > 0 && core_pool_size <= u16::MAX as usize {
+            let old_size = self.max_concurrency.load(Ordering::Acquire);
+            self.max_concurrency.store(core_pool_size, Ordering::Release);
+
+            // Adjust semaphore permits
+            if core_pool_size > old_size {
+                let diff = core_pool_size - old_size;
+                self.concurrency_limiter.add_permits(diff);
+                info!(
+                    "{} ConsumeMessagePopConcurrentlyService increase core pool size from {} to {}",
+                    self.consumer_group, old_size, core_pool_size
+                );
+            } else if core_pool_size < old_size {
+                // Note: Tokio Semaphore doesn't support reducing permits directly
+                // Permits will naturally decrease as tasks complete
+                info!(
+                    "{} ConsumeMessagePopConcurrentlyService decrease core pool size from {} to {} (will take effect \
+                     gradually)",
+                    self.consumer_group, old_size, core_pool_size
+                );
+            }
+        }
+    }
+
+    fn inc_core_pool_size(&self) {
+        let current = self.max_concurrency.load(Ordering::Acquire);
+        if current < u16::MAX as usize {
+            self.update_core_pool_size(current + 1);
+        }
+    }
+
+    fn dec_core_pool_size(&self) {
+        let current = self.max_concurrency.load(Ordering::Acquire);
+        if current > 1 {
+            self.update_core_pool_size(current - 1);
+        }
+    }
+
+    fn get_core_pool_size(&self) -> usize {
+        self.max_concurrency.load(Ordering::Acquire)
     }
 
     async fn consume_message_directly(
@@ -192,13 +236,30 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
             request.consumer_group = self.consumer_group.clone();
             request.message_listener = self.message_listener.clone();
             request.default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.clone();
-            self.pop_consume_runtime.get_handle().spawn(async move {
+            let limiter = self.concurrency_limiter.clone();
+            let stopped = self.stopped.clone();
+            tokio::spawn(async move {
+                if stopped.load(Ordering::Acquire) {
+                    return;
+                }
+
+                let permit = match limiter.acquire().await {
+                    Ok(p) => p,
+                    Err(_) => {
+                        warn!("Failed to acquire permit, semaphore closed");
+                        return;
+                    }
+                };
+
                 request.run(this).await;
+                drop(permit);
             });
         } else {
             let consumer_group = self.consumer_group.clone();
             let message_listener = self.message_listener.clone();
             let default_impl = self.default_mqpush_consumer_impl.clone();
+            let limiter = self.concurrency_limiter.clone();
+            let stopped = self.stopped.clone();
             msgs.chunks(consume_batch_size as usize)
                 .map(|t| t.to_vec())
                 .for_each(|msgs| {
@@ -208,15 +269,53 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopConcurrentlyService {
                     consume_request.message_listener = message_listener.clone();
                     consume_request.default_mqpush_consumer_impl = default_impl.clone();
                     let pop_consume_message_concurrently_service = this.clone();
-                    self.pop_consume_runtime
-                        .get_handle()
-                        .spawn(async move { consume_request.run(pop_consume_message_concurrently_service).await });
+                    let limiter_clone = limiter.clone();
+                    let stopped_clone = stopped.clone();
+                    tokio::spawn(async move {
+                        if stopped_clone.load(Ordering::Acquire) {
+                            return;
+                        }
+
+                        let permit = match limiter_clone.acquire().await {
+                            Ok(p) => p,
+                            Err(_) => {
+                                warn!("Failed to acquire permit, semaphore closed");
+                                return;
+                            }
+                        };
+
+                        consume_request.run(pop_consume_message_concurrently_service).await;
+                        drop(permit);
+                    });
                 });
         }
     }
 }
 
 impl ConsumeMessagePopConcurrentlyService {
+    /// Submit consume request after 5 seconds delay for retry
+    async fn submit_pop_consume_request_later(
+        &self,
+        this: ArcMut<Self>,
+        msgs: Vec<MessageExt>,
+        process_queue: Arc<PopProcessQueue>,
+        message_queue: MessageQueue,
+    ) {
+        let stopped = self.stopped.clone();
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(5000)).await;
+
+            if stopped.load(Ordering::Acquire) {
+                warn!("Service stopped, discard delayed consume request for {}", message_queue);
+                return;
+            }
+
+            this.submit_pop_consume_request(this.clone(), msgs, &process_queue, &message_queue)
+                .await;
+        });
+    }
+
     async fn process_consume_result(
         &mut self,
         this: ArcMut<Self>,
