@@ -175,44 +175,62 @@ impl MQClientInstance {
 
     pub fn new_arc(
         client_config: ClientConfig,
-        instance_index: i32,
+        _instance_index: i32,
         client_id: impl Into<CheetahString>,
         rpc_hook: Option<Arc<dyn RPCHook>>,
     ) -> ArcMut<MQClientInstance> {
-        let broker_addr_table = Arc::new(DashMap::new());
+        let client_id = client_id.into();
+        let shared_config = ArcMut::new(client_config.clone());
+
+        let broker_addr_table = Arc::new(DashMap::default());
+        let producer_table = Arc::new(DashMap::default());
+        let consumer_table = Arc::new(DashMap::default());
+        let admin_ext_table = Arc::new(DashMap::default());
+        let topic_route_table = Arc::new(DashMap::default());
+        let topic_end_points_table = Arc::new(DashMap::default());
+        let broker_version_table = Arc::new(DashMap::default());
+        let broker_heartbeat_fingerprint_table = Arc::new(DashMap::default());
+        let broker_support_v2_heartbeat_set = Arc::new(DashMap::default());
+
+        let default_producer = ArcMut::new(
+            DefaultMQProducer::builder()
+                .producer_group(mix_all::CLIENT_INNER_PRODUCER_GROUP)
+                .client_config(client_config.clone())
+                .build(),
+        );
+
+        let instance_runtime = Arc::new(RocketMQRuntime::new_multi(num_cpus::get(), "mq-client-instance"));
+
         let mut instance = ArcMut::new(MQClientInstance {
-            client_config: ArcMut::new(client_config.clone()),
-            client_id: client_id.into(),
+            client_config: shared_config,
+            client_id,
             boot_timestamp: get_current_millis(),
-            producer_table: Arc::new(DashMap::new()),
-            consumer_table: Arc::new(DashMap::new()),
-            admin_ext_table: Arc::new(DashMap::new()),
+            producer_table,
+            consumer_table,
+            admin_ext_table,
             mq_client_api_impl: None,
             mq_admin_impl: ArcMut::new(MQAdminImpl::new()),
-            topic_route_table: Arc::new(DashMap::new()),
-            topic_end_points_table: Arc::new(DashMap::new()),
-            lock_namesrv: Default::default(),
-            lock_heartbeat: Default::default(),
+            topic_route_table,
+            topic_end_points_table,
+            lock_namesrv: Arc::default(),
+            lock_heartbeat: Arc::default(),
             service_state: ServiceState::CreateJust,
             pull_message_service: ArcMut::new(PullMessageService::new()),
             rebalance_service: RebalanceService::new(),
-            default_producer: ArcMut::new(
-                DefaultMQProducer::builder()
-                    .producer_group(mix_all::CLIENT_INNER_PRODUCER_GROUP)
-                    .client_config(client_config.clone())
-                    .build(),
-            ),
-            instance_runtime: Arc::new(RocketMQRuntime::new_multi(num_cpus::get(), "mq-client-instance")),
+            default_producer,
+            instance_runtime,
             broker_addr_table,
-            broker_version_table: Arc::new(DashMap::new()),
+            broker_version_table,
             send_heartbeat_times_total: Arc::new(AtomicI64::new(0)),
             scheduled_task_manager: ScheduledTaskManager::new(),
-            broker_heartbeat_fingerprint_table: Arc::new(DashMap::new()),
-            broker_support_v2_heartbeat_set: Arc::new(DashMap::new()),
+            broker_heartbeat_fingerprint_table,
+            broker_support_v2_heartbeat_set,
         });
+
+        // Clone instance first to avoid borrow checker issues
         let instance_clone = instance.clone();
         instance.mq_admin_impl.set_client(instance_clone);
-        let weak_instance = ArcMut::downgrade(&instance);
+
         let (tx, mut rx) = tokio::sync::broadcast::channel::<ConnectionNetEvent>(16);
 
         let mq_client_api_impl = ArcMut::new(MQClientAPIImpl::new(
@@ -222,17 +240,22 @@ impl MQClientInstance {
             client_config.clone(),
             Some(tx),
         ));
-        instance.mq_client_api_impl = Some(mq_client_api_impl.clone());
+
         if let Some(namesrv_addr) = client_config.namesrv_addr.as_deref() {
-            let namesrv_addr = namesrv_addr.to_string();
+            let api_impl = mq_client_api_impl.clone();
+            let addr = namesrv_addr.to_string();
+            // Use block_in_place for synchronous initialization in async context
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async move {
-                    mq_client_api_impl
-                        .update_name_server_address_list(namesrv_addr.as_str())
-                        .await;
+                    api_impl.update_name_server_address_list(&addr).await;
                 })
             });
         }
+
+        instance.mq_client_api_impl = Some(mq_client_api_impl);
+
+        // Use weak reference to avoid circular dependencies
+        let weak_instance = ArcMut::downgrade(&instance);
         tokio::spawn(async move {
             while let Ok(value) = rx.recv().await {
                 if let Some(instance_) = weak_instance.upgrade() {
