@@ -28,6 +28,7 @@ use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeM
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
+use tracing::error;
 use tracing::info;
 use tracing::warn;
 
@@ -380,14 +381,7 @@ impl ConsumeRequest {
                 default_mqpush_consumer_impl.execute_hook_before(&mut consume_message_context);
             }
             let vec = self.msgs.iter().map(|msg| msg.as_ref()).collect::<Vec<&MessageExt>>();
-            match self.message_listener.consume_message(&vec, &context) {
-                Ok(value) => {
-                    status = Some(value);
-                }
-                Err(_) => {
-                    has_exception = true;
-                }
-            }
+            status = self.execute_consume_with_error_handling(&vec, &context, &mut has_exception);
         }
 
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
@@ -437,6 +431,25 @@ impl ConsumeRequest {
             consume_message_concurrently_service
                 .process_consume_result(this, status.unwrap(), &context, self)
                 .await;
+        }
+    }
+    
+    fn execute_consume_with_error_handling(
+        &self,
+        msgs: &[&MessageExt],
+        context: &ConsumeConcurrentlyContext,
+        has_exception: &mut bool
+    ) -> Option<ConsumeConcurrentlyStatus> {
+        match self.message_listener.consume_message(msgs, context) {
+            Ok(status) => Some(status),
+            Err(e) => {
+                *has_exception = true;
+                error!(
+                    "consumeMessage exception: {:?}, Group: {}, Msgs: {}, MQ: {}",
+                    e, self.consumer_group, self.msgs.len(), self.message_queue
+                );
+                None
+            }
         }
     }
 }
