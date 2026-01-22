@@ -31,6 +31,7 @@ pub mod check_rocksdb_cqwrite_progress_response_body;
 pub mod cluster_acl_version_info;
 pub mod cm_result;
 pub mod connection;
+pub mod consume_by_who;
 pub mod consume_message_directly_result;
 pub mod consume_queue_data;
 pub mod consume_status;
