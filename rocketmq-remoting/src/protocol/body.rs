@@ -15,6 +15,7 @@
 pub mod broker_body;
 pub mod consumer_running_info;
 pub mod create_topic_list_request_body;
+pub mod get_broker_lite_info_response_body;
 pub mod get_consumer_listby_group_response_body;
 
 pub mod consumer_connection;
