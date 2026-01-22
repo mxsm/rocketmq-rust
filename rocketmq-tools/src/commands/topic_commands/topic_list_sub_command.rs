@@ -28,11 +28,9 @@ use crate::commands::CommonArgs;
 
 #[derive(Debug, Clone, Parser)]
 pub struct TopicListSubCommand {
-    /// Common arguments
     #[command(flatten)]
     common_args: CommonArgs,
 
-    /// Cluster name
     #[arg(
         short = 'c',
         long = "clusterName",

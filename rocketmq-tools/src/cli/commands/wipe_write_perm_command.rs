@@ -28,7 +28,6 @@ use crate::ui::prompt;
 /// Wipe write permission for broker
 #[derive(Debug, Clone, Parser)]
 pub struct WipeWritePermCommand {
-    /// Broker name
     #[arg(short = 'b', long = "broker-name", required = true)]
     pub broker_name: String,
 

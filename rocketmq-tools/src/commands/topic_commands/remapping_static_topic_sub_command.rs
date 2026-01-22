@@ -37,15 +37,12 @@ const DEFAULT_BLOCK_SEQ_SIZE: i64 = 10000;
 
 #[derive(Debug, Clone, Parser)]
 pub struct RemappingStaticTopicSubCommand {
-    /// Common arguments
     #[command(flatten)]
     common_args: CommonArgs,
 
-    /// Topic name
     #[arg(short = 't', long = "topic", required = true, help = "topic name")]
     topic: String,
 
-    /// Broker names to remapping
     #[arg(
         short = 'b',
         long = "brokers",
@@ -54,7 +51,6 @@ pub struct RemappingStaticTopicSubCommand {
     )]
     brokers: Option<String>,
 
-    /// Cluster names
     #[arg(
         short = 'c',
         long = "clusters",
@@ -63,11 +59,9 @@ pub struct RemappingStaticTopicSubCommand {
     )]
     clusters: Option<String>,
 
-    /// Map file
     #[arg(short = 'm', long = "mapFile", required = false, help = "The mapping data file name")]
     mapping_file: Option<String>,
 
-    /// Force replace
     #[arg(
         short = 'f',
         long = "forceReplace",

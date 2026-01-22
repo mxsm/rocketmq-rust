@@ -29,13 +29,12 @@ use crate::commands::CommonArgs;
 
 #[derive(Debug, Clone, Parser)]
 pub struct TopicRouteSubCommand {
-    /// Common arguments
     #[command(flatten)]
     common_args: CommonArgs,
-    /// Topic name
+
     #[arg(short = 't', long = "topic", required = true, help = "topic name")]
     topic: String,
-    /// List format
+
     #[arg(short = 'l', long = "list format", required = false, help = "list format")]
     list_format: Option<bool>,
 }

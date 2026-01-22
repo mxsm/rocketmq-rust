@@ -26,7 +26,6 @@ use crate::commands::Commands;
 #[command(name = "rocketmq-admin-cli-rust")]
 #[command(about = "Rocketmq Rust admin commands", long_about = None, author="mxsm")]
 pub struct RocketMQCli {
-    /// Generate shell completion script
     #[arg(
         long = "generate-completion",
         value_name = "SHELL",
