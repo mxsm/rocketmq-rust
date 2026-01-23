@@ -2,6 +2,21 @@
 layout: default
 ---
 
+<!--
+  Splash Layout with Ballpit Background
+
+  This layout is similar to the default splash layout but
+  includes the Ballpit dynamic background effect.
+
+  Usage:
+  In your front matter, set:
+  ---
+  layout: splash-ballpit
+  header:
+    ballpit_bg: true
+  ---
+-->
+
 {% if page.header.ballpit_bg %}
   {% include ballpit/ballpit.html %}
 {% elsif page.header.overlay_color or page.header.overlay_image or page.header.image %}

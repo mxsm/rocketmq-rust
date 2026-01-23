@@ -1,0 +1,142 @@
+/* ============================================
+   Ballpit Dynamic Background Styles
+   For RocketMQ-Rust Documentation Site
+   ============================================ */
+
+/* Ballpit 容器 */
+.ballpit-container {
+  position: relative;
+  width: 100%;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+/* Canvas 画布 */
+#ballpit-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  display: block;
+  background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
+}
+
+/* 内容覆盖层 */
+.ballpit-content {
+  position: relative;
+  z-index: 1;
+  pointer-events: none; /* 让鼠标事件穿透到 Canvas */
+}
+
+/* 恢复子元素的鼠标事件 */
+.ballpit-content > * {
+  pointer-events: auto;
+}
+
+/* Hero 区域样式调整 */
+.ballpit-content .page__hero {
+  position: relative;
+  z-index: 2;
+  background: transparent !important;
+  background-image: none !important;
+}
+
+/* 确保文本可读性 */
+.ballpit-content .page__hero .wrapper {
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.ballpit-content .page__title {
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.ballpit-content .page__lead {
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+
+/* 移动端优化 */
+@media screen and (max-width: 768px) {
+  .ballpit-container {
+    /* 移动端显示静态背景 */
+    background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
+  }
+
+  #ballpit-canvas {
+    /* 可以选择隐藏 Canvas 或显示简化版 */
+    display: none;
+  }
+
+  .ballpit-content .page__hero .wrapper {
+    padding: 1em;
+  }
+
+  .ballpit-content .page__title {
+    font-size: 1.8em;
+  }
+}
+
+/* 平板设备优化 */
+@media screen and (min-width: 769px) and (max-width: 1024px) {
+  #ballpit-canvas {
+    /* 可以减少球体数量或简化效果 */
+    opacity: 0.8;
+  }
+}
+
+/* 性能优化：减少重绘 */
+.ballpit-container {
+  will-change: transform;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+#ballpit-canvas {
+  will-change: transform;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+/* 暗色主题支持 */
+@media (prefers-color-scheme: dark) {
+  #ballpit-canvas {
+    background: linear-gradient(135deg, #050714 0%, #0d1229 100%);
+  }
+}
+
+/* 亮色主题支持 */
+@media (prefers-color-scheme: light) {
+  #ballpit-canvas {
+    background: linear-gradient(135deg, #e8f4f8 0%, #d0e8f0 100%);
+  }
+
+  .ballpit-content .page__hero .wrapper,
+  .ballpit-content .page__title,
+  .ballpit-content .page__lead {
+    text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8);
+    color: #1a1f3a;
+  }
+}
+
+/* 减少动画偏好设置支持 */
+@media (prefers-reduced-motion: reduce) {
+  #ballpit-canvas {
+    display: none;
+  }
+
+  .ballpit-container {
+    background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%) !important;
+  }
+}
+
+/* 打印样式 */
+@media print {
+  .ballpit-container {
+    background: white !important;
+  }
+
+  #ballpit-canvas {
+    display: none !important;
+  }
+}

@@ -3,7 +3,8 @@ layout: splash
 permalink: /
 hidden: true
 header:
-  overlay_color: "#5e616c"
+  ballpit_bg: true
+  overlay_color: "rgba(0, 0, 0, 0.4)"
   overlay_image: /assets/images/header.jpg
   actions:
     - label: "<i class='fa fa-rocket'></i> Quick Start"
