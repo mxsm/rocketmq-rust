@@ -145,3 +145,88 @@ impl GetBrokerLiteInfoResponseBody {
         self.group_meta = group_meta;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_broker_lite_info_response_body_default_and_new() {
+        let body = GetBrokerLiteInfoResponseBody::default();
+        assert!(body.get_store_type().is_none());
+        assert_eq!(body.get_max_lmq_num(), 0);
+        assert_eq!(body.get_current_lmq_num(), 0);
+        assert_eq!(body.get_lite_subscription_count(), 0);
+        assert_eq!(body.get_order_info_count(), 0);
+        assert_eq!(body.get_cq_table_size(), 0);
+        assert_eq!(body.get_offset_table_size(), 0);
+        assert_eq!(body.get_event_map_size(), 0);
+        assert!(body.get_topic_meta().is_empty());
+        assert!(body.get_group_meta().is_empty());
+
+        let body = GetBrokerLiteInfoResponseBody::new();
+        assert!(body.get_store_type().is_none());
+        assert_eq!(body.get_max_lmq_num(), 0);
+        assert_eq!(body.get_current_lmq_num(), 0);
+        assert_eq!(body.get_lite_subscription_count(), 0);
+        assert_eq!(body.get_order_info_count(), 0);
+        assert_eq!(body.get_cq_table_size(), 0);
+        assert_eq!(body.get_offset_table_size(), 0);
+        assert_eq!(body.get_event_map_size(), 0);
+        assert!(body.get_topic_meta().is_empty());
+        assert!(body.get_group_meta().is_empty());
+    }
+
+    #[test]
+    fn get_broker_lite_info_response_body_getters_and_setters() {
+        let mut body = GetBrokerLiteInfoResponseBody::new();
+        body.set_store_type(CheetahString::from("local"));
+        body.set_max_lmq_num(100);
+        body.set_current_lmq_num(50);
+        body.set_lite_subscription_count(10);
+        body.set_order_info_count(5);
+        body.set_cq_table_size(1000);
+        body.set_offset_table_size(2000);
+        body.set_event_map_size(3000);
+
+        let mut topic_meta = HashMap::new();
+        topic_meta.insert(CheetahString::from("topic1"), 1);
+        body.set_topic_meta(topic_meta.clone());
+
+        let mut group_meta = HashMap::new();
+        let mut set = HashSet::new();
+        set.insert(CheetahString::from("g1"));
+        group_meta.insert(CheetahString::from("topic1"), set);
+        body.set_group_meta(group_meta.clone());
+
+        assert_eq!(body.get_store_type().unwrap(), "local");
+        assert_eq!(body.get_max_lmq_num(), 100);
+        assert_eq!(body.get_current_lmq_num(), 50);
+        assert_eq!(body.get_lite_subscription_count(), 10);
+        assert_eq!(body.get_order_info_count(), 5);
+        assert_eq!(body.get_cq_table_size(), 1000);
+        assert_eq!(body.get_offset_table_size(), 2000);
+        assert_eq!(body.get_event_map_size(), 3000);
+        assert_eq!(body.get_topic_meta(), &topic_meta);
+        assert_eq!(body.get_group_meta(), &group_meta);
+        assert_eq!(body.get_topic_meta_mut(), &mut topic_meta);
+        assert_eq!(body.get_group_meta_mut(), &mut group_meta);
+    }
+
+    #[test]
+    fn get_broker_lite_info_response_body_serialization_and_deserialization() {
+        let mut body = GetBrokerLiteInfoResponseBody::new();
+        body.set_store_type(CheetahString::from("local"));
+        body.set_max_lmq_num(100);
+
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("\"storeType\":\"local\""));
+        assert!(json.contains("\"maxLmqNum\":100"));
+        assert!(json.contains("\"currentLmqNum\":0"));
+
+        let decoded: GetBrokerLiteInfoResponseBody = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.get_store_type().unwrap(), "local");
+        assert_eq!(decoded.get_max_lmq_num(), 100);
+        assert_eq!(decoded.get_current_lmq_num(), 0);
+    }
+}
