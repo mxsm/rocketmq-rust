@@ -52,9 +52,33 @@
   --ifm-table-border-color: #334155;
 }
 
-/* Custom hero gradient */
+/* Custom hero gradient - removed to use module CSS */
 .hero {
-  background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%);
+  /* Hero styles now in index.module.css */
+}
+
+/* Smooth transitions */
+* {
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* Better scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--ifm-background-surface-color);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--ifm-color-primary);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ifm-color-primary-dark);
 }
 
 /* Better code blocks */

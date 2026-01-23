@@ -1,52 +1,71 @@
 .features {
-  display: flex;
-  align-items: center;
   padding: 5rem 0;
-  width: 100%;
-}
-
-.featureSvg {
-  height: 150px;
-  width: 150px;
+  background: var(--ifm-background-color);
 }
 
 .feature {
   padding: 1rem;
+  margin-bottom: 2rem;
 }
 
-.featureIcon {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  margin-bottom: 1rem;
-  color: var(--ifm-color-primary);
-}
-
-.feature h3 {
-  text-align: center;
-  margin-bottom: 1rem;
-  color: var(--ifm-color-primary-dark);
-}
-
-.feature .card {
+.card {
+  padding: 2rem;
   height: 100%;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  background: var(--ifm-background-surface-color);
   border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 12px;
+  transition: all 0.3s ease;
+  text-align: left;
 }
 
-.feature .card:hover {
+.card:hover {
   transform: translateY(-4px);
   box-shadow: 0 12px 24px rgba(0, 0, 0, 0.1);
+  border-color: var(--ifm-color-primary);
 }
 
-.feature .card__body {
-  text-align: center;
+.icon {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 1.5rem;
+  background: linear-gradient(135deg, var(--ifm-color-primary) 0%, var(--ifm-color-primary-dark) 100%);
+  border-radius: 12px;
+  color: white;
+}
+
+.svg {
+  width: 36px;
+  height: 36px;
+  stroke-width: 1.5;
+}
+
+.card h3 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  color: var(--ifm-heading-color);
+}
+
+.card p {
   color: var(--ifm-color-emphasis-700);
   line-height: 1.6;
+  margin: 0;
+  font-size: 1rem;
 }
 
 @media screen and (max-width: 996px) {
   .features {
     padding: 3rem 0;
+  }
+
+  .card {
+    padding: 1.5rem;
+  }
+
+  .card h3 {
+    font-size: 1.25rem;
   }
 }

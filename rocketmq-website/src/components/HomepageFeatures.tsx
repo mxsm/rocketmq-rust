@@ -10,22 +10,22 @@ type FeatureItem = {
 
 const FeatureList: FeatureItem[] = [
   {
-    title: 'Built with Rust',
+    title: 'Powered by Rust',
     Svg: require('@site/static/img/rust-logo.svg').default,
     description: (
       <>
-        Memory-safe and blazing fast performance. RocketMQ-Rust leverages Rust's ownership model and zero-cost abstractions
+        Memory-safe and blazing fast performance. Leverages Rust's ownership model and zero-cost abstractions
         for enterprise-grade reliability.
       </>
     ),
   },
   {
-    title: 'High Performance',
-    Svg: require('@site/static/img/performance.svg').default,
+    title: 'Async by Design',
+    Svg: require('@site/static/img/async.svg').default,
     description: (
       <>
-        Designed for high-throughput, low-latency messaging. Async/await based architecture withTokio runtime for
-        exceptional concurrency and scalability.
+        Fully asynchronous architecture using Tokio runtime. Non-blocking I/O operations ensure optimal resource
+        utilization and exceptional concurrency.
       </>
     ),
   },
@@ -39,51 +39,17 @@ const FeatureList: FeatureItem[] = [
       </>
     ),
   },
-  {
-    title: 'Async by Design',
-    Svg: require('@site/static/img/async.svg').default,
-    description: (
-      <>
-        Fully asynchronous architecture using Tokio. Non-blocking I/O operations ensure optimal resource utilization and
-        responsiveness under load.
-      </>
-    ),
-  },
-  {
-    title: 'Type Safe',
-    Svg: require('@site/static/img/types.svg').default,
-    description: (
-      <>
-        Strong typing with Rust's type system prevents entire classes of bugs at compile-time. Self-documenting APIs with
-        comprehensive IDE support.
-      </>
-    ),
-  },
-  {
-    title: 'Cloud Native',
-    Svg: require('@site/static/img/cloud.svg').default,
-    description: (
-      <>
-        Designed for modern cloud environments. Container-ready, supports Kubernetes deployment patterns, and integrates
-        seamlessly with cloud-native ecosystems.
-      </>
-    ),
-  },
 ];
 
 function Feature({ title, Svg, description }: FeatureItem) {
   return (
-    <div className={clsx('col col--4', styles.feature)}>
-      <div className="card">
-        <div className="card__header">
-          <div className={styles.featureIcon}>
-            <Svg className={styles.featureSvg} role="img" />
-          </div>
-          <h3>{title}</h3>
+    <div className={clsx('col', styles.feature)}>
+      <div className={styles.card}>
+        <div className={styles.icon}>
+          <Svg className={styles.svg} role="img" />
         </div>
-        <div className="card__body">
-          <p>{description}</p>
-        </div>
+        <h3>{title}</h3>
+        <p>{description}</p>
       </div>
     </div>
   );
