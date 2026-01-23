@@ -12,6 +12,14 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
+//! Lightweight RocketMQ common types and utilities for client SDK.
+//!
+//! This module provides essential lightweight types used throughout RocketMQ,
+//! optimized for minimal dependencies and fast execution.
+
 mod lite_subscription_action;
+mod offset_option;
 
 pub use lite_subscription_action::*;
+pub use offset_option::OffsetOption;
+pub use offset_option::OffsetOptionType;
