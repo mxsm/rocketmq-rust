@@ -18,6 +18,7 @@ pub mod create_topic_list_request_body;
 pub mod get_broker_lite_info_response_body;
 pub mod get_consumer_listby_group_response_body;
 pub mod get_lite_client_info_response_body;
+pub mod get_lite_group_info_response_body;
 pub mod get_parent_topic_info_response_body;
 
 pub mod consumer_connection;
@@ -44,6 +45,7 @@ pub mod ha_client_runtime_info;
 pub mod ha_connection_runtime_info;
 pub mod ha_runtime_info;
 pub mod kv_table;
+pub mod lite_lag_info;
 pub mod message_request_mode_serialize_wrapper;
 pub mod pop_process_queue_info;
 pub mod process_queue_info;
