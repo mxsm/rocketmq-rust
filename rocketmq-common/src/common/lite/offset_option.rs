@@ -1,8 +1,12 @@
+use serde::Deserialize;
+use serde::Serialize;
 use std::fmt;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct OffsetOption {
+    #[serde(rename = "type")]
     pub type_: OffsetOptionType,
     pub value: i64,
 }
@@ -92,7 +96,7 @@ impl fmt::Display for OffsetOption {
 }
 
 /// Enumeration of offset seeking strategies.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum OffsetOptionType {
     Policy = 0,

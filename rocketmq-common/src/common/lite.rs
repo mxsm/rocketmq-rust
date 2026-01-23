@@ -20,10 +20,12 @@
 mod lite_lag_info;
 mod lite_subscription;
 mod lite_subscription_action;
+mod lite_subscription_dto;
 mod offset_option;
 
 pub use lite_lag_info::LiteLagInfo;
 pub use lite_subscription::LiteSubscription;
 pub use lite_subscription_action::*;
+pub use lite_subscription_dto::LiteSubscriptionDTO;
 pub use offset_option::OffsetOption;
 pub use offset_option::OffsetOptionType;
