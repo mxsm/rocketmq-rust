@@ -41,19 +41,43 @@
   z-index: 2;
   background: transparent !important;
   background-image: none !important;
+  min-height: 70vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* 确保文本可读性 */
 .ballpit-content .page__hero .wrapper {
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  padding: 2em;
 }
 
 .ballpit-content .page__title {
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  color: #ffffff;
+  font-weight: 700;
 }
 
 .ballpit-content .page__lead {
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  color: #f0f0f0;
+}
+
+/* 按钮样式增强 */
+.ballpit-content .page__hero .btn {
+  text-shadow: none;
+  background: rgba(255, 255, 255, 0.1);
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(10px);
+  transition: all 0.3s ease;
+}
+
+.ballpit-content .page__hero .btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: #ffffff;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
 /* 移动端优化 */
