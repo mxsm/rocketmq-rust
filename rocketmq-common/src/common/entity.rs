@@ -13,5 +13,7 @@
 // limitations under the License.
 
 mod client_group;
+mod topic_group;
 
 pub use client_group::ClientGroup;
+pub use topic_group::TopicGroup;
