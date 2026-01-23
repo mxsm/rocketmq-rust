@@ -508,21 +508,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_error_handling_timeout() {
-        // Test timeout with a slow endpoint
-        let result = HttpTinyClient::http_get_async(
-            "https://httpbin.org/delay/10",
-            None,
-            None,
-            "UTF-8",
-            1000, // 1 second timeout, but endpoint delays 10 seconds
-        )
-        .await;
+        let result = HttpTinyClient::http_get_async("https://httpbin.org/delay/10", None, None, "UTF-8", 2000).await;
 
-        assert!(result.is_err());
-        if let Err(e) = result {
-            println!("Expected timeout error: {}", e);
-            // Should be a network timeout error
-            assert!(matches!(e, RocketMQError::Network(_)));
+        match result {
+            Err(e) => {
+                println!("Expected error: {}", e);
+                assert!(matches!(e, RocketMQError::Network(_)));
+            }
+            Ok(response) => {
+                panic!(
+                    "Expected timeout error but got success response with code: {}",
+                    response.code
+                );
+            }
         }
     }
 
