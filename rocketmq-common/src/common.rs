@@ -57,6 +57,7 @@ pub mod sys_flag;
 
 pub mod action;
 pub mod entity;
+pub mod lite;
 pub mod metrics;
 pub mod resource;
 pub mod system_clock;
