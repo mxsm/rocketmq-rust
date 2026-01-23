@@ -26,6 +26,7 @@ pub mod chain;
 pub use crate::common::sys_flag::topic_sys_flag as TopicSysFlag;
 pub mod attribute;
 pub mod base;
+
 pub mod boundary_type;
 pub mod broker;
 pub mod coldctr;
@@ -55,6 +56,7 @@ pub mod stats;
 pub mod sys_flag;
 
 pub mod action;
+pub mod entity;
 pub mod metrics;
 pub mod resource;
 pub mod system_clock;
