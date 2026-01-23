@@ -4,7 +4,7 @@ import Link from '@docusaurus/Link';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import Layout from '@theme/Layout';
 import HomepageFeatures from '@site/src/components/HomepageFeatures';
-import OrbBackgroundGlobal from '@site/src/components/OrbBackground.global';
+import SimpleOrb from '@site/src/components/SimpleOrb';
 
 import styles from './index.module.css';
 
@@ -12,7 +12,6 @@ function HomepageHeader() {
   const { siteConfig } = useDocusaurusContext();
   return (
     <header className={clsx('hero', styles.heroBanner)}>
-      <OrbBackgroundGlobal />
       <div className="container" style={{ position: 'relative', zIndex: 2 }}>
         <div className={styles.heroContent}>
           <div className={styles.heroLeft}>
@@ -38,7 +37,8 @@ function HomepageHeader() {
               </Link>
             </div>
           </div>
-          <div className={styles.heroRight}>
+          <div className={styles.heroRight} style={{ position: 'relative' }}>
+            <SimpleOrb />
             <div className={styles.heroIllustration}>
               <svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
                 <circle cx="100" cy="100" r="80" fill="#2563eb" opacity="0.1"/>

@@ -326,3 +326,73 @@ a:hover {
     filter: blur(80px);
   }
 }
+
+/* Orb Background - Centered around MQ logo */
+.orb-centered-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.orb-centered-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(40px);
+  opacity: 0.8;
+  animation-timing-function: ease-in-out;
+  will-change: transform;
+}
+
+/* Rotation animations for each orb */
+@keyframes orb-rotate-0 {
+  0%, 100% { transform: translate(-50%, -50%) rotate(0deg) translateX(80px) scale(1); }
+  25% { transform: translate(-50%, -50%) rotate(90deg) translateX(100px) scale(1.1); }
+   50% { transform: translate(-50%, -50%) rotate(180deg) translateX(80px) scale(0.9); }
+  75% { transform: translate(-50%, -50%) rotate(270deg) translateX(100px) scale(1.05); }
+}
+
+@keyframes orb-rotate-1 {
+  0%, 100% { transform: translate(-50%, -50%) rotate(0deg) translateX(80px) scale(1); }
+  25% { transform: translate(-50%, -50%) rotate(90deg) translateX(100px) scale(1.1); }
+  50% { transform: translate(-50%, -50%) rotate(180deg) translateX(80px) scale(0.9); }
+  75% { transform: translate(-50%, -50%) rotate(270deg) translateX(100px) scale(1.05); }
+}
+
+@keyframes orb-rotate-2 {
+  0%, 100% { transform: translate(-50%, -50%) rotate(0deg) translateX(80px) scale(1); }
+  25% { transform: translate(-50%, -50%) rotate(90deg) translateX(100px) scale(1.1); }
+  50% { transform: translate(-50%, -50%) rotate(180deg) translateX(80px) scale(0.9); }
+  75% { transform: translate(-50%, -50%) rotate(270deg) translateX(100px) scale(1.05); }
+}
+
+@keyframes orb-rotate-3 {
+  0%, 100% { transform: translate(-50%, -50%) rotate(0deg) translateX(80px) scale(1); }
+  25% { transform: translate(-50%, -50%) rotate(90deg) translateX(100px) scale(1.1); }
+  50% { transform: translate(-50%, -50%) rotate(180deg) translateX(80px) scale(0.9); }
+  75% { transform: translate(-50%, -50%) rotate(270deg) translateX(100px) scale(1.05); }
+}
+
+@keyframes orb-rotate-4 {
+  0%, 100% { transform: translate(-50%, -50%) rotate(0deg) translateX(80px) scale(1); }
+  25% { transform: translate(-50%, -50%) rotate(90deg) translateX(100px) scale(1.1); }
+  25% { transform: translate(-50%, -50%) rotate(90deg) translateX(100px) scale(1.1); }
+  50% { transform: translate(-50%, -50%) rotate(180deg) translateX(80px) scale(0.9); }
+  75% { transform: translate(-50%, -50%) rotate(270deg) translateX(100px) scale(1.05); }
+}
+
+@keyframes orb-rotate-5 {
+  0%, 100% { transform: translate(-50%, -50%) rotate(0deg) translateX(80px) scale(1); }
+  25% { transform: translate(-50%, -50%) rotate(90deg) translateX(100px) scale(1.1); }
+  50% { transform: translate(-50%, -50%) rotate(180deg) translateX(80px) scale(0.9); }
+  75% { transform: translate(-50%, -50%) rotate(270deg) translateX(100px) scale(1.05); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orb-centered-orb {
+    animation: none !important;
+  }
+}
