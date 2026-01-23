@@ -5,6 +5,35 @@
 import React from 'react';
 
 export default function SimpleOrb(): React.JSX.Element {
+  const animationStyles = `
+    @keyframes float1 {
+      0%, 100% {
+        transform: translate(-50%, -50%) translate(0, 0);
+      }
+      50% {
+        transform: translate(-50%, -50%) translate(30px, -30px);
+      }
+    }
+
+    @keyframes float2 {
+      0%, 100% {
+        transform: translate(-50%, -50%) translate(0, 0);
+      }
+      50% {
+        transform: translate(-50%, -50%) translate(-30px, 30px);
+      }
+    }
+
+    @keyframes float3 {
+      0%, 100% {
+        transform: translate(-50%, -50%) translate(0, 0);
+      }
+      50% {
+        transform: translate(-50%, -50%) translate(-20px, 20px);
+      }
+    }
+  `;
+
   return (
     <>
       {/* Orb 1 - Blue */}
@@ -59,34 +88,7 @@ export default function SimpleOrb(): React.JSX.Element {
         }}
       />
       {/* Add animation styles */}
-      <style>{`
-        @keyframes float1 {
-          0%, 100% {
-            transform: translate(-50%, -50%) translate(0, 0);
-          }
-          50% {
-            transform: translate(-50%, -50%) translate(30px, -30px);
-          }
-        }
-
-        @keyframes float2 {
-          0%, 100% {
-            transform: translate(-50%, -50%) translate(0, 0);
-          }
-          50% {
-            transform: translate(-50%, -50%) translate(-30px, 30px);
-          }
-        }
-
-        @keyframes float3 {
-          0%, 100% {
-            transform: translate(-50%, -50%) translate(0, 0);
-          }
-          50% {
-            transform: translate(-50%, -50%) translate(-20px, 20px);
-          }
-        }
-      </style>
+      <style dangerouslySetInnerHTML={{ __html: animationStyles }} />
     </>
   );
 }
