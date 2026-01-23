@@ -81,3 +81,60 @@ impl GetParentTopicInfoResponseBody {
         self.lite_topic_count = lite_topic_count;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_parent_topic_info_response_body_default() {
+        let body = GetParentTopicInfoResponseBody::default();
+        assert!(body.get_topic().is_none());
+        assert_eq!(body.get_ttl(), 0);
+        assert!(body.get_groups().is_empty());
+        assert_eq!(body.get_lmq_num(), 0);
+        assert_eq!(body.get_lite_topic_count(), 0);
+    }
+
+    #[test]
+    fn get_parent_topic_info_response_body_getters_setters() {
+        let mut body = GetParentTopicInfoResponseBody::new();
+        body.set_topic(CheetahString::from("parent"));
+        body.set_ttl(3600);
+        let mut groups = HashSet::new();
+        groups.insert(CheetahString::from("g1"));
+        body.set_groups(groups.clone());
+        body.set_lmq_num(10);
+        body.set_lite_topic_count(5);
+
+        assert_eq!(body.get_topic().unwrap(), "parent");
+        assert_eq!(body.get_ttl(), 3600);
+        assert_eq!(body.get_groups(), &groups);
+        assert_eq!(body.get_lmq_num(), 10);
+        assert_eq!(body.get_lite_topic_count(), 5);
+    }
+
+    #[test]
+    fn get_parent_topic_info_response_body_serialization_and_deserialization() {
+        let mut body = GetParentTopicInfoResponseBody::new();
+        body.set_topic(CheetahString::from("parent"));
+        body.set_ttl(3600);
+        body.set_groups(HashSet::from([CheetahString::from("g1")]));
+        body.set_lmq_num(10);
+        body.set_lite_topic_count(5);
+
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("\"topic\":\"parent\""));
+        assert!(json.contains("\"ttl\":3600"));
+        assert!(json.contains("\"groups\":[\"g1\"]"));
+        assert!(json.contains("\"lmqNum\":10"));
+        assert!(json.contains("\"liteTopicCount\":5"));
+
+        let decoded: GetParentTopicInfoResponseBody = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.get_topic().unwrap(), "parent");
+        assert_eq!(decoded.get_ttl(), 3600);
+        assert_eq!(decoded.get_groups(), &HashSet::from([CheetahString::from("g1")]));
+        assert_eq!(decoded.get_lmq_num(), 10);
+        assert_eq!(decoded.get_lite_topic_count(), 5);
+    }
+}

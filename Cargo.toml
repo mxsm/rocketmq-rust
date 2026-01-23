@@ -97,9 +97,9 @@ futures = "0.3"
 
 cheetah-string = { version = "1.0.1", features = ["serde", "bytes", "simd"] }
 
-flate2  = "1.1.8"
-dashmap = "6.1.0"
-strum   = { version = "0.27.2", features = ["derive"] }
+flate2   = "1.1.8"
+dashmap  = "6.1.0"
+strum    = { version = "0.27.2", features = ["derive"] }
 smallvec = "1.13"
 
 opentelemetry     = { version = "0.31", features = ["metrics"] }

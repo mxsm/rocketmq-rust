@@ -44,15 +44,15 @@ cheetah-string = { workspace = true }
 criterion = { version = "0.8.1", features = ["async_tokio"] }
 
 [[bench]]
-name = "produce_accumulator_benchmark"
+name    = "produce_accumulator_benchmark"
 harness = false
 
 [[bench]]
-name = "concurrent_optimization_benchmark"
+name    = "concurrent_optimization_benchmark"
 harness = false
 
 [[bench]]
-name = "thread_local_index_bench"
+name    = "thread_local_index_bench"
 harness = false
 
 [[example]]
