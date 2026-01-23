@@ -1,10 +1,8 @@
 /**
- * OrbBackground - Advanced animated orb background with mouse interaction
- * Creates glowing, floating orbs that respond to mouse movement
+ * OrbBackground - Using global CSS (for debugging)
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import styles from './OrbBackground.module.css';
 
 interface Orb {
   id: number;
@@ -19,11 +17,11 @@ interface Orb {
 
 const generateOrbs = (count: number): Orb[] => {
   const colors = [
-    'radial-gradient(circle, rgba(37, 99, 235, 0.6) 0%, rgba(37, 99, 235, 0) 70%)',
-    'radial-gradient(circle, rgba(0, 191, 165, 0.5) 0%, rgba(0, 191, 165, 0) 70%)',
-    'radial-gradient(circle, rgba(76, 175, 80, 0.5) 0%, rgba(76, 175, 80, 0) 70%)',
-    'radial-gradient(circle, rgba(0, 188, 212, 0.5) 0%, rgba(0, 188, 212, 0) 70%)',
-    'radial-gradient(circle, rgba(139, 92, 246, 0.4) 0%, rgba(139, 92, 246, 0) 70%)',
+    'radial-gradient(circle, rgba(37, 99, 235, 0.8) 0%, rgba(37, 99, 235, 0) 70%)',
+    'radial-gradient(circle, rgba(0, 191, 165, 0.7) 0%, rgba(0, 191, 165, 0) 70%)',
+    'radial-gradient(circle, rgba(76, 175, 80, 0.7) 0%, rgba(76, 175, 80, 0) 70%)',
+    'radial-gradient(circle, rgba(0, 188, 212, 0.7) 0%, rgba(0, 188, 212, 0) 70%)',
+    'radial-gradient(circle, rgba(139, 92, 246, 0.6) 0%, rgba(139, 92, 246, 0) 70%)',
   ];
 
   return Array.from({ length: count }, (_, i) => ({
@@ -38,7 +36,7 @@ const generateOrbs = (count: number): Orb[] => {
   }));
 };
 
-export default function OrbBackground(): React.JSX.Element {
+export default function OrbBackgroundGlobal(): React.JSX.Element {
   const [mousePosition, setMousePosition] = useState({ x: 50, y: 50 });
   const orbsRef = useRef<HTMLDivElement>(null);
   const orbs = generateOrbs(8);
@@ -67,11 +65,11 @@ export default function OrbBackground(): React.JSX.Element {
   }, []);
 
   return (
-    <div className={styles.orbContainer} ref={orbsRef}>
+    <div className="orb-background-container" ref={orbsRef}>
       {orbs.map((orb) => (
         <div
           key={orb.id}
-          className={styles.orb}
+          className="orb-background-orb"
           style={{
             width: `${orb.size}px`,
             height: `${orb.size}px`,
@@ -84,9 +82,8 @@ export default function OrbBackground(): React.JSX.Element {
           }}
         />
       ))}
-      {/* Mouse-following orb */}
       <div
-        className={styles.mouseOrb}
+        className="orb-background-mouse-orb"
         style={{
           left: `${mousePosition.x}%`,
           top: `${mousePosition.y}%`,
