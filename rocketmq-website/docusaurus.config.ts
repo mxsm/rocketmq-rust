@@ -149,20 +149,6 @@ const config: Config = {
     },
   } satisfies PresetOptions['themeConfig'],
 
-  plugins: [
-    [
-      '@docusaurus/plugin-client-redirects',
-      {
-        redirects: [
-          {
-            to: '/docs/introduction',
-            from: ['/'],
-          },
-        ],
-      },
-    ],
-  ],
-
   // Markdown processing
   markdown: {
     mermaid: true,
