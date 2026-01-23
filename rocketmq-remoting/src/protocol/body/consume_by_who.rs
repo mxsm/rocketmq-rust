@@ -81,3 +81,65 @@ impl ConsumeByWho {
         self.offset = offset;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn consume_by_who_default() {
+        let body = ConsumeByWho::default();
+        assert!(body.get_consumed_group().is_empty());
+        assert!(body.get_not_consumed_group().is_empty());
+        assert!(body.get_topic().is_none());
+        assert_eq!(body.get_queue_id(), 0);
+        assert_eq!(body.get_offset(), 0);
+    }
+
+    #[test]
+    fn consume_by_who_getters_setters() {
+        let mut body = ConsumeByWho::new();
+
+        let mut consumed = HashSet::new();
+        consumed.insert(CheetahString::from("g1"));
+        body.set_consumed_group(consumed.clone());
+
+        let mut not_consumed = HashSet::new();
+        not_consumed.insert(CheetahString::from("g2"));
+        body.set_not_consumed_group(not_consumed.clone());
+
+        body.set_topic(CheetahString::from("topic1"));
+        body.set_queue_id(1);
+        body.set_offset(100);
+
+        assert_eq!(body.get_consumed_group(), &consumed);
+        assert_eq!(body.get_not_consumed_group(), &not_consumed);
+        assert_eq!(body.get_topic().unwrap(), "topic1");
+        assert_eq!(body.get_queue_id(), 1);
+        assert_eq!(body.get_offset(), 100);
+    }
+
+    #[test]
+    fn consume_by_who_serialization_and_deserialization() {
+        let mut body = ConsumeByWho::new();
+        body.set_consumed_group(HashSet::from(["g3".into()]));
+        body.set_not_consumed_group(HashSet::from(["g4".into()]));
+        body.set_topic(CheetahString::from("topic1"));
+        body.set_offset(100);
+        body.set_queue_id(1);
+
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("\"consumedGroup\":[\"g3\"]"));
+        assert!(json.contains("\"notConsumedGroup\":[\"g4\"]"));
+        assert!(json.contains("\"topic\":\"topic1\""));
+        assert!(json.contains("\"offset\":100"));
+        assert!(json.contains("\"queueId\":1"));
+
+        let decoded: ConsumeByWho = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.get_consumed_group(), &HashSet::from(["g3".into()]));
+        assert_eq!(decoded.get_not_consumed_group(), &HashSet::from(["g4".into()]));
+        assert_eq!(decoded.get_topic().unwrap(), "topic1");
+        assert_eq!(decoded.get_offset(), 100);
+        assert_eq!(decoded.get_queue_id(), 1);
+    }
+}
