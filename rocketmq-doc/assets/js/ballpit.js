@@ -160,12 +160,29 @@
      * 初始化
      */
     init() {
-      this.resize();
-      this.createBalls();
-      this.bindEvents();
-      this.start();
+      // 延迟初始化，确保 DOM 完全渲染
+      setTimeout(() => {
+        this.resize();
+        console.log('[Ballpit] Canvas size:', this.canvas.width, 'x', this.canvas.height);
 
-      console.log('[Ballpit] Initialized successfully');
+        if (this.canvas.width === 0 || this.canvas.height === 0) {
+          console.warn('[Ballpit] Canvas has zero size, retrying...');
+          setTimeout(() => {
+            this.resize();
+            this.createBalls();
+            this.bindEvents();
+            this.start();
+            console.log('[Ballpit] Initialized successfully (retry)');
+          }, 100);
+          return;
+        }
+
+        this.createBalls();
+        this.bindEvents();
+        this.start();
+
+        console.log('[Ballpit] Initialized successfully with', this.balls.length, 'balls');
+      }, 50);
     }
 
     /**
@@ -219,9 +236,14 @@
      * 调整画布大小
      */
     resize() {
-      const rect = this.canvas.getBoundingClientRect();
-      this.canvas.width = rect.width;
-      this.canvas.height = rect.height;
+      const container = this.canvas.parentElement;
+      if (container) {
+        this.canvas.width = container.offsetWidth;
+        this.canvas.height = container.offsetHeight;
+      } else {
+        this.canvas.width = window.innerWidth;
+        this.canvas.height = window.innerHeight;
+      }
     }
 
     /**

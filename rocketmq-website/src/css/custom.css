@@ -1,0 +1,231 @@
+/**
+ * Copyright (c) 2025 The Apache Software Foundation.
+ * Licensed under the Apache License, Version 2.0.
+ */
+
+/**
+ * Any CSS included here will be global. The classic template
+ * bundles Infima on build. This file can be used to override
+ * Infima variables and Docusaurus custom CSS variables.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  --ifm-color-primary: #2563eb;
+  --ifm-color-primary-dark: #1d4ed8;
+  --ifm-color-primary-darker: #1e40af;
+  --ifm-color-primary-darkest: #1e3a8a;
+  --ifm-color-primary-light: #3b82f6;
+  --ifm-color-primary-lighter: #60a5fa;
+  --ifm-color-primary-lightest: #93c5fd;
+
+  --ifm-code-font-size: 95%;
+
+  --ifm-font-family-base: 'Inter', system-ui, -apple-system, sans-serif;
+  --ifm-heading-font-weight: 700;
+  --ifm-global-border-radius: 8px;
+  --ifm-heading-margin-top: 2rem;
+  --ifm-heading-margin-bottom: 1rem;
+}
+
+/* Dark mode overrides */
+[data-theme='dark'] {
+  --ifm-background-color: #0f172a;
+  --ifm-background-surface-color: #1e293b;
+  --ifm-color-primary: #3b82f6;
+  --ifm-color-primary-dark: #60a5fa;
+  --ifm-color-primary-darker: #93c5fd;
+  --ifm-color-primary-darkest: #bfdbfe;
+  --ifm-color-primary-light: #2563eb;
+  --ifm-color-primary-lighter: #1d4ed8;
+  --ifm-color-primary-lightest: #1e40af;
+
+  --ifm-card-background-color: #1e293b;
+  --ifm-table-stripe-background: #334155;
+  --ifm-code-background: #1e293b;
+  --ifm-menu-color-active: #60a5fa;
+  --ifm-menu-color-background-active: #1e293b;
+  --ifm-toc-border-color: #334155;
+  --ifm-tabs-border-color: #334155;
+  --ifm-border-color: #334155;
+  --ifm-table-border-color: #334155;
+}
+
+/* Custom hero gradient */
+.hero {
+  background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%);
+}
+
+/* Better code blocks */
+.theme-code-block {
+  border-radius: var(--ifm-global-border-radius);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+/* Improved table styling */
+markdown > table {
+  border-radius: var(--ifm-global-border-radius);
+  overflow: hidden;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+/* Better cards */
+.card {
+  border-radius: var(--ifm-global-border-radius);
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.card:hover {
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px);
+}
+
+/* Improved navbar */
+.navbar {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(10px);
+}
+
+.navbar__link--active {
+  color: var(--ifm-color-primary) !important;
+  font-weight: 600;
+}
+
+/* Better footer */
+.footer {
+  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+  border-top: none;
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Better heading styles */
+h1, h2, h3, h4, h5, h6 {
+  color: var(--ifm-heading-color);
+  font-weight: var(--ifm-heading-font-weight);
+  line-height: 1.25;
+}
+
+h1 {
+  font-size: 2.5rem;
+  margin-bottom: 1.5rem;
+}
+
+h2 {
+  font-size: 2rem;
+  margin-bottom: 1.25rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--ifm-border-color);
+}
+
+h3 {
+  font-size: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--ifm-background-surface-color);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--ifm-color-primary);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ifm-color-primary-dark);
+}
+
+/* Mermaid diagram styling */
+.mermaid {
+  background: var(--ifm-background-surface-color);
+  border-radius: var(--ifm-global-border-radius);
+  padding: 1rem;
+  margin: 1.5rem 0;
+}
+
+/* API reference styling */
+.api-reference {
+  background: var(--ifm-background-surface-color);
+  border: 1px solid var(--ifm-border-color);
+  border-radius: var(--ifm-global-border-radius);
+  padding: 1.5rem;
+  margin: 1rem 0;
+}
+
+/* Warning and notice boxes */
+.admonition {
+  border-radius: var(--ifm-global-border-radius);
+  margin: 1.5rem 0;
+}
+
+/* Tabs styling */
+.tabs {
+  margin: 1.5rem 0;
+}
+
+.tab-item {
+  border-radius: var(--ifm-global-border-radius);
+}
+
+/* Code inline styling */
+code {
+  padding: 0.2em 0.4em;
+  margin: 0;
+  font-size: 85%;
+  background-color: var(--ifm-code-background);
+  border-radius: 6px;
+}
+
+/* Links */
+a {
+  color: var(--ifm-color-primary);
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+a:hover {
+  color: var(--ifm-color-primary-dark);
+  text-decoration: underline;
+}
+
+/* Print styles */
+@media print {
+  .navbar,
+  .footer,
+  .menu,
+  .table-of-contents {
+    display: none;
+  }
+
+  main {
+    margin: 0;
+    padding: 0;
+  }
+}
+
+/* Responsive adjustments */
+@media (max-width: 996px) {
+  h1 {
+    font-size: 2rem;
+  }
+
+  h2 {
+    font-size: 1.5rem;
+  }
+
+  h3 {
+    font-size: 1.25rem;
+  }
+}
