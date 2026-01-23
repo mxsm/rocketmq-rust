@@ -18,7 +18,6 @@ const config: Config = {
   deploymentBranch: 'gh-pages',
 
   onBrokenLinks: 'throw',
-  onBrokenMarkdownLinks: 'warn',
   onBrokenAnchors: 'warn',
 
   i18n: {
