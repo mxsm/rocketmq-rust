@@ -69,10 +69,6 @@ impl Hash for TopicGroup {
 
 impl std::fmt::Display for TopicGroup {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "TopicGroup{{topic='{}', group='{}'}}",
-            self.topic, self.group
-        )
+        write!(f, "TopicGroup{{topic='{}', group='{}'}}", self.topic, self.group)
     }
 }
