@@ -12,19 +12,24 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
-  --ifm-color-primary: #2563eb;
-  --ifm-color-primary-dark: #1d4ed8;
-  --ifm-color-primary-darker: #1e40af;
-  --ifm-color-primary-darkest: #1e3a8a;
-  --ifm-color-primary-light: #3b82f6;
-  --ifm-color-primary-lighter: #60a5fa;
-  --ifm-color-primary-lightest: #93c5fd;
+  --ifm-color-primary: #a855f7;
+  --ifm-color-primary-dark: #9333ea;
+  --ifm-color-primary-darker: #7e22ce;
+  --ifm-color-primary-darkest: #6b21a8;
+  --ifm-color-primary-light: #c084fc;
+  --ifm-color-primary-lighter: #d8b4fe;
+  --ifm-color-primary-lightest: #e9d5ff;
+
+  --ifm-color-secondary: #06b6d4;
+  --ifm-color-secondary-dark: #0891b2;
+  --ifm-color-secondary-darker: #0e7490;
+  --ifm-color-secondary-darkest: #164e63;
 
   --ifm-code-font-size: 95%;
 
   --ifm-font-family-base: 'Inter', system-ui, -apple-system, sans-serif;
   --ifm-heading-font-weight: 700;
-  --ifm-global-border-radius: 8px;
+  --ifm-global-border-radius: 12px;
   --ifm-heading-margin-top: 2rem;
   --ifm-heading-margin-bottom: 1rem;
 }
@@ -33,22 +38,22 @@
 [data-theme='dark'] {
   --ifm-background-color: #0f172a;
   --ifm-background-surface-color: #1e293b;
-  --ifm-color-primary: #3b82f6;
-  --ifm-color-primary-dark: #60a5fa;
-  --ifm-color-primary-darker: #93c5fd;
-  --ifm-color-primary-darkest: #bfdbfe;
-  --ifm-color-primary-light: #2563eb;
-  --ifm-color-primary-lighter: #1d4ed8;
-  --ifm-color-primary-lightest: #1e40af;
+  --ifm-color-primary: #c084fc;
+  --ifm-color-primary-dark: #d8b4fe;
+  --ifm-color-primary-darker: #e9d5ff;
+  --ifm-color-primary-darkest: #f3e8ff;
+  --ifm-color-primary-light: #a855f7;
+  --ifm-color-primary-lighter: #9333ea;
+  --ifm-color-primary-lightest: #7e22ce;
 
   --ifm-card-background-color: #1e293b;
   --ifm-table-stripe-background: #334155;
   --ifm-code-background: #1e293b;
-  --ifm-menu-color-active: #60a5fa;
+  --ifm-menu-color-active: #c084fc;
   --ifm-menu-color-background-active: #1e293b;
   --ifm-toc-border-color: #334155;
   --ifm-tabs-border-color: #334155;
-  --ifm-border-color: #334155;
+  --ifm-border-color: rgba(168, 85, 247, 0.2);
   --ifm-table-border-color: #334155;
 }
 
