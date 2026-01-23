@@ -17,9 +17,11 @@
 //! This module provides essential lightweight types used throughout RocketMQ,
 //! optimized for minimal dependencies and fast execution.
 
+mod lite_lag_info;
 mod lite_subscription_action;
 mod offset_option;
 
+pub use lite_lag_info::LiteLagInfo;
 pub use lite_subscription_action::*;
 pub use offset_option::OffsetOption;
 pub use offset_option::OffsetOptionType;
