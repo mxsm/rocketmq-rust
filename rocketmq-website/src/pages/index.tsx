@@ -4,6 +4,7 @@ import Link from '@docusaurus/Link';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import Layout from '@theme/Layout';
 import HomepageFeatures from '@site/src/components/HomepageFeatures';
+import OrbBackground from '@site/src/components/OrbBackground';
 
 import styles from './index.module.css';
 
@@ -11,7 +12,8 @@ function HomepageHeader() {
   const { siteConfig } = useDocusaurusContext();
   return (
     <header className={clsx('hero', styles.heroBanner)}>
-      <div className="container">
+      <OrbBackground />
+      <div className="container" style={{ position: 'relative', zIndex: 2 }}>
         <div className={styles.heroContent}>
           <div className={styles.heroLeft}>
             <h1 className="hero__title">

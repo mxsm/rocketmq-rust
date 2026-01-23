@@ -1,0 +1,82 @@
+.orbContainer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(60px);
+  opacity: 0.6;
+  animation: float-orb ease-in-out infinite;
+  transform: translate(-50%, -50%);
+}
+
+@keyframes float-orb {
+  0%, 100% {
+    transform: translate(-50%, -50%) translate(0, 0) scale(1);
+  }
+  25% {
+    transform: translate(-50%, -50%) translate(30px, -30px) scale(1.1);
+  }
+  50% {
+    transform: translate(-50%, -50%) translate(-20px, 20px) scale(0.9);
+  }
+  75% {
+    transform: translate(-50%, -50%) translate(20px, 30px) scale(1.05);
+  }
+}
+
+.overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(135deg, rgba(30, 41, 59, 0.85) 0%, rgba(15, 23, 42, 0.95) 100%);
+  z-index: 1;
+}
+
+.mouseOrb {
+  position: absolute;
+  width: 300px;
+  height: 300px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(37, 99, 235, 0.6) 0%, rgba(37, 99, 235, 0) 70%);
+  filter: blur(80px);
+  transform: translate(-50%, -50%);
+  transition: left 0.3s ease-out, top 0.3s ease-out;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.8;
+}
+
+/* Reduce animation on devices that prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .orb {
+    animation: none;
+  }
+
+  .mouseOrb {
+    transition: none;
+  }
+}
+
+/* Mobile optimizations */
+@media (max-width: 768px) {
+  .orb {
+    filter: blur(40px) !important;
+  }
+
+  .mouseOrb {
+    width: 200px;
+    height: 200px;
+    filter: blur(60px);
+  }
+}
