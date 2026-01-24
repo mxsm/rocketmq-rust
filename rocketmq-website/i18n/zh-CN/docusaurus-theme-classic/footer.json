@@ -36,7 +36,7 @@
     "description": "The label of footer link with label=Stack Overflow"
   },
   "copyright": {
-    "message": "版权所有 © 2026 Apache 软件基金会。使用 Docusaurus 构建。",
+    "message": "版权所有 © RocketMQ-Rust Community。使用 Docusaurus 构建。",
     "description": "The footer copyright"
   }
 }

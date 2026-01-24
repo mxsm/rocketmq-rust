@@ -65,6 +65,12 @@
   "homepage.hero.github": {
     "message": "GitHub"
   },
+  "homepage.announcement.title": {
+    "message": "RocketMQ-Rust v0.3.0 发布了！"
+  },
+  "homepage.announcement.link": {
+    "message": "查看新特性 →"
+  },
   "theme.ErrorPageContent.title": {
     "message": "页面已崩溃。",
     "description": "The title of the fallback page when the page crashed"
