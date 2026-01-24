@@ -1,0 +1,30 @@
+{
+  "title": {
+    "message": "RocketMQ-Rust",
+    "description": "The title in the navbar"
+  },
+  "logo.alt": {
+    "message": "RocketMQ-Rust Logo",
+    "description": "The alt text of navbar logo"
+  },
+  "item.label.Documentation": {
+    "message": "文档",
+    "description": "Navbar item with label Documentation"
+  },
+  "item.label.Release Notes": {
+    "message": "发布说明",
+    "description": "Navbar item with label Release Notes"
+  },
+  "item.label.Contribute": {
+    "message": "贡献",
+    "description": "Navbar item with label Contribute"
+  },
+  "item.label.Author": {
+    "message": "作者",
+    "description": "Navbar item with label Author"
+  },
+  "item.label.GitHub": {
+    "message": "GitHub",
+    "description": "Navbar item with label GitHub"
+  }
+}

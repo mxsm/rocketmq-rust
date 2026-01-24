@@ -1,0 +1,8 @@
+{
+  "label": "Release Notes",
+  "position": 9,
+  "link": {
+    "type": "generated-index",
+    "description": "RocketMQ-Rust version release notes"
+  }
+}

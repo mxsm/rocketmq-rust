@@ -1,0 +1,68 @@
+{
+  "Getting Started": {
+    "message": "Getting Started"
+  },
+  "Documentation": {
+    "message": "Documentation"
+  },
+  "Release Notes": {
+    "message": "Release Notes"
+  },
+  "Contribute": {
+    "message": "Contribute"
+  },
+  "Author": {
+    "message": "Author"
+  },
+  "GitHub": {
+    "message": "GitHub"
+  },
+  "Rust Language Advantages": {
+    "message": "Rust Language Advantages"
+  },
+  "Memory safety, zero-cost abstractions, and high concurrency performance. Leverages Rust's ownership model for enterprise-grade reliability and efficiency.": {
+    "message": "Memory safety, zero-cost abstractions, and high concurrency performance. Leverages Rust's ownership model for enterprise-grade reliability and efficiency."
+  },
+  "Async Non-blocking Design": {
+    "message": "Async Non-blocking Design"
+  },
+  "Fully asynchronous architecture using Rust's async capabilities. Non-blocking design supports high-concurrency message processing with optimal resource utilization.": {
+    "message": "Fully asynchronous architecture using Rust's async capabilities. Non-blocking design supports high-concurrency message processing with optimal resource utilization."
+  },
+  "Cross-platform Support": {
+    "message": "Cross-platform Support"
+  },
+  "Supports multiple platforms including Linux, Windows, and macOS. Convenient deployment across different environments with consistent performance and behavior.": {
+    "message": "Supports multiple platforms including Linux, Windows, and macOS. Convenient deployment across different environments with consistent performance and behavior."
+  },
+  "homepage.features.rust.title": {
+    "message": "Rust Language Advantages"
+  },
+  "homepage.features.rust.description": {
+    "message": "Memory safety, zero-cost abstractions, and high concurrency performance. Leverages Rust's ownership model for enterprise-grade reliability and efficiency."
+  },
+  "homepage.features.async.title": {
+    "message": "Async Non-blocking Design"
+  },
+  "homepage.features.async.description": {
+    "message": "Fully asynchronous architecture using Rust's async capabilities. Non-blocking design supports high-concurrency message processing with optimal resource utilization."
+  },
+  "homepage.features.crossPlatform.title": {
+    "message": "Cross-platform Support"
+  },
+  "homepage.features.crossPlatform.description": {
+    "message": "Supports multiple platforms including Linux, Windows, and macOS. Convenient deployment across different environments with consistent performance and behavior."
+  },
+  "homepage.hero.subtitle": {
+    "message": "// High-performance & Faster & safer"
+  },
+  "homepage.hero.description": {
+    "message": "A high-performance, memory-safe Apache RocketMQ implementation built with Rust for modern distributed systems."
+  },
+  "homepage.hero.getStarted": {
+    "message": "Get Started"
+  },
+  "homepage.hero.github": {
+    "message": "GitHub"
+  }
+}

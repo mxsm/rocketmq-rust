@@ -1,0 +1,8 @@
+{
+  "label": "架构",
+  "position": 3,
+  "link": {
+    "type": "generated-index",
+    "description": "了解 RocketMQ-Rust 的架构设计"
+  }
+}
