@@ -64,7 +64,14 @@ const config: Config = {
             },
           },
         },
-        blog: false,
+        blog: {
+          showReadingTime: true,
+          blogTitle: 'Release Notes',
+          blogDescription: 'RocketMQ-Rust release announcements and changelogs',
+          postsPerPage: 10,
+          blogSidebarTitle: 'All Releases',
+          blogSidebarCount: 'ALL',
+        },
         theme: {
           customCss: './src/css/custom.css',
         },
@@ -93,9 +100,7 @@ const config: Config = {
           label: 'Documentation',
         },
         {
-          type: 'doc',
-          docId: 'release-notes/index',
-          sidebarId: 'docsSidebar',
+          to: '/blog',
           position: 'left',
           label: 'Release Notes',
         },
