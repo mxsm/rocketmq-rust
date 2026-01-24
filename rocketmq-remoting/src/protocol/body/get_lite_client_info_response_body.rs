@@ -133,3 +133,79 @@ impl GetLiteClientInfoResponseBody {
         self.lite_topic_set.contains(topic)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_lite_client_info_response_body_default() {
+        let body = GetLiteClientInfoResponseBody::default();
+        assert!(body.parent_topic().is_none());
+        assert!(body.group().is_empty());
+        assert!(body.client_id().is_empty());
+        assert_eq!(body.last_access_time(), 0);
+        assert_eq!(body.last_consume_time(), 0);
+        assert_eq!(body.lite_topic_count(), 0);
+        assert!(body.lite_topic_set().is_empty());
+    }
+
+    #[test]
+    fn get_lite_client_info_response_body_getters_and_setters() {
+        let mut body = GetLiteClientInfoResponseBody::new();
+        body.with_parent_topic("parent".into())
+            .with_group("group".into())
+            .with_client_id("client".into())
+            .with_last_access_time(100)
+            .with_last_consume_time(200)
+            .with_lite_topic_count(2)
+            .with_lite_topic_set(HashSet::from(["topic1".into(), "topic2".into()]));
+
+        assert_eq!(body.parent_topic().unwrap(), "parent");
+        assert_eq!(body.group(), "group");
+        assert_eq!(body.client_id(), "client");
+        assert_eq!(body.last_access_time(), 100);
+        assert_eq!(body.last_consume_time(), 200);
+        assert_eq!(body.lite_topic_count(), 2);
+        assert_eq!(
+            body.lite_topic_set(),
+            &HashSet::from(["topic1".into(), "topic2".into()])
+        );
+    }
+
+    #[test]
+    fn get_lite_client_info_response_body_topic_operations() {
+        let mut body = GetLiteClientInfoResponseBody::new();
+        body.add_lite_topic("topic1".into());
+        assert!(body.contains_lite_topic(&"topic1".into()));
+
+        body.remove_lite_topic(&"topic1".into());
+        assert!(!body.contains_lite_topic(&"topic1".into()));
+        assert!(body.lite_topic_set().is_empty());
+    }
+
+    #[test]
+    fn get_lite_client_info_response_body_serialization_and_deserialization() {
+        let mut body = GetLiteClientInfoResponseBody::new();
+        body.with_parent_topic("parent".into())
+            .with_group("group".into())
+            .with_client_id("client".into())
+            .with_last_access_time(100)
+            .with_last_consume_time(200)
+            .with_lite_topic_count(1)
+            .with_lite_topic_set(HashSet::from(["topic3".into()]));
+
+        let json = serde_json::to_string(&body).unwrap();
+        let expected = r#"{"parentTopic":"parent","group":"group","clientId":"client","lastAccessTime":100,"lastConsumeTime":200,"liteTopicCount":1,"liteTopicSet":["topic3"]}"#;
+        assert_eq!(json, expected);
+
+        let decoded: GetLiteClientInfoResponseBody = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.parent_topic().unwrap(), "parent");
+        assert_eq!(decoded.group(), "group");
+        assert_eq!(decoded.client_id(), "client");
+        assert_eq!(decoded.last_access_time(), 100);
+        assert_eq!(decoded.last_consume_time(), 200);
+        assert_eq!(decoded.lite_topic_count(), 1);
+        assert_eq!(decoded.lite_topic_set(), &HashSet::from(["topic3".into()]));
+    }
+}
