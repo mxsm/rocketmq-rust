@@ -81,21 +81,6 @@ const sidebars: SidebarsConfig = {
         'contributing/coding-standards',
       ],
     },
-    {
-      type: 'category',
-      label: 'Release Notes',
-      collapsible: true,
-      collapsed: true,
-      items: [
-        'release-notes/index',
-        'release-notes/v0.6.0',
-        'release-notes/v0.5.0',
-        'release-notes/v0.4.0',
-        'release-notes/v0.3.0',
-        'release-notes/v0.2.0',
-        'release-notes/v0.1.0',
-      ],
-    },
     'author',
   ],
 };
