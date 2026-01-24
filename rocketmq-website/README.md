@@ -36,6 +36,7 @@ node ./node_modules/@docusaurus/core/bin/docusaurus.mjs start --locale zh-CN
 ```
 
 The website will be available at:
+
 - **English**: http://localhost:3000/
 - **Chinese**: http://localhost:3000/zh-CN/
 
@@ -121,6 +122,7 @@ Edit `src/css/custom.css` to customize theme colors and styles.
 ### Components
 
 Custom React components are located in `src/components/`:
+
 - `DeveloperStyleHero.tsx` - Homepage hero section
 - `HomepageFeatures.tsx` - Feature cards
 
@@ -151,6 +153,7 @@ npm run deploy
 ```
 
 Configuration:
+
 - Organization: `apache`
 - Project: `rocketmq-rust`
 - Branch: `gh-pages`
@@ -161,7 +164,7 @@ Configuration:
 - [RocketMQ-Rust Repository](https://github.com/mxsm/rocketmq-rust)
 - [Developer Style Guide](./DEVELOPER_STYLE_README.md)
 - [Project Structure](./PROJECT_STRUCTURE.md)
-- [Quick Start Guide](./QUICKSTART.md)
+- [Quick Start Guide](QUICKSTART.md)
 
 ## 🤝 Contributing
 
@@ -170,6 +173,7 @@ Contributions are welcome! Please read our [Contributing Guide](../CONTRIBUTING.
 ### Help with Translations
 
 If you'd like to help translate the documentation, please:
+
 1. Check existing translation files in `i18n/zh-CN/`
 2. Submit an issue or pull request with your translations
 3. See our [GitHub Issues](https://github.com/mxsm/rocketmq-rust/issues/new/choose) for translation requests
@@ -187,7 +191,6 @@ This project is licensed under the same license as RocketMQ-Rust. See the [LICEN
 
 Built with ❤️ using [Docusaurus](https://docusaurus.io/)
 
-
 Licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
 
 ## Links
@@ -199,4 +202,4 @@ Licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
 ## Support
 
 - GitHub Issues: https://github.com/mxsm/rocketmq-rust/issues
-- Mailing List: general@rocketmq.apache.org
+- Mailing List: general@mxsm.apache.org
