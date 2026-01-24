@@ -250,12 +250,12 @@ impl MappedFileMetrics {
     /// Average flush duration, or `Duration::ZERO` if no flushes occurred
     pub fn avg_flush_duration(&self) -> Duration {
         let flushes = self.total_flushes();
-        if flushes > 0 {
-            let avg_us = self.total_flush_time_us.load(Ordering::Relaxed) / flushes;
-            Duration::from_micros(avg_us)
-        } else {
-            Duration::ZERO
-        }
+        let total_time_us = self.total_flush_time_us.load(Ordering::Relaxed);
+
+        total_time_us
+            .checked_div(flushes)
+            .map(Duration::from_micros)
+            .unwrap_or(Duration::ZERO)
     }
 
     /// Calculates the percentage of zero-copy reads.

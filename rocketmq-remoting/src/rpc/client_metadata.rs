@@ -147,7 +147,7 @@ impl ClientMetadata {
         for (scope, topic_queue_mapping_info_map) in mapping_infos_by_scope {
             let mut mq_endpoints: HashMap<MessageQueue, TopicQueueMappingInfo> = HashMap::new();
             let mut mapping_infos: Vec<_> = topic_queue_mapping_info_map.iter().collect();
-            mapping_infos.sort_by(|a, b| b.1.epoch.cmp(&a.1.epoch));
+            mapping_infos.sort_by_key(|b| std::cmp::Reverse(b.1.epoch));
 
             let mut max_total_nums = 0;
             let max_total_num_of_epoch = -1;
