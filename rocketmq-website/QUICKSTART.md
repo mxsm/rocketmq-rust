@@ -1,77 +1,77 @@
-# RocketMQ-Rust Website 快速启动指南
+# RocketMQ-Rust Website Quick Start Guide
 
-## 🚀 快速开始
+## 🚀 Quick Start
 
-### 1. 安装依赖
+### 1. Install Dependencies
 
 ```bash
 cd rocketmq-website
 npm install
 ```
 
-### 2. 启动开发服务器
+### 2. Start Development Server
 
 ```bash
-npm start
+npm run start
 ```
 
-网站将在 [http://localhost:3000](http://localhost:3000) 启动。
+The website will be available at [http://localhost:3000](http://localhost:3000).
 
-### 3. 构建生产版本
+### 3. Build for Production
 
 ```bash
 npm run build
 ```
 
-构建产物将输出到 `build/` 目录。
+Build output will be placed in the `build/` directory.
 
-### 4. 预览生产构建
+### 4. Preview Production Build
 
 ```bash
 npm run serve
 ```
 
-## 📁 项目结构速览
+## 📁 Project Structure Overview
 
 ```
 rocketmq-website/
-├── docs/                    # 文档内容（Markdown）
-├── src/                     # React 组件和页面
-├── static/                  # 静态资源（图片、文件）
-├── i18n/                    # 国际化翻译文件
-├── docusaurus.config.ts     # 网站配置
-└── sidebars.ts              # 文档侧边栏结构
+├── docs/                    # Documentation content (Markdown)
+├── src/                     # React components and pages
+├── static/                  # Static assets (images, files)
+├── i18n/                    # Internationalization translation files
+├── docusaurus.config.ts     # Website configuration
+└── sidebars.ts              # Documentation sidebar structure
 ```
 
-## ✨ 主要功能
+## ✨ Key Features
 
-- ✅ 完整的文档系统（22+ 篇文档）
-- ✅ 国际化支持（英文 + 中文）
-- ✅ 响应式设计（移动端友好）
-- ✅ 暗色模式支持
-- ✅ 代码高亮
-- ✅ Mermaid 图表支持
-- ✅ 搜索功能
-- ✅ TypeScript 类型检查
+- ✅ Complete documentation system (22+ documents)
+- ✅ Internationalization support (English + Chinese)
+- ✅ Responsive design (mobile-friendly)
+- ✅ Dark mode support
+- ✅ Code syntax highlighting
+- ✅ Mermaid diagram support
+- ✅ Search functionality
+- ✅ TypeScript type checking
 
-## 📝 添加新内容
+## 📝 Adding New Content
 
-### 添加文档
+### Adding Documentation
 
-1. 在 `docs/` 目录创建新的 Markdown 文件
-2. 在 `sidebars.ts` 中添加文档引用
+1. Create a new Markdown file in the `docs/` directory
+2. Add the document reference in `sidebars.ts`
 
-### 添加翻译
+### Adding Translations
 
 ```bash
 npm run write-translations -- --locale zh-CN
 ```
 
-### 自定义样式
+### Customizing Styles
 
-编辑 `src/css/custom.css`
+Edit `src/css/custom.css`
 
-## 🌐 部署
+## 🌐 Deployment
 
 ### GitHub Pages
 
@@ -79,39 +79,39 @@ npm run write-translations -- --locale zh-CN
 npm run deploy
 ```
 
-### 其他平台
+### Other Platforms
 
-上传 `build/` 目录到你的服务器或 CDN。
+Upload the `build/` directory to your server or CDN.
 
-## 🔧 常用命令
+## 🔧 Common Commands
 
 ```bash
-npm start              # 启动开发服务器
-npm run build          # 构建生产版本
-npm run serve          # 预览生产构建
-npm run typecheck      # TypeScript 类型检查
-npm run write-translations  # 生成翻译文件
+npm start              # Start development server
+npm run build          # Build for production
+npm run serve          # Preview production build
+npm run typecheck      # TypeScript type checking
+npm run write-translations  # Generate translation files
 ```
 
-## 📚 文档分类
+## 📚 Documentation Categories
 
-- Getting Started (3篇)
-- Architecture (3篇)
-- Producer (3篇)
-- Consumer (4篇)
-- Configuration (3篇)
-- FAQ (3篇)
-- Contributing (3篇)
+- Getting Started (3 docs)
+- Architecture (3 docs)
+- Producer (3 docs)
+- Consumer (4 docs)
+- Configuration (3 docs)
+- FAQ (3 docs)
+- Contributing (3 docs)
 
-## 🎨 自定义
+## 🎨 Customization
 
-- 主题颜色: 编辑 `docusaurus.config.ts`
-- 网站样式: 编辑 `src/css/custom.css`
-- 导航栏: 编辑 `docusaurus.config.ts` 中的 `themeConfig.navbar`
-- 页脚: 编辑 `docusaurus.config.ts` 中的 `themeConfig.footer`
+- Theme colors: Edit `docusaurus.config.ts`
+- Website styles: Edit `src/css/custom.css`
+- Navigation bar: Edit `themeConfig.navbar` in `docusaurus.config.ts`
+- Footer: Edit `themeConfig.footer` in `docusaurus.config.ts`
 
-## 📖 更多信息
+## 📖 More Information
 
-- 完整文档: [PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md)
-- Docusaurus 文档: https://docusaurus.io/docs
+- Full documentation: [PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md)
+- Docusaurus documentation: https://docusaurus.io/docs
 - RocketMQ-Rust GitHub: https://github.com/mxsm/rocketmq-rust
