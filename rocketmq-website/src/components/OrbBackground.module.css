@@ -1,0 +1,75 @@
+.orbContainer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 1;
+  animation: float-orb ease-in-out infinite;
+  transform: translate(-50%, -50%);
+  z-index: 1;
+  will-change: transform;
+}
+
+@keyframes float-orb {
+  0%, 100% {
+    transform: translate(-50%, -50%) translate(0, 0) scale(1);
+  }
+  25% {
+    transform: translate(-50%, -50%) translate(30px, -30px) scale(1.1);
+  }
+  50% {
+    transform: translate(-50%, -50%) translate(-20px, 20px) scale(0.9);
+  }
+  75% {
+    transform: translate(-50%, -50%) translate(20px, 30px) scale(1.05);
+  }
+}
+
+.mouseOrb {
+  position: absolute;
+  width: 400px;
+  height: 400px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(37, 99, 235, 1) 0%, rgba(37, 99, 235, 0) 70%);
+  filter: blur(100px);
+  transform: translate(-50%, -50%);
+  transition: left 0.2s ease-out, top 0.2s ease-out;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 1;
+  will-change: left, top;
+}
+
+/* Reduce animation on devices that prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .orb {
+    animation: none;
+  }
+
+  .mouseOrb {
+    transition: none;
+  }
+}
+
+/* Mobile optimizations */
+@media (max-width: 768px) {
+  .orb {
+    filter: blur(60px) !important;
+  }
+
+  .mouseOrb {
+    width: 250px;
+    height: 250px;
+    filter: blur(80px);
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "label": "Consumer",
+  "position": 5,
+  "link": {
+    "type": "generated-index",
+    "description": "Learn how to consume messages with RocketMQ-Rust"
+  }
+}

@@ -1,0 +1,80 @@
+.features {
+  padding: 5rem 0;
+  background: transparent;
+}
+
+[data-theme='light'] .features {
+  background: #f1f5f9;
+}
+
+[data-theme='dark'] .features {
+  background: #0a0f1e;
+}
+
+.feature {
+  padding: 1rem;
+  margin-bottom: 2rem;
+}
+
+.card {
+  padding: 2rem;
+  height: 100%;
+  background: var(--ifm-background-surface-color);
+  border: 1px solid rgba(168, 85, 247, 0.2);
+  border-radius: 12px;
+  transition: all 0.3s ease;
+  text-align: left;
+}
+
+.card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 24px rgba(168, 85, 247, 0.2);
+  border-color: #a855f7;
+}
+
+.icon {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 1.5rem;
+  background: linear-gradient(135deg, #a855f7 0%, #06b6d4 100%);
+  border-radius: 12px;
+  color: white;
+  box-shadow: 0 4px 14px rgba(168, 85, 247, 0.3);
+}
+
+.svg {
+  width: 36px;
+  height: 36px;
+  stroke-width: 1.5;
+}
+
+.card h3 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  color: var(--ifm-heading-color);
+}
+
+.card p {
+  color: var(--ifm-color-emphasis-700);
+  line-height: 1.6;
+  margin: 0;
+  font-size: 1rem;
+}
+
+@media screen and (max-width: 996px) {
+  .features {
+    padding: 3rem 0;
+  }
+
+  .card {
+    padding: 1.5rem;
+  }
+
+  .card h3 {
+    font-size: 1.25rem;
+  }
+}

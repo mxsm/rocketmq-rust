@@ -1,0 +1,8 @@
+{
+  "label": "发布说明",
+  "position": 9,
+  "link": {
+    "type": "generated-index",
+    "description": "RocketMQ-Rust 版本发布说明"
+  }
+}
