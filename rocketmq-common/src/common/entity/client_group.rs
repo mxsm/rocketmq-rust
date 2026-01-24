@@ -71,3 +71,56 @@ impl Hash for ClientGroup {
         self.group.hash(state);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_group_default() {
+        let cg = ClientGroup::default();
+        assert!(cg.client_id().is_empty());
+        assert!(cg.group().is_empty());
+    }
+
+    #[test]
+    fn client_group_from_parts() {
+        let cg = ClientGroup::from_parts("client".into(), "group".into());
+        assert_eq!(cg.client_id(), "client");
+        assert_eq!(cg.group(), "group");
+    }
+
+    #[test]
+    fn client_group_getters_and_setters() {
+        let mut cg = ClientGroup::new();
+        cg.with_client_id("client".into()).with_group("group".into());
+        assert_eq!(cg.client_id(), "client");
+        assert_eq!(cg.group(), "group");
+    }
+
+    #[test]
+    fn client_group_partial_eq_and_hash() {
+        let cg1 = ClientGroup::from_parts("client".into(), "group".into());
+        let cg2 = ClientGroup::from_parts("client".into(), "group".into());
+        let cg3 = ClientGroup::from_parts("client2".into(), "group".into());
+        assert_eq!(cg1, cg2);
+        assert_ne!(cg1, cg3);
+
+        use std::collections::hash_map::DefaultHasher;
+        let mut hasher1 = DefaultHasher::new();
+        cg1.hash(&mut hasher1);
+        let mut hasher2 = DefaultHasher::new();
+        cg2.hash(&mut hasher2);
+        assert_eq!(hasher1.finish(), hasher2.finish());
+    }
+
+    #[test]
+    fn client_group_serialization_and_deserialization() {
+        let cg = ClientGroup::from_parts("client".into(), "group".into());
+        let json = serde_json::to_string(&cg).unwrap();
+        let expected = r#"{"client_id":"client","group":"group"}"#;
+        assert_eq!(json, expected);
+        let decoded: ClientGroup = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, cg);
+    }
+}
