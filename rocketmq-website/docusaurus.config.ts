@@ -74,6 +74,11 @@ const config: Config = {
 
   themeConfig: {
     image: 'img/docusaurus-social-card.jpg',
+    colorMode: {
+      defaultMode: 'dark',
+      disableSwitch: false,
+      respectPrefersColorScheme: true,
+    },
     navbar: {
       title: 'RocketMQ-Rust',
       logo: {
@@ -185,14 +190,7 @@ const config: Config = {
       indexName: 'rocketmq-rust',
       contextualSearch: true,
     },
-    announcementBar: {
-      id: 'announcement_bar',
-      content:
-        '⚠️ RocketMQ-Rust is under active development. APIs may change before the 1.0 release.',
-      backgroundColor: '#fafbfc',
-      textColor: '#091E42',
-      isCloseable: true,
-    },
+    // Using custom DevWarningBanner component instead of built-in announcementBar
   } satisfies PresetOptions['themeConfig'],
 
   themes: ['@docusaurus/theme-mermaid'],

@@ -54,7 +54,7 @@
     "message": "Supports multiple platforms including Linux, Windows, and macOS. Convenient deployment across different environments with consistent performance and behavior."
   },
   "homepage.hero.subtitle": {
-    "message": "// High-performance & Faster & safer"
+    "message": ""
   },
   "homepage.hero.description": {
     "message": "A high-performance, memory-safe Apache RocketMQ implementation built with Rust for modern distributed systems."
@@ -64,5 +64,11 @@
   },
   "homepage.hero.github": {
     "message": "GitHub"
+  },
+  "homepage.announcement.title": {
+    "message": "RocketMQ-Rust v0.7.0 is out!"
+  },
+  "homepage.announcement.link": {
+    "message": "See what's new →"
   }
 }
