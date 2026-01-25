@@ -5,7 +5,17 @@ title: Coding Standards
 
 # Coding Standards
 
-Follow these standards when contributing to RocketMQ-Rust.
+Welcome to RocketMQ-Rust's coding standards! 📝
+
+This guide will help you write clean, idiomatic Rust code that follows our project conventions. These standards ensure code consistency, maintainability, and quality across the entire codebase.
+
+## Why Coding Standards Matter
+
+Consistent code is:
+- **Easier to read** and understand
+- **Easier to maintain** and debug
+- **Easier to review** in pull requests
+- **More reliable** with fewer bugs
 
 ## Rust Conventions
 
@@ -71,22 +81,25 @@ impl Default for Producer {
 
 ### Error Handling
 
+RocketMQ-Rust uses the `thiserror` crate for error definitions. Always use `Result` types for operations that can fail.
+
 ```rust
 // Use Result for fallible operations
 use crate::error::Result;
 
 pub async fn send_message(&self, msg: Message) -> Result<SendResult> {
-    // Use ? for error propagation
+    // Use ? for error propagation - clean and idiomatic
     let broker = self.find_broker(&msg.topic)?;
 
-    // Avoid unwrap() in library code
+    // ⚠️ Avoid unwrap() in library code - it can panic!
+    // ✅ Instead, handle errors explicitly
     match broker.send(msg).await {
         Ok(result) => Ok(result),
         Err(e) => Err(Error::SendFailed(e.to_string())),
     }
 }
 
-// Custom error types
+// Custom error types using thiserror
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Broker not found: {0}")]
@@ -98,26 +111,55 @@ pub enum Error {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
+
+// ✅ Good: Explicit error handling
+pub fn parse_config(data: &str) -> Result<Config> {
+    serde_json::from_str(data)
+        .map_err(|e| Error::ConfigParse(e.to_string()))
+}
+
+// ❌ Bad: Using unwrap() - can panic!
+pub fn parse_config_bad(data: &str) -> Config {
+    serde_json::from_str(data).unwrap() // Don't do this!
+}
 ```
 
 ### Async/Await
 
+RocketMQ-Rust uses `tokio` as the async runtime. All I/O operations should be async.
+
 ```rust
-// Use async/await for async operations
+// ✅ Use async/await for async operations
 pub async fn send(&self, msg: Message) -> Result<SendResult> {
     let broker = self.get_broker().await?;
     broker.send(msg).await
 }
 
-// Spawn tasks for concurrent operations
+// ✅ Spawn tasks for concurrent operations
 pub async fn send_batch(&self, msgs: Vec<Message>) -> Result<Vec<SendResult>> {
     let tasks: Vec<_> = msgs
         .into_iter()
-        .map(|msg| tokio::spawn(self.send(msg)))
+        .map(|msg| {
+            let self_clone = self.clone();
+            tokio::spawn(async move { self_clone.send(msg).await })
+        })
         .collect();
 
     let results = futures::future::try_join_all(tasks).await?;
-    Ok(results.into_iter().map(|r| r.unwrap()).collect())
+    results.into_iter().collect::<Result<Vec<_>>>()
+}
+
+// ❌ Bad: Blocking operations in async context
+pub async fn send_bad(&self, msg: Message) -> Result<SendResult> {
+    // Don't do this - blocks the async runtime!
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    self.send_impl(msg).await
+}
+
+// ✅ Good: Use tokio's async sleep
+pub async fn send_good(&self, msg: Message) -> Result<SendResult> {
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    self.send_impl(msg).await
 }
 ```
 
@@ -220,25 +262,35 @@ async fn test_producer_consumer() {
 
 ## Code Style
 
-### Formatting
+### Automated Formatting
+
+We use `rustfmt` to ensure consistent code formatting across the project. **Always format your code before committing!**
 
 ```bash
-# Format code
-cargo fmt
+# Format all code in the workspace
+cargo fmt --all
 
-# Check formatting
-cargo fmt --check
+# Check if code is formatted (used in CI)
+cargo fmt --all --check
 ```
 
-### Linting
+**Pro tip**: Configure your IDE to format on save:
+- **VS Code**: Set `"editor.formatOnSave": true` with rust-analyzer
+- **RustRover**: Enable "Reformat code" in Settings → Tools → Actions on Save
+
+### Linting with Clippy
+
+We use `clippy` to catch common mistakes and non-idiomatic code. All clippy warnings must be fixed before merging.
 
 ```bash
-# Run clippy
-cargo clippy -- -D warnings
+# Run clippy on all targets and features
+cargo clippy --all-targets --all-features --workspace -- -D warnings
 
-# Fix clippy suggestions
-cargo clippy --fix
+# Auto-fix clippy suggestions (when possible)
+cargo clippy --fix --all-targets --all-features --workspace
 ```
+
+**Note**: Some clippy suggestions are auto-fixable, but always review the changes before committing.
 
 ### Common Patterns
 
@@ -295,22 +347,33 @@ impl AsRef<str> for MessageId {
 
 ## Performance Guidelines
 
+RocketMQ-Rust is designed for high performance. Follow these guidelines to maintain optimal performance.
+
 ### Memory Management
 
+**Prefer borrowing over cloning** - avoid unnecessary allocations:
+
 ```rust
-// Use references to avoid copies
+// ✅ Good: Use references to avoid copies
 pub fn process_message(msg: &Message) -> Result<()> {
-    let body = msg.get_body();
+    let body = msg.get_body();  // Borrows, no copy
     // Process body without cloning
+    Ok(())
 }
 
-// Use Cow for conditional ownership
+// ❌ Bad: Unnecessary cloning
+pub fn process_message_bad(msg: Message) -> Result<()> {
+    let body = msg.get_body().clone();  // Extra allocation!
+    Ok(())
+}
+
+// ✅ Use Cow for conditional ownership
 use std::borrow::Cow;
 
 pub fn get_topic<'a>(msg: &'a Message, default: &'a str) -> Cow<'a, str> {
     match msg.get_topic() {
-        "" => Cow::Borrowed(default),
-        topic => Cow::Borrowed(topic),
+        "" => Cow::Borrowed(default),  // No allocation
+        topic => Cow::Borrowed(topic), // No allocation
     }
 }
 ```
@@ -334,24 +397,121 @@ use tokio::sync::mpsc;
 let (tx, mut rx) = mpsc::channel(1000);
 ```
 
-## Common Mistakes to Avoid
+## Common Mistakes to Avoid ⚠️
 
-1. **Don't use `unwrap()`** in library code
-2. **Don't use `expect()`** unless absolutely necessary
-3. **Don't ignore errors**: Always handle `Result` properly
-4. **Don't use blocking operations** in async code
-5. **Don't leak memory**: Be careful with reference cycles
-6. **Don't overuse `unsafe`**: Only when necessary
-7. **Don't make unnecessary clones**: Use references
+Learn from these common pitfalls:
 
-## Resources
+### 1. Using `unwrap()` or `panic!()` in Library Code
 
-- [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/)
-- [Rust Style Guide](https://rust-lang.github.io/rust-clippy/master/index.html)
-- [Effective Rust](https://doc.rust-lang.org/book/title-page.html)
+❌ **Bad**:
+```rust
+pub fn get_broker(&self) -> Broker {
+    self.brokers.get(0).unwrap()  // Can panic!
+}
+```
+
+✅ **Good**:
+```rust
+pub fn get_broker(&self) -> Result<&Broker> {
+    self.brokers.get(0).ok_or(Error::NoBrokerAvailable)
+}
+```
+
+### 2. Ignoring Errors
+
+❌ **Bad**:
+```rust
+let _ = self.send(msg).await;  // Error silently ignored!
+```
+
+✅ **Good**:
+```rust
+if let Err(e) = self.send(msg).await {
+    log::error!("Failed to send message: {}", e);
+    return Err(e);
+}
+```
+
+### 3. Blocking in Async Code
+
+❌ **Bad**:
+```rust
+pub async fn send(&self) -> Result<()> {
+    std::thread::sleep(Duration::from_secs(1));  // Blocks executor!
+}
+```
+
+✅ **Good**:
+```rust
+pub async fn send(&self) -> Result<()> {
+    tokio::time::sleep(Duration::from_secs(1)).await;
+}
+```
+
+### 4. Unnecessary Clones
+
+❌ **Bad**:
+```rust
+pub fn process(&self, data: String) -> Result<()> {
+    let copy = data.clone();  // Unnecessary!
+    self.process_impl(&copy)
+}
+```
+
+✅ **Good**:
+```rust
+pub fn process(&self, data: &str) -> Result<()> {
+    self.process_impl(data)
+}
+```
+
+### 5. Memory Leaks with Reference Cycles
+
+Be careful with `Rc`/`Arc` cycles. Use `Weak` references when needed.
+
+### 6. Overusing `unsafe`
+
+Only use `unsafe` when absolutely necessary and always document why it's safe.
+
+### 7. Not Handling All Enum Variants
+
+Avoid using `_` in match arms - be explicit to catch future enum additions.
+
+## Learning Resources 📚
+
+Want to write better Rust code? Check out these resources:
+
+### Official Rust Resources
+- [The Rust Book](https://doc.rust-lang.org/book/) - Comprehensive Rust guide
+- [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/) - API design best practices
+- [Rust by Example](https://doc.rust-lang.org/rust-by-example/) - Learn by examples
+- [Clippy Lint List](https://rust-lang.github.io/rust-clippy/master/index.html) - All clippy lints explained
+
+### Advanced Topics
+- [Async Book](https://rust-lang.github.io/async-book/) - Deep dive into async Rust
+- [Tokio Tutorial](https://tokio.rs/tokio/tutorial) - Async runtime guide
+- [The Rustonomicon](https://doc.rust-lang.org/nomicon/) - Unsafe Rust (advanced)
+
+### RocketMQ-Rust Specific
+- [Architecture Overview](/docs/architecture/overview) - Understand the codebase structure
+- [Development Guide](./development-guide) - Set up your dev environment
+- [Contributing Overview](./overview) - Start contributing today!
+
+## Summary
+
+Remember:
+- ✅ Write idiomatic Rust code
+- ✅ Handle errors properly with `Result`
+- ✅ Use async/await for I/O operations
+- ✅ Format code with `cargo fmt`
+- ✅ Fix clippy warnings before committing
+- ✅ Write tests for your code
+- ✅ Document public APIs
+
+Happy coding! 🚀
 
 ## Next Steps
 
-- [Development Guide](./development-guide) - Development information
-- [Overview](./overview) - Contributing overview
-- [Report Issues](https://github.com/mxsm/rocketmq-rust/issues) - File issues
+- [Development Guide](./development-guide) - Set up your environment
+- [Overview](./overview) - Start contributing
+- [Report Issues](https://github.com/mxsm/rocketmq-rust/issues) - Found a bug?

@@ -5,7 +5,9 @@ title: Overview
 
 # Contributing Overview
 
-Thank you for your interest in contributing to RocketMQ-Rust! This document will guide you through the contribution process.
+Welcome to the RocketMQ-Rust community! 🎉
+
+Thank you for your interest in contributing to RocketMQ-Rust. Whether you're fixing a bug, adding a feature, or improving documentation, every contribution makes a difference. This guide will help you get started on your contribution journey.
 
 ## Ways to Contribute
 
@@ -44,8 +46,9 @@ git remote add upstream https://github.com/mxsm/rocketmq-rust.git
 ### 2. Set Up Development Environment
 
 ```bash
-# Ensure Rust is installed
-rustc --version  # Should be 1.70 or later
+# Install Rust nightly toolchain
+rustup toolchain install nightly
+rustup default nightly
 
 # Install development tools
 rustup component add rustfmt clippy
@@ -128,17 +131,24 @@ git push origin feature/your-feature-name
 
 ### What to Expect
 
-1. **Automated checks**: CI will run tests
-2. **Manual review**: Maintainers review code
-3. **Feedback**: Address review comments
-4. **Approval**: PR approved and merged
+Our review process is designed to maintain code quality while being welcoming to contributors:
+
+1. **Automated checks** (1-5 minutes): CI runs tests, linting, and format checks
+2. **Manual review** (1-3 days): Maintainers review your code for quality and design
+3. **Feedback discussion**: Collaborative discussion to improve the code
+4. **Approval & merge**: Once approved, your PR will be merged! 🎉
 
 ### Addressing Feedback
 
-- Respond to all review comments
-- Make requested changes
-- Push updates to same branch
-- Ask for re-review when ready
+Code review is a conversation, not criticism. When you receive feedback:
+
+- Respond to all review comments (even if just to acknowledge)
+- Ask questions if something is unclear
+- Make requested changes and push updates to the same branch
+- Request re-review when ready
+- Don't hesitate to discuss alternative approaches
+
+**Note**: CodeRabbit suggestions are helpful references, but the final decision is made by maintainers during code review.
 
 ## Coding Standards
 
@@ -277,18 +287,27 @@ pub fn public_function() -> Result<()> {
 
 ## Getting Help
 
-- **GitHub Issues**: Report bugs or request features
-- **Mailing List**: general@rocketmq.apache.org
-- **Slack**: Join RocketMQ Slack workspace
-- **Stack Overflow**: Use `rocketmq` tag
+We're here to help! Feel free to reach out through:
+
+- **GitHub Issues**: [Report bugs or request features](https://github.com/mxsm/rocketmq-rust/issues)
+- **GitHub Discussions**: [Ask questions and share ideas](https://github.com/mxsm/rocketmq-rust/discussions)
+- **Email**: [mxsm@apache.org](mailto:mxsm@apache.org)
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0).
+RocketMQ-Rust is licensed under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). By contributing, you agree that your contributions will be licensed under the same license.
 
 ## Code of Conduct
 
-Please be respectful and constructive. We're all here to build great software together.
+We are committed to providing a welcoming and inclusive environment for everyone. Please:
+
+- Be respectful and considerate in your communication
+- Welcome newcomers and help them get started
+- Focus on constructive feedback
+- Assume good intentions
+- Collaborate openly and share knowledge
+
+We're all here to build great software together! 🚀
 
 ## Next Steps
 
