@@ -89,3 +89,54 @@ impl fmt::Display for LiteLagInfo {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lite_lag_info_default() {
+        let info = LiteLagInfo::default();
+        assert!(info.lite_topic().is_empty());
+        assert_eq!(info.lag_count(), 0);
+        assert_eq!(info.earliest_unconsumed_timestamp(), 0);
+    }
+
+    #[test]
+    fn lite_lag_info_new() {
+        let info = LiteLagInfo::new("topic".into(), 10, 100);
+        assert_eq!(info.lite_topic(), "topic");
+        assert_eq!(info.lag_count(), 10);
+        assert_eq!(info.earliest_unconsumed_timestamp(), 100);
+    }
+
+    #[test]
+    fn lite_lag_info_getters_and_setters() {
+        let mut info = LiteLagInfo::default();
+        info.set_lite_topic("topic".into());
+        info.set_lag_count(10);
+        info.set_earliest_unconsumed_timestamp(default_earliest_unconsumed_timestamp());
+
+        assert_eq!(info.lite_topic(), "topic");
+        assert_eq!(info.lag_count(), 10);
+        assert_eq!(info.earliest_unconsumed_timestamp(), -1);
+    }
+
+    #[test]
+    fn lite_lag_info_display() {
+        let info = LiteLagInfo::new("topic".into(), 10, 100);
+        let display = format!("{}", info);
+        let expected = "LiteLagInfo { lite_topic: topic, lag_count: 10, earliest_unconsumed_timestamp: 100 }";
+        assert_eq!(display, expected);
+    }
+
+    #[test]
+    fn lite_lag_info_serialization_and_deserialization() {
+        let info = LiteLagInfo::new("topic".into(), 10, 100);
+        let json = serde_json::to_string(&info).unwrap();
+        let expected = r#"{"liteTopic":"topic","lagCount":10,"earliestUnconsumedTimestamp":100}"#;
+        assert_eq!(json, expected);
+        let decoded: LiteLagInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, info);
+    }
+}
