@@ -52,7 +52,6 @@ rocketmq-remoting    = { version = "0.8.0", path = "./rocketmq-remoting" }
 rocketmq-client-rust = { version = "0.8.0", path = "./rocketmq-client" }
 rocketmq-tools       = { version = "0.8.0", path = "./rocketmq-tools" }
 rocketmq-error       = { version = "0.8.0", path = "./rocketmq-error" }
-rocketmq-auth        = { version = "0.8.0", path = "./rocketmq-auth" }
 
 tokio        = { version = "1.49", features = ["full"] }
 tokio-util   = { version = "0.7.18", features = ["full"] }
@@ -73,7 +72,6 @@ serde_json_any_key = "2.0.0"
 anyhow             = "1.0.100"
 bytes              = "1.11.0"
 rand               = "0.9.2"
-lazy_static        = "1.5.0"
 num_cpus           = "1.17"
 
 config = "0.15.19"
