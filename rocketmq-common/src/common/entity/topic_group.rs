@@ -72,3 +72,64 @@ impl std::fmt::Display for TopicGroup {
         write!(f, "TopicGroup{{topic='{}', group='{}'}}", self.topic, self.group)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn topic_group_default() {
+        let tg = TopicGroup::default();
+        assert!(tg.topic().is_empty());
+        assert!(tg.group().is_empty());
+    }
+
+    #[test]
+    fn topic_group_from_parts() {
+        let tg = TopicGroup::from_parts("topic".into(), "group".into());
+        assert_eq!(tg.topic(), "topic");
+        assert_eq!(tg.group(), "group");
+    }
+
+    #[test]
+    fn topic_group_with_methods() {
+        let mut tg = TopicGroup::default();
+        tg.with_topic("topic".into()).with_group("group".into());
+        assert_eq!(tg.topic(), "topic");
+        assert_eq!(tg.group(), "group");
+    }
+
+    #[test]
+    fn topic_group_partial_eq_and_hash() {
+        let tg1 = TopicGroup::from_parts("topic".into(), "group".into());
+        let tg2 = TopicGroup::from_parts("topic".into(), "group".into());
+        let tg3 = TopicGroup::from_parts("topic2".into(), "group".into());
+        assert_eq!(tg1, tg2);
+        assert_ne!(tg1, tg3);
+
+        use std::collections::hash_map::DefaultHasher;
+        let mut hasher1 = DefaultHasher::new();
+        tg1.hash(&mut hasher1);
+        let mut hasher2 = DefaultHasher::new();
+        tg2.hash(&mut hasher2);
+        assert_eq!(hasher1.finish(), hasher2.finish());
+    }
+
+    #[test]
+    fn topic_group_display() {
+        let tg = TopicGroup::from_parts("topic".into(), "group".into());
+        let display = format!("{}", tg);
+        let expected = "TopicGroup{topic='topic', group='group'}";
+        assert_eq!(display, expected);
+    }
+
+    #[test]
+    fn topic_group_serde() {
+        let tg = TopicGroup::from_parts("topic".into(), "group".into());
+        let json = serde_json::to_string(&tg).unwrap();
+        let expected = r#"{"topic":"topic","group":"group"}"#;
+        assert_eq!(json, expected);
+        let decoded: TopicGroup = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, tg);
+    }
+}
