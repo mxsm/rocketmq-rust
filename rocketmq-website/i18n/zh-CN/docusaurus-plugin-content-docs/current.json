@@ -1,38 +1,38 @@
 {
   "version.label": {
-    "message": "Next",
+    "message": "最新",
     "description": "The label for version current"
   },
   "sidebar.docsSidebar.category.Getting Started": {
-    "message": "Getting Started",
+    "message": "快速开始",
     "description": "The label for category 'Getting Started' in sidebar 'docsSidebar'"
   },
   "sidebar.docsSidebar.category.Architecture": {
-    "message": "Architecture",
+    "message": "架构",
     "description": "The label for category 'Architecture' in sidebar 'docsSidebar'"
   },
   "sidebar.docsSidebar.category.Producer": {
-    "message": "Producer",
+    "message": "生产者",
     "description": "The label for category 'Producer' in sidebar 'docsSidebar'"
   },
   "sidebar.docsSidebar.category.Consumer": {
-    "message": "Consumer",
+    "message": "消费者",
     "description": "The label for category 'Consumer' in sidebar 'docsSidebar'"
   },
   "sidebar.docsSidebar.category.Configuration": {
-    "message": "Configuration",
+    "message": "配置",
     "description": "The label for category 'Configuration' in sidebar 'docsSidebar'"
   },
   "sidebar.docsSidebar.category.FAQ": {
-    "message": "FAQ",
+    "message": "常见问题",
     "description": "The label for category 'FAQ' in sidebar 'docsSidebar'"
   },
   "sidebar.docsSidebar.category.Contributing": {
-    "message": "Contributing",
+    "message": "贡献指南",
     "description": "The label for category 'Contributing' in sidebar 'docsSidebar'"
   },
   "sidebar.docsSidebar.category.Release Notes": {
-    "message": "Release Notes",
+    "message": "发布说明",
     "description": "The label for category 'Release Notes' in sidebar 'docsSidebar'"
   }
 }
