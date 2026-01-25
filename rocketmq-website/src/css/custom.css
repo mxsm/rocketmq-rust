@@ -124,9 +124,55 @@ markdown > table {
   backdrop-filter: blur(10px);
 }
 
+/* Make navbar title (RocketMQ-Rust) larger and bold with animation */
+.navbar__title {
+  font-size: 1.5rem !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.02em;
+  background: linear-gradient(135deg, #a855f7 0%, #06b6d4 50%, #a855f7 100%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: gradient-shift 3s ease infinite;
+  transition: transform 0.3s ease;
+}
+
+.navbar__title:hover {
+  transform: scale(1.05);
+  animation: gradient-shift 1.5s ease infinite;
+}
+
+@keyframes gradient-shift {
+  0% {
+    background-position: 0% center;
+  }
+  50% {
+    background-position: 100% center;
+  }
+  100% {
+    background-position: 0% center;
+  }
+}
+
+@keyframes scale-in {
+  0% {
+    transform: scale(0.9);
+  }
+  50% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* Navbar links styling - removed colorful gradients, keep default */
 .navbar__link--active {
-  color: var(--ifm-color-primary) !important;
-  font-weight: 600;
+  font-weight: 700 !important;
+  animation: scale-in 0.4s ease-out;
+  transform: scale(1);
+  display: inline-block;
 }
 
 /* Better footer */
