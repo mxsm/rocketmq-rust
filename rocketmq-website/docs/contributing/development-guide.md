@@ -11,10 +11,9 @@ Detailed guide for developing RocketMQ-Rust.
 
 ### Prerequisites
 
-- **Rust**: 1.70.0 or later
+- **Rust**: nightly toolchain
 - **Git**: For version control
-- **Docker**: For running RocketMQ broker in development
-- **IDE**: VS Code, IntelliJ IDEA, or similar
+- **IDE**: VS Code, RustRover, or similar
 
 ### IDE Setup
 
@@ -26,9 +25,25 @@ Install extensions:
 - Even Better TOML
 - Error Lens
 
-**IntelliJ IDEA**:
+**RustRover**:
 
-Install the Rust plugin for full IDE support.
+RustRover comes with built-in Rust support. No additional plugins required.
+
+### Installing Rust Nightly
+
+```bash
+# Install rustup if you haven't already
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Install nightly toolchain
+rustup toolchain install nightly
+
+# Set nightly as default (optional)
+rustup default nightly
+
+# Or use nightly for this project only
+rustup override set nightly
+```
 
 ### Building from Source
 
@@ -49,34 +64,51 @@ cargo test --all
 
 ## Project Structure
 
+RocketMQ-Rust is a workspace-based project with multiple crates. Here's the high-level structure:
+
 ```
 rocketmq-rust/
-├── rocketmq/           # Main library
+├── rocketmq/              # Core library (utilities, scheduling, concurrency)
+├── rocketmq-auth/         # Authentication and authorization
+├── rocketmq-broker/       # Broker implementation
+├── rocketmq-cli/          # Command-line interface tools
+├── rocketmq-client/       # Client library (producer & consumer)
 │   ├── src/
-│   │   ├── client/     # Client code
-│   │   ├── producer/   # Producer implementation
-│   │   ├── consumer/   # Consumer implementation
-│   │   ├── model/      # Data models
-│   │   ├── protocol/   # Protocol implementation
-│   │   └── error/      # Error types
-│   └── Cargo.toml
-├── rocketmq-remoting/  # Remoting module
-├── examples/           # Example code
-└── docs/              # Documentation
+│   │   ├── admin/         # Admin tools
+│   │   ├── base/          # Base client functionality
+│   │   ├── common/        # Common utilities
+│   │   ├── consumer/      # Consumer implementation
+│   │   ├── producer/      # Producer implementation
+│   │   ├── factory/       # Client factory
+│   │   ├── implementation/ # Implementation details
+│   │   ├── latency/       # Latency tracking
+│   │   ├── hook/          # Hooks and interceptors
+│   │   ├── trace/         # Message tracing
+│   │   └── utils/         # Utility functions
+├── rocketmq-common/       # Common data structures and utilities
+├── rocketmq-controller/   # Controller component
+├── rocketmq-doc/          # Documentation resources
+├── rocketmq-error/        # Error types and handling
+├── rocketmq-example/      # Example code
+├── rocketmq-filter/       # Message filtering
+├── rocketmq-macros/       # Procedural macros
+├── rocketmq-namesrv/      # Name server implementation
+├── rocketmq-proxy/        # Proxy server
+├── rocketmq-remoting/     # Remoting/communication layer
+├── rocketmq-runtime/      # Runtime utilities
+├── rocketmq-store/        # Message storage
+├── rocketmq-tools/        # Development tools
+├── rocketmq-tui/          # Terminal user interface
+├── rocketmq-website/      # Documentation website
+├── Cargo.toml             # Workspace configuration
+├── Cargo.lock             # Lock file
+├── CHANGELOG.md           # Change log
+├── CONTRIBUTING.md        # Contributing guidelines
+├── README.md              # Project README
+└── resources/             # Additional resources
 ```
 
-## Running Integration Tests
-
-### Start Test Broker
-
-```bash
-# Using Docker
-docker run -d -p 9876:9876 --name rmqnamesrv apache/rocketmq:nameserver
-docker run -d -p 10911:10911 -p 10909:10909 --name rmqbroker \
-  -e "NAMESRV_ADDR=rmqnamesrv:9876" \
-  --link rmqnamesrv:rmqnamesrv \
-  apache/rocketmq:broker
-```
+## Running Tests
 
 ### Run Integration Tests
 
@@ -294,12 +326,105 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
         with:
-          toolchain: stable
+          toolchain: nightly
+          override: true
       - uses: actions-rs/cargo@v1
         with:
           command: test
           args: --all
 ```
+
+## Contributing Workflow
+
+### Reporting Issues
+
+- Before submitting an issue, please go through a comprehensive search to make sure the problem cannot be solved just by searching.
+- Check the [Issue List](https://github.com/mxsm/rocketmq-rust/issues) to make sure the problem is not repeated.
+- Create a new issue and choose the type of issue.
+- Define the issue with a clear and descriptive title.
+- Fill in necessary information according to the template.
+- Please pay attention to your issue, you may need to provide more information during discussion.
+
+### How to Contribute
+
+#### 1. Prepare Repository
+
+Go to [RocketMQ Rust GitHub Repo](https://github.com/mxsm/rocketmq-rust) and fork the repository to your account.
+
+Clone the repository to your local machine:
+
+```bash
+git clone https://github.com/(your-username)/rocketmq-rust.git
+cd rocketmq-rust
+```
+
+Add the upstream **`rocketmq-rust`** remote repository:
+
+```bash
+git remote add mxsm https://github.com/mxsm/rocketmq-rust.git
+git remote -v
+git fetch mxsm
+```
+
+#### 2. Choose Issue
+
+Please choose the issue to be worked on. If it is a new issue discovered or a new feature enhancement to offer, please create an issue and set the appropriate label for it.
+
+#### 3. Create Branch
+
+```bash
+git checkout main
+git fetch mxsm
+git rebase mxsm/main
+git checkout -b feature-issueNo
+```
+
+**Note:** We will merge PR using squash, commit log will be different with upstream if you use old branch.
+
+#### 4. Development Workflow
+
+After the development is completed, it is necessary to perform code formatting, compilation, and format checking.
+
+**Format the code in the project:**
+
+```bash
+cargo fmt --all
+```
+
+**Build:**
+
+```bash
+cargo build
+```
+
+**Run Clippy:**
+
+```bash
+cargo clippy --all-targets --all-features --workspace
+```
+
+**Run all tests:**
+
+```bash
+cargo test --all-features --workspace
+```
+
+**Push code to your fork repo:**
+
+```bash
+git add modified-file-names
+git commit -m 'commit log'
+git push origin feature-issueNo
+```
+
+#### 5. Submit Pull Request
+
+- Send a pull request to the main branch
+- Maintainers will do code review and discuss details (including design, implementation, and performance) with you
+- The request will be merged into the current development branch after the review is complete
+- Congratulations on becoming a contributor to rocketmq-rust!
+
+**Note:** 🚨 The code review suggestions from CodeRabbit are to be used as a reference only. The PR submitter can decide whether to make changes based on their own judgment. Ultimately, the project maintainers will conduct the final code review.
 
 ## Best Practices
 
