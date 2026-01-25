@@ -13,3 +13,5 @@
 //  limitations under the License.
 
 pub mod broker_operator_result;
+pub mod message_track;
+pub mod track_type;
