@@ -101,3 +101,59 @@ impl GetLiteTopicInfoResponseBody {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_lite_topic_info_response_body_default() {
+        let body = GetLiteTopicInfoResponseBody::default();
+        assert!(body.parent_topic().is_empty());
+        assert!(body.lite_topic().is_empty());
+        assert!(body.subscriber().is_empty());
+        assert!(body.topic_offset().is_none());
+        assert!(!body.sharding_to_broker());
+    }
+
+    #[test]
+    fn get_lite_topic_info_response_body_getters_setters() {
+        let mut body = GetLiteTopicInfoResponseBody::new();
+        let mut set = HashSet::new();
+        let subscriber1 = ClientGroup::from_parts("client1".into(), "group1".into());
+        set.insert(subscriber1.clone());
+        let subscriber2 = ClientGroup::from_parts("client2".into(), "group2".into());
+        let offset = TopicOffset::default();
+
+        body.with_parent_topic("parent".into())
+            .with_lite_topic("topic".into())
+            .with_subscriber(set)
+            .add_subscriber(subscriber2.clone())
+            .with_topic_offset(offset)
+            .with_sharding_to_broker(true);
+
+        assert_eq!(body.parent_topic(), "parent");
+        assert_eq!(body.lite_topic(), "topic");
+        assert!(body.subscriber().contains(&subscriber1));
+        assert!(body.subscriber().contains(&subscriber2));
+        assert!(body.topic_offset().is_some());
+        assert!(body.sharding_to_broker());
+    }
+
+    #[test]
+    fn get_lite_topic_info_response_body_serialization_and_deserialization() {
+        let mut body = GetLiteTopicInfoResponseBody::new();
+        body.with_parent_topic("parent".into())
+            .with_lite_topic("topic".into())
+            .with_sharding_to_broker(true);
+
+        let json = serde_json::to_string(&body).unwrap();
+        let expected = r#"{"parentTopic":"parent","liteTopic":"topic","subscriber":[],"shardingToBroker":true}"#;
+        assert_eq!(json, expected);
+
+        let decoded: GetLiteTopicInfoResponseBody = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.parent_topic(), body.parent_topic());
+        assert_eq!(decoded.lite_topic(), body.lite_topic());
+        assert_eq!(decoded.sharding_to_broker(), body.sharding_to_broker());
+    }
+}
