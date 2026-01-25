@@ -19,22 +19,45 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::base::plain_access_config::PlainAccessConfig;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::tools::broker_operator_result::BrokerOperatorResult;
+use rocketmq_common::common::tools::message_track::MessageTrack;
 use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
+use rocketmq_remoting::protocol::admin::consume_stats_list::ConsumeStatsList;
+use rocketmq_remoting::protocol::admin::rollback_stats::RollbackStats;
 use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
+use rocketmq_remoting::protocol::body::acl_info::AclInfo;
+use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
+use rocketmq_remoting::protocol::body::broker_replicas_info::BrokerReplicasInfo;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::body::consumer_connection::ConsumerConnection;
 use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
+use rocketmq_remoting::protocol::body::epoch_entry_cache::EpochEntryCache;
+use rocketmq_remoting::protocol::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
+use rocketmq_remoting::protocol::body::get_lite_client_info_response_body::GetLiteClientInfoResponseBody;
+use rocketmq_remoting::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
+use rocketmq_remoting::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
+use rocketmq_remoting::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
 use rocketmq_remoting::protocol::body::group_list::GroupList;
+use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::body::producer_connection::ProducerConnection;
+use rocketmq_remoting::protocol::body::producer_table_info::ProducerTableInfo;
+use rocketmq_remoting::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
+use rocketmq_remoting::protocol::body::queue_time_span::QueueTimeSpan;
+use rocketmq_remoting::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper;
 use rocketmq_remoting::protocol::body::topic::topic_list::TopicList;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
+use rocketmq_remoting::protocol::body::user_info::UserInfo;
+use rocketmq_remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
 use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use rocketmq_remoting::protocol::subscription::broker_stats_data::BrokerStatsData;
+use rocketmq_remoting::protocol::subscription::group_forbidden::GroupForbidden;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 
 use crate::common::admin_tool_result::AdminToolResult;
@@ -146,11 +169,11 @@ pub trait MQAdminExt: Send {
         timeout_millis: Option<u64>,
     ) -> rocketmq_error::RocketMQResult<ConsumeStats>;
 
-    /*async fn check_rocksdb_cq_write_progress(
+    async fn check_rocksdb_cq_write_progress(
         &self,
         broker_addr: CheetahString,
         topic: CheetahString,
-    ) ->rocketmq_error::RocketMQResult<CheckRocksdbCqWriteProgressResponseBody>;*/
+    ) -> rocketmq_error::RocketMQResult<CheetahString>;
 
     async fn examine_broker_cluster_info(&self) -> rocketmq_error::RocketMQResult<ClusterInfo>;
 
@@ -171,10 +194,10 @@ pub trait MQAdminExt: Send {
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<ProducerConnection>;
 
-    /* async fn get_all_producer_info(
+    async fn get_all_producer_info(
         &self,
         broker_addr: CheetahString,
-    ) ->rocketmq_error::RocketMQResult<ProducerTableInfo>;*/
+    ) -> rocketmq_error::RocketMQResult<ProducerTableInfo>;
 
     async fn get_name_server_address_list(&self) -> Vec<CheetahString>;
 
@@ -212,11 +235,11 @@ pub trait MQAdminExt: Send {
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()>;
 
-    /*async fn delete_topic_in_broker_concurrent(
+    async fn delete_topic_in_broker_concurrent(
         &self,
         addrs: HashSet<CheetahString>,
         topic: CheetahString,
-    ) -> AdminToolResult<BrokerOperatorResult>;*/
+    ) -> AdminToolResult<BrokerOperatorResult>;
 
     async fn delete_topic_in_name_server(
         &self,
@@ -245,13 +268,13 @@ pub trait MQAdminExt: Send {
         key: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()>;
 
-    /*async fn reset_offset_by_timestamp_old(
+    async fn reset_offset_by_timestamp_old(
         &self,
         consumer_group: CheetahString,
         topic: CheetahString,
         timestamp: u64,
         force: bool,
-    ) ->rocketmq_error::RocketMQResult<Vec<RollbackStats>>;*/
+    ) -> rocketmq_error::RocketMQResult<Vec<RollbackStats>>;
 
     async fn reset_offset_by_timestamp(
         &self,
@@ -269,12 +292,12 @@ pub trait MQAdminExt: Send {
         timestamp: u64,
     ) -> rocketmq_error::RocketMQResult<()>;
 
-    /*async fn reset_offset_new_concurrent(
+    async fn reset_offset_new_concurrent(
         &self,
         group: CheetahString,
         topic: CheetahString,
         timestamp: u64,
-    ) -> AdminToolResult<BrokerOperatorResult>;*/
+    ) -> AdminToolResult<BrokerOperatorResult>;
 
     async fn get_consume_status(
         &self,
@@ -302,17 +325,17 @@ pub trait MQAdminExt: Send {
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<SubscriptionData>;
 
-    /*async fn query_consume_time_span(
+    async fn query_consume_time_span(
         &self,
         topic: CheetahString,
         group: CheetahString,
-    ) ->rocketmq_error::RocketMQResult<Vec<QueueTimeSpan>>;
+    ) -> rocketmq_error::RocketMQResult<Vec<QueueTimeSpan>>;
 
     async fn query_consume_time_span_concurrent(
         &self,
         topic: CheetahString,
         group: CheetahString,
-    ) -> AdminToolResult<Vec<QueueTimeSpan>>;*/
+    ) -> AdminToolResult<Vec<QueueTimeSpan>>;
 
     async fn clean_expired_consumer_queue(
         &self,
@@ -357,15 +380,9 @@ pub trait MQAdminExt: Send {
         msg_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<ConsumeMessageDirectlyResult>;
 
-    /*async fn message_track_detail(
-        &self,
-        msg: MessageExt,
-    ) ->rocketmq_error::RocketMQResult<Vec<MessageTrack>>;
+    async fn message_track_detail(&self, msg_id: CheetahString) -> rocketmq_error::RocketMQResult<Vec<MessageTrack>>;
 
-    async fn message_track_detail_concurrent(
-        &self,
-        msg: MessageExt,
-    ) -> AdminToolResult<Vec<MessageTrack>>;*/
+    async fn message_track_detail_concurrent(&self, msg_id: CheetahString) -> AdminToolResult<Vec<MessageTrack>>;
 
     async fn clone_group_offset(
         &self,
@@ -375,35 +392,35 @@ pub trait MQAdminExt: Send {
         is_offline: bool,
     ) -> rocketmq_error::RocketMQResult<()>;
 
-    /*async fn view_broker_stats_data(
+    async fn view_broker_stats_data(
         &self,
         broker_addr: CheetahString,
         stats_name: CheetahString,
         stats_key: CheetahString,
-    ) ->rocketmq_error::RocketMQResult<BrokerStatsData>;*/
+    ) -> rocketmq_error::RocketMQResult<BrokerStatsData>;
 
     async fn get_cluster_list(&self, topic: String) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>>;
 
-    /*async fn fetch_consume_stats_in_broker(
+    async fn fetch_consume_stats_in_broker(
         &self,
         broker_addr: CheetahString,
         is_order: bool,
         timeout_millis: u64,
-    ) ->rocketmq_error::RocketMQResult<ConsumeStatsList>;*/
+    ) -> rocketmq_error::RocketMQResult<ConsumeStatsList>;
 
     async fn get_topic_cluster_list(&self, topic: String) -> rocketmq_error::RocketMQResult<HashSet<CheetahString>>;
 
-    /*async fn get_all_subscription_group(
+    async fn get_all_subscription_group(
         &self,
         broker_addr: CheetahString,
         timeout_millis: u64,
-    ) ->rocketmq_error::RocketMQResult<SubscriptionGroupWrapper>;*/
+    ) -> rocketmq_error::RocketMQResult<SubscriptionGroupWrapper>;
 
-    /*async fn get_user_subscription_group(
+    async fn get_user_subscription_group(
         &self,
         broker_addr: CheetahString,
         timeout_millis: u64,
-    ) ->rocketmq_error::RocketMQResult<SubscriptionGroupWrapper>;*/
+    ) -> rocketmq_error::RocketMQResult<SubscriptionGroupWrapper>;
 
     async fn get_all_topic_config(
         &self,
@@ -437,7 +454,7 @@ pub trait MQAdminExt: Send {
         name_servers: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>>;
 
-    /*async fn query_consume_queue(
+    async fn query_consume_queue(
         &self,
         broker_addr: CheetahString,
         topic: CheetahString,
@@ -445,7 +462,7 @@ pub trait MQAdminExt: Send {
         index: u64,
         count: i32,
         consumer_group: CheetahString,
-    ) ->rocketmq_error::RocketMQResult<QueryConsumeQueueResponseBody>;*/
+    ) -> rocketmq_error::RocketMQResult<QueryConsumeQueueResponseBody>;
 
     async fn resume_check_half_message(
         &self,
@@ -487,34 +504,33 @@ pub trait MQAdminExt: Send {
         force: bool,
     ) -> rocketmq_error::RocketMQResult<()>;
 
-    /*async fn update_and_get_group_read_forbidden(
+    async fn update_and_get_group_read_forbidden(
         &self,
         broker_addr: CheetahString,
         group_name: CheetahString,
         topic_name: CheetahString,
         readable: Option<bool>,
-    ) ->rocketmq_error::RocketMQResult<GroupForbidden>;
+    ) -> rocketmq_error::RocketMQResult<GroupForbidden>;
 
     async fn query_message(
         &self,
         cluster_name: CheetahString,
         topic: CheetahString,
         msg_id: CheetahString,
-    ) ->rocketmq_error::RocketMQResult<MessageExt>;
+    ) -> rocketmq_error::RocketMQResult<MessageExt>;
 
-    async fn get_broker_ha_status(&self, broker_addr: CheetahString) ->rocketmq_error::RocketMQResult<HARuntimeInfo>;
+    async fn get_broker_ha_status(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<HARuntimeInfo>;
 
     async fn get_in_sync_state_data(
         &self,
         controller_address: CheetahString,
         brokers: Vec<CheetahString>,
-    ) ->rocketmq_error::RocketMQResult<BrokerReplicasInfo>;
+    ) -> rocketmq_error::RocketMQResult<BrokerReplicasInfo>;
 
     async fn get_broker_epoch_cache(
         &self,
         broker_addr: CheetahString,
-    ) ->rocketmq_error::RocketMQResult<EpochEntryCache>;
-    */
+    ) -> rocketmq_error::RocketMQResult<EpochEntryCache>;
 
     async fn get_controller_meta_data(
         &self,
@@ -538,13 +554,13 @@ pub trait MQAdminExt: Send {
         controllers: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()>;
 
-    /*async fn elect_master(
+    async fn elect_master(
         &self,
         controller_addr: CheetahString,
         cluster_name: CheetahString,
         broker_name: CheetahString,
         broker_id: Option<u64>,
-    ) ->rocketmq_error::RocketMQResult<(ElectMasterResponseHeader, BrokerMemberGroup)>;*/
+    ) -> rocketmq_error::RocketMQResult<(ElectMasterResponseHeader, BrokerMemberGroup)>;
 
     async fn clean_controller_broker_data(
         &self,
@@ -586,11 +602,12 @@ pub trait MQAdminExt: Send {
         user_type: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()>;
 
-    /*async fn create_user_with_info(
+    async fn create_user_with_info(
         &self,
         broker_addr: CheetahString,
-        user_info: UserInfo,
-    ) ->rocketmq_error::RocketMQResult<()>;*/
+        username: CheetahString,
+        password: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()>;
 
     async fn update_user(
         &self,
@@ -601,11 +618,12 @@ pub trait MQAdminExt: Send {
         user_status: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()>;
 
-    /* async fn update_user_with_info(
+    async fn update_user_with_info(
         &self,
         broker_addr: CheetahString,
-        user_info: UserInfo,
-    ) ->rocketmq_error::RocketMQResult<()>;*/
+        username: CheetahString,
+        password: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()>;
 
     async fn delete_user(
         &self,
@@ -613,17 +631,17 @@ pub trait MQAdminExt: Send {
         username: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()>;
 
-    /*async fn get_user(
+    async fn get_user(
         &self,
         broker_addr: CheetahString,
         username: CheetahString,
-    ) ->rocketmq_error::RocketMQResult<UserInfo>;*/
+    ) -> rocketmq_error::RocketMQResult<UserInfo>;
 
-    /* async fn list_users(
+    async fn list_users(
         &self,
         broker_addr: CheetahString,
         filter: CheetahString,
-    ) ->rocketmq_error::RocketMQResult<Vec<UserInfo>>;*/
+    ) -> rocketmq_error::RocketMQResult<Vec<UserInfo>>;
 
     async fn create_acl(
         &self,
@@ -635,11 +653,11 @@ pub trait MQAdminExt: Send {
         decision: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()>;
 
-    /*async fn create_acl_with_info(
+    async fn create_acl_with_info(
         &self,
         broker_addr: CheetahString,
-        acl_info: AclInfo,
-    ) ->rocketmq_error::RocketMQResult<()>;*/
+        subject: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()>;
 
     async fn update_acl(
         &self,
@@ -651,11 +669,11 @@ pub trait MQAdminExt: Send {
         decision: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()>;
 
-    /*async fn update_acl_with_info(
+    async fn update_acl_with_info(
         &self,
         broker_addr: CheetahString,
-        acl_info: AclInfo,
-    ) ->rocketmq_error::RocketMQResult<()>;*/
+        subject: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()>;
 
     async fn delete_acl(
         &self,
@@ -664,16 +682,210 @@ pub trait MQAdminExt: Send {
         resource: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()>;
 
-    /*async fn get_acl(
+    async fn get_acl(
         &self,
         broker_addr: CheetahString,
         subject: CheetahString,
-    ) ->rocketmq_error::RocketMQResult<AclInfo>;*/
+    ) -> rocketmq_error::RocketMQResult<AclInfo>;
 
-    /*async fn list_acl(
+    async fn list_acl(
         &self,
         broker_addr: CheetahString,
         subject_filter: CheetahString,
         resource_filter: CheetahString,
-    ) ->rocketmq_error::RocketMQResult<Vec<AclInfo>>;*/
+    ) -> rocketmq_error::RocketMQResult<Vec<AclInfo>>;
+
+    async fn create_lite_pull_topic(
+        &self,
+        addr: CheetahString,
+        topic: CheetahString,
+        queue_num: i32,
+        topic_sys_flag: i32,
+        read_queue_nums: i32,
+        write_queue_nums: i32,
+    ) -> rocketmq_error::RocketMQResult<()>;
+
+    async fn update_lite_pull_topic(
+        &self,
+        addr: CheetahString,
+        topic: CheetahString,
+        read_queue_nums: i32,
+        write_queue_nums: i32,
+    ) -> rocketmq_error::RocketMQResult<()>;
+
+    async fn get_lite_pull_topic(
+        &self,
+        addr: CheetahString,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<TopicConfig>;
+
+    async fn delete_lite_pull_topic(
+        &self,
+        addr: CheetahString,
+        cluster_name: CheetahString,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()>;
+
+    async fn query_lite_pull_topic_list(&self, addr: CheetahString) -> rocketmq_error::RocketMQResult<TopicList>;
+
+    async fn query_lite_pull_topic_by_cluster(
+        &self,
+        cluster_name: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<TopicList>;
+
+    async fn query_lite_pull_subscription_list(
+        &self,
+        addr: CheetahString,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<GroupList>;
+
+    async fn update_lite_pull_consumer_offset(
+        &self,
+        addr: CheetahString,
+        topic: CheetahString,
+        group: CheetahString,
+        queue_id: i32,
+        offset: u64,
+    ) -> rocketmq_error::RocketMQResult<()>;
+
+    async fn examine_consume_stats_with_queue(
+        &self,
+        consumer_group: CheetahString,
+        topic: Option<CheetahString>,
+        queue_id: Option<i32>,
+    ) -> rocketmq_error::RocketMQResult<ConsumeStats>;
+
+    async fn examine_consume_stats_concurrent(
+        &self,
+        consumer_group: CheetahString,
+        topic: Option<CheetahString>,
+    ) -> AdminToolResult<ConsumeStats>;
+
+    async fn examine_consume_stats_concurrent_with_cluster(
+        &self,
+        consumer_group: CheetahString,
+        topic: Option<CheetahString>,
+        cluster_name: Option<CheetahString>,
+    ) -> AdminToolResult<ConsumeStats>;
+
+    async fn export_rocksdb_consumer_offset_to_json(
+        &self,
+        broker_addr: CheetahString,
+        file_path: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()>;
+
+    async fn export_rocksdb_consumer_offset_from_memory(
+        &self,
+        broker_addr: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<CheetahString>;
+
+    async fn sync_broker_member_group(
+        &self,
+        controller_addr: CheetahString,
+        cluster_name: CheetahString,
+        broker_name: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()>;
+
+    async fn get_topic_config_by_topic_name(
+        &self,
+        broker_addr: CheetahString,
+        topic_name: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<TopicConfig>;
+
+    async fn notify_min_broker_id_changed(
+        &self,
+        cluster_name: CheetahString,
+        broker_name: CheetahString,
+        min_broker_id: u64,
+        min_broker_addr: CheetahString,
+        offline_broker_addr: Option<CheetahString>,
+        ha_broker_addr: Option<CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<()>;
+
+    async fn get_topic_stats_info(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<TopicStatsTable>;
+
+    async fn query_broker_has_topic(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<bool>;
+
+    async fn get_system_topic_list_from_broker(
+        &self,
+        broker_addr: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<TopicList>;
+
+    async fn examine_topic_route_info_with_timeout(
+        &self,
+        topic: CheetahString,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<Option<TopicRouteData>>;
+
+    async fn export_pop_records(&self, broker_addr: CheetahString, timeout: u64) -> rocketmq_error::RocketMQResult<()>;
+
+    async fn switch_timer_engine(
+        &self,
+        broker_addr: CheetahString,
+        des_timer_engine: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()>;
+
+    async fn get_broker_lite_info(
+        &self,
+        broker_addr: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<GetBrokerLiteInfoResponseBody>;
+
+    async fn get_parent_topic_info(
+        &self,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<GetParentTopicInfoResponseBody>;
+
+    async fn get_lite_topic_info(
+        &self,
+        broker_addr: CheetahString,
+        parent_topic: CheetahString,
+        lite_topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<GetLiteTopicInfoResponseBody>;
+
+    async fn get_lite_client_info(
+        &self,
+        broker_addr: CheetahString,
+        parent_topic: CheetahString,
+        group: CheetahString,
+        client_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<GetLiteClientInfoResponseBody>;
+
+    async fn get_lite_group_info(
+        &self,
+        broker_addr: CheetahString,
+        group: CheetahString,
+        lite_topic: CheetahString,
+        top_k: i32,
+    ) -> rocketmq_error::RocketMQResult<GetLiteGroupInfoResponseBody>;
+
+    async fn trigger_lite_dispatch(
+        &self,
+        broker_addr: CheetahString,
+        group: CheetahString,
+        client_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()>;
+
+    async fn export_rocksdb_config_to_json(
+        &self,
+        broker_addr: CheetahString,
+        config_types: Vec<CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<()>;
+
+    async fn search_offset(
+        &self,
+        broker_addr: CheetahString,
+        topic_name: CheetahString,
+        queue_id: i32,
+        timestamp: u64,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<u64>;
 }
