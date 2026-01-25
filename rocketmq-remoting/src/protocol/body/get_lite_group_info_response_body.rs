@@ -143,3 +143,69 @@ impl GetLiteGroupInfoResponseBody {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_lite_group_info_response_body_default() {
+        let body = GetLiteGroupInfoResponseBody::default();
+        assert!(body.group().is_empty());
+        assert!(body.parent_topic().is_empty());
+        assert!(body.lite_topic().is_empty());
+        assert_eq!(body.earliest_unconsumed_timestamp(), 0);
+        assert_eq!(body.total_lag_count(), 0);
+        assert!(body.lite_topic_offset_wrapper().is_none());
+        assert!(body.lag_count_top_k().is_empty());
+        assert!(body.lag_timestamp_top_k().is_empty());
+    }
+
+    #[test]
+    fn get_lite_group_info_response_body_getters_and_setters() {
+        let mut body = GetLiteGroupInfoResponseBody::new();
+        let wrapper = OffsetWrapper::default();
+        let lag_info = LiteLagInfo::new();
+
+        body.with_group("group".into())
+            .with_parent_topic("parent".into())
+            .with_lite_topic("topic".into())
+            .with_earliest_unconsumed_timestamp(100)
+            .with_total_lag_count(200)
+            .with_lite_topic_offset_wrapper(wrapper)
+            .with_lag_count_top_k(vec![lag_info.clone()])
+            .add_lag_count_top_k(lag_info.clone())
+            .with_lag_timestamp_top_k(vec![lag_info.clone()])
+            .add_lag_timestamp_top_k(lag_info);
+
+        assert_eq!(body.group(), "group");
+        assert_eq!(body.parent_topic(), "parent");
+        assert_eq!(body.lite_topic(), "topic");
+        assert_eq!(body.earliest_unconsumed_timestamp(), 100);
+        assert_eq!(body.total_lag_count(), 200);
+        assert!(body.lite_topic_offset_wrapper().is_some());
+        assert_eq!(body.lag_count_top_k().len(), 2);
+        assert_eq!(body.lag_timestamp_top_k().len(), 2);
+    }
+
+    #[test]
+    fn get_lite_group_info_response_body_serialization_and_deserialization() {
+        let mut body = GetLiteGroupInfoResponseBody::new();
+        body.with_group("group".into())
+            .with_parent_topic("parent".into())
+            .with_lite_topic("topic".into())
+            .with_earliest_unconsumed_timestamp(100)
+            .with_total_lag_count(200);
+
+        let json = serde_json::to_string(&body).unwrap();
+        let expected = r#"{"group":"group","parentTopic":"parent","liteTopic":"topic","earliestUnconsumedTimestamp":100,"totalLagCount":200,"lagCountTopK":[],"lagTimestampTopK":[]}"#;
+        assert_eq!(json, expected);
+
+        let decoded: GetLiteGroupInfoResponseBody = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.group(), "group");
+        assert_eq!(decoded.parent_topic(), "parent");
+        assert_eq!(decoded.lite_topic(), "topic");
+        assert_eq!(decoded.earliest_unconsumed_timestamp(), 100);
+        assert_eq!(decoded.total_lag_count(), 200);
+    }
+}
