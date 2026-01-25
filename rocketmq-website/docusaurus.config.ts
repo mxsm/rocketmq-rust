@@ -94,10 +94,10 @@ const config: Config = {
       },
       items: [
         {
-          type: 'docSidebar',
-          sidebarId: 'docsSidebar',
+          to: '/docs/introduction',
           position: 'left',
           label: 'Documentation',
+          activeBaseRegex: '^/docs/(?!contributing|author)',
         },
         {
           to: '/blog',
@@ -105,18 +105,16 @@ const config: Config = {
           label: 'Release Notes',
         },
         {
-          type: 'doc',
-          docId: 'contributing/overview',
-          sidebarId: 'docsSidebar',
+          to: '/docs/contributing/overview',
           position: 'left',
           label: 'Contribute',
+          activeBaseRegex: '^/docs/contributing',
         },
         {
-          type: 'doc',
-          docId: 'author',
-          sidebarId: 'docsSidebar',
+          to: '/docs/author',
           position: 'left',
           label: 'Author',
+          activeBasePath: '/docs/author',
         },
         {
           href: 'https://github.com/mxsm/rocketmq-rust',
