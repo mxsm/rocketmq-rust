@@ -151,6 +151,10 @@ const config: Config = {
               label: 'Architecture',
               to: '/docs/architecture/overview',
             },
+            {
+              label: 'Contributing',
+              to: '/docs/contributing/overview',
+            },
           ],
         },
         {
@@ -161,21 +165,60 @@ const config: Config = {
               href: 'https://github.com/mxsm/rocketmq-rust',
             },
             {
-              label: 'Contributing',
-              to: '/docs/contributing/overview',
+              label: 'Discussions',
+              href: 'https://github.com/mxsm/rocketmq-rust/discussions',
+            },
+            {
+              label: 'Issues',
+              href: 'https://github.com/mxsm/rocketmq-rust/issues',
             },
           ],
         },
         {
-          title: 'More',
+          title: 'Resources',
           items: [
             {
               label: 'Apache RocketMQ',
               href: 'https://rocketmq.apache.org/',
             },
             {
+              label: 'Rust Official',
+              href: 'https://www.rust-lang.org/',
+            },
+            {
               label: 'Stack Overflow',
               href: 'https://stackoverflow.com/questions/tagged/rocketmq',
+            },
+          ],
+        },
+        {
+          title: 'Follow Us',
+          items: [
+            {
+              html: `
+                <div style="display: flex; flex-direction: column; align-items: flex-start; padding: 0;">
+                  <img 
+                    src="/img/rocketmq-rustWeChat%20OfficialAccount.jpg" 
+                    alt="WeChat Official Account" 
+                    style="
+                      width: 120px; 
+                      height: 120px; 
+                      border-radius: 8px; 
+                      border: 2px solid rgba(168, 85, 247, 0.3);
+                      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+                      margin-bottom: 8px;
+                    "
+                  />
+                  <p style="
+                    margin: 0; 
+                    font-size: 0.813rem; 
+                    color: var(--ifm-footer-link-color);
+                    opacity: 0.8;
+                  ">
+                    WeChat Official Account
+                  </p>
+                </div>
+              `,
             },
           ],
         },
