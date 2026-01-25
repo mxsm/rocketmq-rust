@@ -121,12 +121,31 @@ I am actively looking for **partner developers** to join the RocketMQ-Rust proje
 
 ## 🤝 Connect & Reach Me
 
+<div style={{display: 'flex', justifyContent: 'center', gap: '2rem', margin: '2rem 0', flexWrap: 'wrap'}}>
+  <div style={{textAlign: 'center'}}>
+    <img
+      src="/img/rocketmq-rustWeChat OfficialAccount.jpg"
+      alt="RocketMQ-Rust WeChat Official Account"
+      style={{
+        width: '200px',
+        height: '200px',
+        borderRadius: '12px',
+        border: '3px solid var(--ifm-color-primary)',
+        boxShadow: '0 4px 12px rgba(168, 85, 247, 0.3)'
+      }}
+    />
+    <p style={{marginTop: '0.5rem', fontSize: '0.9rem', color: 'var(--ifm-color-secondary)'}}>
+      WeChat Official Account
+    </p>
+  </div>
+</div>
+
 ### Find Me Online
 
 - 🐙 **GitHub**: [@mxsm](https://github.com/mxsm)
 - 📦 **Project**: [RocketMQ-Rust Repository](https://github.com/mxsm/rocketmq-rust)
 - 🌐 **Personal Website**: [mxsm.github.io](https://mxsm.github.io)
-- 📝 **Juejin (掘金)**: [My Juejin Homepage](https://juejin.cn/user/mxsm)
+- 📝 **Juejin (掘金)**: [My Juejin Homepage](https://juejin.cn/user/1151943918492855)
 - 💬 **Discussions**: [GitHub Discussions](https://github.com/mxsm/rocketmq-rust/discussions)
 - 🐛 **Issues**: [Bug Reports & Feature Requests](https://github.com/mxsm/rocketmq-rust/issues)
 
