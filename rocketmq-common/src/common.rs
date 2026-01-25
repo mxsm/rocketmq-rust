@@ -62,6 +62,7 @@ pub mod metrics;
 pub mod resource;
 pub mod system_clock;
 pub mod thread;
+pub mod tools;
 pub mod topic;
 
 #[derive(Clone, Default, Eq, PartialEq, Copy)]
