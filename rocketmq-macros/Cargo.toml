@@ -22,7 +22,6 @@ quote       = "1.0"
 proc-macro2 = "1.0"
 
 [dev-dependencies]
-criterion = { version = "0.8", features = ["html_reports"] }
 # Temporarily disabled for publishing - these crates are not yet published as v0.7.0
 # cheetah-string = { workspace = true }
 # rocketmq-error = { workspace = true }

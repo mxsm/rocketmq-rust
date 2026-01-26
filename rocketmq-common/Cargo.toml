@@ -68,7 +68,6 @@ regex     = "1.12.2"
 thiserror = { workspace = true }
 
 reqwest         = { version = "0.13", features = ["json"] }
-url             = "2.5.8"
 form_urlencoded = "1.2.2"
 
 uuid           = { workspace = true }

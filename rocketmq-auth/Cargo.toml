@@ -27,8 +27,7 @@ serde_json     = { workspace = true }
 serde_yaml     = { workspace = true }
 
 
-tracing            = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing = { workspace = true }
 
 # IP utilities for authorization models
 ipnetwork = "0.21.1"
@@ -55,5 +54,6 @@ moka = { version = "0.12", features = ["sync"] }
 
 
 [dev-dependencies]
-tempfile = "3"
-tracing  = { workspace = true }
+tempfile           = "3"
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
