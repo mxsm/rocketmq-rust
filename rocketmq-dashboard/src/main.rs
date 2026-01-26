@@ -21,28 +21,22 @@ mod ui;
 
 use gpui::*;
 use gpui_component::Root;
-use ui::dashboard_view::DashboardView;
 use tracing::info;
+use ui::dashboard_view::DashboardView;
 
 /// Main dashboard application struct
 pub struct RocketmqDashboard;
 
 impl Render for RocketmqDashboard {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .bg(rgb(0xF5F5F7))
-            .child(DashboardView::new())
+        div().size_full().flex().bg(rgb(0xF5F5F7)).child(DashboardView::new())
     }
 }
 
 /// Main entry point for the RocketMQ Dashboard application
 fn main() {
     // Initialize logging
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .init();
+    tracing_subscriber::fmt().with_max_level(tracing::Level::INFO).init();
 
     info!("Starting RocketMQ Dashboard");
 
@@ -56,10 +50,13 @@ fn main() {
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds {
-                        origin: Point { x: px(100.0), y: px(100.0) },
+                        origin: Point {
+                            x: px(100.0),
+                            y: px(100.0),
+                        },
                         size: gpui::Size {
                             width: px(1440.0),
-                            height: px(900.0)
+                            height: px(900.0),
                         },
                     })),
                     titlebar: Some(TitlebarOptions {
