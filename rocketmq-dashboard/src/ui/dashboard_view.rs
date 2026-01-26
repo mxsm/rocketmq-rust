@@ -135,8 +135,8 @@ impl DashboardView {
         ];
 
         div()
-            .w(px(280.0))  // Fixed width for sidebar (standard design pattern)
-            .h_full()      // Full height - responsive to window
+            .w(px(280.0)) // Fixed width for sidebar (standard design pattern)
+            .h_full() // Full height - responsive to window
             .flex()
             .flex_col()
             .bg(rgb(0xFFFFFF))
@@ -145,44 +145,38 @@ impl DashboardView {
             .p_6()
             .gap_2()
             .child(Self::render_logo())
-            .children(
-                menu_items
-                    .iter()
-                    .map(|item| {
+            .children(menu_items.iter().map(|item| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .h(px(44.0))
+                    .px_4()
+                    .cursor_pointer()
+                    .rounded(px(8.0))
+                    .when(item.name == "Dashboard", |div| div.bg(rgb(0xF5F5F7)))
+                    .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .h(px(44.0))
-                            .px_4()
-                            .cursor_pointer()
-                            .rounded(px(8.0))
-                            .when(item.name == "Dashboard", |div| {
-                                div.bg(rgb(0xF5F5F7))
+                            .text_base()
+                            .text_color(if item.name == "Dashboard" {
+                                rgb(0x007AFF)
+                            } else {
+                                rgb(0x86868B)
                             })
-                            .child(
-                                div()
-                                    .text_base()
-                                    .text_color(if item.name == "Dashboard" {
-                                        rgb(0x007AFF)
-                                    } else {
-                                        rgb(0x86868B)
-                                    })
-                                    .child(item.icon),
-                            )
-                            .child(
-                                div()
-                                    .text_base()
-                                    .font_weight(if item.name == "Dashboard" {
-                                        FontWeight::SEMIBOLD
-                                    } else {
-                                        FontWeight::NORMAL
-                                    })
-                                    .text_color(rgb(0x1D1D1F))
-                                    .child(item.name),
-                            )
-                    }),
-            )
+                            .child(item.icon),
+                    )
+                    .child(
+                        div()
+                            .text_base()
+                            .font_weight(if item.name == "Dashboard" {
+                                FontWeight::SEMIBOLD
+                            } else {
+                                FontWeight::NORMAL
+                            })
+                            .text_color(rgb(0x1D1D1F))
+                            .child(item.name),
+                    )
+            }))
     }
 
     /// Render the logo section
@@ -199,12 +193,7 @@ impl DashboardView {
                     .text_color(rgb(0x1D1D1F))
                     .child("RocketMQ-Rust"),
             )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(rgb(0x86868B))
-                    .child("Operations Dashboard"),
-            )
+            .child(div().text_sm().text_color(rgb(0x86868B)).child("Operations Dashboard"))
     }
 
     /// Render the main content area
@@ -222,17 +211,13 @@ impl DashboardView {
 
     /// Render the page header
     fn render_page_header() -> Div {
-        div()
-            .flex()
-            .items_center()
-            .gap_3()
-            .child(
-                div()
-                    .text_2xl()
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(0x1D1D1F))
-                    .child("Dashboard"),
-            )
+        div().flex().items_center().gap_3().child(
+            div()
+                .text_2xl()
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(0x1D1D1F))
+                .child("Dashboard"),
+        )
     }
 
     /// Render the two-column content layout
@@ -241,7 +226,7 @@ impl DashboardView {
             .flex()
             .flex_row()
             .gap_5()
-            .flex_1()  // Take available space
+            .flex_1() // Take available space
             .child(Self::render_left_column())
             .child(Self::render_right_column())
     }
@@ -249,8 +234,8 @@ impl DashboardView {
     /// Render the left column with overview and charts
     fn render_left_column() -> Div {
         div()
-            .flex_1()  // Responsive: takes 50% of available space
-            .min_w(px(300.0))  // Minimum width to prevent squishing
+            .flex_1() // Responsive: takes 50% of available space
+            .min_w(px(300.0)) // Minimum width to prevent squishing
             .flex()
             .flex_col()
             .gap_5()
@@ -262,8 +247,8 @@ impl DashboardView {
     /// Render the right column with date picker and trends
     fn render_right_column() -> Div {
         div()
-            .flex_1()  // Responsive: takes 50% of available space
-            .min_w(px(300.0))  // Minimum width to prevent squishing
+            .flex_1() // Responsive: takes 50% of available space
+            .min_w(px(300.0)) // Minimum width to prevent squishing
             .flex()
             .flex_col()
             .gap_5()
@@ -310,13 +295,7 @@ impl DashboardView {
                             .flex_row()
                             .items_center()
                             .gap_3()
-                            .child(
-                                div()
-                                    .w(px(180.0))
-                                    .text_sm()
-                                    .text_color(rgb(0x86868B))
-                                    .child(*label),
-                            )
+                            .child(div().w(px(180.0)).text_sm().text_color(rgb(0x86868B)).child(*label))
                             .child(
                                 div()
                                     .flex_1()
@@ -325,7 +304,7 @@ impl DashboardView {
                                     .text_color(rgb(0x1D1D1F))
                                     .child(*value),
                             )
-                    }))
+                    })),
             )
     }
 
@@ -365,13 +344,7 @@ impl DashboardView {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(
-                                div()
-                                    .w(px(8.0))
-                                    .h(px(8.0))
-                                    .rounded(px(4.0))
-                                    .bg(rgb(0x007AFF)),
-                            )
+                            .child(div().w(px(8.0)).h(px(8.0)).rounded(px(4.0)).bg(rgb(0x007AFF)))
                             .child(
                                 div()
                                     .text_xs()
@@ -400,13 +373,7 @@ impl DashboardView {
                                     .bg(rgb(0xF5F5F7))
                                     .rounded(px(6.0))
                                     .relative()
-                                    .child(
-                                        div()
-                                            .h_full()
-                                            .w(px(450.0))
-                                            .bg(rgb(0x007AFF))
-                                            .rounded(px(6.0)),
-                                    ),
+                                    .child(div().h_full().w(px(450.0)).bg(rgb(0x007AFF)).rounded(px(6.0))),
                             )
                             .child(
                                 div()
@@ -455,13 +422,7 @@ impl DashboardView {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(
-                                div()
-                                    .w(px(8.0))
-                                    .h(px(8.0))
-                                    .rounded(px(4.0))
-                                    .bg(rgb(0x34C759)),
-                            )
+                            .child(div().w(px(8.0)).h(px(8.0)).rounded(px(4.0)).bg(rgb(0x34C759)))
                             .child(
                                 div()
                                     .text_xs()
@@ -496,13 +457,7 @@ impl DashboardView {
                                         .h(px(32.0))
                                         .bg(rgb(0xF5F5F7))
                                         .rounded(px(6.0))
-                                        .child(
-                                            div()
-                                                .h_full()
-                                                .w(*width)
-                                                .bg(*color)
-                                                .rounded(px(6.0)),
-                                        ),
+                                        .child(div().h_full().w(*width).bg(*color).rounded(px(6.0))),
                                 )
                                 .child(
                                     div()
@@ -512,7 +467,7 @@ impl DashboardView {
                                         .child(*value),
                                 )
                         }),
-                    )
+                    ),
             )
     }
 
@@ -547,12 +502,7 @@ impl DashboardView {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(
-                        div()
-                            .text_base()
-                            .text_color(rgb(0x1D1D1F))
-                            .child("2026-01-26"),
-                    )
+                    .child(div().text_base().text_color(rgb(0x1D1D1F)).child("2026-01-26"))
                     .child(
                         div()
                             .text_xl()
@@ -625,13 +575,7 @@ impl DashboardView {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(
-                        div()
-                            .w(px(12.0))
-                            .h(px(12.0))
-                            .rounded(px(6.0))
-                            .bg(color),
-                    )
+                    .child(div().w(px(12.0)).h(px(12.0)).rounded(px(6.0)).bg(color))
                     .child(
                         div()
                             .text_xs()
@@ -648,13 +592,7 @@ impl DashboardView {
                     .flex_row()
                     .items_end()
                     .gap_6()
-                    .children((0..6).map(|_| {
-                        div()
-                            .w(px(12.0))
-                            .h(px(12.0))
-                            .rounded(px(6.0))
-                            .bg(color)
-                    }))
+                    .children((0..6).map(|_| div().w(px(12.0)).h(px(12.0)).rounded(px(6.0)).bg(color)))
                     .px_2(),
             )
             .child(
@@ -663,18 +601,8 @@ impl DashboardView {
                     .flex_row()
                     .justify_between()
                     .w_full()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(0x86868B))
-                            .child("19:41:00"),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(0x86868B))
-                            .child("20:23:00"),
-                    ),
+                    .child(div().text_xs().text_color(rgb(0x86868B)).child("19:41:00"))
+                    .child(div().text_xs().text_color(rgb(0x86868B)).child("20:23:00")),
             )
     }
 }
