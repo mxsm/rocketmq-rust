@@ -30,7 +30,7 @@ smallvec = { workspace = true }
 
 # Fix core-graphics version conflict on macOS
 [target.'cfg(target_os = "macos")'.dependencies]
-core-graphics = "=0.24.0"
+core-graphics = "=0.25.0"
 core-text = "=21.0.0"
 
 [build-dependencies]
