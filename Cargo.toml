@@ -103,3 +103,8 @@ smallvec = "1.13"
 
 opentelemetry     = { version = "0.31", features = ["metrics"] }
 opentelemetry_sdk = { version = "0.31", features = ["metrics", "rt-tokio"] }
+
+# Patch to unify core-graphics version for macOS builds
+# This resolves version conflicts between different dependencies
+[patch.crates-io]
+core-graphics = "0.24.0"
