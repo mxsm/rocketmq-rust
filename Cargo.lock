@@ -6551,7 +6551,7 @@ dependencies = [
  "rocketmq-store",
  "serde",
  "serde_json",
- "sysinfo 0.37.2",
+ "sysinfo 0.38.0",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -6856,7 +6856,7 @@ dependencies = [
  "rocketmq-rust",
  "serde",
  "serde_json",
- "sysinfo 0.37.2",
+ "sysinfo 0.38.0",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -8128,16 +8128,16 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.37.2"
+version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16607d5caffd1c07ce073528f9ed972d88db15dd44023fa57142963be3feb11f"
+checksum = "fe840c5b1afe259a5657392a4dbb74473a14c8db999c3ec2f4ae812e028a94da"
 dependencies = [
  "libc",
  "memchr",
  "ntapi",
  "objc2-core-foundation",
  "objc2-io-kit",
- "windows 0.61.3",
+ "windows 0.62.2",
 ]
 
 [[package]]
