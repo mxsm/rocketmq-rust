@@ -19,6 +19,7 @@
 
 use crate::ui::cluster_view::ClusterView;
 use crate::ui::nameserver_view::NameserverView;
+use crate::ui::topic_view::TopicView;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 
@@ -186,6 +187,7 @@ impl DashboardView {
         match self.active_page.as_str() {
             "NameServer" => div().flex_1().h_full().child(cx.new(|_| NameserverView::new())),
             "Cluster" => div().flex_1().h_full().child(cx.new(|_| ClusterView::new())),
+            "Topic" => div().flex_1().h_full().child(cx.new(|_| TopicView::new())),
             _ => self.render_dashboard_content(),
         }
     }
