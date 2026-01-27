@@ -23,5 +23,8 @@ pub mod icons;
 #[path = "ui/nameserver_view.rs"]
 pub mod nameserver_view;
 
+#[path = "ui/cluster_view.rs"]
+pub mod cluster_view;
+
 #[path = "ui/pages.rs"]
 pub mod pages;
