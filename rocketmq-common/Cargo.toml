@@ -55,7 +55,7 @@ md5       = { package = "md-5", version = "0.10" }
 local-ip-address = "0.6.9"
 chrono           = "0.4.43"
 chrono-tz        = "0.10.4"
-time             = "0.3.45"
+time             = "0.3.46"
 iana-time-zone   = "0.1"
 
 parking_lot             = { workspace = true }
