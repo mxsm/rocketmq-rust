@@ -18,6 +18,7 @@
 //! and content area for displaying RocketMQ metrics.
 
 use crate::ui::cluster_view::ClusterView;
+use crate::ui::consumer_view::ConsumerView;
 use crate::ui::nameserver_view::NameserverView;
 use crate::ui::topic_view::TopicView;
 use gpui::prelude::FluentBuilder;
@@ -188,6 +189,7 @@ impl DashboardView {
             "NameServer" => div().flex_1().h_full().child(cx.new(|_| NameserverView::new())),
             "Cluster" => div().flex_1().h_full().child(cx.new(|_| ClusterView::new())),
             "Topic" => div().flex_1().h_full().child(cx.new(|_| TopicView::new())),
+            "Consumer" => div().flex_1().h_full().child(cx.new(|_| ConsumerView::new())),
             _ => self.render_dashboard_content(),
         }
     }
