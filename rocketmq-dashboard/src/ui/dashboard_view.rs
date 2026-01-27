@@ -147,11 +147,7 @@ impl DashboardView {
             .child(
                 div()
                     .text_base()
-                    .text_color(if is_active {
-                        rgb(0x007AFF)
-                    } else {
-                        rgb(0x86868B)
-                    })
+                    .text_color(if is_active { rgb(0x007AFF) } else { rgb(0x86868B) })
                     .child(item.icon),
             )
             .child(
@@ -162,11 +158,7 @@ impl DashboardView {
                     } else {
                         FontWeight::NORMAL
                     })
-                    .text_color(if is_active {
-                        rgb(0x007AFF)
-                    } else {
-                        rgb(0x1D1D1F)
-                    })
+                    .text_color(if is_active { rgb(0x007AFF) } else { rgb(0x1D1D1F) })
                     .child(item.name),
             )
     }
@@ -191,10 +183,7 @@ impl DashboardView {
     /// Render the main content area based on active page
     fn render_main_content(&self, cx: &mut Context<Self>) -> Div {
         match self.active_page.as_str() {
-            "NameServer" => div()
-                .flex_1()
-                .h_full()
-                .child(cx.new(|_| NameserverView::new())),
+            "NameServer" => div().flex_1().h_full().child(cx.new(|_| NameserverView::new())),
             _ => self.render_dashboard_content(),
         }
     }
@@ -215,17 +204,13 @@ impl DashboardView {
 
     /// Render the page header
     fn render_page_header() -> Div {
-        div()
-            .flex()
-            .items_center()
-            .gap_3()
-            .child(
-                div()
-                    .text_2xl()
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(0x1D1D1F))
-                    .child("Dashboard"),
-            )
+        div().flex().items_center().gap_3().child(
+            div()
+                .text_2xl()
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(0x1D1D1F))
+                .child("Dashboard"),
+        )
     }
 
     /// Render the two-column content layout

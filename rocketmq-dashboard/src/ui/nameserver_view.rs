@@ -130,19 +130,8 @@ impl NameserverView {
             .justify_between()
             .border_1()
             .border_color(rgb(0xE5E5E7))
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(rgb(0x86868B))
-                    .child(title),
-            )
-            .child(
-                div()
-                    .text_3xl()
-                    .font_semibold()
-                    .text_color(color)
-                    .child(value),
-            )
+            .child(div().text_sm().text_color(rgb(0x86868B)).child(title))
+            .child(div().text_3xl().font_semibold().text_color(color).child(value))
     }
 
     /// Render the NameServer list table
@@ -201,30 +190,9 @@ impl NameserverView {
             .flex_1()
             .flex()
             .flex_col()
-            .child(self.render_table_row(
-                "192.168.1.10",
-                "9876",
-                "Running",
-                "4",
-                "5d 12h 30m",
-                rgb(0x34C759),
-            ))
-            .child(self.render_table_row(
-                "192.168.1.11",
-                "9876",
-                "Running",
-                "4",
-                "5d 12h 28m",
-                rgb(0x34C759),
-            ))
-            .child(self.render_table_row(
-                "192.168.1.12",
-                "9876",
-                "Running",
-                "4",
-                "5d 12h 25m",
-                rgb(0x34C759),
-            ))
+            .child(self.render_table_row("192.168.1.10", "9876", "Running", "4", "5d 12h 30m", rgb(0x34C759)))
+            .child(self.render_table_row("192.168.1.11", "9876", "Running", "4", "5d 12h 28m", rgb(0x34C759)))
+            .child(self.render_table_row("192.168.1.12", "9876", "Running", "4", "5d 12h 25m", rgb(0x34C759)))
     }
 
     /// Render a single table row
@@ -262,11 +230,7 @@ impl NameserverView {
     /// Render a table cell
     fn render_table_cell(&self, text: &str) -> Div {
         let text = text.to_string();
-        div()
-            .flex_1()
-            .text_sm()
-            .text_color(rgb(0x1D1D1F))
-            .child(text)
+        div().flex_1().text_sm().text_color(rgb(0x1D1D1F)).child(text)
     }
 
     /// Render a status cell with colored indicator
@@ -277,19 +241,8 @@ impl NameserverView {
             .flex()
             .items_center()
             .gap_2()
-            .child(
-                div()
-                    .w(px(8.0))
-                    .h(px(8.0))
-                    .rounded_full()
-                    .bg(color),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(color)
-                    .child(text),
-            )
+            .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(color))
+            .child(div().text_sm().text_color(color).child(text))
     }
 }
 
