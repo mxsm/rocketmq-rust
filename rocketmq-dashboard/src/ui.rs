@@ -12,5 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! UI components for the RocketMQ Dashboard
+
+#[path = "ui/dashboard_view.rs"]
 pub mod dashboard_view;
-mod pages;
+
+#[path = "ui/icons.rs"]
+pub mod icons;
+
+#[path = "ui/pages.rs"]
+pub mod pages;
