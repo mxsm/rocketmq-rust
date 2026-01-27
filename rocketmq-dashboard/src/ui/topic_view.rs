@@ -71,14 +71,7 @@ struct TopicData {
 }
 
 impl TopicData {
-    fn new(
-        name: &str,
-        topic_type: TopicType,
-        queues: u32,
-        partitions: u32,
-        tps: &str,
-        messages: &str,
-    ) -> Self {
+    fn new(name: &str, topic_type: TopicType, queues: u32, partitions: u32, tps: &str, messages: &str) -> Self {
         Self {
             name: name.to_string(),
             topic_type,
@@ -123,10 +116,7 @@ impl TopicView {
             TopicData::new("SysTopic", TopicType::System, 4, 6, "0.3K", "0.9M"),
         ];
 
-        Self {
-            active_filters,
-            topics,
-        }
+        Self { active_filters, topics }
     }
 
     /// Render the complete topic management page
@@ -206,12 +196,7 @@ impl TopicView {
                     .border_1()
                     .border_color(rgb(0xE5E5E7))
                     .child(div().text_lg().text_color(rgb(0x86868B)).child("\u{1F50D}"))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(0x98989D))
-                            .child("Search topics..."),
-                    ),
+                    .child(div().text_sm().text_color(rgb(0x98989D)).child("Search topics...")),
             )
             .child(
                 div()
@@ -287,16 +272,8 @@ impl TopicView {
         is_active: bool,
         _cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let bg = if is_active {
-            rgb(0xE3F2FD)
-        } else {
-            rgb(0xF5F5F7)
-        };
-        let text_color = if is_active {
-            topic_type.color()
-        } else {
-            rgb(0x86868B)
-        };
+        let bg = if is_active { rgb(0xE3F2FD) } else { rgb(0xF5F5F7) };
+        let text_color = if is_active { topic_type.color() } else { rgb(0x86868B) };
 
         div()
             .flex()
@@ -449,12 +426,7 @@ impl TopicView {
                     .justify_center()
                     .rounded(px(14.0))
                     .bg(icon_bg)
-                    .child(
-                        div()
-                            .text_3xl()
-                            .text_color(topic.topic_type.color())
-                            .child("\u{1F4C1}"),
-                    ),
+                    .child(div().text_3xl().text_color(topic.topic_type.color()).child("\u{1F4C1}")),
             )
             .child(
                 div()
@@ -469,17 +441,12 @@ impl TopicView {
                             .text_color(rgb(0x1D1D1F))
                             .child(topic.name.clone()),
                     )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(0x86868B))
-                            .child(format!(
-                                "{} • {} queues • {} partitions",
-                                topic.topic_type.display_name(),
-                                topic.queues,
-                                topic.partitions
-                            )),
-                    )
+                    .child(div().text_sm().text_color(rgb(0x86868B)).child(format!(
+                        "{} • {} queues • {} partitions",
+                        topic.topic_type.display_name(),
+                        topic.queues,
+                        topic.partitions
+                    )))
                     .child(
                         div()
                             .flex()
@@ -492,24 +459,9 @@ impl TopicView {
                                     .text_color(rgb(0x34C759))
                                     .child(topic.tps.clone()),
                             )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(0x86868B))
-                                    .child("TPS"),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(0x86868B))
-                                    .child(topic.messages.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(0x86868B))
-                                    .child("Msg"),
-                            ),
+                            .child(div().text_xs().text_color(rgb(0x86868B)).child("TPS"))
+                            .child(div().text_xs().text_color(rgb(0x86868B)).child(topic.messages.clone()))
+                            .child(div().text_xs().text_color(rgb(0x86868B)).child("Msg")),
                     ),
             )
     }
@@ -536,26 +488,18 @@ impl TopicView {
             .gap_1()
             .w_full()
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .w_full()
-                    .justify_between()
-                    .children(row1_buttons.iter().map(|(text, icon)| {
-                        self.render_action_button(text, icon, rgb(0x1D1D1F), rgb(0xF5F5F7))
-                    })),
+                div().flex().items_center().gap_2().w_full().justify_between().children(
+                    row1_buttons
+                        .iter()
+                        .map(|(text, icon)| self.render_action_button(text, icon, rgb(0x1D1D1F), rgb(0xF5F5F7))),
+                ),
             )
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .w_full()
-                    .justify_between()
-                    .children(row2_buttons.iter().map(|(text, icon)| {
-                        self.render_action_button(text, icon, rgb(0xFFFFFF), rgb(0xFF3B30))
-                    })),
+                div().flex().items_center().gap_2().w_full().justify_between().children(
+                    row2_buttons
+                        .iter()
+                        .map(|(text, icon)| self.render_action_button(text, icon, rgb(0xFFFFFF), rgb(0xFF3B30))),
+                ),
             )
     }
 
