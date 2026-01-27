@@ -41,7 +41,7 @@ serde_json.workspace = true
 bytes                 = { workspace = true }
 parking_lot.workspace = true
 
-clap = { version = "4.5.54", features = ["derive"] }
+clap = { version = "4.5.55", features = ["derive"] }
 rand = { workspace = true }
 
 #tools
