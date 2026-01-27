@@ -25,11 +25,25 @@ use tracing::info;
 use ui::dashboard_view::DashboardView;
 
 /// Main dashboard application struct
-pub struct RocketmqDashboard;
+pub struct RocketmqDashboard {
+    dashboard_view: Entity<DashboardView>,
+}
+
+impl RocketmqDashboard {
+    fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            dashboard_view: cx.new(|_| DashboardView::new()),
+        }
+    }
+}
 
 impl Render for RocketmqDashboard {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().flex().bg(rgb(0xF5F5F7)).child(DashboardView::new())
+        div()
+            .size_full()
+            .flex()
+            .bg(rgb(0xF5F5F7))
+            .child(self.dashboard_view.clone())
     }
 }
 
@@ -67,7 +81,7 @@ fn main() {
                     ..Default::default()
                 },
                 |window, cx| {
-                    let view = cx.new(|_| RocketmqDashboard);
+                    let view = cx.new(RocketmqDashboard::new);
                     // This first level on the window, should be a Root.
                     cx.new(|cx| Root::new(view, window, cx))
                 },
