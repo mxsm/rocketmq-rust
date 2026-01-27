@@ -20,5 +20,8 @@ pub mod dashboard_view;
 #[path = "ui/icons.rs"]
 pub mod icons;
 
+#[path = "ui/nameserver_view.rs"]
+pub mod nameserver_view;
+
 #[path = "ui/pages.rs"]
 pub mod pages;
