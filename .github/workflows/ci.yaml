@@ -23,10 +23,10 @@ env:
 
 jobs:
   # =========================
-  # Format + Clippy
+  # Format + Clippy + Shear
   # =========================
   check:
-    name: Check (fmt + clippy)
+    name: Check (fmt + clippy + shear)
     runs-on: ubuntu-latest
 
     steps:
@@ -71,6 +71,17 @@ jobs:
 
       - name: Clippy (all features)
         run: cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install cargo-shear and cargo-expand
+        run: |
+          cargo binstall --no-confirm cargo-shear
+          cargo binstall --no-confirm cargo-expand
+
+      - name: Check for unused dependencies
+        run: cargo shear --expand
 
   # =========================
   # Build + Test
