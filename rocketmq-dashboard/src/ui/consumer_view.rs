@@ -89,6 +89,8 @@ pub struct ConsumerView {
     active_filters: Vec<ConsumerType>,
     /// Consumer group list data
     consumer_groups: Vec<ConsumerGroupData>,
+    /// Index of consumer whose modal should be shown
+    modal_consumer_index: Option<usize>,
 }
 
 impl ConsumerView {
@@ -110,12 +112,21 @@ impl ConsumerView {
         Self {
             active_filters,
             consumer_groups,
+            modal_consumer_index: None,
         }
     }
 
     /// Render the complete consumer management page
     fn render_page(&self, cx: &mut Context<Self>) -> Div {
-        self.render_main_content(cx)
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .relative()
+            .child(self.render_main_content(cx))
+            .when(self.modal_consumer_index.is_some(), |parent| {
+                parent.child(self.render_modal_content_only(cx))
+            })
     }
 
     /// Render the main content area
@@ -327,7 +338,7 @@ impl ConsumerView {
     }
 
     /// Render the consumer group cards grid
-    fn render_consumer_grid(&self, groups: Vec<&ConsumerGroupData>, _cx: &mut Context<Self>) -> Div {
+    fn render_consumer_grid(&self, groups: Vec<&ConsumerGroupData>, cx: &mut Context<Self>) -> Div {
         // Create grid rows with 3 cards each
         let rows: Vec<_> = groups.chunks(3).collect();
 
@@ -342,12 +353,12 @@ impl ConsumerView {
                     .flex_row()
                     .gap_5()
                     .w_full()
-                    .children(row.iter().map(|group| self.render_consumer_card(group)))
+                    .children(row.iter().map(|group| self.render_consumer_card(group, cx)))
             }))
     }
 
     /// Render a single consumer group card
-    fn render_consumer_card(&self, group: &ConsumerGroupData) -> Div {
+    fn render_consumer_card(&self, group: &ConsumerGroupData, cx: &mut Context<Self>) -> Div {
         let icon_bg = group.group_type.bg_color();
 
         div()
@@ -363,7 +374,7 @@ impl ConsumerView {
             .gap_4()
             .child(self.render_card_header(group, icon_bg))
             .child(self.render_card_stats(group))
-            .child(self.render_card_actions(group))
+            .child(self.render_card_actions(group, cx))
     }
 
     /// Render the card header
@@ -444,12 +455,17 @@ impl ConsumerView {
     }
 
     /// Render the card action buttons
-    fn render_card_actions(&self, group: &ConsumerGroupData) -> Div {
+    fn render_card_actions(&self, group: &ConsumerGroupData, cx: &mut Context<Self>) -> Div {
         let is_system = group.group_type == ConsumerType::System;
+        let group_index = self.consumer_groups.iter().position(|g| g.name == group.name).unwrap();
 
         if is_system {
             // System groups have 3 buttons in one row
-            self.render_button_row(&[("CLIENT", "\u{1F465}"), ("DETAIL", "\u{1F441}"), ("CONFIG", "\u{2699}")])
+            self.render_button_row_with_modal(
+                &[("CLIENT", "\u{1F465}"), ("DETAIL", "\u{1F441}"), ("CONFIG", "\u{2699}")],
+                group_index,
+                cx,
+            )
         } else {
             // Normal groups have 2 rows
             div()
@@ -457,7 +473,11 @@ impl ConsumerView {
                 .flex_col()
                 .gap_2()
                 .w_full()
-                .child(self.render_button_row(&[("CLIENT", "\u{1F465}"), ("DETAIL", "\u{1F441}")]))
+                .child(self.render_button_row_with_modal(
+                    &[("CLIENT", "\u{1F465}"), ("DETAIL", "\u{1F441}")],
+                    group_index,
+                    cx,
+                ))
                 .child(
                     div()
                         .flex()
@@ -472,13 +492,91 @@ impl ConsumerView {
         }
     }
 
-    /// Render a row of action buttons
-    fn render_button_row(&self, buttons: &[(&'static str, &'static str)]) -> Div {
-        div().flex().items_center().gap_2().w_full().justify_between().children(
-            buttons
-                .iter()
-                .map(|(text, icon)| self.render_action_button(text, icon, rgb(0x1D1D1F), rgb(0xF5F5F7))),
-        )
+    /// Render a row of action buttons with modal trigger
+    fn render_button_row_with_modal(
+        &self,
+        buttons: &[(&'static str, &'static str)],
+        group_index: usize,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .justify_between()
+            .children(buttons.iter().map(|(text, icon)| {
+                if *text == "DETAIL" {
+                    self.render_detail_button(group_index, cx).into_any_element()
+                } else {
+                    self.render_action_button(text, icon, rgb(0x1D1D1F), rgb(0xF5F5F7))
+                        .into_any_element()
+                }
+            }))
+    }
+
+    /// Render a detail button with click handler
+    fn render_detail_button(&self, group_index: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let is_selected = self.modal_consumer_index == Some(group_index);
+        let button_id: SharedString = format!("detail-btn-{}", group_index).into();
+
+        div()
+            .id(button_id)
+            .flex_1()
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(if is_selected { rgb(0x007AFF) } else { rgb(0xE5E5E7) })
+            .bg(if is_selected { rgb(0x007AFF) } else { rgb(0xF5F5F7) })
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                // Toggle modal - if already selected, close it; otherwise open it
+                if this.modal_consumer_index == Some(group_index) {
+                    println!("Closing modal for group {}", group_index);
+                    this.modal_consumer_index = None;
+                } else {
+                    println!("Opening modal for group {}", group_index);
+                    this.modal_consumer_index = Some(group_index);
+                }
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(if is_selected { rgb(0xFFFFFF) } else { rgb(0x1D1D1F) })
+                    .child("\u{1F441}"),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(if is_selected { rgb(0xFFFFFF) } else { rgb(0x1D1D1F) })
+                    .child("DETAIL"),
+            )
+    }
+
+    /// Render the close button for modal
+    fn render_close_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("modal-close-btn")
+            .w(px(32.0))
+            .h(px(32.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(8.0))
+            .bg(rgb(0xF5F5F7))
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.modal_consumer_index = None;
+                cx.notify();
+            }))
+            .child(div().text_lg().text_color(rgb(0x86868B)).child("\u{2715}"))
     }
 
     /// Render an action button
@@ -550,6 +648,270 @@ impl ConsumerView {
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(text_color)
                     .child(text),
+            )
+    }
+
+    /// Render just the modal content without backdrop (for use in render_page)
+    fn render_modal_content_only(&self, cx: &mut Context<Self>) -> Div {
+        if let Some(index) = self.modal_consumer_index {
+            if let Some(group) = self.consumer_groups.get(index) {
+                return div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(rgba(0x000000AA))
+                    .child(self.render_modal_content(group, cx));
+            }
+        }
+        div()
+    }
+
+    /// Render the modal content for a specific consumer group
+    fn render_modal_content(&self, group: &ConsumerGroupData, cx: &mut Context<Self>) -> Div {
+        div()
+            .w(px(800.0))
+            .h(px(600.0))
+            .rounded(px(16.0))
+            .bg(rgb(0xFFFFFF))
+            .border_1()
+            .border_color(rgb(0xE5E5E7))
+            .shadow_2xl()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .child(self.render_modal_header(group, cx))
+            .child(self.render_modal_body(group))
+    }
+
+    /// Render the modal header
+    fn render_modal_header(&self, group: &ConsumerGroupData, cx: &mut Context<Self>) -> Div {
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .p_6()
+            .border_b_1()
+            .border_color(rgb(0xE5E5E7))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_4()
+                    .child(
+                        div()
+                            .w(px(48.0))
+                            .h(px(48.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(12.0))
+                            .bg(group.group_type.bg_color())
+                            .child(
+                                div()
+                                    .text_2xl()
+                                    .text_color(group.group_type.color())
+                                    .child(group.group_type.icon()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xl()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgb(0x1D1D1F))
+                                    .child(group.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(rgb(0x86868B))
+                                    .child(format!("Type: {}", group.group_type.display_name())),
+                            ),
+                    ),
+            )
+            .child(self.render_close_button(cx))
+    }
+
+    /// Render the modal body
+    fn render_modal_body(&self, group: &ConsumerGroupData) -> Div {
+        div()
+            .flex()
+            .flex_col()
+            .gap_5()
+            .p_6()
+            .flex_1()
+            .child(self.render_stats_section(group))
+            .child(self.render_config_section(group))
+            .child(self.render_clients_section())
+    }
+
+    /// Render the statistics section
+    fn render_stats_section(&self, group: &ConsumerGroupData) -> Div {
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .text_base()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(0x1D1D1F))
+                    .child("Statistics"),
+            )
+            .child(
+                div().flex().gap_4().children(
+                    [
+                        ("TPS", group.tps.clone(), rgb(0x007AFF)),
+                        ("Delay", group.delay.clone(), rgb(0x34C759)),
+                        ("Clients", group.clients.to_string(), rgb(0xFF9500)),
+                    ]
+                    .iter()
+                    .map(|(label, value, color)| {
+                        div()
+                            .flex_1()
+                            .rounded(px(12.0))
+                            .bg(rgb(0xF5F5F7))
+                            .p_4()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(div().text_sm().text_color(rgb(0x86868B)).child(*label))
+                            .child(
+                                div()
+                                    .text_2xl()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(*color)
+                                    .child(value.clone()),
+                            )
+                    }),
+                ),
+            )
+    }
+
+    /// Render the configuration section
+    fn render_config_section(&self, _group: &ConsumerGroupData) -> Div {
+        let configs = [
+            ("Consume Model", "CLUSTERING"),
+            ("Consume From Where", "CONSUME_FROM_LAST_OFFSET"),
+            ("Consume Timeout", "15min"),
+            ("Max Reconsume Times", "16"),
+        ];
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .text_base()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(0x1D1D1F))
+                    .child("Configuration"),
+            )
+            .child(
+                div()
+                    .rounded(px(12.0))
+                    .bg(rgb(0xF5F5F7))
+                    .p_4()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .children(configs.iter().map(|(key, value)| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(div().text_sm().text_color(rgb(0x86868B)).child(*key))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(0x1D1D1F))
+                                    .child(*value),
+                            )
+                    })),
+            )
+    }
+
+    /// Render the connected clients section
+    fn render_clients_section(&self) -> Div {
+        let clients = [
+            ("192.168.1.100:10911", "Active", "2,340 TPS"),
+            ("192.168.1.101:10911", "Active", "1,890 TPS"),
+            ("192.168.1.102:10911", "Idle", "0 TPS"),
+        ];
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .text_base()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(0x1D1D1F))
+                    .child("Connected Clients"),
+            )
+            .child(
+                div()
+                    .rounded(px(12.0))
+                    .bg(rgb(0xF5F5F7))
+                    .p_4()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .children(clients.iter().map(|(addr, status, tps)| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .px_3()
+                            .py_2()
+                            .rounded(px(8.0))
+                            .bg(rgb(0xFFFFFF))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(0x1D1D1F))
+                                    .child(*addr),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_3()
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .py_1()
+                                            .rounded(px(4.0))
+                                            .bg(if *status == "Active" {
+                                                rgb(0xE8F5E9)
+                                            } else {
+                                                rgb(0xFFF3E0)
+                                            })
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(if *status == "Active" {
+                                                        rgb(0x34C759)
+                                                    } else {
+                                                        rgb(0xFF9500)
+                                                    })
+                                                    .child(*status),
+                                            ),
+                                    )
+                                    .child(div().text_xs().text_color(rgb(0x86868B)).child(*tps)),
+                            )
+                    })),
             )
     }
 }
