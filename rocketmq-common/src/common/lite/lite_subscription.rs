@@ -147,3 +147,65 @@ impl fmt::Display for LiteSubscription {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lite_subscription_new_with_methods() {
+        let mut set = HashSet::new();
+        set.insert("lite_topic".into());
+        let subscription = LiteSubscription::new("group".into(), "topic".into())
+            .with_lite_topic_set(set.clone())
+            .with_update_time(100);
+
+        assert_eq!(subscription.group(), "group");
+        assert_eq!(subscription.topic(), "topic");
+        assert_eq!(subscription.lite_topic_set(), &set);
+        assert_eq!(subscription.update_time(), 100);
+    }
+
+    #[test]
+    fn lite_subscription_topic_operations() {
+        let mut subscription = LiteSubscription::new("group".into(), "topic".into());
+
+        subscription.add_lite_topic("topic1".into());
+        assert!(subscription.lite_topic_set().contains(&CheetahString::from("topic1")));
+
+        let mut set = HashSet::new();
+        set.insert(CheetahString::from("topic2"));
+        subscription.add_lite_topic_set(&set);
+        assert!(subscription.lite_topic_set().contains(&CheetahString::from("topic2")));
+
+        subscription.remove_lite_topic(&CheetahString::from("topic1"));
+        assert!(!subscription.lite_topic_set().contains(&CheetahString::from("topic1")));
+
+        subscription.remove_lite_topic_set(&set);
+        assert!(!subscription.lite_topic_set().contains(&CheetahString::from("topic2")));
+    }
+
+    #[test]
+    fn lite_subscription_setters() {
+        let mut subscription = LiteSubscription::new("group".into(), "topic".into());
+        subscription.set_group("new_group".into());
+        subscription.set_topic("new_topic".into());
+        let mut set = HashSet::new();
+        set.insert("topic1".into());
+        subscription.set_lite_topic_set(set.clone());
+        subscription.set_update_time(200);
+
+        assert_eq!(subscription.group(), "new_group");
+        assert_eq!(subscription.topic(), "new_topic");
+        assert_eq!(subscription.lite_topic_set(), &set);
+        assert_eq!(subscription.update_time(), 200);
+    }
+
+    #[test]
+    fn lite_subscription_display() {
+        let subscription = LiteSubscription::new("group".into(), "topic".into());
+        let display = format!("{}", subscription);
+        assert!(display.contains("group: group"));
+        assert!(display.contains("topic: topic"));
+    }
+}
