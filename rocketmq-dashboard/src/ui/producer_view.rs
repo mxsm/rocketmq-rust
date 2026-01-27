@@ -260,10 +260,7 @@ impl ProducerView {
                             .child(self.selected_topic.clone()),
                     )
                     .child(
-                        div()
-                            .text_base()
-                            .text_color(rgb(0x86868B))
-                            .child("\u{E313}"), // expand_more icon
+                        div().text_base().text_color(rgb(0x86868B)).child("\u{E313}"), // expand_more icon
                     ),
             )
     }
@@ -326,10 +323,7 @@ impl ProducerView {
             .bg(rgb(0x007AFF))
             .cursor_pointer()
             .child(
-                div()
-                    .text_base()
-                    .text_color(rgb(0xFFFFFF))
-                    .child("\u{1F50D}"), // search icon 🔍
+                div().text_base().text_color(rgb(0xFFFFFF)).child("\u{1F50D}"), // search icon 🔍
             )
             .child(
                 div()
@@ -367,18 +361,13 @@ impl ProducerView {
                     .child("Producer Clients"),
             )
             .child(
-                div()
-                    .px_3()
-                    .py_1()
-                    .rounded(px(12.0))
-                    .bg(rgb(0xF5F5F7))
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(0x86868B))
-                            .child(count.to_string()),
-                    ),
+                div().px_3().py_1().rounded(px(12.0)).bg(rgb(0xF5F5F7)).child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(0x86868B))
+                        .child(count.to_string()),
+                ),
             )
     }
 
@@ -440,10 +429,7 @@ impl ProducerView {
                     .rounded(px(16.0))
                     .bg(client.icon_bg)
                     .child(
-                        div()
-                            .text_2xl()
-                            .text_color(client.icon_color)
-                            .child("\u{1F4E4}"), // send icon emoji ✈️
+                        div().text_2xl().text_color(client.icon_color).child("\u{1F4E4}"), // send icon emoji ✈️
                     ),
             )
             .child(
@@ -471,46 +457,31 @@ impl ProducerView {
                             .items_center()
                             .gap_3()
                             .child(self.render_language_badge(&client.language, lang_color, lang_bg))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(rgb(0x86868B))
-                                    .child(client.version.clone()),
-                            ),
+                            .child(div().text_sm().text_color(rgb(0x86868B)).child(client.version.clone())),
                     ),
             )
     }
 
     /// Render status badge
     fn render_status_badge(&self, status: ProducerStatus) -> Div {
-        div()
-            .px_3()
-            .py_1()
-            .rounded(px(12.0))
-            .bg(status.bg_color())
-            .child(
-                div()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(status.color())
-                    .child(status.display_name()),
-            )
+        div().px_3().py_1().rounded(px(12.0)).bg(status.bg_color()).child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(status.color())
+                .child(status.display_name()),
+        )
     }
 
     /// Render language badge
     fn render_language_badge(&self, language: &str, color: Rgba, bg: Rgba) -> Div {
-        div()
-            .px_2()
-            .py_1()
-            .rounded(px(6.0))
-            .bg(bg)
-            .child(
-                div()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(color)
-                    .child(language.to_string()),
-            )
+        div().px_2().py_1().rounded(px(6.0)).bg(bg).child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(color)
+                .child(language.to_string()),
+        )
     }
 
     /// Render the card statistics
@@ -531,12 +502,7 @@ impl ProducerView {
             .flex()
             .flex_col()
             .gap_1()
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(0x86868B))
-                    .child(label.to_string()),
-            )
+            .child(div().text_xs().text_color(rgb(0x86868B)).child(label.to_string()))
             .child(
                 div()
                     .text_sm()
@@ -547,11 +513,7 @@ impl ProducerView {
     }
 
     /// Render the card action buttons
-    fn render_card_actions(
-        &self,
-        client: &ProducerClientData,
-        cx: &mut Context<Self>,
-    ) -> Div {
+    fn render_card_actions(&self, client: &ProducerClientData, cx: &mut Context<Self>) -> Div {
         let producer_index = self
             .producer_clients
             .iter()
@@ -584,11 +546,7 @@ impl ProducerView {
             .py_2()
             .rounded(px(8.0))
             .border_1()
-            .border_color(if is_selected {
-                rgb(0x007AFF)
-            } else {
-                rgb(0xE5E5E7)
-            })
+            .border_color(if is_selected { rgb(0x007AFF) } else { rgb(0xE5E5E7) })
             .bg(if is_selected { rgb(0x007AFF) } else { rgb(0xF5F5F7) })
             .cursor_pointer()
             .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -604,34 +562,20 @@ impl ProducerView {
             .child(
                 div()
                     .text_sm()
-                    .text_color(if is_selected {
-                        rgb(0xFFFFFF)
-                    } else {
-                        rgb(0x1D1D1F)
-                    })
+                    .text_color(if is_selected { rgb(0xFFFFFF) } else { rgb(0x1D1D1F) })
                     .child("\u{1F441}"), // visibility icon 👁
             )
             .child(
                 div()
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(if is_selected {
-                        rgb(0xFFFFFF)
-                    } else {
-                        rgb(0x1D1D1F)
-                    })
+                    .text_color(if is_selected { rgb(0xFFFFFF) } else { rgb(0x1D1D1F) })
                     .child("Detail"),
             )
     }
 
     /// Render an action button
-    fn render_action_button(
-        &self,
-        icon: &'static str,
-        text: &'static str,
-        text_color: Rgba,
-        bg: Rgba,
-    ) -> Div {
+    fn render_action_button(&self, icon: &'static str, text: &'static str, text_color: Rgba, bg: Rgba) -> Div {
         div()
             .flex_1()
             .flex()
@@ -688,11 +632,7 @@ impl ProducerView {
     }
 
     /// Render the modal header
-    fn render_modal_header(
-        &self,
-        client: &ProducerClientData,
-        cx: &mut Context<Self>,
-    ) -> Div {
+    fn render_modal_header(&self, client: &ProducerClientData, cx: &mut Context<Self>) -> Div {
         div()
             .flex()
             .items_center()
@@ -812,9 +752,7 @@ impl ProducerView {
                             .flex()
                             .items_center()
                             .justify_between()
-                            .child(
-                                div().text_sm().text_color(rgb(0x86868B)).child((*key).to_string()),
-                            )
+                            .child(div().text_sm().text_color(rgb(0x86868B)).child((*key).to_string()))
                             .child(
                                 div()
                                     .text_sm()
@@ -840,35 +778,32 @@ impl ProducerView {
                     .child("Statistics"),
             )
             .child(
-                div()
-                    .flex()
-                    .gap_4()
-                    .children(
-                        [
-                            ("Messages Sent", "2,340", rgb(0x007AFF)),
-                            ("Send TPS", "1,245", rgb(0x34C759)),
-                            ("Avg Latency", "2.5ms", rgb(0xFF9500)),
-                        ]
-                        .iter()
-                        .map(|(label, value, color)| {
-                            div()
-                                .flex_1()
-                                .rounded(px(12.0))
-                                .bg(rgb(0xF5F5F7))
-                                .p_4()
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .child(div().text_sm().text_color(rgb(0x86868B)).child((*label).to_string()))
-                                .child(
-                                    div()
-                                        .text_2xl()
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(*color)
-                                        .child(value.to_string()),
-                                )
-                        }),
-                    ),
+                div().flex().gap_4().children(
+                    [
+                        ("Messages Sent", "2,340", rgb(0x007AFF)),
+                        ("Send TPS", "1,245", rgb(0x34C759)),
+                        ("Avg Latency", "2.5ms", rgb(0xFF9500)),
+                    ]
+                    .iter()
+                    .map(|(label, value, color)| {
+                        div()
+                            .flex_1()
+                            .rounded(px(12.0))
+                            .bg(rgb(0xF5F5F7))
+                            .p_4()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(div().text_sm().text_color(rgb(0x86868B)).child((*label).to_string()))
+                            .child(
+                                div()
+                                    .text_2xl()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(*color)
+                                    .child(value.to_string()),
+                            )
+                    }),
+                ),
             )
     }
 
@@ -905,12 +840,7 @@ impl ProducerView {
                             .flex()
                             .items_end()
                             .gap_2()
-                            .children((0..10).map(|_| {
-                                div()
-                                    .flex_1()
-                                    .bg(rgb(0x007AFF))
-                                    .rounded(px(4.0))
-                            })),
+                            .children((0..10).map(|_| div().flex_1().bg(rgb(0x007AFF)).rounded(px(4.0)))),
                     ),
             )
     }
