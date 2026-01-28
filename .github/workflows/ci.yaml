@@ -69,14 +69,10 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
-      - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@main
-
-      - name: Install cargo-shear and cargo-expand
-        run: |
-          cargo binstall --no-confirm cargo-shear
-          cargo binstall --no-confirm cargo-expand
-          echo "$CARGO_HOME/bin" >> $GITHUB_PATH
+      - name: Install cargo-shear
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-shear
 
       - name: Check for unused dependencies
         run: cargo shear --expand
