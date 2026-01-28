@@ -69,9 +69,6 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
-      - name: Clippy (all features)
-        run: cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
-
       - name: Install cargo-binstall
         uses: cargo-bins/cargo-binstall@main
 
@@ -79,9 +76,13 @@ jobs:
         run: |
           cargo binstall --no-confirm cargo-shear
           cargo binstall --no-confirm cargo-expand
+          echo "$CARGO_HOME/bin" >> $GITHUB_PATH
 
       - name: Check for unused dependencies
         run: cargo shear --expand
+
+      - name: Clippy (all features)
+        run: cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
 
   # =========================
   # Build + Test
