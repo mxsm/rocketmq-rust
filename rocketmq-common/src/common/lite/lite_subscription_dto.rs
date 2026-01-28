@@ -206,3 +206,88 @@ impl fmt::Display for LiteSubscriptionDTO {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lite_subscription_dto_default() {
+        let dto = LiteSubscriptionDTO::default();
+        assert_eq!(dto.action(), LiteSubscriptionAction::default());
+        assert!(dto.client_id().is_empty());
+        assert!(dto.group().is_empty());
+        assert!(dto.topic().is_empty());
+        assert!(dto.lite_topic_set().is_empty());
+        assert!(dto.offset_option().is_none());
+        assert_eq!(dto.version(), 0);
+    }
+
+    #[test]
+    fn lite_subscription_dto_with_methods() {
+        let mut set = HashSet::new();
+        set.insert("lite_topic".into());
+        let offset = OffsetOption::offset(100);
+
+        let dto = LiteSubscriptionDTO::new()
+            .with_action(LiteSubscriptionAction::CompleteAdd)
+            .with_client_id("client".into())
+            .with_group("group".into())
+            .with_topic("topic".into())
+            .with_lite_topic_set(set.clone())
+            .with_offset_option(offset)
+            .with_version(1);
+
+        assert_eq!(dto.action(), LiteSubscriptionAction::CompleteAdd);
+        assert_eq!(dto.client_id(), "client");
+        assert_eq!(dto.group(), "group");
+        assert_eq!(dto.topic(), "topic");
+        assert_eq!(dto.lite_topic_set(), &set);
+        assert_eq!(dto.offset_option(), Some(offset));
+        assert_eq!(dto.version(), 1);
+    }
+
+    #[test]
+    fn lite_subscription_dto_setters() {
+        let mut dto = LiteSubscriptionDTO::new();
+        dto.set_action(LiteSubscriptionAction::CompleteRemove);
+        dto.set_client_id("client2".into());
+        dto.set_group("group2".into());
+        dto.set_topic("topic2".into());
+
+        let mut set = HashSet::new();
+        set.insert("topic1".into());
+        dto.set_lite_topic_set(set.clone());
+
+        let offset = OffsetOption::offset(200);
+        dto.set_offset_option(offset);
+        dto.set_version(2);
+
+        assert_eq!(dto.action(), LiteSubscriptionAction::CompleteRemove);
+        assert_eq!(dto.client_id(), "client2");
+        assert_eq!(dto.group(), "group2");
+        assert_eq!(dto.topic(), "topic2");
+        assert_eq!(dto.lite_topic_set(), &set);
+        assert_eq!(dto.offset_option(), Some(offset));
+        assert_eq!(dto.version(), 2);
+    }
+
+    #[test]
+    fn lite_subscription_dto_display() {
+        let dto = LiteSubscriptionDTO::new();
+        let display = format!("{}", dto);
+        let expected = "LiteSubscriptionDTO { action: PARTIAL_ADD, client_id: , group: , topic: , lite_topic_set: {}, \
+                        offset_option: None, version: 0 }";
+        assert_eq!(display, expected);
+    }
+
+    #[test]
+    fn lite_subscription_dto_serde() {
+        let dto = LiteSubscriptionDTO::new().with_topic("topic".into());
+        let json = serde_json::to_string(&dto).unwrap();
+        let expected = r#"{"action":"PARTIAL_ADD","clientId":"","group":"","topic":"topic","liteTopicSet":[],"offsetOption":null,"version":0}"#;
+        assert_eq!(json, expected);
+        let decoded: LiteSubscriptionDTO = serde_json::from_str(&json).unwrap();
+        assert_eq!(dto, decoded);
+    }
+}
