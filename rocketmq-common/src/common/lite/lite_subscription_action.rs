@@ -88,3 +88,62 @@ impl fmt::Display for LiteSubscriptionAction {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lite_subscription_action_serialize() {
+        assert_eq!(
+            serde_json::to_string(&LiteSubscriptionAction::PartialAdd).unwrap(),
+            "\"PARTIAL_ADD\""
+        );
+        assert_eq!(
+            serde_json::to_string(&LiteSubscriptionAction::PartialRemove).unwrap(),
+            "\"PARTIAL_REMOVE\""
+        );
+        assert_eq!(
+            serde_json::to_string(&LiteSubscriptionAction::CompleteAdd).unwrap(),
+            "\"COMPLETE_ADD\""
+        );
+        assert_eq!(
+            serde_json::to_string(&LiteSubscriptionAction::CompleteRemove).unwrap(),
+            "\"COMPLETE_REMOVE\""
+        );
+    }
+
+    #[test]
+    fn lite_subscription_action_deserialize() {
+        assert_eq!(
+            serde_json::from_str::<LiteSubscriptionAction>("\"PARTIAL_ADD\"").unwrap(),
+            LiteSubscriptionAction::PartialAdd
+        );
+        assert_eq!(
+            serde_json::from_str::<LiteSubscriptionAction>("\"PARTIAL_REMOVE\"").unwrap(),
+            LiteSubscriptionAction::PartialRemove
+        );
+        assert_eq!(
+            serde_json::from_str::<LiteSubscriptionAction>("\"COMPLETE_ADD\"").unwrap(),
+            LiteSubscriptionAction::CompleteAdd
+        );
+        assert_eq!(
+            serde_json::from_str::<LiteSubscriptionAction>("\"COMPLETE_REMOVE\"").unwrap(),
+            LiteSubscriptionAction::CompleteRemove
+        );
+        assert!(serde_json::from_str::<LiteSubscriptionAction>("\"unknown\"").is_err());
+    }
+
+    #[test]
+    fn lite_subscription_action_display() {
+        assert_eq!(format!("{}", LiteSubscriptionAction::PartialAdd), "PARTIAL_ADD");
+        assert_eq!(format!("{}", LiteSubscriptionAction::PartialRemove), "PARTIAL_REMOVE");
+        assert_eq!(format!("{}", LiteSubscriptionAction::CompleteAdd), "COMPLETE_ADD");
+        assert_eq!(format!("{}", LiteSubscriptionAction::CompleteRemove), "COMPLETE_REMOVE");
+    }
+
+    #[test]
+    fn lite_subscription_action_default() {
+        assert_eq!(LiteSubscriptionAction::default(), LiteSubscriptionAction::PartialAdd);
+    }
+}
