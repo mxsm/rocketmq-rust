@@ -19,6 +19,7 @@
 
 use crate::ui::cluster_view::ClusterView;
 use crate::ui::consumer_view::ConsumerView;
+use crate::ui::message_view::MessageView;
 use crate::ui::nameserver_view::NameserverView;
 use crate::ui::producer_view::ProducerView;
 use crate::ui::topic_view::TopicView;
@@ -192,6 +193,7 @@ impl DashboardView {
             "Topic" => div().flex_1().h_full().child(cx.new(|_| TopicView::new())),
             "Consumer" => div().flex_1().h_full().child(cx.new(|_| ConsumerView::new())),
             "Producer" => div().flex_1().h_full().child(cx.new(|_| ProducerView::new())),
+            "Message" => div().flex_1().h_full().child(cx.new(|_| MessageView::new())),
             _ => self.render_dashboard_content(),
         }
     }
