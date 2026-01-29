@@ -126,17 +126,13 @@ impl ConsumerRunningInfo {
         ))?;
         let prev = first.1;
 
-        let push = if let ConsumeType::ConsumePassively = prev.consume_type {
-            true
-        } else {
-            false
-        };
+        let push = matches!(prev.consume_type, ConsumeType::ConsumePassively);
 
         let start_for_a_while = (get_current_millis() - prev.prop_consumer_start_timestamp) > (1000 * 60 * 2);
 
         if push && start_for_a_while {
             let mut prev = prev.clone();
-            for (_k, v) in &cri_table {
+            for v in cri_table.values() {
                 if v.subscription_set != prev.subscription_set {
                     // Different subscription in the same group of consumer
                     return Err(RocketMQError::Internal(
@@ -151,11 +147,7 @@ impl ConsumerRunningInfo {
     }
     pub async fn analyze_process_queue(client_id: String, info: ConsumerRunningInfo) -> RocketMQResult<String> {
         let mut sb = String::new();
-        let push = if let ConsumeType::ConsumePassively = &info.consume_type {
-            true
-        } else {
-            false
-        };
+        let push = matches!(info.consume_type, ConsumeType::ConsumePassively);
 
         let order_msg = info.consume_orderly;
 
