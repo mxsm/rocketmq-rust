@@ -53,7 +53,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 
 cheetah-string = { workspace = true }
 
-clap   = { version = "4.5.55", features = ["derive"] }
+clap   = { version = "4.5.56", features = ["derive"] }
 config = { workspace = true }
 
 
