@@ -31,11 +31,9 @@ use crate::commands::CommonArgs;
 
 #[derive(Debug, Clone, Parser)]
 pub struct UpdateTopicSubCommand {
-    /// Common arguments
     #[command(flatten)]
     common_args: CommonArgs,
 
-    /// Broker address
     #[arg(
         short = 'b',
         long = "brokerAddr",
@@ -45,7 +43,6 @@ pub struct UpdateTopicSubCommand {
     )]
     broker_addr: Option<String>,
 
-    /// Cluster name
     #[arg(
         short = 'c',
         long = "clusterName",
@@ -55,11 +52,9 @@ pub struct UpdateTopicSubCommand {
     )]
     cluster_name: Option<String>,
 
-    /// Topic name
     #[arg(short = 't', long = "topic", required = true, help = "topic name")]
     topic: String,
 
-    /// Number of read queues
     #[arg(
         short = 'r',
         long = "readQueueNums",
@@ -70,7 +65,6 @@ pub struct UpdateTopicSubCommand {
     )]
     read_queue_nums: u32,
 
-    /// Number of write queues
     #[arg(
         short = 'w',
         long = "writeQueueNums",
@@ -81,8 +75,6 @@ pub struct UpdateTopicSubCommand {
     )]
     write_queue_nums: u32,
 
-    /// Topic permission
-    /// 2: Write only, 4: Read only, 6: Read and Write
     #[arg(
         short = 'p',
         long = "perm",
@@ -92,7 +84,6 @@ pub struct UpdateTopicSubCommand {
     )]
     perm: Option<String>,
 
-    /// Whether it's an ordered message topic
     #[arg(
         short = 'o',
         long = "order",
@@ -101,11 +92,9 @@ pub struct UpdateTopicSubCommand {
     )]
     order: Option<bool>,
 
-    /// Whether it's a unit topic
     #[arg(short = 'u', long = "unit", required = false, help = "is unit topic (true|false)")]
     unit: Option<bool>,
 
-    /// Whether there's a unit subscription group
     #[arg(
         short = 's',
         long = "hasUnitSub",

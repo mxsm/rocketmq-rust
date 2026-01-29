@@ -1,0 +1,10 @@
+{
+  "title": {
+    "message": "首页",
+    "description": "The title of the homepage"
+  },
+  "tagline": {
+    "message": "使用 Rust 构建的高性能消息中间件",
+    "description": "The tagline of the homepage"
+  }
+}

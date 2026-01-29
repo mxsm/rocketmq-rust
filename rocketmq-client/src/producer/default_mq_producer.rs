@@ -362,7 +362,7 @@ impl DefaultMQProducer {
         self.default_mqproducer_impl
             .as_mut()
             .unwrap()
-            .set_default_mqproducer_impl_inner(wrapper);
+            .set_default_mqproducer_impl_inner(ArcMut::downgrade(&wrapper));
     }
 
     pub fn set_retry_response_codes(&mut self, retry_response_codes: HashSet<i32>) {
@@ -634,6 +634,12 @@ impl MQProducer for DefaultMQProducer {
     }
 
     async fn shutdown(&mut self) {
+        if let Some(ref mut default_mqproducer_impl) = self.default_mqproducer_impl {
+            if let Err(e) = default_mqproducer_impl.shutdown().await {
+                error!("DefaultMQProducerImpl shutdown error: {:?}", e);
+            }
+        }
+
         if let Some(ref mut produce_accumulator) = self.producer_config.produce_accumulator {
             produce_accumulator.shutdown();
         }

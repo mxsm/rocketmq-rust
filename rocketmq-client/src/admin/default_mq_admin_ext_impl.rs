@@ -25,24 +25,47 @@ use rocketmq_common::common::base::plain_access_config::PlainAccessConfig;
 use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
+use rocketmq_common::common::tools::broker_operator_result::BrokerOperatorResult;
+use rocketmq_common::common::tools::message_track::MessageTrack;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
+use rocketmq_remoting::protocol::admin::consume_stats_list::ConsumeStatsList;
+use rocketmq_remoting::protocol::admin::rollback_stats::RollbackStats;
 use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
+use rocketmq_remoting::protocol::body::acl_info::AclInfo;
+use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
+use rocketmq_remoting::protocol::body::broker_replicas_info::BrokerReplicasInfo;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::body::consumer_connection::ConsumerConnection;
 use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
+use rocketmq_remoting::protocol::body::epoch_entry_cache::EpochEntryCache;
+use rocketmq_remoting::protocol::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
+use rocketmq_remoting::protocol::body::get_lite_client_info_response_body::GetLiteClientInfoResponseBody;
+use rocketmq_remoting::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
+use rocketmq_remoting::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
+use rocketmq_remoting::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
 use rocketmq_remoting::protocol::body::group_list::GroupList;
+use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::body::producer_connection::ProducerConnection;
+use rocketmq_remoting::protocol::body::producer_table_info::ProducerTableInfo;
+use rocketmq_remoting::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
+use rocketmq_remoting::protocol::body::queue_time_span::QueueTimeSpan;
+use rocketmq_remoting::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper;
 use rocketmq_remoting::protocol::body::topic::topic_list::TopicList;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
+use rocketmq_remoting::protocol::body::user_info::UserInfo;
+use rocketmq_remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
 use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use rocketmq_remoting::protocol::subscription::broker_stats_data::BrokerStatsData;
+use rocketmq_remoting::protocol::subscription::group_forbidden::GroupForbidden;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
@@ -318,6 +341,14 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         todo!()
     }
 
+    async fn check_rocksdb_cq_write_progress(
+        &self,
+        _broker_addr: CheetahString,
+        _topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<CheetahString> {
+        unimplemented!("check_rocksdb_cq_write_progress not implemented yet")
+    }
+
     async fn examine_broker_cluster_info(&self) -> rocketmq_error::RocketMQResult<ClusterInfo> {
         self.client_instance
             .as_ref()
@@ -355,6 +386,13 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<ProducerConnection> {
         todo!()
+    }
+
+    async fn get_all_producer_info(
+        &self,
+        _broker_addr: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<ProducerTableInfo> {
+        unimplemented!("get_all_producer_info not implemented yet")
     }
 
     async fn get_name_server_address_list(&self) -> Vec<CheetahString> {
@@ -439,7 +477,17 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         group_name: CheetahString,
         remove_offset: Option<bool>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .delete_subscription_group(
+                &addr,
+                group_name,
+                remove_offset.unwrap_or(false),
+                self.timeout_millis.as_millis() as u64,
+            )
+            .await
     }
 
     async fn create_and_update_kv_config(
@@ -762,7 +810,29 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         &self,
         controller_servers: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<CheetahString, CheetahString>>> {
-        todo!()
+        if let Some(ref mq_client_instance) = self.client_instance {
+            let mut result: HashMap<CheetahString, HashMap<CheetahString, CheetahString>> = HashMap::new();
+            let mq_client_api = mq_client_instance.get_mq_client_api_impl();
+            let timeout_millis = self.timeout_millis.as_millis() as u64;
+
+            for controller_addr in controller_servers {
+                match mq_client_api
+                    .get_controller_config(controller_addr.clone(), timeout_millis)
+                    .await
+                {
+                    Ok(config) => {
+                        result.insert(controller_addr, config);
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to get config from controller {}: {}", controller_addr, e);
+                    }
+                }
+            }
+
+            Ok(result)
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn update_controller_config(
@@ -875,5 +945,475 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         resource: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
         todo!()
+    }
+
+    async fn create_lite_pull_topic(
+        &self,
+        _addr: CheetahString,
+        _topic: CheetahString,
+        _queue_num: i32,
+        _topic_sys_flag: i32,
+        _read_queue_nums: i32,
+        _write_queue_nums: i32,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        unimplemented!("create_lite_pull_topic not implemented yet")
+    }
+
+    async fn update_lite_pull_topic(
+        &self,
+        _addr: CheetahString,
+        _topic: CheetahString,
+        _read_queue_nums: i32,
+        _write_queue_nums: i32,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        unimplemented!("update_lite_pull_topic not implemented yet")
+    }
+
+    async fn get_lite_pull_topic(
+        &self,
+        _addr: CheetahString,
+        _topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<TopicConfig> {
+        unimplemented!("get_lite_pull_topic not implemented yet")
+    }
+
+    async fn delete_lite_pull_topic(
+        &self,
+        _addr: CheetahString,
+        _cluster_name: CheetahString,
+        _topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        unimplemented!("delete_lite_pull_topic not implemented yet")
+    }
+
+    async fn query_lite_pull_topic_list(&self, _addr: CheetahString) -> rocketmq_error::RocketMQResult<TopicList> {
+        unimplemented!("query_lite_pull_topic_list not implemented yet")
+    }
+
+    async fn query_lite_pull_topic_by_cluster(
+        &self,
+        _cluster_name: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<TopicList> {
+        unimplemented!("query_lite_pull_topic_by_cluster not implemented yet")
+    }
+
+    async fn query_lite_pull_subscription_list(
+        &self,
+        _addr: CheetahString,
+        _topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<GroupList> {
+        unimplemented!("query_lite_pull_subscription_list not implemented yet")
+    }
+
+    async fn update_lite_pull_consumer_offset(
+        &self,
+        _addr: CheetahString,
+        _topic: CheetahString,
+        _group: CheetahString,
+        _queue_id: i32,
+        _offset: u64,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        unimplemented!("update_lite_pull_consumer_offset not implemented yet")
+    }
+
+    async fn examine_consume_stats_with_queue(
+        &self,
+        _consumer_group: CheetahString,
+        _topic: Option<CheetahString>,
+        _queue_id: Option<i32>,
+    ) -> rocketmq_error::RocketMQResult<ConsumeStats> {
+        unimplemented!("examine_consume_stats_with_queue not implemented yet")
+    }
+
+    async fn examine_consume_stats_concurrent(
+        &self,
+        _consumer_group: CheetahString,
+        _topic: Option<CheetahString>,
+    ) -> AdminToolResult<ConsumeStats> {
+        unimplemented!("examine_consume_stats_concurrent not implemented yet")
+    }
+
+    async fn examine_consume_stats_concurrent_with_cluster(
+        &self,
+        _consumer_group: CheetahString,
+        _topic: Option<CheetahString>,
+        _cluster_name: Option<CheetahString>,
+    ) -> AdminToolResult<ConsumeStats> {
+        unimplemented!("examine_consume_stats_concurrent_with_cluster not implemented yet")
+    }
+
+    async fn export_rocksdb_consumer_offset_to_json(
+        &self,
+        _broker_addr: CheetahString,
+        _file_path: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        unimplemented!("export_rocksdb_consumer_offset_to_json not implemented yet")
+    }
+
+    async fn export_rocksdb_consumer_offset_from_memory(
+        &self,
+        _broker_addr: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<CheetahString> {
+        unimplemented!("export_rocksdb_consumer_offset_from_memory not implemented yet")
+    }
+
+    async fn sync_broker_member_group(
+        &self,
+        _controller_addr: CheetahString,
+        _cluster_name: CheetahString,
+        _broker_name: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        unimplemented!("sync_broker_member_group not implemented yet")
+    }
+
+    async fn get_topic_config_by_topic_name(
+        &self,
+        _broker_addr: CheetahString,
+        _topic_name: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<TopicConfig> {
+        unimplemented!("get_topic_config_by_topic_name not implemented yet")
+    }
+
+    async fn notify_min_broker_id_changed(
+        &self,
+        _cluster_name: CheetahString,
+        _broker_name: CheetahString,
+        _min_broker_id: u64,
+        _min_broker_addr: CheetahString,
+        _offline_broker_addr: Option<CheetahString>,
+        _ha_broker_addr: Option<CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        unimplemented!("notify_min_broker_id_changed not implemented yet")
+    }
+
+    async fn get_topic_stats_info(
+        &self,
+        _broker_addr: CheetahString,
+        _topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<TopicStatsTable> {
+        unimplemented!("get_topic_stats_info not implemented yet")
+    }
+
+    async fn query_broker_has_topic(
+        &self,
+        _broker_addr: CheetahString,
+        _topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<bool> {
+        unimplemented!("query_broker_has_topic not implemented yet")
+    }
+
+    async fn get_system_topic_list_from_broker(
+        &self,
+        _broker_addr: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<TopicList> {
+        unimplemented!("get_system_topic_list_from_broker not implemented yet")
+    }
+
+    async fn examine_topic_route_info_with_timeout(
+        &self,
+        _topic: CheetahString,
+        _timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<Option<TopicRouteData>> {
+        unimplemented!("examine_topic_route_info_with_timeout not implemented yet")
+    }
+
+    async fn export_pop_records(
+        &self,
+        _broker_addr: CheetahString,
+        _timeout: u64,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        unimplemented!("export_pop_records not implemented yet")
+    }
+
+    async fn switch_timer_engine(
+        &self,
+        _broker_addr: CheetahString,
+        _des_timer_engine: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        unimplemented!("switch_timer_engine not implemented yet")
+    }
+
+    async fn trigger_lite_dispatch(
+        &self,
+        _broker_addr: CheetahString,
+        _group: CheetahString,
+        _client_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        unimplemented!("trigger_lite_dispatch not implemented yet")
+    }
+
+    async fn delete_topic_in_broker_concurrent(
+        &self,
+        _addrs: HashSet<CheetahString>,
+        _topic: CheetahString,
+    ) -> AdminToolResult<BrokerOperatorResult> {
+        unimplemented!("delete_topic_in_broker_concurrent not implemented yet")
+    }
+
+    async fn reset_offset_by_timestamp_old(
+        &self,
+        _consumer_group: CheetahString,
+        _topic: CheetahString,
+        _timestamp: u64,
+        _force: bool,
+    ) -> rocketmq_error::RocketMQResult<Vec<RollbackStats>> {
+        unimplemented!("reset_offset_by_timestamp_old not implemented yet")
+    }
+
+    async fn reset_offset_new_concurrent(
+        &self,
+        _group: CheetahString,
+        _topic: CheetahString,
+        _timestamp: u64,
+    ) -> AdminToolResult<BrokerOperatorResult> {
+        unimplemented!("reset_offset_new_concurrent not implemented yet")
+    }
+
+    async fn query_consume_time_span(
+        &self,
+        _topic: CheetahString,
+        _group: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<Vec<QueueTimeSpan>> {
+        unimplemented!("query_consume_time_span not implemented yet")
+    }
+
+    async fn query_consume_time_span_concurrent(
+        &self,
+        _topic: CheetahString,
+        _group: CheetahString,
+    ) -> AdminToolResult<Vec<QueueTimeSpan>> {
+        unimplemented!("query_consume_time_span_concurrent not implemented yet")
+    }
+
+    async fn message_track_detail(&self, _msg_id: CheetahString) -> rocketmq_error::RocketMQResult<Vec<MessageTrack>> {
+        unimplemented!("message_track_detail not implemented yet")
+    }
+
+    async fn message_track_detail_concurrent(&self, _msg_id: CheetahString) -> AdminToolResult<Vec<MessageTrack>> {
+        unimplemented!("message_track_detail_concurrent not implemented yet")
+    }
+
+    async fn view_broker_stats_data(
+        &self,
+        _broker_addr: CheetahString,
+        _stats_name: CheetahString,
+        _stats_key: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<BrokerStatsData> {
+        unimplemented!("view_broker_stats_data not implemented yet")
+    }
+
+    async fn fetch_consume_stats_in_broker(
+        &self,
+        _broker_addr: CheetahString,
+        _is_order: bool,
+        _timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<ConsumeStatsList> {
+        unimplemented!("fetch_consume_stats_in_broker not implemented yet")
+    }
+
+    async fn get_all_subscription_group(
+        &self,
+        _broker_addr: CheetahString,
+        _timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<SubscriptionGroupWrapper> {
+        unimplemented!("get_all_subscription_group not implemented yet")
+    }
+
+    async fn get_user_subscription_group(
+        &self,
+        _broker_addr: CheetahString,
+        _timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<SubscriptionGroupWrapper> {
+        unimplemented!("get_user_subscription_group not implemented yet")
+    }
+
+    async fn query_consume_queue(
+        &self,
+        _broker_addr: CheetahString,
+        _topic: CheetahString,
+        _queue_id: i32,
+        _index: u64,
+        _count: i32,
+        _consumer_group: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<QueryConsumeQueueResponseBody> {
+        unimplemented!("query_consume_queue not implemented yet")
+    }
+
+    async fn update_and_get_group_read_forbidden(
+        &self,
+        _broker_addr: CheetahString,
+        _group_name: CheetahString,
+        _topic_name: CheetahString,
+        _readable: Option<bool>,
+    ) -> rocketmq_error::RocketMQResult<GroupForbidden> {
+        unimplemented!("update_and_get_group_read_forbidden not implemented yet")
+    }
+
+    async fn query_message(
+        &self,
+        _cluster_name: CheetahString,
+        _topic: CheetahString,
+        _msg_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<MessageExt> {
+        unimplemented!("query_message not implemented yet")
+    }
+
+    async fn get_broker_ha_status(&self, _broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<HARuntimeInfo> {
+        unimplemented!("get_broker_ha_status not implemented yet")
+    }
+
+    async fn get_in_sync_state_data(
+        &self,
+        _controller_address: CheetahString,
+        _brokers: Vec<CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<BrokerReplicasInfo> {
+        unimplemented!("get_in_sync_state_data not implemented yet")
+    }
+
+    async fn get_broker_epoch_cache(
+        &self,
+        _broker_addr: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<EpochEntryCache> {
+        unimplemented!("get_broker_epoch_cache not implemented yet")
+    }
+
+    async fn elect_master(
+        &self,
+        _controller_addr: CheetahString,
+        _cluster_name: CheetahString,
+        _broker_name: CheetahString,
+        _broker_id: Option<u64>,
+    ) -> rocketmq_error::RocketMQResult<(ElectMasterResponseHeader, BrokerMemberGroup)> {
+        unimplemented!("elect_master not implemented yet")
+    }
+
+    async fn create_user_with_info(
+        &self,
+        _broker_addr: CheetahString,
+        _username: CheetahString,
+        _password: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        unimplemented!("create_user_with_info not implemented yet")
+    }
+
+    async fn update_user_with_info(
+        &self,
+        _broker_addr: CheetahString,
+        _username: CheetahString,
+        _password: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        unimplemented!("update_user_with_info not implemented yet")
+    }
+
+    async fn get_user(
+        &self,
+        _broker_addr: CheetahString,
+        _username: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<UserInfo> {
+        unimplemented!("get_user not implemented yet")
+    }
+
+    async fn list_users(
+        &self,
+        _broker_addr: CheetahString,
+        _filter: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<Vec<UserInfo>> {
+        unimplemented!("list_users not implemented yet")
+    }
+
+    async fn create_acl_with_info(
+        &self,
+        _broker_addr: CheetahString,
+        _subject: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        unimplemented!("create_acl_with_info not implemented yet")
+    }
+
+    async fn update_acl_with_info(
+        &self,
+        _broker_addr: CheetahString,
+        _subject: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        unimplemented!("update_acl_with_info not implemented yet")
+    }
+
+    async fn get_acl(
+        &self,
+        _broker_addr: CheetahString,
+        _subject: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<AclInfo> {
+        unimplemented!("get_acl not implemented yet")
+    }
+
+    async fn list_acl(
+        &self,
+        _broker_addr: CheetahString,
+        _subject_filter: CheetahString,
+        _resource_filter: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<Vec<AclInfo>> {
+        unimplemented!("list_acl not implemented yet")
+    }
+
+    async fn get_broker_lite_info(
+        &self,
+        _broker_addr: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<GetBrokerLiteInfoResponseBody> {
+        unimplemented!("get_broker_lite_info not implemented yet")
+    }
+
+    async fn get_parent_topic_info(
+        &self,
+        _broker_addr: CheetahString,
+        _topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<GetParentTopicInfoResponseBody> {
+        unimplemented!("get_parent_topic_info not implemented yet")
+    }
+
+    async fn get_lite_topic_info(
+        &self,
+        _broker_addr: CheetahString,
+        _parent_topic: CheetahString,
+        _lite_topic: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<GetLiteTopicInfoResponseBody> {
+        unimplemented!("get_lite_topic_info not implemented yet")
+    }
+
+    async fn get_lite_client_info(
+        &self,
+        _broker_addr: CheetahString,
+        _parent_topic: CheetahString,
+        _group: CheetahString,
+        _client_id: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<GetLiteClientInfoResponseBody> {
+        unimplemented!("get_lite_client_info not implemented yet")
+    }
+
+    async fn get_lite_group_info(
+        &self,
+        _broker_addr: CheetahString,
+        _group: CheetahString,
+        _lite_topic: CheetahString,
+        _top_k: i32,
+    ) -> rocketmq_error::RocketMQResult<GetLiteGroupInfoResponseBody> {
+        unimplemented!("get_lite_group_info not implemented yet")
+    }
+
+    async fn export_rocksdb_config_to_json(
+        &self,
+        _broker_addr: CheetahString,
+        _config_types: Vec<CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        unimplemented!("export_rocksdb_config_to_json not implemented yet")
+    }
+
+    async fn search_offset(
+        &self,
+        _broker_addr: CheetahString,
+        _topic_name: CheetahString,
+        _queue_id: i32,
+        _timestamp: u64,
+        _timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<u64> {
+        unimplemented!("search_offset not implemented yet (deprecated)")
     }
 }

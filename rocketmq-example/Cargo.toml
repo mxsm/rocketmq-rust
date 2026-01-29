@@ -12,16 +12,18 @@ description.workspace  = true
 rust-version.workspace = true
 
 [dependencies]
-rocketmq-rust        = { workspace = true }
-rocketmq-common      = { workspace = true }
-rocketmq-tools       = { workspace = true }
-rocketmq-client-rust = { workspace = true }
-rocketmq-error       = { workspace = true }
-
-tracing.workspace = true
-cheetah-string    = { workspace = true }
-tokio             = { workspace = true }
 
 [[example]]
 name = "pop-consumer"
 path = "examples/consumer/pop_consumer.rs"
+
+[dev-dependencies]
+cheetah-string       = { workspace = true }
+rocketmq-client-rust = { workspace = true }
+rocketmq-common      = { workspace = true }
+rocketmq-error       = { workspace = true }
+rocketmq-rust        = { workspace = true }
+rocketmq-tools       = { workspace = true }
+tokio                = { workspace = true }
+
+tracing.workspace = true

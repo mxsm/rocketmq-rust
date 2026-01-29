@@ -29,7 +29,7 @@ pub trait MQProducerInner: Send + Sync + 'static {
 
     fn is_publish_topic_need_update(&self, topic: &CheetahString) -> bool;
 
-    fn get_check_listener(&self) -> Arc<Box<dyn TransactionListener>>;
+    fn get_check_listener(&self) -> Option<Arc<Box<dyn TransactionListener>>>;
 
     fn check_transaction_state(
         &self,
@@ -63,7 +63,7 @@ impl MQProducerInnerImpl {
         false
     }
 
-    pub fn get_check_listener(&self) -> Arc<Box<dyn TransactionListener>> {
+    pub fn get_check_listener(&self) -> Option<Arc<Box<dyn TransactionListener>>> {
         if let Some(default_mqproducer_impl_inner) = &self.default_mqproducer_impl_inner {
             return default_mqproducer_impl_inner.get_check_listener();
         }

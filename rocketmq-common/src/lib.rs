@@ -30,6 +30,16 @@ pub use rocketmq_error::RocketMQError;
 pub use rocketmq_error::RocketMQResult;
 
 pub use crate::common::attribute::topic_attributes as TopicAttributes;
+pub use crate::common::lite::belongs_to;
+pub use crate::common::lite::get_lite_topic;
+pub use crate::common::lite::get_parent_and_lite_topic;
+pub use crate::common::lite::get_parent_topic;
+pub use crate::common::lite::is_lite_topic_queue;
+pub use crate::common::lite::to_lmq_name;
+pub use crate::common::lite::OffsetOption;
+pub use crate::common::lite::OffsetOptionType;
+pub use crate::common::lite::LITE_TOPIC_PREFIX;
+pub use crate::common::lite::SEPARATOR;
 pub use crate::common::message::message_accessor as MessageAccessor;
 pub use crate::common::message::message_decoder as MessageDecoder;
 pub use crate::common::mq_version::RocketMqVersion as RocketMQVersion;

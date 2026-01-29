@@ -53,8 +53,8 @@ use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader;
 use rocketmq_remoting::runtime::RPCHook;
-use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
+use rocketmq_rust::WeakArcMut;
 use tokio::sync::Semaphore;
 use tracing::warn;
 
@@ -88,6 +88,8 @@ use crate::producer::send_status::SendStatus;
 use crate::producer::transaction_listener::TransactionListener;
 use crate::producer::transaction_send_result::TransactionSendResult;
 use tokio::task::JoinHandle;
+
+type Topic = CheetahString;
 
 /// Producer state machine (atomic)
 #[repr(u8)]
@@ -252,7 +254,7 @@ pub struct DefaultMQProducerImpl {
     pending_end_transaction_hooks: parking_lot::Mutex<Option<Vec<Arc<dyn EndTransactionHook>>>>,
     pending_forbidden_hooks: parking_lot::Mutex<Option<Vec<Arc<dyn CheckForbiddenHook>>>>,
 
-    topic_publish_info_table: Arc<DashMap<CheetahString /* topic */, TopicPublishInfo>>,
+    topic_publish_info_table: Arc<DashMap<Topic, TopicPublishInfo>>,
 
     rpc_hook: Option<Arc<dyn RPCHook>>,
     client_instance: Option<ArcMut<MQClientInstance>>,
@@ -261,9 +263,8 @@ pub struct DefaultMQProducerImpl {
     // ===== Backpressure control =====
     semaphore_async_send_num: Arc<Semaphore>,
     semaphore_async_send_size: Arc<Semaphore>,
-    default_mqproducer_impl_inner: Option<ArcMut<DefaultMQProducerImpl>>,
+    default_mqproducer_impl_inner: Option<WeakArcMut<DefaultMQProducerImpl>>,
     transaction_listener: Option<Arc<Box<dyn TransactionListener>>>,
-    check_runtime: Option<Arc<RocketMQRuntime>>,
 }
 
 #[allow(unused_must_use)]
@@ -299,7 +300,6 @@ impl DefaultMQProducerImpl {
             semaphore_async_send_size: Arc::new(semaphore_async_send_size),
             default_mqproducer_impl_inner: None,
             transaction_listener: None,
-            check_runtime: None,
         }
     }
 
@@ -449,7 +449,15 @@ impl DefaultMQProducerImpl {
         T: std::any::Any + Sync + Send,
     {
         let begin_start_time = Instant::now();
-        let mut producer_impl = self.default_mqproducer_impl_inner.clone().unwrap();
+        let mut producer_impl = self
+            .default_mqproducer_impl_inner
+            .as_ref()
+            .and_then(|weak| weak.upgrade())
+            .ok_or_else(|| {
+                mq_client_err!(
+                    "Failed to upgrade default_mqproducer_impl_inner: producer implementation is not available"
+                )
+            })?;
         let msg_len = if msg.get_body().is_some() {
             msg.get_body().unwrap().len()
         } else {
@@ -574,7 +582,15 @@ impl DefaultMQProducerImpl {
     where
         T: MessageTrait + Send + Sync,
     {
-        let mut producer_impl = self.default_mqproducer_impl_inner.clone().unwrap();
+        let mut producer_impl = self
+            .default_mqproducer_impl_inner
+            .as_ref()
+            .and_then(|weak| weak.upgrade())
+            .ok_or_else(|| {
+                mq_client_err!(
+                    "Failed to upgrade default_mqproducer_impl_inner: producer implementation is not available"
+                )
+            })?;
         let begin_start_time = Instant::now();
         let send_callback_inner = send_callback.clone();
         let msg_len = if msg.get_body().is_some() {
@@ -637,7 +653,15 @@ impl DefaultMQProducerImpl {
     where
         T: MessageTrait + Send + Sync,
     {
-        let producer_impl = self.default_mqproducer_impl_inner.clone().unwrap();
+        let mut producer_impl = self
+            .default_mqproducer_impl_inner
+            .as_ref()
+            .and_then(|weak| weak.upgrade())
+            .ok_or_else(|| {
+                mq_client_err!(
+                    "Failed to upgrade default_mqproducer_impl_inner: producer implementation is not available"
+                )
+            })?;
         let begin_start_time = Instant::now();
         let send_callback_inner = send_callback.clone();
         let msg_len = if msg.get_body().is_some() {
@@ -655,7 +679,6 @@ impl DefaultMQProducerImpl {
             }
 
             let result = producer_impl
-                .clone()
                 .send_default_impl(&mut msg, CommunicationMode::Async, send_callback_inner.clone(), timeout)
                 .await;
             match result {
@@ -1134,7 +1157,10 @@ impl DefaultMQProducerImpl {
                     .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL))
                     .is_some();
             let mut send_message_context = SendMessageContext {
-                producer: self.default_mqproducer_impl_inner.clone(),
+                producer: self
+                    .default_mqproducer_impl_inner
+                    .as_ref()
+                    .and_then(|weak| weak.upgrade()),
                 producer_group: Some(producer_group),
                 communication_mode: Some(communication_mode),
                 born_host,
@@ -1317,7 +1343,7 @@ impl DefaultMQProducerImpl {
         Ok(())
     }
 
-    async fn try_to_find_topic_publish_info(&self, topic: &CheetahString) -> Option<TopicPublishInfo> {
+    async fn try_to_find_topic_publish_info(&self, topic: &Topic) -> Option<TopicPublishInfo> {
         let mut topic_publish_info = self.topic_publish_info_table.get(topic).map(|v| v.clone());
         if topic_publish_info.is_none() || !topic_publish_info.as_ref().unwrap().ok() {
             self.topic_publish_info_table
@@ -1827,9 +1853,12 @@ impl DefaultMQProducerImpl {
             CheetahString::from_static_str(MessageConst::PROPERTY_MESSAGE_TTL),
             CheetahString::from_string(timeout.to_string()),
         );
-        let guard = self.client_instance.as_mut().unwrap().topic_route_table.read().await;
-        let has_route_data = guard.contains_key(msg.get_topic().as_str());
-        drop(guard);
+        let has_route_data = self
+            .client_instance
+            .as_mut()
+            .unwrap()
+            .topic_route_table
+            .contains_key(msg.get_topic().as_str());
         if !has_route_data {
             let begin_timestamp = Instant::now();
             self.try_to_find_topic_publish_info(msg.get_topic()).await;
@@ -1885,7 +1914,8 @@ impl DefaultMQProducerImpl {
                     msg.put_user_property(
                         CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_ID),
                         CheetahString::from_string(transaction_id.to_owned()),
-                    );
+                    )
+                    .map_err(|e| mq_client_err!(e.to_string()))?;
                 }
                 let transaction_id = msg.get_property(&CheetahString::from_static_str(
                     MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
@@ -1914,17 +1944,6 @@ impl DefaultMQProducerImpl {
             send_result: Some(send_result),
         };
         Ok(transaction_send_result)
-    }
-
-    pub fn init_transaction_env(&mut self, check_runtime: Option<Arc<RocketMQRuntime>>) {
-        if check_runtime.is_some() {
-            self.check_runtime = check_runtime;
-        } else {
-            self.check_runtime = Some(Arc::new(RocketMQRuntime::new_multi(
-                num_cpus::get(),
-                "thread-transaction-check-",
-            )));
-        }
     }
 
     pub async fn end_transaction(
@@ -2019,16 +2038,15 @@ impl DefaultMQProducerImpl {
         }
     }
 
-    pub fn set_default_mqproducer_impl_inner(&mut self, default_mqproducer_impl_inner: ArcMut<DefaultMQProducerImpl>) {
+    pub fn set_default_mqproducer_impl_inner(
+        &mut self,
+        default_mqproducer_impl_inner: WeakArcMut<DefaultMQProducerImpl>,
+    ) {
         self.default_mqproducer_impl_inner = Some(default_mqproducer_impl_inner);
     }
 
     pub fn set_transaction_listener(&mut self, transaction_listener: Arc<Box<dyn TransactionListener>>) {
         self.transaction_listener = Some(transaction_listener);
-    }
-
-    pub fn set_check_runtime(&mut self, check_runtime: Arc<RocketMQRuntime>) {
-        self.check_runtime = Some(check_runtime);
     }
 }
 
@@ -2047,8 +2065,8 @@ impl MQProducerInner for DefaultMQProducerImpl {
         true
     }
 
-    fn get_check_listener(&self) -> Arc<Box<dyn TransactionListener>> {
-        todo!()
+    fn get_check_listener(&self) -> Option<Arc<Box<dyn TransactionListener>>> {
+        self.transaction_listener.clone()
     }
 
     fn check_transaction_state(
@@ -2057,17 +2075,44 @@ impl MQProducerInner for DefaultMQProducerImpl {
         msg: MessageExt,
         check_request_header: CheckTransactionStateRequestHeader,
     ) {
-        let transaction_listener = self.transaction_listener.clone().unwrap();
-        let mut producer_impl_inner = self.default_mqproducer_impl_inner.clone().unwrap();
+        let Some(transaction_listener) = self.transaction_listener.clone() else {
+            warn!("TransactionListener is null, cannot check transaction state");
+            return;
+        };
+        let Some(mut producer_impl_inner) = self
+            .default_mqproducer_impl_inner
+            .as_ref()
+            .and_then(|weak| weak.upgrade())
+        else {
+            warn!("Failed to upgrade default_mqproducer_impl_inner: producer implementation is not available");
+            return;
+        };
         let broker_addr = broker_addr.clone();
-        self.check_runtime.as_ref().unwrap().get_handle().spawn(async move {
+        let group = self.producer_config.producer_group().clone();
+
+        // Spawn independent task without storing handle (matches Java's executor.submit behavior)
+        tokio::spawn(async move {
             let mut unique_key = msg.get_property(&CheetahString::from_static_str(
                 MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
             ));
             if unique_key.is_none() {
                 unique_key = Some(msg.msg_id.clone());
             }
-            let transaction_state = transaction_listener.check_local_transaction(&msg);
+
+            // Check local transaction state with exception handling
+            let transaction_state = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                transaction_listener.check_local_transaction(&msg)
+            })) {
+                Ok(state) => state,
+                Err(e) => {
+                    tracing::error!(
+                        "Broker call checkTransactionState, but checkLocalTransaction panic: {:?}, group: {}",
+                        e,
+                        group
+                    );
+                    LocalTransactionState::Unknown
+                }
+            };
             let request_header = EndTransactionRequestHeader {
                 topic: check_request_header.topic.clone().unwrap_or_default(),
                 producer_group: CheetahString::from_string(
@@ -2088,6 +2133,7 @@ impl MQProducerInner for DefaultMQProducerImpl {
                     ..Default::default()
                 },
             };
+            // Execute end transaction hook
             producer_impl_inner.do_execute_end_transaction_hook(
                 &msg.message,
                 unique_key.as_ref().unwrap(),
@@ -2095,7 +2141,9 @@ impl MQProducerInner for DefaultMQProducerImpl {
                 transaction_state,
                 true,
             );
-            let _ = producer_impl_inner
+
+            // Send end transaction request with error handling
+            if let Err(e) = producer_impl_inner
                 .client_instance
                 .as_mut()
                 .unwrap()
@@ -2103,7 +2151,10 @@ impl MQProducerInner for DefaultMQProducerImpl {
                 .as_mut()
                 .unwrap()
                 .end_transaction_oneway(&broker_addr, request_header, CheetahString::from_static_str(""), 3000)
-                .await;
+                .await
+            {
+                tracing::error!("endTransactionOneway exception: {:?}", e);
+            }
         });
     }
 
@@ -2160,7 +2211,15 @@ impl DefaultMQProducerImpl {
                 self.mq_fault_strategy.set_resolve(resolver);
                 self.mq_fault_strategy.set_service_detector(service_detector);
                 self.client_instance = Some(client_instance);
-                let self_clone = self.default_mqproducer_impl_inner.clone();
+                let self_clone = self
+                    .default_mqproducer_impl_inner
+                    .clone()
+                    .and_then(|weak| weak.upgrade())
+                    .ok_or_else(|| {
+                        mq_client_err!(
+                            "Failed to upgrade default_mqproducer_impl_inner: producer implementation is not available"
+                        )
+                    })?;
                 let register_ok = self
                     .client_instance
                     .as_mut()
@@ -2168,7 +2227,7 @@ impl DefaultMQProducerImpl {
                     .register_producer(
                         self.producer_config.producer_group(),
                         MQProducerInnerImpl {
-                            default_mqproducer_impl_inner: self_clone,
+                            default_mqproducer_impl_inner: Some(self_clone),
                         },
                     )
                     .await;
@@ -2403,6 +2462,11 @@ impl DefaultMQProducerImpl {
             return Err(mq_client_err!("Transactional messages do not support delayed delivery"));
         }
         Ok(())
+    }
+
+    pub async fn destroy_transaction_env(&mut self) {
+        // Transaction check tasks are independent, no cleanup needed
+        // Tasks will complete naturally when spawned
     }
 }
 

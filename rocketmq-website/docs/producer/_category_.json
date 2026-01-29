@@ -1,0 +1,8 @@
+{
+  "label": "Producer",
+  "position": 4,
+  "link": {
+    "type": "generated-index",
+    "description": "Learn how to send messages with RocketMQ-Rust"
+  }
+}

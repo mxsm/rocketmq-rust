@@ -18,7 +18,6 @@ use std::sync::Arc;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_error::RocketMQError;
-use rocketmq_runtime::RocketMQRuntime;
 
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::mq_producer::MQProducer;
@@ -34,7 +33,6 @@ pub struct TransactionProducerConfig {
     pub check_thread_pool_min_size: u32,
     pub check_thread_pool_max_size: u32,
     pub check_request_hold_max: u32,
-    pub check_runtime: Option<Arc<RocketMQRuntime>>,
 }
 
 #[derive(Default)]
@@ -65,14 +63,6 @@ impl TransactionMQProducer {
             .unwrap()
             .set_transaction_listener(Arc::new(Box::new(transaction_listener)));
     }
-
-    pub fn set_check_runtime(&mut self, check_runtime: RocketMQRuntime) {
-        self.default_producer
-            .default_mqproducer_impl
-            .as_mut()
-            .unwrap()
-            .set_check_runtime(Arc::new(check_runtime));
-    }
 }
 
 impl MQProducer for TransactionMQProducer {
@@ -85,7 +75,6 @@ impl MQProducer for TransactionMQProducer {
                 .ok_or(RocketMQError::not_initialized(
                     "DefaultMQProducerImpl is not initialized",
                 ))?;
-        default_mqproducer_impl.init_transaction_env(self.transaction_producer_config.check_runtime.take());
         if let Some(transaction_listener) = transaction_listener {
             default_mqproducer_impl.set_transaction_listener(transaction_listener);
         }

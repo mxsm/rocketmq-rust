@@ -28,7 +28,6 @@ use crate::core::RocketMQResult;
 /// Get NameServer configuration
 #[derive(Debug, Args, Clone)]
 pub struct GetNamesrvConfigCommand {
-    /// NameServer address
     #[arg(short = 'n', long = "namesrvAddr", value_parser = validators::validate_namesrv_addr)]
     pub namesrv_addr: String,
 
@@ -38,9 +37,7 @@ pub struct GetNamesrvConfigCommand {
 }
 
 impl GetNamesrvConfigCommand {
-    /// Execute the command
     pub async fn execute(&self) -> RocketMQResult<()> {
-        // Validate inputs
         self.validate()?;
 
         // Create admin client with RAII guard
@@ -72,9 +69,7 @@ impl GetNamesrvConfigCommand {
         Ok(())
     }
 
-    /// Validate command parameters
     fn validate(&self) -> RocketMQResult<()> {
-        // Validate format
         if !["table", "json", "yaml"].contains(&self.format.as_str()) {
             return Err(crate::core::ToolsError::validation_error(
                 "format",
@@ -86,7 +81,6 @@ impl GetNamesrvConfigCommand {
         Ok(())
     }
 
-    /// Print configuration based on format
     fn print_config(&self, config: &std::collections::HashMap<String, String>) -> RocketMQResult<()> {
         match self.format.as_str() {
             "json" => {
@@ -110,7 +104,6 @@ impl GetNamesrvConfigCommand {
         Ok(())
     }
 
-    /// Print configuration as a table
     fn print_table(&self, config: &std::collections::HashMap<String, String>) {
         println!("\nNameServer Configuration");
         println!("Address: {}", self.namesrv_addr);

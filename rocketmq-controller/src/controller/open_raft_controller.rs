@@ -23,7 +23,9 @@
 use std::sync::Arc;
 
 use crate::controller::Controller;
+use crate::heartbeat::default_broker_heartbeat_manager::DefaultBrokerHeartbeatManager;
 use crate::helper::broker_lifecycle_listener::BrokerLifecycleListener;
+use crate::helper::broker_valid_predicate::BrokerValidPredicate;
 use crate::openraft::GrpcRaftService;
 use crate::openraft::RaftNodeManager;
 use crate::protobuf::openraft::open_raft_service_server::OpenRaftServiceServer;
@@ -66,18 +68,21 @@ pub struct OpenRaftController {
     shutdown_tx: Option<oneshot::Sender<()>>,
 
     replica_info_manager: Arc<ReplicasInfoManager>,
+
+    broker_valid_predicate: Arc<dyn BrokerValidPredicate>,
 }
 
 impl OpenRaftController {
     pub fn new(config: ArcMut<ControllerConfig>) -> Self {
         let replica_info_manager = Arc::new(ReplicasInfoManager::new(config.clone()));
-
+        let broker_valid_predicate = Arc::new(DefaultBrokerHeartbeatManager::new(config.clone()));
         Self {
             config,
             node: None,
             handle: None,
             shutdown_tx: None,
             replica_info_manager,
+            broker_valid_predicate,
         }
     }
 }
@@ -404,9 +409,19 @@ impl Controller for OpenRaftController {
         ))
     }
 
-    async fn get_sync_state_data(&self, _broker_names: &[CheetahString]) -> RocketMQResult<Option<RemotingCommand>> {
-        // TODO: Implement sync state data query
-        Ok(Some(RemotingCommand::create_response_command()))
+    async fn get_sync_state_data(&self, broker_names: &[CheetahString]) -> RocketMQResult<Option<RemotingCommand>> {
+        let broker_names_str: Vec<String> = broker_names.iter().map(|s| s.to_string()).collect();
+        let result = self
+            .replica_info_manager
+            .get_sync_state_data(&broker_names_str, self.broker_valid_predicate.as_ref());
+
+        let mut response = RemotingCommand::create_response_command().set_code(result.response_code());
+
+        if let Some(body) = result.body() {
+            response = response.set_body(body.to_vec());
+        }
+
+        Ok(Some(response))
     }
 
     fn register_broker_lifecycle_listener(&self, _listener: Arc<dyn BrokerLifecycleListener>) {

@@ -26,7 +26,9 @@ target/
 # Node.js and NPM
 node_modules
 npm-debug.log*
+# Ignore package-lock.json except for rocketmq-website
 package-lock.json
+!rocketmq-website/package-lock.json
 codekit-config.json
 
 # macOS

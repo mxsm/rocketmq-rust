@@ -263,6 +263,10 @@ impl MessageTrait for MessageExtBrokerInner {
         self.message_ext_inner.get_property(name)
     }
 
+    fn get_property_ref(&self, name: &CheetahString) -> Option<&CheetahString> {
+        self.message_ext_inner.get_property_ref(name)
+    }
+
     #[inline]
     fn get_topic(&self) -> &CheetahString {
         self.message_ext_inner.get_topic()
@@ -314,7 +318,7 @@ impl MessageTrait for MessageExtBrokerInner {
     }
 
     #[inline]
-    fn get_compressed_body_mut(&mut self) -> &mut Option<Bytes> {
+    fn get_compressed_body_mut(&mut self) -> Option<&mut Bytes> {
         self.message_ext_inner.get_compressed_body_mut()
     }
 

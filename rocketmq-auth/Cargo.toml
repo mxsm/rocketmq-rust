@@ -27,8 +27,7 @@ serde_json     = { workspace = true }
 serde_yaml     = { workspace = true }
 
 
-tracing            = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing = { workspace = true }
 
 # IP utilities for authorization models
 ipnetwork = "0.21.1"
@@ -42,7 +41,7 @@ hmac = "0.12"
 sha1 = "0.10"
 
 # Optional: gRPC support
-tonic = { version = "0.14.2", optional = true }
+tonic = { version = "0.14.3", optional = true }
 
 # Error handling
 thiserror = { workspace = true }
@@ -55,5 +54,6 @@ moka = { version = "0.12", features = ["sync"] }
 
 
 [dev-dependencies]
-tempfile = "3"
-tracing  = { workspace = true }
+tempfile           = "3"
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }

@@ -198,6 +198,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_route_manager_config_default() {
+        let config = RouteManagerConfig::default();
+
+        assert_eq!(config.broker_channel_expired_time, 1000 * 60 * 2);
+        assert!(config.delete_topic_with_broker_registration);
+        assert!(config.enable_batch_unregistration);
+        assert_eq!(config.max_batch_unregister_size, 100);
+        assert_eq!(config.scan_not_active_broker_interval, 5000);
+    }
+
+    #[test]
     fn test_broker_registration_builder() {
         let reg = BrokerRegistration::new("cluster1", "192.168.1.1:10911", "broker-a", 0)
             .with_ha_server("192.168.1.1:10912")
@@ -206,14 +217,27 @@ mod tests {
             .with_acting_master(true);
 
         assert_eq!(reg.cluster_name.as_str(), "cluster1");
+        assert_eq!(reg.broker_addr.as_str(), "192.168.1.1:10911");
+        assert_eq!(reg.broker_name.as_str(), "broker-a");
         assert_eq!(reg.broker_id, 0);
+        assert_eq!(reg.ha_server_addr.as_str(), "192.168.1.1:10912");
         assert_eq!(reg.zone_name.as_ref().map(|s| s.as_str()), Some("zone1"));
         assert_eq!(reg.timeout_millis, Some(5000));
         assert_eq!(reg.enable_acting_master, Some(true));
     }
 
     #[test]
-    fn test_topic_route_query() {
+    fn test_broker_unregistration_new() {
+        let unreg = BrokerUnregistration::new("cluster1", "127.0.0.1:10911", "broker-a", 1);
+
+        assert_eq!(unreg.cluster_name.as_str(), "cluster1");
+        assert_eq!(unreg.broker_addr.as_str(), "127.0.0.1:10911");
+        assert_eq!(unreg.broker_name.as_str(), "broker-a");
+        assert_eq!(unreg.broker_id, 1);
+    }
+
+    #[test]
+    fn test_topic_route_query_builder() {
         let query = TopicRouteQuery::new("TestTopic").include_inactive();
 
         assert_eq!(query.topic.as_str(), "TestTopic");

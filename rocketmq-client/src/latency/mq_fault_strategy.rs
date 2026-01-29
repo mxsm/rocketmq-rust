@@ -43,6 +43,9 @@ pub struct MQFaultStrategy {
 }
 
 impl MQFaultStrategy {
+    /// 隔离模式下的延迟惩罚值（10 秒）
+    const ISOLATION_LATENCY_MS: u64 = 10_000;
+
     pub fn new(client_config: &ClientConfig) -> Self {
         let mut tolerance_impl = LatencyFaultToleranceImpl::new();
         tolerance_impl.set_start_detector_enable(client_config.start_detector_enable);
@@ -90,30 +93,33 @@ impl MQFaultStrategy {
         last_broker_name: Option<&CheetahString>,
         reset_index: bool,
     ) -> Option<MessageQueue> {
-        THREAD_BROKER_FILTER.with(|filer| {
-            filer.borrow_mut().last_broker_name = last_broker_name.cloned();
+        // 只克隆一次 BrokerFilter
+        let broker_filter = THREAD_BROKER_FILTER.with(|filer| {
+            let mut f = filer.borrow_mut();
+            f.last_broker_name = last_broker_name.cloned();
+            f.clone()
         });
+
         if self.send_latency_fault_enable.load(Ordering::Relaxed) {
             if reset_index {
                 tp_info.reset_index();
             }
-            let broker_filter = THREAD_BROKER_FILTER.with_borrow(|f| f.clone());
-            let filter = &[self.available_filter.as_ref(), &broker_filter];
-            let mut mq = tp_info.select_one_message_queue_filters(filter);
-            if mq.is_some() {
-                return mq;
+
+            let filter = &[self.available_filter.as_ref(), &broker_filter as &dyn QueueFilter];
+            if let Some(mq) = tp_info.select_one_message_queue_filters(filter) {
+                return Some(mq);
             }
-            let filter = &[self.reachable_filter.as_ref(), &broker_filter];
-            mq = tp_info.select_one_message_queue_filters(filter);
-            if mq.is_some() {
-                return mq;
+
+            let filter = &[self.reachable_filter.as_ref(), &broker_filter as &dyn QueueFilter];
+            if let Some(mq) = tp_info.select_one_message_queue_filters(filter) {
+                return Some(mq);
             }
+
             return tp_info.select_one_message_queue_filters(&[]);
         }
-        let broker_filter = THREAD_BROKER_FILTER.with_borrow(|f| f.clone());
-        let mq = tp_info.select_one_message_queue_filters(&[&broker_filter]);
-        if mq.is_some() {
-            return mq;
+
+        if let Some(mq) = tp_info.select_one_message_queue_filters(&[&broker_filter]) {
+            return Some(mq);
         }
         tp_info.select_one_message_queue_filters(&[])
     }
@@ -134,7 +140,12 @@ impl MQFaultStrategy {
         reachable: bool,
     ) {
         if self.send_latency_fault_enable.load(Ordering::Relaxed) {
-            let duration = self.compute_not_available_duration(if isolation { 10000 } else { current_latency });
+            let effective_latency = if isolation {
+                Self::ISOLATION_LATENCY_MS
+            } else {
+                current_latency
+            };
+            let duration = self.compute_not_available_duration(effective_latency);
             self.latency_fault_tolerance
                 .mut_from_ref()
                 .update_fault_item(broker_name, current_latency, duration, reachable)

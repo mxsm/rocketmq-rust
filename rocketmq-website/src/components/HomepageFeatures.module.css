@@ -1,0 +1,128 @@
+.features {
+  padding: 3rem 0;
+  background: transparent;
+}
+
+[data-theme='light'] .features {
+  background: #f1f5f9;
+}
+
+[data-theme='dark'] .features {
+  background: #0a0f1e;
+}
+
+.feature {
+  padding: 0.75rem;
+  margin-bottom: 1rem;
+  opacity: 0;
+  animation: fadeInUp 0.6s ease-out forwards;
+}
+
+.feature:nth-child(1) {
+  animation-delay: 0.1s;
+}
+
+.feature:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.feature:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.card {
+  padding: 2rem;
+  height: 100%;
+  background: var(--ifm-background-surface-color);
+  border: 1px solid rgba(168, 85, 247, 0.2);
+  border-radius: 12px;
+  transition: all 0.3s ease;
+  text-align: left;
+  position: relative;
+  overflow: hidden;
+}
+
+.card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(168, 85, 247, 0.1), transparent);
+  transition: left 0.6s ease;
+}
+
+.card:hover::before {
+  left: 100%;
+}
+
+.card:hover {
+  transform: translateY(-8px) scale(1.02);
+  box-shadow: 0 16px 32px rgba(168, 85, 247, 0.25);
+  border-color: #a855f7;
+}
+
+.icon {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 1.5rem;
+  background: linear-gradient(135deg, #a855f7 0%, #06b6d4 100%);
+  border-radius: 12px;
+  color: white;
+  box-shadow: 0 4px 14px rgba(168, 85, 247, 0.3);
+  transition: transform 0.8s ease, box-shadow 0.3s ease;
+}
+
+.card:hover .icon {
+  transform: rotateY(360deg) scale(1.1);
+  box-shadow: 0 8px 20px rgba(168, 85, 247, 0.5);
+}
+
+.svg {
+  width: 36px;
+  height: 36px;
+  stroke-width: 1.5;
+}
+
+.card h3 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  color: var(--ifm-heading-color);
+}
+
+.card p {
+  color: var(--ifm-color-emphasis-700);
+  line-height: 1.6;
+  margin: 0;
+  font-size: 1rem;
+}
+
+@media screen and (max-width: 996px) {
+  .features {
+    padding: 3rem 0;
+  }
+
+  .card {
+    padding: 1.5rem;
+  }
+
+  .card h3 {
+    font-size: 1.25rem;
+  }
+}

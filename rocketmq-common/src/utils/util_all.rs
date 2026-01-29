@@ -34,7 +34,6 @@ use chrono::TimeZone;
 use chrono::Timelike;
 use chrono::Utc;
 use local_ip_address::Error;
-use once_cell::sync::Lazy;
 use tracing::error;
 use tracing::info;
 

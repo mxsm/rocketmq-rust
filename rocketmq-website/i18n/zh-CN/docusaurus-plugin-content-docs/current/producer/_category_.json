@@ -1,0 +1,8 @@
+{
+  "label": "生产者",
+  "position": 4,
+  "link": {
+    "type": "generated-index",
+    "description": "了解如何使用 RocketMQ-Rust 发送消息"
+  }
+}

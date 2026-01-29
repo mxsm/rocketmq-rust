@@ -94,9 +94,9 @@ impl DefaultTopAddressing {
         url
     }
 
-    pub fn fetch_ns_addr_inner(&self, verbose: bool, timeout_millis: u64) -> Option<String> {
+    pub async fn fetch_ns_addr_inner_async(&self, verbose: bool, timeout_millis: u64) -> Option<String> {
         let url = self.build_url();
-        match HttpTinyClient::http_get(&url, None, None, "UTF-8", timeout_millis) {
+        match HttpTinyClient::http_get_async(&url, None, None, "UTF-8", timeout_millis).await {
             Ok(response) => {
                 if response.code == 200 {
                     if !response.content.is_empty() {
@@ -123,6 +123,43 @@ impl DefaultTopAddressing {
         }
         None
     }
+
+    /// Fetch nameserver address (blocking version - DEPRECATED)
+    ///
+    /// **DEPRECATED**: Use `fetch_ns_addr_inner_async()` instead.
+    #[deprecated(
+        since = "0.8.0",
+        note = "Use fetch_ns_addr_inner_async() instead for better async performance"
+    )]
+    pub fn fetch_ns_addr_inner(&self, verbose: bool, timeout_millis: u64) -> Option<String> {
+        #[allow(deprecated)]
+        match HttpTinyClient::http_get(&self.build_url(), None, None, "UTF-8", timeout_millis) {
+            Ok(response) => {
+                if response.code == 200 {
+                    if !response.content.is_empty() {
+                        return Some(Self::clear_new_line(&response.content));
+                    } else {
+                        error!("fetch nameserver address is null");
+                    }
+                } else {
+                    error!("fetch nameserver address failed. statusCode={}", response.code);
+                }
+            }
+            Err(e) => {
+                if verbose {
+                    error!("fetch name remoting_server address exception: {}", e);
+                }
+            }
+        }
+
+        if verbose {
+            warn!(
+                "connect to {} failed, maybe the domain name not bind in /etc/hosts",
+                self.build_url()
+            );
+        }
+        None
+    }
 }
 
 impl TopAddressing for DefaultTopAddressing {
@@ -136,6 +173,7 @@ impl TopAddressing for DefaultTopAddressing {
             }
         }
         // Fall back to default implementation
+        #[allow(deprecated)]
         self.fetch_ns_addr_inner(true, 3000)
     }
 

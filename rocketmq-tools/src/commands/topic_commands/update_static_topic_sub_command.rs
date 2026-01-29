@@ -1,3 +1,17 @@
+// Copyright 2023 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
@@ -18,13 +32,12 @@ use crate::commands::CommonArgs;
 
 #[derive(Debug, Clone, Parser)]
 pub struct UpdateStaticTopicSubCommand {
-    /// Common arguments
     #[command(flatten)]
     common_args: CommonArgs,
-    /// Topic name
+
     #[arg(short = 't', long = "topic", required = true, help = "topic name")]
     topic: String,
-    /// Broker address
+
     #[arg(
         short = 'b',
         long = "brokerAddr",
@@ -32,10 +45,10 @@ pub struct UpdateStaticTopicSubCommand {
         help = "create topic to which broker"
     )]
     broker_addr: String,
-    /// "totalQueueNum"
+
     #[arg(short = 'q', long = "totalQueueNum", required = true, help = "totalQueueNum")]
     queue_num: String,
-    /// Cluster name
+
     #[arg(
         short = 'c',
         long = "clusterName",
@@ -43,10 +56,10 @@ pub struct UpdateStaticTopicSubCommand {
         help = "create topic to which cluster"
     )]
     cluster_name: Option<String>,
-    /// Map file
+
     #[arg(short = 'm', long = "mapFile", required = false, help = "The mapping data file name")]
     mapping_file: Option<String>,
-    /// Force replace
+
     #[arg(
         short = 'f',
         long = "forceReplace",

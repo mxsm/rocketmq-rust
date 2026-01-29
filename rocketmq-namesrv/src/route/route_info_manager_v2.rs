@@ -116,7 +116,7 @@ pub struct RouteInfoManagerV2 {
     broker_locks: SegmentedLock,
     topic_locks: SegmentedLock,
 
-    // Legacy components (will be migrated in later phases)
+    // Legacy components
     name_server_runtime_inner: ArcMut<NameServerRuntimeInner>,
     un_register_service: ArcMut<BatchUnregistrationService>,
 }
@@ -162,13 +162,12 @@ impl RouteInfoManagerV2 {
     }
 
     /// Find broker info by socket address
+    #[inline]
     fn find_broker_by_socket_addr(
-        _broker_live_table: &BrokerLiveTable,
-        _socket_addr: std::net::SocketAddr,
+        broker_live_table: &BrokerLiveTable,
+        channel: &Channel,
     ) -> Option<Arc<BrokerAddrInfo>> {
-        // TODO: Need to map socket address to broker address info
-        // This requires tracking socket addresses in BrokerLiveInfo
-        None
+        broker_live_table.get_broker_info_by_channel(channel)
     }
 
     /// Find broker name by broker address
@@ -209,12 +208,12 @@ impl RouteInfoManagerV2 {
     /// 1. Find broker info by socket address
     /// 2. Setup unregister request
     /// 3. Submit to batch unregistration service
-    pub fn on_channel_destroy(&self, socket_addr: std::net::SocketAddr) {
+    pub fn on_channel_destroy(&self, channel: &Channel) {
         let mut unregister_request = UnRegisterBrokerRequestHeader::default();
         let mut need_unregister = false;
 
         // Find broker by socket address and setup unregister request
-        if let Some(broker_addr_info) = Self::find_broker_by_socket_addr(&self.broker_live_table, socket_addr) {
+        if let Some(broker_addr_info) = Self::find_broker_by_socket_addr(&self.broker_live_table, channel) {
             need_unregister = self.setup_unregister_request(&mut unregister_request, &broker_addr_info);
         }
 
@@ -719,7 +718,7 @@ impl RouteInfoManagerV2 {
         broker_addr: CheetahString,
         timeout_millis: Option<u64>,
         data_version: DataVersion,
-        _channel: Channel,
+        channel: Channel,
         ha_server_addr: CheetahString,
     ) -> RouteResult<Option<Arc<BrokerLiveInfo>>> {
         let broker_addr_info = Arc::new(BrokerAddrInfo::new(cluster_name, broker_addr));
@@ -727,9 +726,14 @@ impl RouteInfoManagerV2 {
         let timeout = timeout_millis.unwrap_or(DEFAULT_BROKER_CHANNEL_EXPIRED_TIME);
         let current_time = get_current_millis();
 
-        let live_info = BrokerLiveInfo::new(current_time, data_version)
-            .with_timeout(timeout)
-            .with_ha_server(ha_server_addr);
+        let live_info = BrokerLiveInfo::new(
+            current_time,
+            data_version,
+            channel.remote_address(),
+            channel.channel_id_owned(),
+        )
+        .with_timeout(timeout)
+        .with_ha_server(ha_server_addr);
 
         let prev = self.broker_live_table.register(broker_addr_info, live_info);
 

@@ -9,8 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **feat(tools):** Add `UpdateAclSubCommand` ([#5665](https://github.com/mxsm/rocketmq-rust/issues/5665))
+- **feat(tools):** Add `UpdateSubGroupSubCommand` in update_sub_group_sub_command.rs ([#5653](https://github.com/mxsm/rocketmq-rust/issues/5653))
 - **feat(tools):** Add `GetControllerMetadataSubCommand` ([#5624](https://github.com/mxsm/rocketmq-rust/issues/5624))
 - **feat(common):** Add `filter_type` module to filter.rs in rocketmq-common crate ([#5454](https://github.com/mxsm/rocketmq-rust/issues/5454))
+- **feat(common):** Add test coverage for `MessageQueueAssignment` struct to in rocketmq-common crate ([#5752](https://github.com/mxsm/rocketmq-rust/issues/5752))
 
 ### Changed
 

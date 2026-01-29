@@ -61,6 +61,7 @@ use rocketmq_remoting::protocol::header::change_invisible_time_request_header::C
 use rocketmq_remoting::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
+use rocketmq_remoting::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
 use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
@@ -317,6 +318,36 @@ impl MQClientAPIImpl {
             response.remark().map_or("".to_string(), |s| s.to_string())
         ))
     }
+
+    pub async fn delete_subscription_group(
+        &self,
+        addr: &CheetahString,
+        group_name: CheetahString,
+        clean_offset: bool,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let request_header = DeleteSubscriptionGroupRequestHeader {
+            group_name,
+            clean_offset,
+            rpc_request_header: None,
+        };
+
+        let request = RemotingCommand::create_request_command(RequestCode::DeleteSubscriptionGroup, request_header);
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            return Ok(());
+        }
+
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
 }
 
 impl NameServerUpdateCallback for MQClientAPIImpl {
@@ -510,11 +541,12 @@ impl MQClientAPIImpl {
         };
 
         // if compressed_body is not None, set request body to compressed_body
-        if msg.get_compressed_body_mut().is_some() {
-            let compressed_body = std::mem::take(msg.get_compressed_body_mut());
-            request.set_body_mut_ref(compressed_body.unwrap());
+        if let Some(compressed_body) = msg.get_compressed_body() {
+            request.set_body_mut_ref(compressed_body.clone());
+        } else if let Some(body) = msg.get_body() {
+            request.set_body_mut_ref(body.clone());
         } else {
-            request.set_body_mut_ref(msg.get_body().cloned().unwrap());
+            return Err(mq_client_err!(-1, "Message body is None"));
         }
         match communication_mode {
             CommunicationMode::Sync => {
@@ -1025,7 +1057,7 @@ impl MQClientAPIImpl {
         addr: &CheetahString,
         heartbeat_data: &HeartbeatData,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<i32> {
+    ) -> rocketmq_error::RocketMQResult<(i32, Option<RemotingCommand>)> {
         let request =
             RemotingCommand::create_request_command(RequestCode::HeartBeat, HeartbeatRequestHeader::default())
                 .set_language(self.client_config.language)
@@ -1035,7 +1067,7 @@ impl MQClientAPIImpl {
             .invoke_request(Some(addr), request, timeout_millis)
             .await?;
         if ResponseCode::from(response.code()) == ResponseCode::Success {
-            return Ok(response.version());
+            return Ok((response.version(), Some(response)));
         }
         Err(client_broker_err!(
             response.code(),
@@ -2054,6 +2086,43 @@ impl MQClientAPIImpl {
                 Ok(header) => Ok(header),
                 Err(_) => Err(mq_client_err!("Could not decode GetMetaDataResponseHeader".to_string())),
             },
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string())
+            )),
+        }
+    }
+
+    pub async fn get_controller_config(
+        &self,
+        controller_address: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<HashMap<CheetahString, CheetahString>> {
+        let request = RemotingCommand::create_remoting_command(RequestCode::GetControllerConfig);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&controller_address), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                let mut config_map: HashMap<CheetahString, CheetahString> = HashMap::new();
+                if let Some(body) = response.body() {
+                    let body_str = String::from_utf8_lossy(body);
+                    for line in body_str.lines() {
+                        let line = line.trim();
+                        if line.is_empty() || line.starts_with('#') {
+                            continue;
+                        }
+                        if let Some(pos) = line.find('=') {
+                            let key = line[..pos].trim();
+                            let value = line[pos + 1..].trim();
+                            config_map.insert(CheetahString::from(key), CheetahString::from(value));
+                        }
+                    }
+                }
+                Ok(config_map)
+            }
             _ => Err(mq_client_err!(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string())

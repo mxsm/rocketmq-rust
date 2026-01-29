@@ -17,7 +17,27 @@ use uuid::Uuid;
 pub struct CorrelationIdUtil;
 
 impl CorrelationIdUtil {
+    /// Creates a new correlation ID using UUID v4 in standard format.
+    ///
+    /// Uses hyphenated format (36 chars) to maintain compatibility with Java's UUID.toString().
+    /// Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+    ///
+    /// # Returns
+    /// A 36-character UUID string (e.g., "550e8400-e29b-41d4-a716-446655440000")
+    #[inline]
     pub fn create_correlation_id() -> String {
         Uuid::new_v4().to_string()
+    }
+
+    /// Creates a new correlation ID using UUID v4 in simple format (without hyphens).
+    ///
+    /// This format is more compact and has ~11% less memory overhead compared to standard format.
+    /// Format: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx (32 hex characters)
+    ///
+    /// # Returns
+    /// A 32-character UUID string (e.g., "550e8400e29b41d4a716446655440000")
+    #[inline]
+    pub fn create_correlation_id_simple() -> String {
+        Uuid::new_v4().simple().to_string()
     }
 }

@@ -34,7 +34,6 @@ pub struct UpdateTopicPermSubCommand {
     #[command(flatten)]
     common_args: CommonArgs,
 
-    /// Broker address
     #[arg(
         short = 'b',
         long = "brokerAddr",
@@ -44,7 +43,6 @@ pub struct UpdateTopicPermSubCommand {
     )]
     broker_addr: Option<String>,
 
-    /// Cluster name
     #[arg(
         short = 'c',
         long = "clusterName",
@@ -53,11 +51,9 @@ pub struct UpdateTopicPermSubCommand {
     )]
     cluster_name: Option<String>,
 
-    /// Topic name
     #[arg(short = 't', long = "topic", required = true, help = "Topic name")]
     topic: String,
 
-    /// Perm
     #[arg(
         short = 'p',
         long = "perm",

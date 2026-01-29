@@ -1,0 +1,28 @@
+[package]
+name                   = "rocketmq-dashboard"
+version.workspace      = true
+authors.workspace      = true
+edition.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+license.workspace      = true
+keywords               = ["dashboard", "rocketmq", "gpui", "gui"]
+categories             = ["development-tools", "gui"]
+readme                 = "README.md"
+description            = "A RocketMQ Dashboard GUI implemented based on gpui"
+rust-version.workspace = true
+
+[dependencies]
+gpui = { version = "0.2.2" }
+gpui-component = { version = "0.5.0" }
+anyhow = { workspace = true }
+
+# For logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Fix core-graphics version conflict on macOS
+[target.'cfg(target_os = "macos")'.dependencies]
+
+[build-dependencies]
+anyhow = { workspace = true }

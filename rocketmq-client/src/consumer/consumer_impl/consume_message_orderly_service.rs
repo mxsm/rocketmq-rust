@@ -13,12 +13,15 @@
 // limitations under the License.
 
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 use cheetah_string::CheetahString;
-use once_cell::sync::Lazy;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
@@ -29,16 +32,15 @@ use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_remoting::protocol::body::cm_result::CMResult;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioMutex;
+use std::sync::LazyLock;
 use tracing::info;
 use tracing::warn;
 
 use crate::base::client_config::ClientConfig;
 use crate::consumer::consumer_impl::consume_message_service::ConsumeMessageServiceTrait;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
-use crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue;
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 use crate::consumer::consumer_impl::process_queue::REBALANCE_LOCK_INTERVAL;
 use crate::consumer::default_mq_push_consumer::ConsumerConfig;
@@ -51,7 +53,7 @@ use crate::consumer::mq_consumer_inner::MQConsumerInnerLocal;
 use crate::hook::consume_message_context::ConsumeMessageContext;
 use crate::producer::mq_producer::MQProducer;
 
-static MAX_TIME_CONSUME_CONTINUOUSLY: Lazy<u64> = Lazy::new(|| {
+static MAX_TIME_CONSUME_CONTINUOUSLY: LazyLock<u64> = LazyLock::new(|| {
     std::env::var("rocketmq.client.maxTimeConsumeContinuously")
         .unwrap_or("60000".to_string())
         .parse()
@@ -64,10 +66,11 @@ pub struct ConsumeMessageOrderlyService {
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     pub(crate) consumer_group: CheetahString,
     pub(crate) message_listener: ArcBoxMessageListenerOrderly,
-    pub(crate) consume_runtime: RocketMQRuntime,
-    pub(crate) stopped: AtomicBool,
+    pub(crate) stopped: Arc<AtomicBool>,
     pub(crate) global_lock: Arc<RocketMQTokioMutex<()>>,
     pub(crate) message_queue_lock: MessageQueueLock,
+    pub(crate) lock_periodic_task_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    pub(crate) active_tasks: Arc<AtomicUsize>,
 }
 
 impl ConsumeMessageOrderlyService {
@@ -78,24 +81,23 @@ impl ConsumeMessageOrderlyService {
         message_listener: ArcBoxMessageListenerOrderly,
         default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
     ) -> Self {
-        let consume_thread = consumer_config.consume_thread_max;
-        let consumer_group_tag = format!("{}_{}", "ConsumeMessageThread_", consumer_group);
         Self {
             default_mqpush_consumer_impl,
             client_config,
             consumer_config,
             consumer_group,
             message_listener,
-            consume_runtime: RocketMQRuntime::new_multi(consume_thread as usize, consumer_group_tag.as_str()),
-            stopped: AtomicBool::new(false),
+            stopped: Arc::new(AtomicBool::new(false)),
             global_lock: Arc::new(Default::default()),
             message_queue_lock: Default::default(),
+            lock_periodic_task_handle: Arc::new(Mutex::new(None)),
+            active_tasks: Arc::new(AtomicUsize::new(0)),
         }
     }
 
     pub async fn lock_mqperiodically(&mut self) {
         let lock = self.global_lock.lock().await;
-        if self.stopped.load(std::sync::atomic::Ordering::Acquire) {
+        if self.stopped.load(Ordering::Acquire) {
             return;
         }
 
@@ -133,7 +135,7 @@ impl ConsumeMessageOrderlyService {
     ) {
         let consume_message_orderly_service_cloned = consume_message_orderly_service.clone();
         let message_queue = message_queue.clone();
-        self.consume_runtime.get_handle().spawn(async move {
+        tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(delay_mills)).await;
 
             if consume_message_orderly_service.lock_one_mq(&message_queue).await {
@@ -155,7 +157,7 @@ impl ConsumeMessageOrderlyService {
     }
 
     pub async fn lock_one_mq(&self, message_queue: &MessageQueue) -> bool {
-        if self.stopped.load(std::sync::atomic::Ordering::Acquire) {
+        if self.stopped.load(Ordering::Acquire) {
             return false;
         }
 
@@ -189,14 +191,17 @@ impl ConsumeMessageOrderlyService {
         time_millis = time_millis.clamp(10, 30000);
 
         let delay = Duration::from_millis(time_millis as u64);
+        let stopped = self.stopped.clone();
 
         tokio::spawn(async move {
             tokio::time::sleep(delay).await;
-            // Call the submit_consume_request function here
-            // ConsumeMessageOrderlyService::submit_consume_request(None, process_queue_clone,
-            // message_queue_clone, true).await;
-            let this_ = this.clone();
 
+            if stopped.load(Ordering::Acquire) {
+                warn!("Service stopped, discard delayed consume request");
+                return;
+            }
+
+            let this_ = this.clone();
             this.submit_consume_request(this_, vec![], process_queue, message_queue, true)
                 .await;
         });
@@ -330,7 +335,7 @@ impl ConsumeMessageOrderlyService {
             }
         };
 
-        if commit_offset >= 0 && consume_request.process_queue.is_dropped() {
+        if commit_offset >= 0 && !consume_request.process_queue.is_dropped() {
             let mut default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
 
             default_mqpush_consumer_impl
@@ -347,20 +352,60 @@ impl ConsumeMessageOrderlyService {
 impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
     fn start(&mut self, mut this: ArcMut<Self>) {
         if MessageModel::Clustering == self.consumer_config.message_model {
-            self.consume_runtime.get_handle().spawn(async move {
-                tokio::time::sleep(tokio::time::Duration::from_millis(1_000)).await;
-                loop {
-                    this.lock_mqperiodically().await;
-                    tokio::time::sleep(tokio::time::Duration::from_millis(*REBALANCE_LOCK_INTERVAL)).await;
-                }
+            let lock_handle = self.lock_periodic_task_handle.clone();
+            let stopped = self.stopped.clone();
+            tokio::spawn(async move {
+                let handle = tokio::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1_000)).await;
+                    loop {
+                        if stopped.load(Ordering::Acquire) {
+                            break;
+                        }
+                        this.lock_mqperiodically().await;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(*REBALANCE_LOCK_INTERVAL)).await;
+                    }
+                });
+                *lock_handle.lock().await = Some(handle);
             });
         }
     }
 
     async fn shutdown(&mut self, await_terminate_millis: u64) {
+        info!("{} ConsumeMessageOrderlyService shutdown started", self.consumer_group);
+
+        self.stopped.store(true, Ordering::Release);
+
+        if MessageModel::Clustering == self.consumer_config.message_model {
+            let mut lock_handle_guard = self.lock_periodic_task_handle.lock().await;
+            if let Some(handle) = lock_handle_guard.take() {
+                handle.abort();
+            }
+            drop(lock_handle_guard);
+        }
+
+        let timeout = Duration::from_millis(await_terminate_millis);
+        let start_time = Instant::now();
+
+        while self.active_tasks.load(Ordering::Acquire) > 0 {
+            if start_time.elapsed() >= timeout {
+                warn!(
+                    "{} ConsumeMessageOrderlyService shutdown timeout, {} tasks still active",
+                    self.consumer_group,
+                    self.active_tasks.load(Ordering::Acquire)
+                );
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
         if MessageModel::Clustering == self.consumer_config.message_model {
             self.unlock_all_mq().await;
         }
+
+        info!(
+            "{} ConsumeMessageOrderlyService shutdown completed",
+            self.consumer_group
+        );
     }
 
     #[allow(deprecated)]
@@ -421,6 +466,11 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
     ) {
+        if self.stopped.load(Ordering::Acquire) {
+            warn!("Service stopped, reject new consume request");
+            return;
+        }
+
         if !dispatch_to_consume {
             return;
         }
@@ -430,7 +480,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
             default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
             consumer_group: self.consumer_group.clone(),
         };
-        self.consume_runtime.get_handle().spawn(async move {
+        tokio::spawn(async move {
             consume_request.run(this).await;
         });
     }
@@ -439,10 +489,10 @@ impl ConsumeMessageServiceTrait for ConsumeMessageOrderlyService {
         &self,
         this: ArcMut<Self>,
         msgs: Vec<MessageExt>,
-        process_queue: &PopProcessQueue,
+        process_queue: &crate::consumer::consumer_impl::pop_process_queue::PopProcessQueue,
         message_queue: &MessageQueue,
     ) {
-        unimplemented!("ConsumeMessageConcurrentlyService not support submit_pop_consume_request");
+        unimplemented!("ConsumeMessageOrderlyService not support submit_pop_consume_request");
     }
 }
 
@@ -456,6 +506,14 @@ struct ConsumeRequest {
 impl ConsumeRequest {
     #[allow(deprecated)]
     async fn run(&mut self, consume_message_orderly_service: ArcMut<ConsumeMessageOrderlyService>) {
+        if consume_message_orderly_service.stopped.load(Ordering::Acquire) {
+            warn!(
+                "run, service stopped, discard consume request for {}",
+                self.message_queue
+            );
+            return;
+        }
+
         if self.process_queue.is_dropped() {
             warn!(
                 "run, the message queue not be able to consume, because it's dropped. {}",
@@ -463,6 +521,25 @@ impl ConsumeRequest {
             );
             return;
         }
+
+        consume_message_orderly_service
+            .active_tasks
+            .fetch_add(1, Ordering::SeqCst);
+        let active_tasks = consume_message_orderly_service.active_tasks.clone();
+
+        struct TaskGuard {
+            active_tasks: Arc<AtomicUsize>,
+        }
+
+        impl Drop for TaskGuard {
+            fn drop(&mut self) {
+                self.active_tasks.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+
+        let _guard = TaskGuard {
+            active_tasks: active_tasks.clone(),
+        };
 
         let mut consume_message_orderly_service_inner = consume_message_orderly_service.clone();
         let lock = consume_message_orderly_service_inner
@@ -581,8 +658,15 @@ impl ConsumeRequest {
                     Ok(value) => {
                         status = Some(value);
                     }
-                    Err(_) => {
+                    Err(e) => {
                         has_exception = true;
+                        tracing::error!(
+                            "consumeMessage Orderly exception: {:?}, Group: {}, Msgs: {}, MQ: {}",
+                            e,
+                            self.consumer_group,
+                            msgs.len(),
+                            self.message_queue
+                        );
                     }
                 }
                 drop(consume_lock);

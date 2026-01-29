@@ -23,7 +23,7 @@ env:
 
 jobs:
   # =========================
-  # Format + Clippy
+  # Format + Clippy + Shear
   # =========================
   check:
     name: Check (fmt + clippy)
@@ -40,7 +40,8 @@ jobs:
             clang llvm libclang-dev \
             cmake make ninja-build pkg-config \
             protobuf-compiler \
-            libsnappy-dev liblz4-dev libzstd-dev zlib1g-dev
+            libsnappy-dev liblz4-dev libzstd-dev zlib1g-dev \
+            libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
 
           echo "CC=clang" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV
@@ -97,7 +98,8 @@ jobs:
             clang llvm libclang-dev \
             cmake make ninja-build pkg-config \
             protobuf-compiler \
-            libsnappy-dev liblz4-dev libzstd-dev zlib1g-dev
+            libsnappy-dev liblz4-dev libzstd-dev zlib1g-dev \
+            libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
 
           echo "CC=clang" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV
@@ -158,7 +160,8 @@ jobs:
             clang llvm libclang-dev \
             cmake make ninja-build pkg-config \
             protobuf-compiler \
-            libsnappy-dev liblz4-dev libzstd-dev zlib1g-dev
+            libsnappy-dev liblz4-dev libzstd-dev zlib1g-dev \
+            libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
 
           echo "CC=clang" >> $GITHUB_ENV
           echo "CXX=clang++" >> $GITHUB_ENV

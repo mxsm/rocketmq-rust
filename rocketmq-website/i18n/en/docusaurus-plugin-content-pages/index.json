@@ -1,0 +1,10 @@
+{
+  "title": {
+    "message": "Home",
+    "description": "The title of the homepage"
+  },
+  "tagline": {
+    "message": "High-performance messaging middleware built with Rust",
+    "description": "The tagline of the homepage"
+  }
+}

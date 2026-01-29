@@ -46,19 +46,19 @@ config.workspace = true
 #tools
 dirs.workspace = true
 
-flate2    = { version = "1.1.7", features = ["zlib"], default-features = false }
+flate2    = { version = "1.1.8", features = ["zlib"], default-features = false }
 lz4_flex  = { version = "0.12", default-features = false }
 zstd      = "0.13"
 byteorder = "1.5.0"
+md5       = { package = "md-5", version = "0.10" }
 
-local-ip-address = "0.6.8"
-chrono           = "0.4.42"
+local-ip-address = "0.6.9"
+chrono           = "0.4.43"
 chrono-tz        = "0.10.4"
-time             = "0.3.44"
+time             = "0.3.46"
 iana-time-zone   = "0.1"
 
 parking_lot             = { workspace = true }
-once_cell               = { workspace = true }
 tempfile                = "3.24.0"
 trait-variant.workspace = true
 
@@ -67,8 +67,7 @@ hostname  = "0.4"
 regex     = "1.12.2"
 thiserror = { workspace = true }
 
-reqwest         = { version = "0.13", features = ["blocking", "json"] }
-url             = "2.5.8"
+reqwest         = { version = "0.13", features = ["json"] }
 form_urlencoded = "1.2.2"
 
 uuid           = { workspace = true }

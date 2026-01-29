@@ -26,11 +26,14 @@ pub mod chain;
 pub use crate::common::sys_flag::topic_sys_flag as TopicSysFlag;
 pub mod attribute;
 pub mod base;
+
 pub mod boundary_type;
 pub mod broker;
+pub mod coldctr;
 pub mod compression;
 pub mod config;
 pub mod config_manager;
+pub mod consistenthash;
 pub mod constant;
 pub mod consumer;
 pub mod controller;
@@ -53,10 +56,13 @@ pub mod stats;
 pub mod sys_flag;
 
 pub mod action;
+pub mod entity;
+pub mod lite;
 pub mod metrics;
 pub mod resource;
 pub mod system_clock;
 pub mod thread;
+pub mod tools;
 pub mod topic;
 
 #[derive(Clone, Default, Eq, PartialEq, Copy)]
