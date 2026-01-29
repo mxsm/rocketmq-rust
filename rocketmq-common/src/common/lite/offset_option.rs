@@ -91,7 +91,7 @@ impl Default for OffsetOption {
 
 impl fmt::Display for OffsetOption {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "OffsetOption {{ type: {:?}, value: {} }}", self.type_, self.value)
+        write!(f, "OffsetOption {{ type: {}, value: {} }}", self.type_, self.value)
     }
 }
 
@@ -133,5 +133,85 @@ impl fmt::Display for OffsetOptionType {
             Self::TailN => f.write_str("TAIL_N"),
             Self::Timestamp => f.write_str("TIMESTAMP"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offset_option_constructors() {
+        let option = OffsetOption::new(OffsetOptionType::Policy, OffsetOption::POLICY_MIN_VALUE);
+        assert_eq!(option.type_(), OffsetOptionType::Policy);
+        assert_eq!(option.value(), OffsetOption::POLICY_MIN_VALUE);
+
+        let policy = OffsetOption::policy(OffsetOption::POLICY_MAX_VALUE);
+        assert_eq!(policy.type_(), OffsetOptionType::Policy);
+        assert_eq!(policy.value(), OffsetOption::POLICY_MAX_VALUE);
+
+        let offset = OffsetOption::offset(100);
+        assert_eq!(offset.type_(), OffsetOptionType::Offset);
+        assert_eq!(offset.value(), 100);
+
+        let tail_n = OffsetOption::tail_n(10);
+        assert_eq!(tail_n.type_(), OffsetOptionType::TailN);
+        assert_eq!(tail_n.value(), 10);
+
+        let timestamp = OffsetOption::timestamp(123456789);
+        assert_eq!(timestamp.type_(), OffsetOptionType::Timestamp);
+        assert_eq!(timestamp.value(), 123456789);
+    }
+
+    #[test]
+    fn offset_option_setters() {
+        let mut option = OffsetOption::default();
+        assert_eq!(option.type_(), OffsetOptionType::Policy);
+        assert_eq!(option.value(), OffsetOption::POLICY_LAST_VALUE);
+
+        option.set_type(OffsetOptionType::TailN);
+        option.set_value(5);
+        assert_eq!(option.type_(), OffsetOptionType::TailN);
+        assert_eq!(option.value(), 5);
+    }
+
+    #[test]
+    fn offset_option_display() {
+        let option = OffsetOption::offset(100);
+        let format = format!("{}", option);
+        let expected = "OffsetOption { type: OFFSET, value: 100 }";
+        assert_eq!(format, expected);
+    }
+
+    #[test]
+    fn offset_option_serde() {
+        let option = OffsetOption::offset(100);
+        let json = serde_json::to_string(&option).unwrap();
+        let expected = r#"{"type":"Offset","value":100}"#;
+        assert_eq!(json, expected);
+        let decoded: OffsetOption = serde_json::from_str(&json).unwrap();
+        assert_eq!(option, decoded);
+    }
+
+    #[test]
+    fn offset_option_type_conversion() {
+        assert_eq!(OffsetOptionType::from_i32(0), Some(OffsetOptionType::Policy));
+        assert_eq!(OffsetOptionType::from_i32(1), Some(OffsetOptionType::Offset));
+        assert_eq!(OffsetOptionType::from_i32(2), Some(OffsetOptionType::TailN));
+        assert_eq!(OffsetOptionType::from_i32(3), Some(OffsetOptionType::Timestamp));
+        assert_eq!(OffsetOptionType::from_i32(4), None);
+
+        assert_eq!(OffsetOptionType::Policy.as_i32(), 0);
+        assert_eq!(OffsetOptionType::Offset.as_i32(), 1);
+        assert_eq!(OffsetOptionType::TailN.as_i32(), 2);
+        assert_eq!(OffsetOptionType::Timestamp.as_i32(), 3);
+    }
+
+    #[test]
+    fn offset_option_type_display() {
+        assert_eq!(format!("{}", OffsetOptionType::Policy), "POLICY");
+        assert_eq!(format!("{}", OffsetOptionType::Offset), "OFFSET");
+        assert_eq!(format!("{}", OffsetOptionType::TailN), "TAIL_N");
+        assert_eq!(format!("{}", OffsetOptionType::Timestamp), "TIMESTAMP");
     }
 }
