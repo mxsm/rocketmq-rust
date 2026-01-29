@@ -56,10 +56,7 @@ impl CommandExecute for ConsumerStatusSubCommand {
         let group = self.consumer_group.trim();
 
         let cc = default_mq_admin_ext
-            .examine_consumer_connection_info(
-                group.into(),
-                self.broker_addr.clone().map(|i| CheetahString::from_string(i)),
-            )
+            .examine_consumer_connection_info(group.into(), self.broker_addr.clone().map(CheetahString::from_string))
             .await?;
         let jstack = if let Some(jstack) = &self.jstack {
             *jstack
