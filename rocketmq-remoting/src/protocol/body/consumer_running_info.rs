@@ -12,5 +12,184 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+use std::fmt::Display;
+
+use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
+
+use crate::protocol::body::consume_status::ConsumeStatus;
+use crate::protocol::body::pop_process_queue_info::PopProcessQueueInfo;
+use crate::protocol::body::process_queue_info::ProcessQueueInfo;
+use crate::protocol::heartbeat::consume_type::ConsumeType;
+use crate::protocol::heartbeat::subscription_data::SubscriptionData;
+
 #[derive(Clone)]
-pub struct ConsumerRunningInfo {}
+pub struct ConsumerRunningInfo {
+    subscription_set: BTreeSet<SubscriptionData>,
+    mq_table: BTreeMap<MessageQueue, ProcessQueueInfo>,
+    mq_pop_table: BTreeMap<MessageQueue, PopProcessQueueInfo>,
+    status_table: BTreeMap<String, ConsumeStatus>,
+    user_consumer_info: BTreeMap<String, String>,
+    consume_type: ConsumeType,
+    consume_orderly: bool,
+    prop_consumer_start_timestamp: u64,
+}
+impl Display for ConsumerRunningInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut sb = String::new();
+        sb.push_str("\n\n#Consumer Subscription#\n");
+        let mut i = 0;
+        for subscription in &self.subscription_set {
+            i += 1;
+            let item = format!(
+                "{} Topic: {} ClassFilter: {} SubExpression: {}\n",
+                i, subscription.topic, subscription.class_filter_mode, subscription.sub_string
+            );
+
+            sb.push_str(&item);
+        }
+        sb.push_str("\n\n#Consumer Offset#\n");
+        sb.push_str("#Topic #Broker Name #QID #Consumer Offset\n");
+
+        for (k, v) in &self.mq_table {
+            let item = format!(
+                "{}  {}  {}  {}\n",
+                k.get_topic(),
+                k.get_broker_name(),
+                k.get_queue_id(),
+                v.commit_offset
+            );
+
+            sb.push_str(&item);
+        }
+
+        sb.push_str("\n\n#Consumer MQ Detail#\n");
+        sb.push_str("#Topic #Broker Name #QID #ProcessQueueInfo\n");
+
+        for (k, v) in &self.mq_table {
+            let item = format!(
+                "{}  {}  {}  {}\n",
+                k.get_topic(),
+                k.get_broker_name(),
+                k.get_queue_id(),
+                v
+            );
+
+            sb.push_str(&item);
+        }
+
+        sb.push_str("\n\n#Consumer Pop Detail#\n");
+        sb.push_str("#Topic #Broker Name #QID #ProcessQueueInfo\n");
+        for (k, v) in &self.mq_pop_table {
+            let item = format!(
+                "{}  {}  {}  {}\n",
+                k.get_topic(),
+                k.get_broker_name(),
+                k.get_queue_id(),
+                v
+            );
+
+            sb.push_str(&item);
+        }
+        sb.push_str("\n\n#Consumer RT&TPS#\n");
+        sb.push_str(
+            "#Topic #Pull RT #Pull TPS #Consume RT #ConsumeOK TPS #ConsumeFailed TPS #ConsumeFailedMsgsInHour\n",
+        );
+
+        for (k, v) in &self.status_table {
+            let item = format!(
+                "{} {} {} {} {} {} {}\n",
+                k, v.pull_rt, v.pull_tps, v.consume_rt, v.consume_ok_tps, v.consume_failed_tps, v.consume_failed_msgs
+            );
+
+            sb.push_str(&item);
+        }
+
+        sb.push_str("\n\n#User Consume Info#\n");
+        for (k, v) in &self.user_consumer_info {
+            let item = format!("{}: {}\n", k, v);
+            sb.push_str(&item);
+        }
+        f.write_str(&sb)
+    }
+}
+impl ConsumerRunningInfo {
+    pub async fn analyze_subscription(
+        cri_table: BTreeMap<String /* clientId */, ConsumerRunningInfo>,
+    ) -> RocketMQResult<()> {
+        let first = cri_table.first_key_value().ok_or(RocketMQError::Internal(
+            "analyze_subscription err :cri_table is empty".to_string(),
+        ))?;
+        let prev = first.1;
+
+        let push = if let ConsumeType::ConsumePassively = prev.consume_type {
+            true
+        } else {
+            false
+        };
+
+        let start_for_a_while = (get_current_millis() - prev.prop_consumer_start_timestamp) > (1000 * 60 * 2);
+
+        if push && start_for_a_while {
+            let mut prev = prev.clone();
+            for (_k, v) in &cri_table {
+                if v.subscription_set != prev.subscription_set {
+                    // Different subscription in the same group of consumer
+                    return Err(RocketMQError::Internal(
+                        "Different subscription in the same group of consumer".to_string(),
+                    ));
+                }
+
+                prev = v.clone();
+            }
+        }
+        Ok(())
+    }
+    pub async fn analyze_process_queue(client_id: String, info: ConsumerRunningInfo) -> RocketMQResult<String> {
+        let mut sb = String::new();
+        let push = if let ConsumeType::ConsumePassively = &info.consume_type {
+            true
+        } else {
+            false
+        };
+
+        let order_msg = info.consume_orderly;
+
+        if push {
+            for (k, v) in &info.mq_table {
+                if order_msg {
+                    if !v.locked {
+                        sb.push_str(&format!(
+                            "{} {} can't lock for a while, {}ms\n",
+                            client_id,
+                            k,
+                            get_current_millis() - v.last_lock_timestamp
+                        ));
+                    } else {
+                        if v.droped && v.try_unlock_times > 0 {
+                            sb.push_str(&format!(
+                                "{} {} unlock {} times, still failed\n",
+                                client_id, k, v.try_unlock_times
+                            ));
+                        }
+                    }
+                } else {
+                    let diff = get_current_millis() - v.last_consume_timestamp;
+
+                    if diff > (1000 * 60) && v.cached_msg_count > 0 {
+                        sb.push_str(&format!(
+                            "{} {} can't consume for a while, maybe blocked, {}ms\n",
+                            client_id, k, diff
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(sb)
+    }
+}

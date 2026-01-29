@@ -12,15 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod consumer_status_sub_command;
 mod delete_subscription_group_sub_command;
 mod update_sub_group_sub_command;
-
 use std::sync::Arc;
 
 use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
+use crate::commands::consumer_commands::consumer_status_sub_command::ConsumerStatusSubCommand;
 use crate::commands::consumer_commands::update_sub_group_sub_command::UpdateSubGroupSubCommand;
 use crate::commands::CommandExecute;
 
@@ -38,6 +39,12 @@ pub enum ConsumerCommands {
         long_about = None,
     )]
     UpdateSubGroupSubCommand(UpdateSubGroupSubCommand),
+    #[command(
+        name = "consumerStatus",
+        about = " query and display consumer's internal data structures, including subscription information, queue allocation, consumption mode, and runtime information.",
+        long_about = None,
+    )]
+    ConsumerStatusSubCommand(ConsumerStatusSubCommand),
 }
 
 impl CommandExecute for ConsumerCommands {
@@ -45,6 +52,7 @@ impl CommandExecute for ConsumerCommands {
         match self {
             ConsumerCommands::UpdateSubGroupSubCommand(value) => value.execute(rpc_hook).await,
             ConsumerCommands::DeleteSubGroup(cmd) => cmd.execute(rpc_hook).await,
+            ConsumerCommands::ConsumerStatusSubCommand(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }
