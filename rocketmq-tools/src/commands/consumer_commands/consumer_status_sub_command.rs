@@ -54,13 +54,12 @@ impl CommandExecute for ConsumerStatusSubCommand {
 
         default_mq_admin_ext.start().await?;
         let group = self.consumer_group.trim();
-        let b_addr = if let Some(broker_addr) = &self.broker_addr {
-            Some(CheetahString::from_string(broker_addr.clone()))
-        } else {
-            None
-        };
+
         let cc = default_mq_admin_ext
-            .examine_consumer_connection_info(group.into(), b_addr)
+            .examine_consumer_connection_info(
+                group.into(),
+                self.broker_addr.clone().map(|i| CheetahString::from_string(i)),
+            )
             .await?;
         let jstack = if let Some(jstack) = &self.jstack {
             *jstack
@@ -103,10 +102,10 @@ impl CommandExecute for ConsumerStatusSubCommand {
 
                 if analyze_subscription_res.is_ok() {
                     println!("Same subscription in the same group of consumer");
-                    println!("Rebalance: {}", true);
+                    println!("Rebalance: Ok");
                     for (k, v) in &cri_table {
                         let result = ConsumerRunningInfo::analyze_process_queue(k.clone(), v.clone()).await?;
-                        if result.len() > 0 {
+                        if !result.is_empty() {
                             println!("{}", result);
                         }
                     }
