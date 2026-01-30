@@ -131,6 +131,11 @@ impl CommandExecute for ClassificationTablePrint {
         let commands: Vec<Command> = vec![
             Command {
                 category: "Auth",
+                command: "copyAcl",
+                remark: "Copy acl to cluster.",
+            },
+            Command {
+                category: "Auth",
                 command: "updateAcl",
                 remark: "Update ACL.",
             },

@@ -209,6 +209,26 @@ impl DefaultMQAdminExt {
     pub fn client_config_mut(&mut self) -> &mut ArcMut<ClientConfig> {
         &mut self.client_config
     }
+
+    pub async fn create_acl_with_acl_info(
+        &self,
+        broker_addr: CheetahString,
+        acl_info: AclInfo,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        self.default_mqadmin_ext_impl
+            .create_acl_with_acl_info(broker_addr, acl_info)
+            .await
+    }
+
+    pub async fn update_acl_with_acl_info(
+        &self,
+        broker_addr: CheetahString,
+        acl_info: AclInfo,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        self.default_mqadmin_ext_impl
+            .update_acl_with_acl_info(broker_addr, acl_info)
+            .await
+    }
 }
 
 impl Default for DefaultMQAdminExt {
