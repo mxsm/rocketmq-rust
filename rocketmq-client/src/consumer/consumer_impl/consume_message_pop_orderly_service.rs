@@ -153,7 +153,7 @@ impl ConsumeMessagePopOrderlyService {
     async fn unlock_all_message_queues(&self) {
         if let Some(ref impl_) = self.default_mqpush_consumer_impl {
             use crate::consumer::consumer_impl::re_balance::Rebalance;
-            impl_.rebalance_impl.mut_from_ref().unlock_all(false);
+            impl_.rebalance_impl.mut_from_ref().unlock_all(false).await;
         }
     }
 
@@ -321,9 +321,9 @@ impl ConsumeMessageServiceTrait for ConsumeMessagePopOrderlyService {
                     break;
                 }
 
-                if let Some(impl_) = default_mqpush_consumer_impl.upgrade() {
+                if let Some(mut impl_) = default_mqpush_consumer_impl.upgrade() {
                     use crate::consumer::consumer_impl::re_balance::Rebalance;
-                    impl_.rebalance_impl.lock_all();
+                    impl_.rebalance_impl.lock_all().await;
                 } else {
                     break;
                 }
