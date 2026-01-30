@@ -136,13 +136,23 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Consumer",
-                command: "updateSubGroup",
-                remark: "Update consumer sub group.",
+                command: "consumerStatus",
+                remark: "Query and display consumer's internal data structures.",
+            },
+            Command {
+                category: "Consumer",
+                command: "consumer",
+                remark: "Query consumer's connection, status, etc.",
             },
             Command {
                 category: "Consumer",
                 command: "deleteSubGroup",
                 remark: "Delete subscription group from broker.",
+            },
+            Command {
+                category: "Consumer",
+                command: "updateSubGroup",
+                remark: "Update consumer sub group.",
             },
             Command {
                 category: "Controller",
