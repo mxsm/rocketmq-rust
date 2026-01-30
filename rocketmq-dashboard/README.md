@@ -1,135 +1,104 @@
 # RocketMQ Dashboard
 
-A modern GUI dashboard for RocketMQ built with [gpui](https://github.com/zed-industries/zed), the GPU-accelerated UI framework used by the Zed editor.
+Multiple dashboard implementations for RocketMQ, built with different UI frameworks.
 
-## Features
+## Structure
 
-- 🎨 **Apple-style Design**: Inspired by Apple's Human Interface Guidelines
-- 🚀 **GPU-accelerated**: Built on gpui for smooth, responsive performance
-- 📊 **Comprehensive Dashboard**:
-  - Dashboard overview with metrics
-  - Message management and querying
-  - Topic configuration and monitoring
-  - Consumer group management
-  - Cluster and broker monitoring
-- 🌗 **Theme Support**: Light and dark mode (Apple-inspired)
-- 🎯 **Native Performance**: Rust-powered, cross-platform GUI
+This is a nested workspace containing:
 
-## Screenshots
+- **rocketmq-dashboard-common**: Shared code, data models, and business logic
+- **rocketmq-dashboard-gpui**: Native desktop UI using [GPUI](https://www.gpui.rs/)
+- **rocketmq-dashboard-tauri**: Web-based UI using [Tauri](https://tauri.app/) (planned)
 
-*Coming soon*
+## Why Multiple Implementations?
 
-## Installation
+Different UI frameworks have different strengths:
 
-### Prerequisites
+- **GPUI**: Native performance, GPU-accelerated rendering, Rust-only
+- **Tauri**: Web technologies (HTML/CSS/JS), smaller bundle size, easier for web developers
 
-- Rust 1.85.0 or later
-- Cargo
+## Quick Start
 
-### Build from Source
+### Development Mode
+
+For rapid development iteration with faster compile times:
 
 ```bash
 cd rocketmq-dashboard
-cargo build --release
+
+# Run GPUI version in dev mode
+cargo run -p rocketmq-dashboard-gpui
+
+# Run Tauri version in dev mode (when available)
+cargo run -p rocketmq-dashboard-tauri
 ```
 
-### Run
+### Release Mode
+
+For production builds with full optimizations:
 
 ```bash
-cargo run
+# Build all implementations
+cargo build --workspace --release
+
+# Build specific implementation
+cargo build -p rocketmq-dashboard-gpui --release
+cargo build -p rocketmq-dashboard-tauri --release
+
+# Run in release mode
+cargo run -p rocketmq-dashboard-gpui --release
+cargo run -p rocketmq-dashboard-tauri --release
 ```
 
-## Usage
-
-### Basic Usage
-
-1. Launch the dashboard:
-   ```bash
-   rocketmq-dashboard
-   ```
-
-2. Connect to your RocketMQ instance (configuration coming soon)
-
-3. Navigate through the sidebar to explore:
-   - **Dashboard**: Overview metrics and statistics
-   - **Message**: View, query, and send messages
-   - **Topic**: Manage topics and configurations
-   - **Consumer**: Monitor consumer groups
-   - **Cluster**: View cluster and broker status
-
-## Configuration
-
-Configuration files are stored in:
-- **Linux/macOS**: `~/.config/rocketmq/dashboard/`
-- **Windows**: `%APPDATA%\rocketmq\dashboard\`
-
-Configuration options coming soon.
+**Performance Note**: Dev mode is ~10x faster to compile but runs slower. Use dev mode for development, release mode for testing performance or distribution.
 
 ## Development
 
-### Project Structure
+### Code Quality Checks
 
+Run comprehensive checks before committing:
+
+```bash
+# Check compilation
+cargo check --workspace
+
+# Format code
+cargo fmt --all
+
+# Run Clippy (linter) - all implementations
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+# Run Clippy on specific package
+cargo clippy -p rocketmq-dashboard-common --all-targets -- -D warnings
+cargo clippy -p rocketmq-dashboard-gpui --all-targets -- -D warnings
+cargo clippy -p rocketmq-dashboard-tauri --all-targets -- -D warnings
+
+# Run tests
+cargo test --workspace
 ```
-rocketmq-dashboard/
-├── src/
-│   ├── main.rs           # Application entry point
-│   ├── app.rs            # Main application logic
-│   ├── theme.rs          # Apple-style theme definitions
-│   ├── ui.rs             # UI module exports
-│   └── ui/
-│       ├── dashboard_view.rs  # Main dashboard view
-│       ├── sidebar.rs         # Navigation sidebar
-│       └── pages/
-│           ├── dashboard.rs   # Dashboard overview page
-│           ├── message.rs     # Message management page
-│           ├── topic.rs       # Topic management page
-│           ├── consumer.rs    # Consumer group page
-│           └── cluster.rs     # Cluster monitoring page
-├── Cargo.toml
-└── README.md
+
+### Full CI-like Check
+
+Run all checks as CI would:
+
+```bash
+# Format check (don't modify files)
+cargo fmt --all -- --check
+
+# Clippy with all features
+cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+
+# Build all in release mode
+cargo build --workspace --release
+
+# Run tests
+cargo test --workspace --all-features
 ```
 
-### Adding New Features
+## Documentation
 
-1. Create a new page in `src/ui/pages/`
-2. Implement the `Render` trait
-3. Add navigation item to `sidebar.rs`
-4. Export from `src/ui/pages.rs`
+Each implementation has its own README with specific development instructions:
 
-### Code Style
-
-Follow Rust best practices:
-- Use `rustfmt` for formatting
-- Use `clippy` for linting
-- Write tests for new functionality
-- Document public APIs
-
-## Roadmap
-
-- [ ] Connect to RocketMQ instances
-- [ ] Real-time metrics and charts
-- [ ] Message sending interface
-- [ ] Topic creation and configuration
-- [ ] Consumer group management
-- [ ] Dark mode toggle
-- [ ] Settings and preferences
-- [ ] Multiple instance support
-- [ ] Export/import configurations
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-Licensed under either of
-- Apache License, Version 2.0, ([LICENSE-APACHE](../LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](../LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
-
-## Acknowledgments
-
-- Built with [gpui](https://github.com/zed-industries/zed)
-- Design inspired by [Apple's Human Interface Guidelines](https://developer.apple.com/design/human-interface-guidelines/)
-- Part of the [RocketMQ Rust](https://github.com/mxsm/rocketmq-rust) project
+- [Common Library README](rocketmq-dashboard-common/README.md) - Shared code and APIs
+- [GPUI Implementation README](rocketmq-dashboard-gpui/README.md) - Native desktop UI
+- [Tauri Implementation README](rocketmq-dashboard-tauri/README.md) - Web-based UI (planned)
