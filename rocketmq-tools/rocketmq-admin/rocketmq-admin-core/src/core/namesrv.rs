@@ -20,7 +20,7 @@
 //! # Examples
 //!
 //! ```rust,ignore
-//! use rocketmq_tools::core::namesrv::NameServerService;
+//! use rocketmq_admin_core::core::namesrv::NameServerService;
 //!
 //! let config = NameServerService::get_namesrv_config(&mut admin, addrs).await?;
 //! ```

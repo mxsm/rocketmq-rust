@@ -29,7 +29,7 @@ use crate::core::RocketMQResult;
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rocketmq_tools::core::admin::AdminBuilder;
+/// use rocketmq_admin_core::core::admin::AdminBuilder;
 ///
 /// // Simple usage
 /// let admin = AdminBuilder::new()
@@ -161,7 +161,7 @@ impl AdminBuilder {
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rocketmq_tools::core::admin::{AdminBuilder, AdminGuard};
+/// use rocketmq_admin_core::core::admin::{AdminBuilder, AdminGuard};
 ///
 /// async fn process_topics() -> RocketMQResult<()> {
 ///     let admin = AdminBuilder::new()

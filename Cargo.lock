@@ -3359,6 +3359,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocketmq-admin-core"
+version = "0.8.0"
+dependencies = [
+ "cheetah-string",
+ "clap",
+ "clap_complete",
+ "colored",
+ "dialoguer",
+ "futures",
+ "indicatif",
+ "rocketmq-client-rust",
+ "rocketmq-common",
+ "rocketmq-error",
+ "rocketmq-remoting",
+ "rocketmq-rust",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tabled",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "rocketmq-auth"
 version = "0.8.0"
 dependencies = [
@@ -3560,11 +3584,11 @@ name = "rocketmq-example"
 version = "0.8.0"
 dependencies = [
  "cheetah-string",
+ "rocketmq-admin-core",
  "rocketmq-client-rust",
  "rocketmq-common",
  "rocketmq-error",
  "rocketmq-rust",
- "rocketmq-tools",
  "tokio",
  "tracing",
 ]
@@ -3710,30 +3734,6 @@ dependencies = [
  "trait-variant",
  "uuid",
  "windows",
-]
-
-[[package]]
-name = "rocketmq-tools"
-version = "0.8.0"
-dependencies = [
- "cheetah-string",
- "clap",
- "clap_complete",
- "colored",
- "dialoguer",
- "futures",
- "indicatif",
- "rocketmq-client-rust",
- "rocketmq-common",
- "rocketmq-error",
- "rocketmq-remoting",
- "rocketmq-rust",
- "serde",
- "serde_json",
- "serde_yaml",
- "tabled",
- "tokio",
- "tracing",
 ]
 
 [[package]]
