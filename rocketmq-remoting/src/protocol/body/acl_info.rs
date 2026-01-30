@@ -16,7 +16,7 @@ use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PolicyEntryInfo {
     pub resource: Option<CheetahString>,
@@ -25,14 +25,14 @@ pub struct PolicyEntryInfo {
     pub decision: Option<CheetahString>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PolicyInfo {
     pub policy_type: Option<CheetahString>,
     pub entries: Option<Vec<PolicyEntryInfo>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AclInfo {
     pub subject: Option<CheetahString>,

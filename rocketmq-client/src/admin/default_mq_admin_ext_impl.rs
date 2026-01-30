@@ -136,6 +136,94 @@ impl DefaultMQAdminExtImpl {
     pub fn set_inner(&mut self, inner: ArcMut<DefaultMQAdminExtImpl>) {
         self.inner = Some(inner);
     }
+
+    pub async fn create_acl_with_acl_info(
+        &self,
+        broker_addr: CheetahString,
+        acl_info: AclInfo,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let subject = acl_info
+            .subject
+            .clone()
+            .ok_or_else(|| rocketmq_error::RocketMQError::IllegalArgument("ACL subject is required".into()))?;
+
+        if let Some(ref policies) = acl_info.policies {
+            for policy in policies {
+                if let Some(ref entries) = policy.entries {
+                    for entry in entries {
+                        let resources: Vec<CheetahString> =
+                            entry.resource.as_ref().map(|r| vec![r.clone()]).unwrap_or_default();
+
+                        let actions: Vec<CheetahString> = entry
+                            .actions
+                            .as_ref()
+                            .map(|a| a.split(',').map(|s| CheetahString::from(s.trim())).collect())
+                            .unwrap_or_default();
+
+                        let source_ips: Vec<CheetahString> = entry.source_ips.clone().unwrap_or_default();
+
+                        let decision: CheetahString = entry.decision.clone().unwrap_or_default();
+
+                        self.create_acl(
+                            broker_addr.clone(),
+                            subject.clone(),
+                            resources,
+                            actions,
+                            source_ips,
+                            decision,
+                        )
+                        .await?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn update_acl_with_acl_info(
+        &self,
+        broker_addr: CheetahString,
+        acl_info: AclInfo,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let subject = acl_info
+            .subject
+            .clone()
+            .ok_or_else(|| rocketmq_error::RocketMQError::IllegalArgument("ACL subject is required".into()))?;
+
+        if let Some(ref policies) = acl_info.policies {
+            for policy in policies {
+                if let Some(ref entries) = policy.entries {
+                    for entry in entries {
+                        let resources: Vec<CheetahString> =
+                            entry.resource.as_ref().map(|r| vec![r.clone()]).unwrap_or_default();
+
+                        let actions: Vec<CheetahString> = entry
+                            .actions
+                            .as_ref()
+                            .map(|a| a.split(',').map(|s| CheetahString::from(s.trim())).collect())
+                            .unwrap_or_default();
+
+                        let source_ips: Vec<CheetahString> = entry.source_ips.clone().unwrap_or_default();
+
+                        let decision: CheetahString = entry.decision.clone().unwrap_or_default();
+
+                        self.update_acl(
+                            broker_addr.clone(),
+                            subject.clone(),
+                            resources,
+                            actions,
+                            source_ips,
+                            decision,
+                        )
+                        .await?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[allow(unused_variables)]
