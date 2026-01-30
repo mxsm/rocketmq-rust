@@ -3459,18 +3459,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rocketmq-cli"
-version = "0.8.0"
-dependencies = [
- "bytes",
- "cheetah-string",
- "clap",
- "rocketmq-common",
- "rocketmq-store",
- "tabled",
-]
-
-[[package]]
 name = "rocketmq-client-rust"
 version = "0.8.0"
 dependencies = [
@@ -3748,6 +3736,18 @@ dependencies = [
  "trait-variant",
  "uuid",
  "windows",
+]
+
+[[package]]
+name = "rocketmq-store-inspect"
+version = "0.8.0"
+dependencies = [
+ "bytes",
+ "cheetah-string",
+ "clap",
+ "rocketmq-common",
+ "rocketmq-store",
+ "tabled",
 ]
 
 [[package]]
