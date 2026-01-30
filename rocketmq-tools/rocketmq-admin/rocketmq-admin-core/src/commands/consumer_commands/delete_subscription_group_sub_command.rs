@@ -51,11 +51,9 @@ pub struct DeleteSubscriptionGroupSubCommand {
     )]
     cluster_name: Option<String>,
 
-    /// Subscription group name
     #[arg(short = 'g', long = "groupName", required = true, help = "subscription group name")]
     group_name: String,
 
-    /// Whether to remove consumer offset
     #[arg(
         short = 'r',
         long = "removeOffset",

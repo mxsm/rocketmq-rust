@@ -161,13 +161,11 @@ impl ConsumerRunningInfo {
                             k,
                             get_current_millis() - v.last_lock_timestamp
                         ));
-                    } else {
-                        if v.droped && v.try_unlock_times > 0 {
-                            sb.push_str(&format!(
-                                "{} {} unlock {} times, still failed\n",
-                                client_id, k, v.try_unlock_times
-                            ));
-                        }
+                    } else if v.droped && v.try_unlock_times > 0 {
+                        sb.push_str(&format!(
+                            "{} {} unlock {} times, still failed\n",
+                            client_id, k, v.try_unlock_times
+                        ));
                     }
                 } else {
                     let diff = get_current_millis() - v.last_consume_timestamp;
