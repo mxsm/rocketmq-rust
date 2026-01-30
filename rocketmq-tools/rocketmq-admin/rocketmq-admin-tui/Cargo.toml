@@ -1,5 +1,5 @@
 [package]
-name                   = "rocketmq-tui"
+name                   = "rocketmq-admin-tui"
 version.workspace      = true
 authors.workspace      = true
 edition.workspace      = true

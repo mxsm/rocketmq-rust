@@ -10,4 +10,4 @@ cargo run -p rocketmq-tui
 
 ### design
 
-![](../resources/rocketmq-cli-ui.png)
+![](../../../resources/rocketmq-cli-ui.png)
