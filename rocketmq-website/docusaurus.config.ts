@@ -231,9 +231,9 @@ const config: Config = {
             additionalLanguages: ['rust', 'java', 'yaml', 'bash', 'toml'],
         },
         algolia: {
-            appId: 'A7P4XEL1X0',
-            apiKey: 'db1ad68e86dd7d47a5988ab78dcc8347',
-            indexName: 'crawler_rocketmqrust_index',
+            appId: '2B1J2W7AVD',
+            apiKey: 'd79913c712f99f4a1ca8fa1fb36138d6',
+            indexName: 'RocketMQ-Rust',
             contextualSearch: true,
         },
         // Using custom DevWarningBanner component instead of built-in announcementBar
