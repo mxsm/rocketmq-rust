@@ -160,14 +160,14 @@ pub trait RebalanceLocal {
     async fn unlock(&mut self, mq: &MessageQueue, oneway: bool);
 
     /// Locks all message queues.
-    fn lock_all(&self);
+    async fn lock_all(&mut self);
 
     /// Unlocks all message queues.
     ///
     /// # Arguments
     ///
     /// * `oneway` - A boolean indicating if the unlock should be one-way.
-    fn unlock_all(&self, oneway: bool);
+    async fn unlock_all(&mut self, oneway: bool);
 
     /// Performs rebalancing.
     ///

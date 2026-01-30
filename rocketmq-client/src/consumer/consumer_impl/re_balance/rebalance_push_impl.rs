@@ -117,13 +117,19 @@ impl RebalancePushImpl {
     }
 
     async fn try_remove_order_message_queue(&mut self, mq: &MessageQueue, pq: &ProcessQueue) -> bool {
-        let default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_mut().unwrap();
+        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_mut() else {
+            error!("DefaultMQPushConsumerImpl not initialized for removing order message queue");
+            return false;
+        };
 
         let force_unlock =
             pq.is_dropped() && (get_current_millis() > pq.get_last_lock_timestamp() + *UNLOCK_DELAY_TIME_MILLS);
         let consume_lock = pq.consume_lock.try_write_timeout(Duration::from_millis(500)).await;
         if force_unlock || consume_lock.is_some() {
-            let offset_store = default_mqpush_consumer_impl.offset_store.as_mut().unwrap();
+            let Some(offset_store) = default_mqpush_consumer_impl.offset_store.as_mut() else {
+                error!("Offset store not initialized");
+                return false;
+            };
             offset_store.persist(mq).await;
             offset_store.remove_offset(mq).await;
             pq.set_locked(true);
@@ -151,7 +157,10 @@ impl Rebalance for RebalancePushImpl {
         mq_divided: &HashSet<MessageQueue>,
     ) {
         let mut subscription_inner = self.rebalance_impl_inner.subscription_inner.write().await;
-        let subscription_data = subscription_inner.get_mut(topic).unwrap();
+        let Some(subscription_data) = subscription_inner.get_mut(topic) else {
+            warn!("Subscription data not found for topic: {}", topic);
+            return;
+        };
         let new_version = get_current_millis() as i64;
         info!(
             "{} Rebalance changed, also update version: {}, {}",
@@ -184,23 +193,28 @@ impl Rebalance for RebalancePushImpl {
         }
 
         //notify broker
-        let _ = self
-            .rebalance_impl_inner
-            .client_instance
-            .as_ref()
-            .unwrap()
-            .mut_from_ref()
-            .send_heartbeat_to_all_broker_with_lock_v2(true)
-            .await;
+        if let Some(client_instance) = self.rebalance_impl_inner.client_instance.as_ref() {
+            let _ = client_instance
+                .mut_from_ref()
+                .send_heartbeat_to_all_broker_with_lock_v2(true)
+                .await;
+        }
         if let Some(ref message_queue_listener) = self.consumer_config.message_queue_listener {
             message_queue_listener.message_queue_changed(topic, mq_all, mq_divided);
         }
     }
 
     async fn remove_unnecessary_message_queue(&mut self, mq: &MessageQueue, pq: &ProcessQueue) -> bool {
-        let mut default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
+        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() else {
+            error!("DefaultMQPushConsumerImpl not initialized");
+            return false;
+        };
+        let default_mqpush_consumer_impl = default_mqpush_consumer_impl.clone();
         let consume_orderly = default_mqpush_consumer_impl.is_consume_orderly();
-        let offset_store = default_mqpush_consumer_impl.offset_store.as_mut().unwrap();
+        let Some(mut offset_store) = default_mqpush_consumer_impl.offset_store.clone() else {
+            error!("Offset store not initialized");
+            return false;
+        };
 
         if consume_orderly && MessageModel::Clustering == self.consumer_config.message_model {
             offset_store.persist(mq).await;
@@ -217,14 +231,18 @@ impl Rebalance for RebalancePushImpl {
     }
 
     async fn remove_dirty_offset(&mut self, mq: &MessageQueue) {
-        let offset_store = self
-            .default_mqpush_consumer_impl
-            .as_mut()
-            .unwrap()
-            .offset_store
-            .as_mut()
-            .unwrap();
-        offset_store.remove_offset(mq).await;
+        if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_mut() {
+            if let Some(offset_store) = default_mqpush_consumer_impl.offset_store.as_mut() {
+                offset_store.remove_offset(mq).await;
+            } else {
+                warn!("Offset store not initialized, cannot remove dirty offset for {}", mq);
+            }
+        } else {
+            warn!(
+                "DefaultMQPushConsumerImpl not initialized, cannot remove dirty offset for {}",
+                mq
+            );
+        }
     }
 
     #[allow(deprecated)]
@@ -233,8 +251,19 @@ impl Rebalance for RebalancePushImpl {
         mq: &MessageQueue,
     ) -> rocketmq_error::RocketMQResult<i64> {
         let consume_from_where = self.consumer_config.consume_from_where;
-        let mut default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
-        let offset_store = default_mqpush_consumer_impl.offset_store.as_mut().unwrap();
+        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() else {
+            return Err(mq_client_err!(
+                ResponseCode::SystemError as i32,
+                "DefaultMQPushConsumerImpl not initialized"
+            ));
+        };
+        let mut default_mqpush_consumer_impl = default_mqpush_consumer_impl.clone();
+        let Some(offset_store) = default_mqpush_consumer_impl.offset_store.as_mut() else {
+            return Err(mq_client_err!(
+                ResponseCode::SystemError as i32,
+                "Offset store not initialized"
+            ));
+        };
 
         let result = match consume_from_where {
             ConsumeFromWhere::ConsumeFromLastOffset
@@ -248,13 +277,13 @@ impl Rebalance for RebalancePushImpl {
                     if mq.get_topic().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
                         0
                     } else {
-                        self.rebalance_impl_inner
-                            .client_instance
-                            .as_mut()
-                            .unwrap()
-                            .mq_admin_impl
-                            .max_offset(mq)
-                            .await?
+                        let Some(client_instance) = self.rebalance_impl_inner.client_instance.as_mut() else {
+                            return Err(mq_client_err!(
+                                ResponseCode::SystemError as i32,
+                                "Client instance not initialized"
+                            ));
+                        };
+                        client_instance.mq_admin_impl.max_offset(mq).await?
                     }
                 } else {
                     return Err(mq_client_err!(
@@ -282,14 +311,20 @@ impl Rebalance for RebalancePushImpl {
                     last_offset
                 } else if -1 == last_offset {
                     if mq.get_topic().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
-                        self.rebalance_impl_inner
-                            .client_instance
-                            .as_mut()
-                            .unwrap()
-                            .mq_admin_impl
-                            .max_offset(mq)
-                            .await?
+                        let Some(client_instance) = self.rebalance_impl_inner.client_instance.as_mut() else {
+                            return Err(mq_client_err!(
+                                ResponseCode::SystemError as i32,
+                                "Client instance not initialized"
+                            ));
+                        };
+                        client_instance.mq_admin_impl.max_offset(mq).await?
                     } else {
+                        let Some(client_instance) = self.rebalance_impl_inner.client_instance.as_mut() else {
+                            return Err(mq_client_err!(
+                                ResponseCode::SystemError as i32,
+                                "Client instance not initialized"
+                            ));
+                        };
                         let timestamp = util_all::parse_date(
                             self.consumer_config.consume_timestamp.as_ref().unwrap(),
                             util_all::YYYYMMDDHHMMSS,
@@ -297,10 +332,7 @@ impl Rebalance for RebalancePushImpl {
                         .unwrap()
                         .and_utc()
                         .timestamp();
-                        self.rebalance_impl_inner
-                            .client_instance
-                            .as_mut()
-                            .unwrap()
+                        client_instance
                             .mq_admin_impl
                             .search_offset(mq, timestamp as u64)
                             .await?
@@ -390,22 +422,23 @@ impl Rebalance for RebalancePushImpl {
             let droped = pq.is_dropped();
             pq.set_dropped(true);
             self.remove_unnecessary_message_queue(mq, &pq).await;
-            info!(
-                "Fix Offset, {}, remove unnecessary mq, {} Droped: {}",
-                self.rebalance_impl_inner.consumer_group.as_ref().unwrap(),
-                mq,
-                droped
-            );
+            if let Some(ref consumer_group) = self.rebalance_impl_inner.consumer_group {
+                info!(
+                    "Fix Offset, {}, remove unnecessary mq, {} Droped: {}",
+                    consumer_group, mq, droped
+                );
+            }
         }
     }
 
     async fn unlock(&mut self, mq: &MessageQueue, oneway: bool) {
-        let client = match self.rebalance_impl_inner.client_instance.as_mut() {
-            Some(client) => client,
-            None => {
-                warn!("Client instance is not available.");
-                return;
-            }
+        let Some(client) = self.rebalance_impl_inner.client_instance.as_mut() else {
+            warn!("Client instance is not available for unlocking {}", mq);
+            return;
+        };
+        let Some(ref consumer_group) = self.rebalance_impl_inner.consumer_group else {
+            warn!("Consumer group not set for unlocking {}", mq);
+            return;
         };
         let broker_name = client.get_broker_name_from_message_queue(mq).await;
         let find_broker_result = client
@@ -413,7 +446,7 @@ impl Rebalance for RebalancePushImpl {
             .await;
         if let Some(find_broker_result) = find_broker_result {
             let mut request_body = UnlockBatchRequestBody {
-                consumer_group: Some(self.rebalance_impl_inner.consumer_group.clone().unwrap()),
+                consumer_group: Some(consumer_group.clone()),
                 client_id: Some(client.client_id.clone()),
                 ..Default::default()
             };
@@ -434,20 +467,37 @@ impl Rebalance for RebalancePushImpl {
             } else {
                 warn!(
                     "unlock messageQueue. group:{}, clientId:{}, mq:{}",
-                    self.rebalance_impl_inner.consumer_group.as_ref().unwrap(),
-                    client.client_id,
-                    mq
+                    consumer_group, client.client_id, mq
                 )
             }
         }
     }
 
-    fn lock_all(&self) {
-        todo!()
+    async fn lock_all(&mut self) {
+        if let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() {
+            if default_mqpush_consumer_impl.is_consume_orderly() {
+                let process_queue_table = self.rebalance_impl_inner.process_queue_table.clone();
+                let consumer_group = self.rebalance_impl_inner.consumer_group.clone();
+                let client_instance = self.rebalance_impl_inner.client_instance.clone();
+
+                if let Some(client_instance) = client_instance {
+                    let broker_mqs =
+                        build_process_queue_table_by_broker_name(&process_queue_table, &client_instance).await;
+                    lock_all_impl(broker_mqs, process_queue_table, consumer_group, client_instance).await;
+                }
+            }
+        }
     }
 
-    fn unlock_all(&self, oneway: bool) {
-        todo!()
+    async fn unlock_all(&mut self, oneway: bool) {
+        let process_queue_table = self.rebalance_impl_inner.process_queue_table.clone();
+        let consumer_group = self.rebalance_impl_inner.consumer_group.clone();
+        let client_instance = self.rebalance_impl_inner.client_instance.clone();
+
+        if let Some(client_instance) = client_instance {
+            let broker_mqs = build_process_queue_table_by_broker_name(&process_queue_table, &client_instance).await;
+            unlock_all_impl(broker_mqs, process_queue_table, consumer_group, client_instance, oneway).await;
+        }
     }
 
     async fn do_rebalance(&mut self, is_order: bool) -> bool {
@@ -474,10 +524,142 @@ impl Rebalance for RebalancePushImpl {
         // ConsumeMessageOrderlyService to consume
         self.consumer_config.client_rebalance
             || self.rebalance_impl_inner.message_model.unwrap() == MessageModel::Broadcasting
-            || self.default_mqpush_consumer_impl.as_ref().unwrap().is_consume_orderly()
+            || self
+                .default_mqpush_consumer_impl
+                .as_ref()
+                .map(|impl_ref| impl_ref.is_consume_orderly())
+                .unwrap_or(false)
     }
 
     fn destroy(&mut self) {
-        unimplemented!()
+        info!(
+            "Destroying RebalancePushImpl for consumer group: {:?}",
+            self.rebalance_impl_inner.consumer_group
+        );
+    }
+}
+
+async fn build_process_queue_table_by_broker_name(
+    process_queue_table: &Arc<RwLock<HashMap<MessageQueue, Arc<ProcessQueue>>>>,
+    client: &ArcMut<MQClientInstance>,
+) -> HashMap<CheetahString, HashSet<MessageQueue>> {
+    let mut result = HashMap::new();
+    let process_queue_table_read = process_queue_table.read().await;
+    for (mq, pq) in process_queue_table_read.iter() {
+        if pq.is_dropped() {
+            continue;
+        }
+        let broker_name = client.get_broker_name_from_message_queue(mq).await;
+        let entry = result.entry(broker_name).or_insert_with(HashSet::new);
+        entry.insert(mq.clone());
+    }
+    result
+}
+
+async fn lock_all_impl(
+    broker_mqs: HashMap<CheetahString, HashSet<MessageQueue>>,
+    process_queue_table: Arc<RwLock<HashMap<MessageQueue, Arc<ProcessQueue>>>>,
+    consumer_group: Option<CheetahString>,
+    client_instance: ArcMut<MQClientInstance>,
+) {
+    use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
+
+    let map = broker_mqs
+        .into_iter()
+        .map(|(broker_name, mqs)| {
+            let mut client_instance = client_instance.clone();
+            let process_queue_table = process_queue_table.clone();
+            let consumer_group = consumer_group.clone();
+            async move {
+                if mqs.is_empty() {
+                    return;
+                }
+                let find_broker_result = client_instance
+                    .find_broker_address_in_subscribe(&broker_name, mix_all::MASTER_ID, true)
+                    .await;
+                if let Some(find_broker_result) = find_broker_result {
+                    let request_body = LockBatchRequestBody {
+                        consumer_group: consumer_group.clone(),
+                        client_id: Some(client_instance.client_id.clone()),
+                        mq_set: mqs.clone(),
+                        ..Default::default()
+                    };
+                    let result = client_instance
+                        .mq_client_api_impl
+                        .as_mut()
+                        .unwrap()
+                        .lock_batch_mq(find_broker_result.broker_addr.as_str(), request_body, 1_000)
+                        .await;
+                    match result {
+                        Ok(lock_okmqset) => {
+                            let process_queue_table = process_queue_table.read().await;
+                            for mq in &mqs {
+                                if let Some(pq) = process_queue_table.get(mq) {
+                                    if lock_okmqset.contains(mq) {
+                                        if !pq.is_locked() {
+                                            info!("the message queue locked OK, Group: {:?} {}", consumer_group, mq);
+                                        }
+                                        pq.set_locked(true);
+                                        pq.set_last_lock_timestamp(get_current_millis());
+                                    } else {
+                                        pq.set_locked(false);
+                                        warn!("the message queue locked Failed, Group: {:?} {}", consumer_group, mq);
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("lockBatchMQ exception {}", e);
+                        }
+                    }
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+    futures::future::join_all(map).await;
+}
+
+async fn unlock_all_impl(
+    broker_mqs: HashMap<CheetahString, HashSet<MessageQueue>>,
+    process_queue_table: Arc<RwLock<HashMap<MessageQueue, Arc<ProcessQueue>>>>,
+    consumer_group: Option<CheetahString>,
+    mut client_instance: ArcMut<MQClientInstance>,
+    oneway: bool,
+) {
+    for (broker_name, mqs) in broker_mqs {
+        if mqs.is_empty() {
+            continue;
+        }
+        let find_broker_result = client_instance
+            .find_broker_address_in_subscribe(&broker_name, mix_all::MASTER_ID, true)
+            .await;
+        if let Some(find_broker_result) = find_broker_result {
+            let request_body = UnlockBatchRequestBody {
+                consumer_group: consumer_group.clone(),
+                client_id: Some(client_instance.client_id.clone()),
+                mq_set: mqs.clone(),
+                ..Default::default()
+            };
+            let result = client_instance
+                .mq_client_api_impl
+                .as_mut()
+                .unwrap()
+                .unlock_batch_mq(&find_broker_result.broker_addr, request_body, 1_000, oneway)
+                .await;
+            match result {
+                Ok(_) => {
+                    let process_queue_table = process_queue_table.read().await;
+                    for mq in &mqs {
+                        if let Some(pq) = process_queue_table.get(mq) {
+                            pq.set_locked(false);
+                            info!("the message queue unlock OK, Group: {:?} {}", consumer_group, mq);
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("unlockBatchMQ exception {}", e);
+                }
+            }
+        }
     }
 }
