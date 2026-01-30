@@ -3383,6 +3383,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocketmq-admin-tui"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "ratatui",
+ "rocketmq-rust",
+ "serde",
+ "strum 0.27.2",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
 name = "rocketmq-auth"
 version = "0.8.0"
 dependencies = [
@@ -3734,20 +3748,6 @@ dependencies = [
  "trait-variant",
  "uuid",
  "windows",
-]
-
-[[package]]
-name = "rocketmq-tui"
-version = "0.8.0"
-dependencies = [
- "anyhow",
- "crossterm",
- "ratatui",
- "rocketmq-rust",
- "serde",
- "strum 0.27.2",
- "tokio",
- "tokio-stream",
 ]
 
 [[package]]
