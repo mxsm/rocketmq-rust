@@ -1,0 +1,34 @@
+[package]
+name                   = "rocketmq-dashboard-common"
+version.workspace      = true
+authors.workspace      = true
+edition.workspace      = true
+homepage.workspace     = true
+repository.workspace   = true
+license.workspace      = true
+keywords               = ["dashboard", "rocketmq", "common"]
+categories             = ["development-tools"]
+readme                 = "README.md"
+description            = "Common shared code for RocketMQ Dashboard implementations"
+rust-version.workspace = true
+
+[dependencies]
+rocketmq-common = { workspace = true }
+rocketmq-client-rust = { workspace = true }
+rocketmq-remoting = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Async trait support
+async-trait = "0.1"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }

@@ -1,28 +1,47 @@
-[package]
-name                   = "rocketmq-dashboard"
-version.workspace      = true
-authors.workspace      = true
-edition.workspace      = true
-homepage.workspace     = true
-repository.workspace   = true
-license.workspace      = true
-keywords               = ["dashboard", "rocketmq", "gpui", "gui"]
-categories             = ["development-tools", "gui"]
-readme                 = "README.md"
-description            = "A RocketMQ Dashboard GUI implemented based on gpui"
-rust-version.workspace = true
+[workspace]
+members = [
+    "rocketmq-dashboard-common",
+    "rocketmq-dashboard-gpui",
+]
+resolver = "2"
 
-[dependencies]
-gpui = { version = "0.2.2" }
-gpui-component = { version = "0.5.0" }
-anyhow = { workspace = true }
+[workspace.package]
+version = "0.8.0"
+authors = ["mxsm <mxsm@apache.org>"]
+edition = "2021"
+homepage = "https://github.com/mxsm/rocketmq-rust"
+repository = "https://github.com/mxsm/rocketmq-rust"
+license = "MIT OR Apache-2.0"
+keywords = [
+    "apache-rocketmq",
+    "rocketmq-rust",
+    "rocketmq-rs",
+    "rust",
+    "dashboard",
+]
+categories = ["development-tools", "gui"]
+readme = "README.md"
+description = """
+RocketMQ Dashboard implementations
+"""
+rust-version = "1.85.0"
 
-# For logging
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+[workspace.dependencies]
+# RocketMQ dependencies (from parent workspace)
+rocketmq-common = { version = "0.8.0", path = "../rocketmq-common" }
+rocketmq-client-rust = { version = "0.8.0", path = "../rocketmq-client" }
+rocketmq-remoting = { version = "0.8.0", path = "../rocketmq-remoting" }
 
-# Fix core-graphics version conflict on macOS
-[target.'cfg(target_os = "macos")'.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
 
-[build-dependencies]
-anyhow = { workspace = true }
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow = "1"
