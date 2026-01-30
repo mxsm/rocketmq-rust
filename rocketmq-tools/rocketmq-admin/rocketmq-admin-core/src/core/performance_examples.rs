@@ -31,7 +31,7 @@ use crate::core::RocketMQResult;
 /// Example: Using cache to reduce network calls
 ///
 /// ```rust,ignore
-/// use rocketmq_tools::core::cache::RocketMQCache;
+/// use rocketmq_admin_core::core::cache::RocketMQCache;
 /// use std::time::Duration;
 ///
 /// #[tokio::main]
@@ -93,7 +93,7 @@ pub async fn example_cache_usage() -> RocketMQResult<()> {
 /// Example: Concurrent queries for multiple topics
 ///
 /// ```rust,ignore
-/// use rocketmq_tools::core::concurrent::concurrent_query;
+/// use rocketmq_admin_core::core::concurrent::concurrent_query;
 ///
 /// #[tokio::main]
 /// async fn main() -> RocketMQResult<()> {
@@ -166,7 +166,7 @@ pub async fn example_concurrent_queries() -> RocketMQResult<()> {
 /// Example: Limited concurrency to avoid overwhelming server
 ///
 /// ```rust,ignore
-/// use rocketmq_tools::core::concurrent::concurrent_query_limited;
+/// use rocketmq_admin_core::core::concurrent::concurrent_query_limited;
 ///
 /// // Query 100 topics with max 10 concurrent connections
 /// let results = concurrent_query_limited(queries, 10).await;

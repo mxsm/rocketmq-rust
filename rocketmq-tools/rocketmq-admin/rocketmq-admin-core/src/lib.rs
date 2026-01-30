@@ -50,8 +50,8 @@
 //! ## As a Library (using core)
 //!
 //! ```rust,ignore
-//! use rocketmq_tools::core::admin::AdminBuilder;
-//! use rocketmq_tools::core::topic::TopicService;
+//! use rocketmq_admin_core::core::admin::AdminBuilder;
+//! use rocketmq_admin_core::core::topic::TopicService;
 //!
 //! // With RAII auto-cleanup
 //! let mut admin = AdminBuilder::new()

@@ -1,5 +1,5 @@
 [package]
-name = "rocketmq-tools"
+name = "rocketmq-admin-core"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
