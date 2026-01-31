@@ -102,6 +102,35 @@ impl CommandUtil {
             broker_addr
         )))
     }
+
+    pub fn fetch_master_and_slave_addr_by_cluster_name(
+        cluster_info: &ClusterInfo,
+        cluster_name: &str,
+    ) -> RocketMQResult<Vec<CheetahString>> {
+        let cluster_addr_table = cluster_info.cluster_addr_table.as_ref().ok_or_else(|| {
+            RocketMQError::Internal("CommandUtil: No cluster address table available from nameserver.".into())
+        })?;
+        let broker_names = cluster_addr_table.get(cluster_name).ok_or_else(|| {
+            RocketMQError::Internal(format!(
+                "CommandUtil: Make sure the specified clusterName exists or the nameserver which connected to is \
+                 correct. Cluster: {}",
+                cluster_name
+            ))
+        })?;
+        let broker_addr_table = cluster_info.broker_addr_table.as_ref().ok_or_else(|| {
+            RocketMQError::Internal("CommandUtil: No broker address table available from nameserver.".into())
+        })?;
+
+        let mut all_addrs = Vec::new();
+        for broker_name in broker_names {
+            if let Some(broker_data) = broker_addr_table.get(broker_name) {
+                for addr in broker_data.broker_addrs().values() {
+                    all_addrs.push(addr.clone());
+                }
+            }
+        }
+        Ok(all_addrs)
+    }
 }
 
 #[cfg(test)]
@@ -138,12 +167,9 @@ mod tests {
     #[test]
     fn fetch_master_addr_by_cluster_name() {
         let cluster_info = create_test_cluster_info();
-        let result = CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, "DefaultCluster");
+        let result = CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, "DefaultCluster").unwrap();
 
-        assert!(result.is_ok());
-        let addrs = result.unwrap();
-        assert_eq!(addrs.len(), 1);
-        assert_eq!(addrs[0].as_str(), "192.168.1.1:10911");
+        assert_eq!(result[0].as_str(), "192.168.1.1:10911");
     }
 
     #[test]
@@ -159,7 +185,6 @@ mod tests {
         let cluster_info = create_test_cluster_info();
         let result = CommandUtil::fetch_master_addr_by_broker_name(&cluster_info, "broker-a");
 
-        assert!(result.is_ok());
         assert_eq!(result.unwrap().as_str(), "192.168.1.1:10911");
     }
 
@@ -174,12 +199,9 @@ mod tests {
     #[test]
     fn fetch_broker_name_by_cluster_name() {
         let cluster_info = create_test_cluster_info();
-        let result = CommandUtil::fetch_broker_name_by_cluster_name(&cluster_info, "DefaultCluster");
+        let result = CommandUtil::fetch_broker_name_by_cluster_name(&cluster_info, "DefaultCluster").unwrap();
 
-        assert!(result.is_ok());
-        let names = result.unwrap();
-        assert_eq!(names.len(), 1);
-        assert_eq!(names[0], "broker-a");
+        assert_eq!(result[0], "broker-a");
     }
 
     #[test]
@@ -195,7 +217,6 @@ mod tests {
         let cluster_info = create_test_cluster_info();
         let result = CommandUtil::fetch_broker_name_by_addr(&cluster_info, "192.168.1.1:10911");
 
-        assert!(result.is_ok());
         assert_eq!(result.unwrap(), "broker-a");
     }
 
@@ -203,6 +224,23 @@ mod tests {
     fn fetch_broker_name_by_addr_not_found() {
         let cluster_info = create_test_cluster_info();
         let result = CommandUtil::fetch_broker_name_by_addr(&cluster_info, "192.168.1.99:10911");
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn fetch_master_and_slave_addr_by_cluster_name() {
+        let cluster_info = create_test_cluster_info();
+        let result = CommandUtil::fetch_master_and_slave_addr_by_cluster_name(&cluster_info, "DefaultCluster").unwrap();
+
+        assert!(result.contains(&CheetahString::from_static_str("192.168.1.1:10911")));
+        assert!(result.contains(&CheetahString::from_static_str("192.168.1.2:10911")));
+    }
+
+    #[test]
+    fn fetch_master_and_slave_addr_by_cluster_name_not_found() {
+        let cluster_info = create_test_cluster_info();
+        let result = CommandUtil::fetch_master_and_slave_addr_by_cluster_name(&cluster_info, "NonExistentCluster");
 
         assert!(result.is_err());
     }
