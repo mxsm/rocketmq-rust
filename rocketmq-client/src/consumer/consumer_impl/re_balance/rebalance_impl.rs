@@ -123,9 +123,24 @@ where
 
     #[inline]
     pub fn client_rebalance(&mut self, topic: &str) -> bool {
-        match self.sub_rebalance_impl.as_mut().unwrap().upgrade() {
-            None => true,
-            Some(mut value) => value.client_rebalance(topic),
+        match self.sub_rebalance_impl.as_mut() {
+            Some(sub_impl) => match sub_impl.upgrade() {
+                Some(mut value) => value.client_rebalance(topic),
+                None => {
+                    warn!(
+                        "Sub rebalance implementation has been dropped, defaulting to client rebalance for topic: {}",
+                        topic
+                    );
+                    true
+                }
+            },
+            None => {
+                warn!(
+                    "Sub rebalance implementation not set, defaulting to client rebalance for topic: {}",
+                    topic
+                );
+                true
+            }
         }
     }
 
@@ -150,7 +165,7 @@ where
         let client_instance = match self.client_instance.as_mut() {
             Some(instance) => instance,
             None => {
-                error!("tryQueryAssignment error, client_instance is None.");
+                error!("tryQueryAssignment error: client_instance is None for topic: {}", topic);
                 return false;
             }
         };
@@ -175,7 +190,10 @@ where
         let strategy_name = if let Some(strategy) = &self.allocate_message_queue_strategy {
             CheetahString::from_static_str(strategy.get_name())
         } else {
-            error!("tryQueryAssignment error, allocateMessageQueueStrategy is None.");
+            error!(
+                "tryQueryAssignment error: allocateMessageQueueStrategy is None for topic: {}",
+                topic
+            );
             return false;
         };
 
@@ -199,10 +217,13 @@ where
                 }
                 Err(e) => match e {
                     rocketmq_error::RocketMQError::Timeout { .. } => {
-                        // Continue to retry on timeout errors
+                        warn!(
+                            "tryQueryAssignment timeout for topic: {}, retry: {}/{}",
+                            topic, retry_times, TIMEOUT_CHECK_TIMES
+                        );
                     }
                     _ => {
-                        error!("tryQueryAssignment error {}.", e);
+                        error!("tryQueryAssignment error for topic: {}, error: {}", topic, e);
                         let mut topic_client_rebalance = self.topic_client_rebalance.write().await;
                         topic_client_rebalance.insert(topic.clone(), topic.clone());
                         return false;
@@ -212,6 +233,10 @@ where
         }
 
         // Insert into topic_client_rebalance after all retries
+        warn!(
+            "tryQueryAssignment exhausted all retries for topic: {}, falling back to client rebalance",
+            topic
+        );
         let mut topic_client_rebalance = self.topic_client_rebalance.write().await;
         topic_client_rebalance.insert(topic.clone(), topic.clone());
         false
@@ -219,40 +244,76 @@ where
 
     async fn truncate_message_queue_not_my_topic(&self) {
         let sub_table = self.subscription_inner.read().await;
+        let topics: HashSet<CheetahString> = sub_table.keys().cloned().collect();
+        drop(sub_table);
 
-        let mut process_queue_table = self.process_queue_table.write().await;
-        process_queue_table.retain(|mq, pq| {
-            if !sub_table.contains_key(mq.get_topic()) {
-                pq.set_dropped(true);
+        // Identify queues to remove with read lock only - DO NOT modify state
+        let to_remove: Vec<MessageQueue> = {
+            let process_queue_table = self.process_queue_table.read().await;
+            process_queue_table
+                .iter()
+                .filter_map(|(mq, _pq)| {
+                    if !topics.contains(mq.get_topic()) {
+                        Some(mq.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        // Set dropped and remove under write lock for atomicity
+        if !to_remove.is_empty() {
+            let mut process_queue_table = self.process_queue_table.write().await;
+            for mq in &to_remove {
+                if let Some(pq) = process_queue_table.get(mq) {
+                    pq.set_dropped(true);
+                }
+                process_queue_table.remove(mq);
                 info!(
                     "doRebalance, {}, truncateMessageQueueNotMyTopic remove unnecessary mq, {}",
                     self.consumer_group.as_ref().unwrap(),
                     mq.get_topic()
                 );
-                false
-            } else {
-                true
             }
-        });
-        let mut pop_process_queue_table = self.pop_process_queue_table.write().await;
-        pop_process_queue_table.retain(|mq, pq| {
-            if !sub_table.contains_key(mq.get_topic()) {
-                pq.set_dropped(true);
+        }
+
+        // Same fix for pop process queue
+        let pop_to_remove: Vec<MessageQueue> = {
+            let pop_process_queue_table = self.pop_process_queue_table.read().await;
+            pop_process_queue_table
+                .iter()
+                .filter_map(|(mq, _pq)| {
+                    if !topics.contains(mq.get_topic()) {
+                        Some(mq.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        if !pop_to_remove.is_empty() {
+            let mut pop_process_queue_table = self.pop_process_queue_table.write().await;
+            for mq in &pop_to_remove {
+                if let Some(pq) = pop_process_queue_table.get(mq) {
+                    pq.set_dropped(true);
+                }
+                pop_process_queue_table.remove(mq);
                 info!(
                     "doRebalance, {}, truncateMessageQueueNotMyTopic remove unnecessary pop mq, {}",
                     self.consumer_group.as_ref().unwrap(),
                     mq.get_topic()
                 );
-                false
-            } else {
-                true
             }
-        });
+        }
 
         let mut topic_client_rebalance = self.topic_client_rebalance.write().await;
-        topic_client_rebalance.retain(|topic, _| sub_table.contains_key(topic));
+        topic_client_rebalance.retain(|topic, _| topics.contains(topic));
+        drop(topic_client_rebalance);
+
         let mut topic_broker_rebalance = self.topic_broker_rebalance.write().await;
-        topic_broker_rebalance.retain(|topic, _| sub_table.contains_key(topic));
+        topic_broker_rebalance.retain(|topic, _| topics.contains(topic));
     }
 
     /// Retrieves the rebalance result from the broker for a given topic.
@@ -502,17 +563,55 @@ where
                 return false;
             }
             let mut sub_rebalance_impl = sub_rebalance_impl.unwrap();
-            let process_queue_table_clone = self.process_queue_table.clone();
-            let mut process_queue_table = process_queue_table_clone.write().await;
-            for (mq, assignment) in mq2push_assignment {
-                if !process_queue_table.contains_key(mq) {
-                    if is_order && !self.lock_with(mq, process_queue_table.deref()).await {
+
+            // First, identify queues that need locking (for ordered consumption)
+            let queues_need_lock: Vec<_> = if is_order {
+                let process_queue_table = self.process_queue_table.read().await;
+                mq2push_assignment
+                    .keys()
+                    .filter(|mq| !process_queue_table.contains_key(*mq))
+                    .cloned()
+                    .cloned()
+                    .collect()
+            } else {
+                vec![]
+            };
+
+            // Perform locking BEFORE acquiring write lock (avoid holding lock during I/O)
+            let mut successfully_locked = HashSet::new();
+            if is_order && !queues_need_lock.is_empty() {
+                // Get process_queue_table snapshot, then drop the lock before calling lock_with
+                let process_queue_table = {
+                    let table = self.process_queue_table.read().await;
+                    table.clone()
+                };
+
+                for mq in &queues_need_lock {
+                    if self.lock_with(mq, &process_queue_table).await {
+                        successfully_locked.insert(mq.clone());
+                    } else {
                         warn!(
-                            "doRebalance, {:?}, add a new mq failed, {}, because lock failed",
+                            "doRebalance, {:?}, lock mq failed before adding, {}",
                             self.consumer_group,
                             mq.get_topic()
                         );
                         all_mq_locked = false;
+                    }
+                }
+            }
+
+            // Now acquire write lock and add queues (no I/O while holding write lock)
+            let process_queue_table_clone = self.process_queue_table.clone();
+            let mut process_queue_table = process_queue_table_clone.write().await;
+            for (mq, assignment) in mq2push_assignment {
+                if !process_queue_table.contains_key(mq) {
+                    // Check if lock succeeded (for ordered consumption)
+                    if is_order && !successfully_locked.contains(mq) {
+                        warn!(
+                            "doRebalance, {:?}, skip adding mq because lock failed, {}",
+                            self.consumer_group,
+                            mq.get_topic()
+                        );
                         continue;
                     }
 
@@ -654,16 +753,48 @@ where
             return false;
         }
         let mut sub_rebalance_impl = sub_rebalance_impl.unwrap();
-        let mut process_queue_table = process_queue_table_cloned.write().await;
-        for mq in mq_set {
-            if !process_queue_table.contains_key(mq) {
-                if is_order && !self.lock_with(mq, process_queue_table.deref()).await {
+
+        // First, identify queues that need locking (for ordered consumption)
+        let queues_need_lock: Vec<_> = if is_order {
+            let process_queue_table = process_queue_table_cloned.read().await;
+            mq_set
+                .iter()
+                .filter(|mq| !process_queue_table.contains_key(*mq))
+                .cloned()
+                .collect()
+        } else {
+            vec![]
+        };
+
+        // Perform locking BEFORE acquiring write lock (avoid holding lock during I/O)
+        let mut successfully_locked = HashSet::new();
+        if is_order && !queues_need_lock.is_empty() {
+            let process_queue_table = process_queue_table_cloned.read().await;
+            for mq in &queues_need_lock {
+                if self.lock_with(mq, &process_queue_table).await {
+                    successfully_locked.insert(mq.clone());
+                } else {
                     warn!(
-                        "doRebalance, {:?}, add a new mq failed, {}, because lock failed",
+                        "doRebalance, {:?}, lock mq failed before adding, {}",
                         self.consumer_group,
                         mq.get_topic()
                     );
                     all_mq_locked = false;
+                }
+            }
+        }
+
+        // Now acquire write lock and add queues (no I/O while holding write lock)
+        let mut process_queue_table = process_queue_table_cloned.write().await;
+        for mq in mq_set {
+            if !process_queue_table.contains_key(mq) {
+                // Check if lock succeeded (for ordered consumption)
+                if is_order && !successfully_locked.contains(mq) {
+                    warn!(
+                        "doRebalance, {:?}, skip adding mq because lock failed, {}",
+                        self.consumer_group,
+                        mq.get_topic()
+                    );
                     continue;
                 }
 
