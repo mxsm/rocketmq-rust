@@ -41,7 +41,6 @@ use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
-use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioMutex;
@@ -97,7 +96,6 @@ pub struct MQClientInstance {
     pub(crate) pull_message_service: ArcMut<PullMessageService>,
     rebalance_service: RebalanceService,
     pub(crate) default_producer: ArcMut<DefaultMQProducer>,
-    instance_runtime: Arc<RocketMQRuntime>,
     broker_addr_table: Arc<DashMap<CheetahString, HashMap<u64, CheetahString>>>,
     broker_version_table: Arc<DashMap<CheetahString /* Broker Name */, HashMap<CheetahString /* address */, i32>>>,
     send_heartbeat_times_total: Arc<AtomicI64>,
@@ -198,9 +196,6 @@ impl MQClientInstance {
                 .client_config(client_config.clone())
                 .build(),
         );
-
-        let instance_runtime = Arc::new(RocketMQRuntime::new_multi(num_cpus::get(), "mq-client-instance"));
-
         let mut instance = ArcMut::new(MQClientInstance {
             client_config: shared_config,
             client_id,
@@ -218,7 +213,6 @@ impl MQClientInstance {
             pull_message_service: ArcMut::new(PullMessageService::new()),
             rebalance_service: RebalanceService::new(),
             default_producer,
-            instance_runtime,
             broker_addr_table,
             broker_version_table,
             send_heartbeat_times_total: Arc::new(AtomicI64::new(0)),
@@ -1369,7 +1363,7 @@ impl MQClientInstance {
             self.rebalance_service.wakeup();
         } else {
             let service = self.rebalance_service.clone();
-            self.instance_runtime.get_handle().spawn(async move {
+            tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(delay_millis)).await;
                 service.wakeup();
             });
