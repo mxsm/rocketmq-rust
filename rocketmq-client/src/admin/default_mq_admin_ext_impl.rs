@@ -223,6 +223,40 @@ impl DefaultMQAdminExtImpl {
 
         Ok(())
     }
+
+    pub async fn create_user_with_user_info(
+        &self,
+        broker_addr: CheetahString,
+        user_info: UserInfo,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let username = user_info
+            .username
+            .clone()
+            .ok_or_else(|| rocketmq_error::RocketMQError::IllegalArgument("User username is required".into()))?;
+
+        let password = user_info.password.clone().unwrap_or_default();
+        let user_type = user_info.user_type.clone().unwrap_or_default();
+
+        self.create_user(broker_addr, username, password, user_type).await
+    }
+
+    pub async fn update_user_with_user_info(
+        &self,
+        broker_addr: CheetahString,
+        user_info: UserInfo,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let username = user_info
+            .username
+            .clone()
+            .ok_or_else(|| rocketmq_error::RocketMQError::IllegalArgument("User username is required".into()))?;
+
+        let password = user_info.password.clone().unwrap_or_default();
+        let user_type = user_info.user_type.clone().unwrap_or_default();
+        let user_status = user_info.user_status.clone().unwrap_or_default();
+
+        self.update_user(broker_addr, username, password, user_type, user_status)
+            .await
+    }
 }
 
 #[allow(unused_variables)]
