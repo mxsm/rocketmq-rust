@@ -11,18 +11,24 @@ impl UserConverter {
         let mut user = User::of(user_info.username.clone().unwrap_or_default());
 
         if let Some(password) = &user_info.password {
-            user.set_password(password.clone());
-        }
-
-        if let Some(user_type) = &user_info.user_type {
-            if let Some(ut) = UserType::get_by_name(user_type) {
-                user.set_user_type(ut);
+            if !password.is_empty() {
+                user.set_password(password.clone());
             }
         }
 
-        if let Some(user_status) = &user_info.user_status {
-            if let Some(us) = UserStatus::get_by_name(user_status) {
-                user.set_user_status(us);
+        if let Some(user_type_name) = &user_info.user_type {
+            if !user_type_name.is_empty() {
+                if let Some(user_type) = UserType::get_by_name(user_type_name) {
+                    user.set_user_type(user_type);
+                }
+            }
+        }
+
+        if let Some(user_status_name) = &user_info.user_status {
+            if !user_status_name.is_empty() {
+                if let Some(user_status) = UserStatus::get_by_name(user_status_name) {
+                    user.set_user_status(user_status);
+                }
             }
         }
 

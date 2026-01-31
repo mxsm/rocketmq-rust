@@ -65,19 +65,14 @@ impl<MS: MessageStore> UpdateUserRequestHandler<MS> {
         }
 
         // TODO get authentication metadata manager and do operations
-        Ok(Some(
-            response
-                .set_code(ResponseCode::SystemError)
-                .set_remark("UpdateUser not implemented: authentication metadata manager not configured"),
-        ))
+        Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(
+            "UpdateUser not implemented: authentication metadata manager not configured",
+        )))
     }
 
     async fn is_not_super_user_login(&self, request: &RemotingCommand) -> bool {
         // Get "AccessKey" from ext_fields
-        let access_key = request.ext_fields().unwrap().get("AccessKey");
-
-        // If access key is missing or empty, authentication may not be enabled
-        let access_key = match access_key {
+        let access_key = match request.ext_fields().and_then(|fields| fields.get("AccessKey")) {
             Some(k) if !k.is_empty() => k,
             _ => return false,
         };
