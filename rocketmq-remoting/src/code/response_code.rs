@@ -113,6 +113,7 @@ define_response_code! {
         SubscriptionGroupNotExist = 26,
         FilterDataNotExist = 27,
         FilterDataNotLatest = 28,
+        InvalidParameter =29,
         TransactionShouldCommit = 200,
         TransactionShouldRollback = 201,
         TransactionStateUnknow = 202,

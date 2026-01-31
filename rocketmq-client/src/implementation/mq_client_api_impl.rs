@@ -21,6 +21,26 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::base::client_config::ClientConfig;
+use crate::consumer::ack_callback::AckCallback;
+use crate::consumer::ack_result::AckResult;
+use crate::consumer::ack_status::AckStatus;
+use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
+use crate::consumer::pop_callback::PopCallback;
+use crate::consumer::pop_result::PopResult;
+use crate::consumer::pop_status::PopStatus;
+use crate::consumer::pull_callback::PullCallback;
+use crate::consumer::pull_result::PullResult;
+use crate::consumer::pull_status::PullStatus;
+use crate::factory::mq_client_instance::MQClientInstance;
+use crate::hook::send_message_context::SendMessageContext;
+use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
+use crate::implementation::communication_mode::CommunicationMode;
+use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
+use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
+use crate::producer::send_callback::SendMessageCallback;
+use crate::producer::send_result::SendResult;
+use crate::producer::send_status::SendStatus;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_batch::MessageBatch;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
@@ -56,6 +76,7 @@ use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBat
 use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
 use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
 use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
+use rocketmq_remoting::protocol::body::user_info::UserInfo;
 use rocketmq_remoting::protocol::header::ack_message_request_header::AckMessageRequestHeader;
 use rocketmq_remoting::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader;
 use rocketmq_remoting::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader;
@@ -89,6 +110,7 @@ use rocketmq_remoting::protocol::header::query_consumer_offset_response_header::
 use rocketmq_remoting::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
+use rocketmq_remoting::protocol::header::update_user_request_header::UpdateUserRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
@@ -106,27 +128,6 @@ use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::warn;
-
-use crate::base::client_config::ClientConfig;
-use crate::consumer::ack_callback::AckCallback;
-use crate::consumer::ack_result::AckResult;
-use crate::consumer::ack_status::AckStatus;
-use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
-use crate::consumer::pop_callback::PopCallback;
-use crate::consumer::pop_result::PopResult;
-use crate::consumer::pop_status::PopStatus;
-use crate::consumer::pull_callback::PullCallback;
-use crate::consumer::pull_result::PullResult;
-use crate::consumer::pull_status::PullStatus;
-use crate::factory::mq_client_instance::MQClientInstance;
-use crate::hook::send_message_context::SendMessageContext;
-use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
-use crate::implementation::communication_mode::CommunicationMode;
-use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
-use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
-use crate::producer::send_callback::SendMessageCallback;
-use crate::producer::send_result::SendResult;
-use crate::producer::send_status::SendStatus;
 
 static INIT_REMOTING_VERSION: OnceLock<()> = OnceLock::new();
 
@@ -198,6 +199,41 @@ impl MQClientAPIImpl {
                 ResponseCode::Success => {}
                 _ => err_response = Some(response),
             }
+        }
+
+        if let Some(err_response) = err_response {
+            return Err(mq_client_err!(
+                err_response.code(),
+                err_response.remark().map_or("".to_string(), |s| s.to_string())
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn update_user(
+        &self,
+        broker_address: CheetahString,
+        user_info: &UserInfo,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let mut request_header = UpdateUserRequestHeader::default();
+        let username = user_info
+            .username
+            .clone()
+            .ok_or_else(|| mq_client_err!(-1, "username is required".to_string()))?;
+        request_header.set_username(username);
+        let mut request = RemotingCommand::create_request_command(RequestCode::AuthUpdateUser, request_header);
+        request = request.set_body(user_info.encode()?);
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_address), request.clone(), timeout_millis)
+            .await?;
+
+        let mut err_response = None;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {}
+            _ => err_response = Some(response),
         }
 
         if let Some(err_response) = err_response {

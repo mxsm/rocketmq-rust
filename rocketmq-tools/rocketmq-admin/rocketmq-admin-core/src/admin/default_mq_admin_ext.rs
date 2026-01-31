@@ -834,7 +834,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         user_type: CheetahString,
         user_status: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .update_user(broker_addr, username, password, user_type, user_status)
+            .await
     }
 
     async fn delete_user(

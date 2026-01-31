@@ -12,16 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_remoting::code::request_code::RequestCode;
-use rocketmq_remoting::code::response_code::ResponseCode;
-use rocketmq_remoting::net::channel::Channel;
-use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
-use rocketmq_remoting::runtime::processor::RequestProcessor;
-use rocketmq_rust::ArcMut;
-use rocketmq_store::base::message_store::MessageStore;
-use tracing::warn;
-
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::processor::admin_broker_processor::batch_mq_handler::BatchMqHandler;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
@@ -36,6 +26,16 @@ use crate::processor::admin_broker_processor::reset_master_flusg_offset_handler:
 use crate::processor::admin_broker_processor::subscription_group_handler::SubscriptionGroupHandler;
 use crate::processor::admin_broker_processor::topic_request_handler::TopicRequestHandler;
 use crate::processor::admin_broker_processor::update_broker_ha_handler::UpdateBrokerHaHandler;
+use crate::processor::admin_broker_processor::update_user_request_handler::UpdateUserRequestHandler;
+use rocketmq_remoting::code::request_code::RequestCode;
+use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::net::channel::Channel;
+use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
+use rocketmq_remoting::runtime::processor::RequestProcessor;
+use rocketmq_rust::ArcMut;
+use rocketmq_store::base::message_store::MessageStore;
+use tracing::warn;
 
 mod batch_mq_handler;
 mod broker_config_request_handler;
@@ -50,6 +50,7 @@ mod reset_master_flusg_offset_handler;
 mod subscription_group_handler;
 mod topic_request_handler;
 mod update_broker_ha_handler;
+mod update_user_request_handler;
 
 pub struct AdminBrokerProcessor<MS: MessageStore> {
     topic_request_handler: TopicRequestHandler<MS>,
@@ -68,6 +69,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     notify_broker_role_change_handler: NotifyBrokerRoleChangeHandler<MS>,
     message_related_handler: MessageRelatedHandler<MS>,
     producer_request_handler: ProducerRequestHandler<MS>,
+    update_user_request_handler: UpdateUserRequestHandler<MS>,
 }
 
 impl<MS> RequestProcessor for AdminBrokerProcessor<MS>
@@ -106,6 +108,8 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
 
         let message_related_handler = MessageRelatedHandler::new(broker_runtime_inner.clone());
         let producer_request_handler = ProducerRequestHandler::new(broker_runtime_inner.clone());
+        let update_user_request_handler = UpdateUserRequestHandler::new(broker_runtime_inner.clone());
+
         AdminBrokerProcessor {
             topic_request_handler,
             broker_config_request_handler,
@@ -121,6 +125,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             notify_broker_role_change_handler,
             message_related_handler,
             producer_request_handler,
+            update_user_request_handler,
         }
     }
 }

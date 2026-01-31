@@ -3441,6 +3441,7 @@ dependencies = [
  "opentelemetry_sdk",
  "parking_lot",
  "rand 0.9.2",
+ "rocketmq-auth",
  "rocketmq-client-rust",
  "rocketmq-common",
  "rocketmq-error",
