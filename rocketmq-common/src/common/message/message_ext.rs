@@ -388,3 +388,57 @@ impl std::ops::DerefMut for MessageExt {
         &mut self.message
     }
 }
+
+// Conversion to new MessageEnvelope type
+impl From<MessageExt> for crate::common::message::message_envelope::MessageEnvelope {
+    fn from(ext: MessageExt) -> Self {
+        use crate::common::message::message_envelope::MessageEnvelope;
+        use crate::common::message::routing_context::RoutingContext;
+        use crate::common::message::storage_metadata::StorageMetadata;
+
+        let routing = RoutingContext::new(ext.born_host, ext.born_timestamp, ext.sys_flag);
+
+        let storage = StorageMetadata::new(
+            ext.broker_name,
+            ext.queue_id,
+            ext.queue_offset,
+            ext.commit_log_offset,
+            ext.store_timestamp,
+            ext.store_host,
+            ext.store_size,
+        );
+
+        MessageEnvelope::new(
+            ext.message,
+            routing,
+            storage,
+            ext.msg_id,
+            ext.body_crc,
+            ext.reconsume_times,
+            ext.prepared_transaction_offset,
+        )
+    }
+}
+
+// Conversion from new MessageEnvelope type
+impl From<crate::common::message::message_envelope::MessageEnvelope> for MessageExt {
+    fn from(envelope: crate::common::message::message_envelope::MessageEnvelope) -> Self {
+        Self {
+            message: envelope.message().clone(),
+            broker_name: CheetahString::from_string(envelope.broker_name().to_string()),
+            queue_id: envelope.queue_id(),
+            store_size: envelope.store_size(),
+            queue_offset: envelope.queue_offset(),
+            sys_flag: envelope.sys_flag(),
+            born_timestamp: envelope.born_timestamp(),
+            born_host: envelope.born_host(),
+            store_timestamp: envelope.store_timestamp(),
+            store_host: envelope.store_host(),
+            msg_id: envelope.msg_id().clone(),
+            commit_log_offset: envelope.commit_log_offset(),
+            body_crc: envelope.body_crc(),
+            reconsume_times: envelope.reconsume_times(),
+            prepared_transaction_offset: envelope.prepared_transaction_offset(),
+        }
+    }
+}

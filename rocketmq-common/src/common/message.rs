@@ -29,6 +29,7 @@ use rocketmq_error::RocketMQResult;
 
 pub mod message_accessor;
 pub mod message_batch;
+pub mod message_batch_v2;
 pub mod message_body;
 pub mod message_builder;
 pub mod message_client_ext;
@@ -44,6 +45,12 @@ pub mod message_queue;
 pub mod message_queue_assignment;
 pub mod message_queue_for_c;
 pub mod message_single;
+
+// New refactored message types
+pub mod broker_message;
+pub mod message_envelope;
+pub mod routing_context;
+pub mod storage_metadata;
 
 /// This module defines the `MessageTrait` trait, which provides a flexible interface for working
 ///
