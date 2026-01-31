@@ -1,4 +1,3 @@
-use cheetah_string::CheetahString;
 use rocketmq_auth::authentication::enums::user_status::UserStatus;
 use rocketmq_auth::authentication::enums::user_type::UserType;
 use rocketmq_auth::authentication::model::user::User;

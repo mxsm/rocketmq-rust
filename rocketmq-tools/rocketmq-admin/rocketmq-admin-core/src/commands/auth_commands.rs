@@ -21,9 +21,6 @@ use std::sync::Arc;
 use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
-
-use crate::commands::auth_commands::update_acl_sub_command::UpdateAclSubCommand;
-use crate::commands::auth_commands::update_user_sub_command::UpdateUserSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
@@ -33,29 +30,29 @@ pub enum AuthCommands {
         about = "Copy acl to cluster",
         long_about = None,
     )]
-    CopyAclSubCommand(copy_acl_sub_command::CopyAclSubCommand),
+    CopyAcl(copy_acl_sub_command::CopyAclSubCommand),
 
     #[command(
         name = "updateAcl",
         about = "Update Access Control List (ACL)",
         long_about = None,
     )]
-    UpdateAclSubCommand(UpdateAclSubCommand),
+    UpdateAcl(update_acl_sub_command::UpdateAclSubCommand),
 
     #[command(
         name = "updateUser",
         about = "Update user to cluster.",
         long_about = None,
     )]
-    UpdateUserSubCommand(UpdateUserSubCommand),
+    UpdateUser(update_user_sub_command::UpdateUserSubCommand),
 }
 
 impl CommandExecute for AuthCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
-            AuthCommands::CopyAclSubCommand(value) => value.execute(rpc_hook).await,
-            AuthCommands::UpdateAclSubCommand(value) => value.execute(rpc_hook).await,
-            AuthCommands::UpdateUserSubCommand(value) => value.execute(rpc_hook).await,
+            AuthCommands::CopyAcl(value) => value.execute(rpc_hook).await,
+            AuthCommands::UpdateAcl(value) => value.execute(rpc_hook).await,
+            AuthCommands::UpdateUser(value) => value.execute(rpc_hook).await,
         }
     }
 }

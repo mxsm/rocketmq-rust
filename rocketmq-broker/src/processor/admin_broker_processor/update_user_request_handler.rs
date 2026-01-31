@@ -31,9 +31,9 @@ impl<MS: MessageStore> UpdateUserRequestHandler<MS> {
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
         let request_header = request.decode_command_custom_header::<UpdateUserRequestHeader>()?;
 
-        let mut response = RemotingCommand::default();
+        let response = RemotingCommand::default();
 
-        if (request_header.username.is_empty()) {
+        if request_header.username.is_empty() {
             return Ok(Some(
                 response
                     .set_code(ResponseCode::InvalidParameter)
@@ -70,17 +70,11 @@ impl<MS: MessageStore> UpdateUserRequestHandler<MS> {
         )))
     }
 
-    async fn is_not_super_user_login(&self, request: &RemotingCommand) -> bool {
+    async fn is_not_super_user_login(&self, _request: &RemotingCommand) -> bool {
         // Get "AccessKey" from ext_fields
-        let access_key = match request.ext_fields().and_then(|fields| fields.get("AccessKey")) {
-            Some(k) if !k.is_empty() => k,
-            _ => return false,
-        };
-
         // Check superuser (await the async function)
         // TODO get the authentication metadata manager and check if the user is superuser
         let is_super = false;
-
         !is_super
     }
 }
