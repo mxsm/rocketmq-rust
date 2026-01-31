@@ -17,7 +17,6 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -48,23 +47,24 @@ pub static REBALANCE_LOCK_INTERVAL: LazyLock<u64> = LazyLock::new(|| {
         .unwrap_or(20000)
 });
 
-#[derive(Clone)]
 pub struct ProcessQueue {
-    pub(crate) tree_map_lock: Arc<RwLock<()>>,
     pub(crate) msg_tree_map: Arc<RwLock<std::collections::BTreeMap<i64, ArcMut<MessageExt>>>>,
-    pub(crate) msg_count: Arc<AtomicU64>,
-    pub(crate) msg_size: Arc<AtomicU64>,
-    pub(crate) consume_lock: Arc<RocketMQTokioRwLock<()>>,
     pub(crate) consuming_msg_orderly_tree_map: Arc<RwLock<std::collections::BTreeMap<i64, ArcMut<MessageExt>>>>,
-    pub(crate) try_unlock_times: Arc<AtomicI64>,
-    pub(crate) queue_offset_max: Arc<AtomicU64>,
-    pub(crate) dropped: Arc<AtomicBool>,
-    pub(crate) last_pull_timestamp: Arc<AtomicU64>,
-    pub(crate) last_consume_timestamp: Arc<AtomicU64>,
-    pub(crate) locked: Arc<AtomicBool>,
-    pub(crate) last_lock_timestamp: Arc<AtomicU64>,
-    pub(crate) consuming: Arc<AtomicBool>,
-    pub(crate) msg_acc_cnt: Arc<AtomicI64>,
+    pub(crate) consume_lock: Arc<RocketMQTokioRwLock<()>>,
+
+    msg_count: AtomicU64,
+    msg_size: AtomicU64,
+    queue_offset_max: AtomicI64,
+    msg_acc_cnt: AtomicI64,
+    try_unlock_times: AtomicI64,
+
+    dropped: AtomicBool,
+    locked: AtomicBool,
+    consuming: AtomicBool,
+
+    last_pull_timestamp: AtomicU64,
+    last_consume_timestamp: AtomicU64,
+    last_lock_timestamp: AtomicU64,
 }
 
 impl Default for ProcessQueue {
@@ -75,22 +75,25 @@ impl Default for ProcessQueue {
 
 impl ProcessQueue {
     pub fn new() -> Self {
+        let now = get_current_millis();
         ProcessQueue {
-            tree_map_lock: Arc::new(RwLock::new(())),
             msg_tree_map: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
-            msg_count: Arc::new(AtomicU64::new(0)),
-            msg_size: Arc::new(AtomicU64::new(0)),
-            consume_lock: Arc::new(RocketMQTokioRwLock::new(())),
             consuming_msg_orderly_tree_map: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
-            try_unlock_times: Arc::new(AtomicI64::new(0)),
-            queue_offset_max: Arc::new(AtomicU64::new(0)),
-            dropped: Arc::new(AtomicBool::new(false)),
-            last_pull_timestamp: Arc::new(AtomicU64::new(get_current_millis())),
-            last_consume_timestamp: Arc::new(AtomicU64::new(get_current_millis())),
-            locked: Arc::new(AtomicBool::new(false)),
-            last_lock_timestamp: Arc::new(AtomicU64::new(get_current_millis())),
-            consuming: Arc::new(AtomicBool::new(false)),
-            msg_acc_cnt: Arc::new(AtomicI64::new(0)),
+            consume_lock: Arc::new(RocketMQTokioRwLock::new(())),
+
+            msg_count: AtomicU64::new(0),
+            msg_size: AtomicU64::new(0),
+            queue_offset_max: AtomicI64::new(0),
+            msg_acc_cnt: AtomicI64::new(0),
+            try_unlock_times: AtomicI64::new(0),
+
+            dropped: AtomicBool::new(false),
+            locked: AtomicBool::new(false),
+            consuming: AtomicBool::new(false),
+
+            last_pull_timestamp: AtomicU64::new(now),
+            last_consume_timestamp: AtomicU64::new(now),
+            last_lock_timestamp: AtomicU64::new(now),
         }
     }
 }
@@ -195,7 +198,7 @@ impl ProcessQueue {
             if msg_tree_map.insert(message.queue_offset, message.clone()).is_none() {
                 valid_msg_cnt += 1;
                 self.queue_offset_max
-                    .store(message.queue_offset as u64, std::sync::atomic::Ordering::Release);
+                    .fetch_max(message.queue_offset, std::sync::atomic::Ordering::AcqRel);
                 self.msg_size
                     .fetch_add(message.body().as_ref().unwrap().len() as u64, Ordering::AcqRel);
             }
@@ -222,28 +225,38 @@ impl ProcessQueue {
     }
 
     pub(crate) async fn remove_message(&self, messages: &[ArcMut<MessageExt>]) -> i64 {
-        let mut result = -1;
+        let now = get_current_millis();
         let mut msg_tree_map = self.msg_tree_map.write().await;
+
         if msg_tree_map.is_empty() {
-            return result;
+            return -1;
         }
-        result = self.queue_offset_max.load(Ordering::Acquire) as i64 + 1;
-        let mut removed_cnt = 0;
+
+        let mut result = self.queue_offset_max.load(Ordering::Acquire) + 1;
+        let mut removed_cnt = 0u64;
+
         for message in messages {
-            let prev = msg_tree_map.remove(&message.queue_offset);
-            if let Some(prev) = prev {
+            if let Some(_prev) = msg_tree_map.remove(&message.queue_offset) {
                 removed_cnt += 1;
-                self.msg_size
-                    .fetch_sub(message.body().as_ref().unwrap().len() as u64, Ordering::AcqRel);
+                if let Some(body) = message.body() {
+                    self.msg_size.fetch_sub(body.len() as u64, Ordering::AcqRel);
+                }
             }
-            self.msg_count.fetch_sub(removed_cnt, Ordering::AcqRel);
-            if self.msg_count.load(Ordering::Acquire) == 0 {
+        }
+
+        if removed_cnt > 0 {
+            let current_count = self.msg_count.fetch_sub(removed_cnt, Ordering::AcqRel);
+            if current_count == removed_cnt {
                 self.msg_size.store(0, Ordering::Release);
             }
-            if !msg_tree_map.is_empty() {
-                result = *msg_tree_map.first_key_value().unwrap().0;
-            }
         }
+
+        self.last_consume_timestamp.store(now, Ordering::Release);
+
+        if !msg_tree_map.is_empty() {
+            result = *msg_tree_map.first_key_value().unwrap().0;
+        }
+
         result
     }
 
@@ -260,9 +273,12 @@ impl ProcessQueue {
         let mut consuming_msg_orderly_tree_map = self.consuming_msg_orderly_tree_map.write().await;
         let key_value = consuming_msg_orderly_tree_map.last_key_value();
         let offset = if let Some((key, _)) = key_value { *key + 1 } else { -1 };
-        self.msg_count
+
+        let prev_count = self
+            .msg_count
             .fetch_sub(consuming_msg_orderly_tree_map.len() as u64, Ordering::AcqRel);
-        if self.msg_count.load(Ordering::Acquire) == 0 {
+
+        if prev_count == consuming_msg_orderly_tree_map.len() as u64 {
             self.msg_size.store(0, Ordering::Release);
         } else {
             for message in consuming_msg_orderly_tree_map.values() {
@@ -285,17 +301,28 @@ impl ProcessQueue {
 
     pub(crate) async fn take_messages(&self, batch_size: u32) -> Vec<ArcMut<MessageExt>> {
         let mut messages = Vec::with_capacity(batch_size as usize);
-        let now = Instant::now();
+        let now = get_current_millis();
+
         let mut msg_tree_map = self.msg_tree_map.write().await;
+        let mut consuming_map = self.consuming_msg_orderly_tree_map.write().await;
+
+        self.last_consume_timestamp.store(now, Ordering::Release);
+
         if !msg_tree_map.is_empty() {
             for _ in 0..batch_size {
-                if let Some((_, message)) = msg_tree_map.pop_first() {
+                if let Some((offset, message)) = msg_tree_map.pop_first() {
+                    consuming_map.insert(offset, message.clone());
                     messages.push(message);
                 } else {
                     break;
                 }
             }
         }
+
+        if messages.is_empty() {
+            self.consuming.store(false, Ordering::Release);
+        }
+
         messages
     }
 
@@ -305,17 +332,45 @@ impl ProcessQueue {
     }
 
     pub(crate) async fn clear(&self) {
-        let lock = self.tree_map_lock.write().await;
         self.msg_tree_map.write().await.clear();
         self.consuming_msg_orderly_tree_map.write().await.clear();
         self.msg_count.store(0, Ordering::Release);
         self.msg_size.store(0, Ordering::Release);
         self.queue_offset_max.store(0, Ordering::Release);
-        drop(lock);
     }
 
-    pub(crate) fn fill_process_queue_info(&self, info: ProcessQueueInfo) {
-        unimplemented!("fill_process_queue_info")
+    pub(crate) async fn fill_process_queue_info(&self, info: &mut ProcessQueueInfo) {
+        let msg_tree_map = self.msg_tree_map.read().await;
+        let consuming_map = self.consuming_msg_orderly_tree_map.read().await;
+
+        if !msg_tree_map.is_empty() {
+            if let Some((min_offset, _)) = msg_tree_map.first_key_value() {
+                info.cached_msg_min_offset = *min_offset as u64;
+            }
+            if let Some((max_offset, _)) = msg_tree_map.last_key_value() {
+                info.cached_msg_max_offset = *max_offset as u64;
+            }
+            info.cached_msg_count = msg_tree_map.len() as u32;
+        }
+
+        info.cached_msg_size_in_mib = (self.msg_size.load(Ordering::Acquire) / (1024 * 1024)) as u32;
+
+        if !consuming_map.is_empty() {
+            if let Some((min_offset, _)) = consuming_map.first_key_value() {
+                info.transaction_msg_min_offset = *min_offset as u64;
+            }
+            if let Some((max_offset, _)) = consuming_map.last_key_value() {
+                info.transaction_msg_max_offset = *max_offset as u64;
+            }
+            info.transaction_msg_count = consuming_map.len() as u32;
+        }
+
+        info.locked = self.locked.load(Ordering::Acquire);
+        info.try_unlock_times = self.try_unlock_times.load(Ordering::Acquire) as u64;
+        info.last_lock_timestamp = self.last_lock_timestamp.load(Ordering::Acquire);
+        info.droped = self.dropped.load(Ordering::Acquire);
+        info.last_pull_timestamp = self.last_pull_timestamp.load(Ordering::Acquire);
+        info.last_consume_timestamp = self.last_consume_timestamp.load(Ordering::Acquire);
     }
 
     pub(crate) fn set_last_pull_timestamp(&self, last_pull_timestamp: u64) {
@@ -338,5 +393,410 @@ impl ProcessQueue {
 
     pub(crate) fn is_locked(&self) -> bool {
         self.locked.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub(crate) async fn has_temp_message(&self) -> bool {
+        let msg_tree_map = self.msg_tree_map.read().await;
+        !msg_tree_map.is_empty()
+    }
+
+    pub(crate) fn get_last_pull_timestamp(&self) -> u64 {
+        self.last_pull_timestamp.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn get_last_consume_timestamp(&self) -> u64 {
+        self.last_consume_timestamp.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn get_msg_acc_cnt(&self) -> i64 {
+        self.msg_acc_cnt.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn get_try_unlock_times(&self) -> i64 {
+        self.try_unlock_times.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn is_consuming(&self) -> bool {
+        self.consuming.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn set_consuming(&self, consuming: bool) {
+        self.consuming.store(consuming, Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::message::MessageTrait;
+
+    fn create_test_messages(count: usize) -> Vec<ArcMut<MessageExt>> {
+        let mut messages = Vec::with_capacity(count);
+        for i in 0..count {
+            let mut msg = MessageExt {
+                queue_offset: i as i64,
+                ..Default::default()
+            };
+            msg.set_body(Bytes::from(vec![0u8; 100]));
+            msg.set_topic(CheetahString::from_static_str("test_topic"));
+            messages.push(ArcMut::new(msg));
+        }
+        messages
+    }
+
+    #[tokio::test]
+    async fn test_remove_message_count_correct() {
+        let pq = ProcessQueue::new();
+
+        let msgs = create_test_messages(10);
+        pq.put_message(msgs.clone()).await;
+
+        assert_eq!(pq.msg_count(), 10);
+
+        pq.remove_message(&msgs[0..5]).await;
+
+        assert_eq!(pq.msg_count(), 5);
+        assert_eq!(pq.msg_size(), 500);
+    }
+
+    #[tokio::test]
+    async fn test_remove_message_all() {
+        let pq = ProcessQueue::new();
+
+        let msgs = create_test_messages(5);
+        pq.put_message(msgs.clone()).await;
+
+        assert_eq!(pq.msg_count(), 5);
+
+        pq.remove_message(&msgs).await;
+
+        assert_eq!(pq.msg_count(), 0);
+        assert_eq!(pq.msg_size(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_take_messages_updates_consuming_map() {
+        let pq = ProcessQueue::new();
+
+        let msgs = create_test_messages(10);
+        pq.put_message(msgs).await;
+
+        let taken = pq.take_messages(5).await;
+
+        assert_eq!(taken.len(), 5);
+
+        let consuming_map = pq.consuming_msg_orderly_tree_map.read().await;
+        assert_eq!(consuming_map.len(), 5);
+
+        for msg in &taken {
+            assert!(consuming_map.contains_key(&msg.queue_offset));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_take_messages_updates_timestamp() {
+        let pq = ProcessQueue::new();
+
+        let msgs = create_test_messages(5);
+        pq.put_message(msgs).await;
+
+        let timestamp_before = pq.last_consume_timestamp.load(Ordering::Acquire);
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+        pq.take_messages(3).await;
+
+        let timestamp_after = pq.last_consume_timestamp.load(Ordering::Acquire);
+
+        assert!(timestamp_after > timestamp_before);
+    }
+
+    #[tokio::test]
+    async fn test_take_messages_empty_sets_consuming_false() {
+        let pq = ProcessQueue::new();
+
+        pq.consuming.store(true, Ordering::Release);
+
+        let taken = pq.take_messages(5).await;
+
+        assert_eq!(taken.len(), 0);
+        assert!(!pq.consuming.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn test_fill_process_queue_info() {
+        let pq = ProcessQueue::new();
+
+        let msgs = create_test_messages(10);
+        pq.put_message(msgs).await;
+
+        pq.take_messages(3).await;
+
+        let mut info = ProcessQueueInfo {
+            commit_offset: 0,
+            cached_msg_min_offset: 0,
+            cached_msg_max_offset: 0,
+            cached_msg_count: 0,
+            cached_msg_size_in_mib: 0,
+            transaction_msg_min_offset: 0,
+            transaction_msg_max_offset: 0,
+            transaction_msg_count: 0,
+            locked: false,
+            try_unlock_times: 0,
+            last_lock_timestamp: 0,
+            droped: false,
+            last_pull_timestamp: 0,
+            last_consume_timestamp: 0,
+        };
+
+        pq.fill_process_queue_info(&mut info).await;
+
+        assert_eq!(info.cached_msg_count, 7);
+        assert_eq!(info.cached_msg_min_offset, 3);
+        assert_eq!(info.cached_msg_max_offset, 9);
+
+        assert_eq!(info.transaction_msg_count, 3);
+        assert_eq!(info.transaction_msg_min_offset, 0);
+        assert_eq!(info.transaction_msg_max_offset, 2);
+    }
+
+    #[tokio::test]
+    async fn test_has_temp_message() {
+        let pq = ProcessQueue::new();
+
+        assert!(!pq.has_temp_message().await);
+
+        let msgs = create_test_messages(5);
+        pq.put_message(msgs.clone()).await;
+
+        assert!(pq.has_temp_message().await);
+
+        pq.remove_message(&msgs).await;
+
+        assert!(!pq.has_temp_message().await);
+    }
+
+    #[tokio::test]
+    async fn test_rollback_after_take_messages() {
+        let pq = ProcessQueue::new();
+
+        let msgs = create_test_messages(10);
+        pq.put_message(msgs).await;
+
+        assert_eq!(pq.msg_count(), 10);
+
+        let taken = pq.take_messages(5).await;
+        assert_eq!(taken.len(), 5);
+
+        let msg_tree_map_len = pq.msg_tree_map.read().await.len();
+        assert_eq!(msg_tree_map_len, 5);
+
+        pq.rollback().await;
+
+        let msg_tree_map_len_after = pq.msg_tree_map.read().await.len();
+        assert_eq!(msg_tree_map_len_after, 10);
+
+        let consuming_map_len = pq.consuming_msg_orderly_tree_map.read().await.len();
+        assert_eq!(consuming_map_len, 0);
+    }
+
+    #[tokio::test]
+    async fn test_commit_after_take_messages() {
+        let pq = ProcessQueue::new();
+
+        let msgs = create_test_messages(10);
+        pq.put_message(msgs).await;
+
+        pq.take_messages(5).await;
+
+        assert_eq!(pq.msg_count(), 10);
+
+        let offset = pq.commit().await;
+
+        assert_eq!(offset, 5);
+        assert_eq!(pq.msg_count(), 5);
+
+        let consuming_map_len = pq.consuming_msg_orderly_tree_map.read().await.len();
+        assert_eq!(consuming_map_len, 0);
+    }
+
+    #[tokio::test]
+    async fn test_getter_methods() {
+        let pq = ProcessQueue::new();
+
+        assert_eq!(pq.get_try_unlock_times(), 0);
+        assert!(!pq.is_consuming());
+        assert!(!pq.is_dropped());
+        assert!(!pq.is_locked());
+
+        pq.inc_try_unlock_times();
+        assert_eq!(pq.get_try_unlock_times(), 1);
+
+        pq.set_consuming(true);
+        assert!(pq.is_consuming());
+
+        pq.set_dropped(true);
+        assert!(pq.is_dropped());
+
+        pq.set_locked(true);
+        assert!(pq.is_locked());
+    }
+
+    #[tokio::test]
+    async fn test_timestamp_getters() {
+        let pq = ProcessQueue::new();
+
+        let pull_ts = pq.get_last_pull_timestamp();
+        let consume_ts = pq.get_last_consume_timestamp();
+        let lock_ts = pq.get_last_lock_timestamp();
+
+        assert!(pull_ts > 0);
+        assert!(consume_ts > 0);
+        assert!(lock_ts > 0);
+
+        let new_ts = get_current_millis() + 1000;
+        pq.set_last_pull_timestamp(new_ts);
+        assert_eq!(pq.get_last_pull_timestamp(), new_ts);
+
+        pq.set_last_lock_timestamp(new_ts);
+        assert_eq!(pq.get_last_lock_timestamp(), new_ts);
+    }
+
+    #[tokio::test]
+    async fn test_msg_acc_cnt() {
+        let pq = ProcessQueue::new();
+
+        assert_eq!(pq.get_msg_acc_cnt(), 0);
+
+        let mut msgs = Vec::new();
+        for i in 0..5 {
+            let mut msg = MessageExt {
+                queue_offset: i as i64,
+                ..Default::default()
+            };
+            msg.set_body(Bytes::from(vec![0u8; 100]));
+            msg.set_topic(CheetahString::from_static_str("test_topic"));
+            msg.put_property(
+                CheetahString::from_static_str(MessageConst::PROPERTY_MAX_OFFSET),
+                CheetahString::from(format!("{}", i + 100)),
+            );
+            msgs.push(ArcMut::new(msg));
+        }
+
+        pq.put_message(msgs).await;
+
+        assert!(pq.get_msg_acc_cnt() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_clear_resets_all_state() {
+        let pq = ProcessQueue::new();
+
+        let msgs = create_test_messages(10);
+        pq.put_message(msgs).await;
+        pq.take_messages(5).await;
+
+        assert_eq!(pq.msg_count(), 10);
+        assert!(pq.msg_size() > 0);
+
+        pq.clear().await;
+
+        assert_eq!(pq.msg_count(), 0);
+        assert_eq!(pq.msg_size(), 0);
+
+        let msg_tree_map_len = pq.msg_tree_map.read().await.len();
+        assert_eq!(msg_tree_map_len, 0);
+
+        let consuming_map_len = pq.consuming_msg_orderly_tree_map.read().await.len();
+        assert_eq!(consuming_map_len, 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_max_span() {
+        let pq = ProcessQueue::new();
+
+        assert_eq!(pq.get_max_span().await, 0);
+
+        let msgs = create_test_messages(10);
+        pq.put_message(msgs).await;
+
+        let span = pq.get_max_span().await;
+        assert_eq!(span, 9);
+    }
+
+    #[tokio::test]
+    async fn test_consuming_flag_behavior() {
+        let pq = ProcessQueue::new();
+
+        assert!(!pq.is_consuming());
+
+        let msgs = create_test_messages(5);
+        let should_dispatch = pq.put_message(msgs).await;
+
+        assert!(should_dispatch);
+        assert!(pq.is_consuming());
+
+        pq.set_consuming(false);
+        assert!(!pq.is_consuming());
+    }
+
+    #[tokio::test]
+    async fn test_queue_offset_max_with_unordered_messages() {
+        let pq = ProcessQueue::new();
+
+        let mut msgs = Vec::new();
+        for offset in [5, 2, 8, 1, 9, 3].iter() {
+            let mut msg = MessageExt {
+                queue_offset: *offset,
+                ..Default::default()
+            };
+            msg.set_body(Bytes::from(vec![0u8; 100]));
+            msg.set_topic(CheetahString::from_static_str("test_topic"));
+            msgs.push(ArcMut::new(msg));
+        }
+
+        pq.put_message(msgs).await;
+
+        let max_offset = pq.queue_offset_max.load(Ordering::Acquire);
+        assert_eq!(max_offset, 9);
+    }
+
+    #[tokio::test]
+    async fn test_commit_preserves_msg_size_correctly() {
+        let pq = ProcessQueue::new();
+
+        let msgs = create_test_messages(10);
+        pq.put_message(msgs).await;
+
+        assert_eq!(pq.msg_size(), 1000);
+
+        pq.take_messages(3).await;
+
+        assert_eq!(pq.msg_count(), 10);
+        assert_eq!(pq.msg_size(), 1000);
+
+        pq.commit().await;
+
+        assert_eq!(pq.msg_count(), 7);
+        assert_eq!(pq.msg_size(), 700);
+    }
+
+    #[tokio::test]
+    async fn test_commit_when_all_messages_consumed() {
+        let pq = ProcessQueue::new();
+
+        let msgs = create_test_messages(5);
+        pq.put_message(msgs).await;
+
+        assert_eq!(pq.msg_size(), 500);
+
+        pq.take_messages(5).await;
+
+        pq.commit().await;
+
+        assert_eq!(pq.msg_count(), 0);
+        assert_eq!(pq.msg_size(), 0);
     }
 }
