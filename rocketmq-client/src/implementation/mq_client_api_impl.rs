@@ -217,7 +217,11 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> RocketMQResult<()> {
         let mut request_header = UpdateUserRequestHeader::default();
-        request_header.set_username(user_info.username.clone().unwrap());
+        let username = user_info
+            .username
+            .clone()
+            .ok_or_else(|| mq_client_err!(-1, "username is required".to_string()))?;
+        request_header.set_username(username);
         let mut request = RemotingCommand::create_request_command(RequestCode::AuthUpdateUser, request_header);
         request = request.set_body(user_info.encode()?);
 
