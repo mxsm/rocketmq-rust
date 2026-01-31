@@ -990,7 +990,6 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         user_type: CheetahString,
         user_status: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        
         let mut user_info = UserInfo {
             username: Some(username),
             user_type: Some(user_type),
