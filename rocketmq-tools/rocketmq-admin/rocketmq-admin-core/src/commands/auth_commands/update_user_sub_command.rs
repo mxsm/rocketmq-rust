@@ -67,7 +67,7 @@ impl CommandExecute for UpdateUserSubCommand {
 
         MQAdminExt::start(&mut default_mqadmin_ext)
             .await
-            .map_err(|e| RocketMQError::Internal(format!("UpdateAclSubCommand: Failed to start MQAdminExt: {}", e)))?;
+            .map_err(|e| RocketMQError::Internal(format!("UpdateUserSubCommand: Failed to start MQAdminExt: {}", e)))?;
 
         let username = CheetahString::from(self.username.trim());
         let password = self
