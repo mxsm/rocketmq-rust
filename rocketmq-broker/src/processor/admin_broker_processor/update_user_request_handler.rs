@@ -41,10 +41,19 @@ impl<MS: MessageStore> UpdateUserRequestHandler<MS> {
             ));
         }
 
-        let mut user_info: UserInfo = UserInfo::decode(request.get_body().unwrap())?;
+        let body = match request.get_body() {
+            Some(body) => body,
+            None => {
+                return Ok(Some(
+                    response
+                        .set_code(ResponseCode::InvalidParameter)
+                        .set_remark("Request body is empty"),
+                ));
+            }
+        };
+        let mut user_info: UserInfo = UserInfo::decode(body)?;
 
         user_info.username = Option::from(request_header.username);
-
         let user = UserConverter::convert_user(&user_info);
 
         if user.user_type() == Option::from(UserType::Super) && self.is_not_super_user_login(request).await {
