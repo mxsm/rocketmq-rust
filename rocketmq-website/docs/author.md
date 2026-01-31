@@ -20,7 +20,7 @@ hide_table_of_contents: false
   />
   <h2 style={{marginTop: '1rem', color: 'var(--ifm-color-primary)'}}>MXSM</h2>
   <p style={{fontSize: '1.1rem', color: 'var(--ifm-color-secondary)'}}>
-    Apache EventMesh PMC | Apache RocketMQ Active Contributor | RocketMQ-Rust Owner
+    Apache EventMesh PMC | Apache RocketMQ Active Contributor | RocketMQ-Rust Maintainer
   </p>
 </div>
 
