@@ -1,4 +1,4 @@
-// Copyright 2023 The RocketMQ Rust Authors
+// Copyright 2026 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 
 mod copy_acl_sub_command;
 mod update_acl_sub_command;
+mod update_user_sub_command;
 
 use std::sync::Arc;
 
@@ -21,6 +22,8 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
+use crate::commands::auth_commands::update_acl_sub_command::UpdateAclSubCommand;
+use crate::commands::auth_commands::update_user_sub_command::UpdateUserSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
@@ -37,7 +40,14 @@ pub enum AuthCommands {
         about = "Update Access Control List (ACL)",
         long_about = None,
     )]
-    UpdateAclSubCommand(update_acl_sub_command::UpdateAclSubCommand),
+    UpdateAclSubCommand(UpdateAclSubCommand),
+
+    #[command(
+        name = "updateUser",
+        about = "Update user to cluster.",
+        long_about = None,
+    )]
+    UpdateUserSubCommand(UpdateUserSubCommand),
 }
 
 impl CommandExecute for AuthCommands {
@@ -45,6 +55,7 @@ impl CommandExecute for AuthCommands {
         match self {
             AuthCommands::CopyAclSubCommand(value) => value.execute(rpc_hook).await,
             AuthCommands::UpdateAclSubCommand(value) => value.execute(rpc_hook).await,
+            AuthCommands::UpdateUserSubCommand(value) => value.execute(rpc_hook).await,
         }
     }
 }

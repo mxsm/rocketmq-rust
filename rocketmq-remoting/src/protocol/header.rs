@@ -78,5 +78,6 @@ pub mod search_offset_response_header;
 pub mod unlock_batch_mq_request_header;
 pub mod unregister_client_request_header;
 pub mod update_consumer_offset_header;
+pub mod update_user_request_header;
 pub mod view_message_request_header;
 pub mod view_message_response_header;

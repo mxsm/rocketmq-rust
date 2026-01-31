@@ -20,6 +20,12 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use crate::admin::mq_admin_ext_async::MQAdminExt;
+use crate::admin::mq_admin_ext_async_inner::MQAdminExtInnerImpl;
+use crate::base::client_config::ClientConfig;
+use crate::common::admin_tool_result::AdminToolResult;
+use crate::factory::mq_client_instance::MQClientInstance;
+use crate::implementation::mq_client_manager::MQClientManager;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::base::plain_access_config::PlainAccessConfig;
 use rocketmq_common::common::base::service_state::ServiceState;
@@ -70,13 +76,6 @@ use rocketmq_remoting::protocol::subscription::subscription_group_config::Subscr
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
 use tracing::info;
-
-use crate::admin::mq_admin_ext_async::MQAdminExt;
-use crate::admin::mq_admin_ext_async_inner::MQAdminExtInnerImpl;
-use crate::base::client_config::ClientConfig;
-use crate::common::admin_tool_result::AdminToolResult;
-use crate::factory::mq_client_instance::MQClientInstance;
-use crate::implementation::mq_client_manager::MQClientManager;
 
 static SYSTEM_GROUP_SET: OnceLock<HashSet<CheetahString>> = OnceLock::new();
 
@@ -991,7 +990,24 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         user_type: CheetahString,
         user_status: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        let mut user_info = UserInfo::default();
+        user_info.username = Option::from(username);
+        user_info.user_type = Option::from(user_type);
+        user_info.password = Option::from(password);
+        user_info.user_status = Option::from(user_status);
+
+        dbg!(&user_info);
+
+        if let Some(ref mq_client_instance) = self.client_instance {
+            let mq_client_api = mq_client_instance.get_mq_client_api_impl();
+            let timeout_millis = self.timeout_millis.as_millis() as u64;
+            mq_client_api
+                .update_user(broker_addr, &user_info, timeout_millis)
+                .await?;
+            Ok(())
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn delete_user(

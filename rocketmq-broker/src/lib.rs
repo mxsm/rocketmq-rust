@@ -51,3 +51,5 @@ pub(crate) mod subscription;
 pub(crate) mod topic;
 mod transaction;
 pub(crate) mod util;
+
+pub(crate) mod auth;
