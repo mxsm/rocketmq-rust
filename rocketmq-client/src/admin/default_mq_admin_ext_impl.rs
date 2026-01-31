@@ -990,11 +990,13 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         user_type: CheetahString,
         user_status: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let mut user_info = UserInfo::default();
-        user_info.username = Option::from(username);
-        user_info.user_type = Option::from(user_type);
-        user_info.password = Option::from(password);
-        user_info.user_status = Option::from(user_status);
+        
+        let mut user_info = UserInfo {
+            username: Some(username),
+            user_type: Some(user_type),
+            password: Some(password),
+            user_status: Some(user_status),
+        };
 
         if let Some(ref mq_client_instance) = self.client_instance {
             let mq_client_api = mq_client_instance.get_mq_client_api_impl();
