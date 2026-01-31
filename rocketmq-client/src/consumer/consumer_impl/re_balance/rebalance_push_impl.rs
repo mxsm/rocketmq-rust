@@ -205,16 +205,16 @@ impl Rebalance for RebalancePushImpl {
     }
 
     async fn remove_unnecessary_message_queue(&mut self, mq: &MessageQueue, pq: &ProcessQueue) -> bool {
-        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() else {
+        let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl else {
             error!("DefaultMQPushConsumerImpl not initialized");
             return false;
         };
-        let default_mqpush_consumer_impl = default_mqpush_consumer_impl.clone();
         let consume_orderly = default_mqpush_consumer_impl.is_consume_orderly();
-        let Some(mut offset_store) = default_mqpush_consumer_impl.offset_store.clone() else {
+        let Some(offset_store) = default_mqpush_consumer_impl.offset_store.clone() else {
             error!("Offset store not initialized");
             return false;
         };
+        let mut offset_store = offset_store;
 
         if consume_orderly && MessageModel::Clustering == self.consumer_config.message_model {
             offset_store.persist(mq).await;
@@ -251,17 +251,19 @@ impl Rebalance for RebalancePushImpl {
         mq: &MessageQueue,
     ) -> rocketmq_error::RocketMQResult<i64> {
         let consume_from_where = self.consumer_config.consume_from_where;
-        let Some(default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl.as_ref() else {
+        let default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_ref().ok_or_else(|| {
+            error!("DefaultMQPushConsumerImpl not initialized for mq: {}", mq);
+            mq_client_err!(
+                ResponseCode::SystemError as i32,
+                format!("DefaultMQPushConsumerImpl not initialized for mq: {}", mq)
+            )
+        })?;
+        let default_mqpush_consumer_impl = default_mqpush_consumer_impl.clone();
+        let Some(offset_store) = default_mqpush_consumer_impl.offset_store.clone() else {
+            error!("Offset store not initialized for mq: {}", mq);
             return Err(mq_client_err!(
                 ResponseCode::SystemError as i32,
-                "DefaultMQPushConsumerImpl not initialized"
-            ));
-        };
-        let mut default_mqpush_consumer_impl = default_mqpush_consumer_impl.clone();
-        let Some(offset_store) = default_mqpush_consumer_impl.offset_store.as_mut() else {
-            return Err(mq_client_err!(
-                ResponseCode::SystemError as i32,
-                "Offset store not initialized"
+                format!("Offset store not initialized for mq: {}", mq)
             ));
         };
 
@@ -278,9 +280,10 @@ impl Rebalance for RebalancePushImpl {
                         0
                     } else {
                         let Some(client_instance) = self.rebalance_impl_inner.client_instance.as_mut() else {
+                            error!("Client instance not initialized for mq: {}", mq);
                             return Err(mq_client_err!(
                                 ResponseCode::SystemError as i32,
-                                "Client instance not initialized"
+                                format!("Client instance not initialized for mq: {}", mq)
                             ));
                         };
                         client_instance.mq_admin_impl.max_offset(mq).await?
@@ -288,7 +291,7 @@ impl Rebalance for RebalancePushImpl {
                 } else {
                     return Err(mq_client_err!(
                         ResponseCode::QueryNotFound as i32,
-                        "Failed to query consume offset from offset store"
+                        format!("Failed to query consume offset from offset store for mq: {}", mq)
                     ));
                 }
             }
@@ -301,7 +304,7 @@ impl Rebalance for RebalancePushImpl {
                 } else {
                     return Err(mq_client_err!(
                         ResponseCode::QueryNotFound as i32,
-                        "Failed to query consume offset from offset store"
+                        format!("Failed to query consume offset from offset store for mq: {}", mq)
                     ));
                 }
             }
@@ -312,17 +315,19 @@ impl Rebalance for RebalancePushImpl {
                 } else if -1 == last_offset {
                     if mq.get_topic().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
                         let Some(client_instance) = self.rebalance_impl_inner.client_instance.as_mut() else {
+                            error!("Client instance not initialized for mq: {}", mq);
                             return Err(mq_client_err!(
                                 ResponseCode::SystemError as i32,
-                                "Client instance not initialized"
+                                format!("Client instance not initialized for mq: {}", mq)
                             ));
                         };
                         client_instance.mq_admin_impl.max_offset(mq).await?
                     } else {
                         let Some(client_instance) = self.rebalance_impl_inner.client_instance.as_mut() else {
+                            error!("Client instance not initialized for mq: {}", mq);
                             return Err(mq_client_err!(
                                 ResponseCode::SystemError as i32,
-                                "Client instance not initialized"
+                                format!("Client instance not initialized for mq: {}", mq)
                             ));
                         };
                         let timestamp = util_all::parse_date(
@@ -340,7 +345,7 @@ impl Rebalance for RebalancePushImpl {
                 } else {
                     return Err(mq_client_err!(
                         ResponseCode::QueryNotFound as i32,
-                        "Failed to query consume offset from offset store"
+                        format!("Failed to query consume offset from offset store for mq: {}", mq)
                     ));
                 }
             }
@@ -348,7 +353,10 @@ impl Rebalance for RebalancePushImpl {
         if result < 0 {
             return Err(mq_client_err!(
                 ResponseCode::SystemError as i32,
-                "Failed to query consume offset from offset store"
+                format!(
+                    "Failed to query consume offset from offset store for mq: {}, result: {}",
+                    mq, result
+                )
             ));
         }
         Ok(result)
@@ -609,9 +617,14 @@ async fn lock_all_impl(
                             }
                         }
                         Err(e) => {
-                            error!("lockBatchMQ exception {}", e);
+                            error!("lockBatchMQ exception for broker: {}, error: {}", broker_name, e);
                         }
                     }
+                } else {
+                    warn!(
+                        "Failed to find broker address for broker: {}, Group: {:?}",
+                        broker_name, consumer_group
+                    );
                 }
             }
         })
@@ -623,43 +636,57 @@ async fn unlock_all_impl(
     broker_mqs: HashMap<CheetahString, HashSet<MessageQueue>>,
     process_queue_table: Arc<RwLock<HashMap<MessageQueue, Arc<ProcessQueue>>>>,
     consumer_group: Option<CheetahString>,
-    mut client_instance: ArcMut<MQClientInstance>,
+    client_instance: ArcMut<MQClientInstance>,
     oneway: bool,
 ) {
-    for (broker_name, mqs) in broker_mqs {
-        if mqs.is_empty() {
-            continue;
-        }
-        let find_broker_result = client_instance
-            .find_broker_address_in_subscribe(&broker_name, mix_all::MASTER_ID, true)
-            .await;
-        if let Some(find_broker_result) = find_broker_result {
-            let request_body = UnlockBatchRequestBody {
-                consumer_group: consumer_group.clone(),
-                client_id: Some(client_instance.client_id.clone()),
-                mq_set: mqs.clone(),
-                ..Default::default()
-            };
-            let result = client_instance
-                .mq_client_api_impl
-                .as_mut()
-                .unwrap()
-                .unlock_batch_mq(&find_broker_result.broker_addr, request_body, 1_000, oneway)
-                .await;
-            match result {
-                Ok(_) => {
-                    let process_queue_table = process_queue_table.read().await;
-                    for mq in &mqs {
-                        if let Some(pq) = process_queue_table.get(mq) {
-                            pq.set_locked(false);
-                            info!("the message queue unlock OK, Group: {:?} {}", consumer_group, mq);
+    let map = broker_mqs
+        .into_iter()
+        .map(|(broker_name, mqs)| {
+            let mut client_instance = client_instance.clone();
+            let process_queue_table = process_queue_table.clone();
+            let consumer_group = consumer_group.clone();
+            async move {
+                if mqs.is_empty() {
+                    return;
+                }
+                let find_broker_result = client_instance
+                    .find_broker_address_in_subscribe(&broker_name, mix_all::MASTER_ID, true)
+                    .await;
+                if let Some(find_broker_result) = find_broker_result {
+                    let request_body = UnlockBatchRequestBody {
+                        consumer_group: consumer_group.clone(),
+                        client_id: Some(client_instance.client_id.clone()),
+                        mq_set: mqs.clone(),
+                        ..Default::default()
+                    };
+                    let result = client_instance
+                        .mq_client_api_impl
+                        .as_mut()
+                        .unwrap()
+                        .unlock_batch_mq(&find_broker_result.broker_addr, request_body, 1_000, oneway)
+                        .await;
+                    match result {
+                        Ok(_) => {
+                            let process_queue_table = process_queue_table.read().await;
+                            for mq in &mqs {
+                                if let Some(pq) = process_queue_table.get(mq) {
+                                    pq.set_locked(false);
+                                    info!("the message queue unlock OK, Group: {:?} {}", consumer_group, mq);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("unlockBatchMQ exception for broker: {}, error: {}", broker_name, e);
                         }
                     }
-                }
-                Err(e) => {
-                    error!("unlockBatchMQ exception {}", e);
+                } else {
+                    warn!(
+                        "Failed to find broker address for broker: {}, Group: {:?}",
+                        broker_name, consumer_group
+                    );
                 }
             }
-        }
-    }
+        })
+        .collect::<Vec<_>>();
+    futures::future::join_all(map).await;
 }
