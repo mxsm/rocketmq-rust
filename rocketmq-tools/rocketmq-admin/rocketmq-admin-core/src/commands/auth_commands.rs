@@ -18,10 +18,10 @@ mod update_user_sub_command;
 
 use std::sync::Arc;
 
+use crate::commands::CommandExecute;
 use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
-use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
 pub enum AuthCommands {
