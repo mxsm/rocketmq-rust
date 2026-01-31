@@ -1,177 +1,121 @@
 name: Dashboard CI
 
+permissions:
+  contents: read
+
 on:
   push:
-    branches: [ main, rocketmq-*-dev ]
+    branches: [ "main", "rocketmq-*-dev" ]
     paths:
       - 'rocketmq-dashboard/**'
       - '.github/workflows/dashboard-ci.yml'
   pull_request:
-    branches: [ main, rocketmq-*-dev ]
+    branches: [ "main", "rocketmq-*-dev" ]
     paths:
       - 'rocketmq-dashboard/**'
       - '.github/workflows/dashboard-ci.yml'
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
+  RUST_BACKTRACE: full
+  CI: true
+  CARGO_PROFILE_DEV_DEBUG: "false"
+  CARGO_PROFILE_TEST_DEBUG: "false"
+  CARGO_PROFILE_DEV_OPT_LEVEL: 1
+  CARGO_PROFILE_DEV_OVERFLOW_CHECKS: "false"
+  CARGO_TARGET_DIR: target
 
 jobs:
+  # =========================
+  # Format + Clippy
+  # =========================
   check:
-    name: Check
+    name: Check (fmt + clippy)
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-
-      
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-git-
-      
-      - name: Cache cargo build
-        uses: actions/cache@v4
-        with:
-          path: rocketmq-dashboard/target
-          key: ${{ runner.os }}-cargo-target-${{ hashFiles('rocketmq-dashboard/**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-target-
-      
-      - name: Run cargo check
-        working-directory: ./rocketmq-dashboard
-        run: cargo check --workspace --all-targets --all-features
 
-  fmt:
-    name: Format
-    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      
-      - name: Run cargo fmt
-        working-directory: ./rocketmq-dashboard
-        run: cargo fmt --all -- --check
+      - name: Checkout
+        uses: actions/checkout@v4
 
-  clippy:
-    name: Clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-
-      
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-git-
-      
-      - name: Cache cargo build
-        uses: actions/cache@v4
-        with:
-          path: rocketmq-dashboard/target
-          key: ${{ runner.os }}-cargo-target-clippy-${{ hashFiles('rocketmq-dashboard/**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-target-clippy-
-      
-      - name: Run cargo clippy
-        working-directory: ./rocketmq-dashboard
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-
-  test:
-    name: Test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        rust: [stable]
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
-      
       - name: Install system dependencies (Ubuntu)
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libwayland-dev libvulkan-dev
-      
+
+      - name: Set up Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: dashboard-ubuntu
+          workspaces: |
+            rocketmq-dashboard
+
+      - name: Format check
+        working-directory: ./rocketmq-dashboard
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (all features)
+        working-directory: ./rocketmq-dashboard
+        run: cargo clippy --workspace --no-deps --all-targets --all-features -- -D warnings
+
+  # =========================
+  # Build + Test
+  # =========================
+  build-test:
+    name: Build & Test (${{ matrix.os }})
+    needs: check
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ---------- Ubuntu ----------
+      - name: Install system dependencies (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libvulkan-dev
+
+      # ---------- macOS ----------
       - name: Install system dependencies (macOS)
-        if: runner.os == 'macOS'
+        if: matrix.os == 'macos-latest'
         run: |
-          # Vulkan SDK should be pre-installed on GitHub runners
           echo "macOS system dependencies check"
-      
+
+      # ---------- Windows ----------
       - name: Install system dependencies (Windows)
-        if: runner.os == 'Windows'
+        if: matrix.os == 'windows-latest'
         run: |
-          # Vulkan SDK should be pre-installed on GitHub runners
           echo "Windows system dependencies check"
-      
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+
+      - name: Set up Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
         with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-${{ matrix.rust }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.rust }}-cargo-registry-
-      
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-${{ matrix.rust }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.rust }}-cargo-git-
-      
-      - name: Cache cargo build
-        uses: actions/cache@v4
-        with:
-          path: rocketmq-dashboard/target
-          key: ${{ runner.os }}-${{ matrix.rust }}-cargo-target-${{ hashFiles('rocketmq-dashboard/**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.rust }}-cargo-target-
-      
-      - name: Run tests (common)
+          shared-key: dashboard-${{ matrix.os }}
+          workspaces: |
+            rocketmq-dashboard
+
+      - name: Build (all features)
+        working-directory: ./rocketmq-dashboard
+        run: cargo build --workspace --all-features
+
+      - name: Test (common - all features)
         working-directory: ./rocketmq-dashboard/rocketmq-dashboard-common
         run: cargo test --all-features
-      
+
       - name: Build GPUI (without tests due to headless environment)
         working-directory: ./rocketmq-dashboard/rocketmq-dashboard-gpui
         run: cargo build --all-features
