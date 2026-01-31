@@ -42,7 +42,11 @@ pub async fn main() -> RocketMQResult<()> {
     let (tx, mut rx) = tokio::sync::broadcast::channel(1);
     producer
         .request_with_callback(
-            Message::with_tags(TOPIC, "", "Hello RocketMQ".as_bytes()),
+            Message::builder()
+                .topic(TOPIC)
+                .tags("")
+                .body_slice("Hello RocketMQ".as_bytes())
+                .build_unchecked(),
             move |message, _result| {
                 println!(">>>>>>>>>>>>>>>send result: {:?}", message);
                 let _ = tx.send(());

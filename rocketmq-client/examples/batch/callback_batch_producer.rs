@@ -43,9 +43,24 @@ pub async fn main() -> RocketMQResult<()> {
     producer.start().await?;
 
     let messages = vec![
-        Message::with_keys(TOPIC, TAG, "OrderID001", "Hello world 0".as_bytes()),
-        Message::with_keys(TOPIC, TAG, "OrderID002", "Hello world 1".as_bytes()),
-        Message::with_keys(TOPIC, TAG, "OrderID003", "Hello world 2".as_bytes()),
+        Message::builder()
+            .topic(TOPIC)
+            .tags(TAG)
+            .key("OrderID001")
+            .body_slice("Hello world 0".as_bytes())
+            .build_unchecked(),
+        Message::builder()
+            .topic(TOPIC)
+            .tags(TAG)
+            .key("OrderID002")
+            .body_slice("Hello world 1".as_bytes())
+            .build_unchecked(),
+        Message::builder()
+            .topic(TOPIC)
+            .tags(TAG)
+            .key("OrderID003")
+            .body_slice("Hello world 2".as_bytes())
+            .build_unchecked(),
     ];
     let counter = Arc::new(AtomicI32::new(0));
     for _ in 0..100 {
@@ -76,24 +91,24 @@ pub async fn main() -> RocketMQResult<()> {
         })
         .await?;
     let mut messages = Vec::new();
-    messages.push(Message::with_keys(
-        TOPIC,
-        TAG,
-        "OrderID001",
-        "Hello world 0".as_bytes(),
-    ));
-    messages.push(Message::with_keys(
-        TOPIC,
-        TAG,
-        "OrderID002",
-        "Hello world 1".as_bytes(),
-    ));
-    messages.push(Message::with_keys(
-        TOPIC,
-        TAG,
-        "OrderID003",
-        "Hello world 2".as_bytes(),
-    ));
+    messages.push(Message::builder()
+        .topic(TOPIC)
+        .tags(TAG)
+        .key("OrderID001")
+        .body_slice("Hello world 0".as_bytes())
+        .build_unchecked());
+    messages.push(Message::builder()
+        .topic(TOPIC)
+        .tags(TAG)
+        .key("OrderID002")
+        .body_slice("Hello world 1".as_bytes())
+        .build_unchecked());
+    messages.push(Message::builder()
+        .topic(TOPIC)
+        .tags(TAG)
+        .key("OrderID003")
+        .body_slice("Hello world 2".as_bytes())
+        .build_unchecked());
     producer
         .send_batch_with_callback(messages, move |result, err| {
             println!("send result: {:?}", result);

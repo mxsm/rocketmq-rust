@@ -36,7 +36,8 @@ pub fn get_sharding_key_index(sharding_key: &str, index_size: usize) -> usize {
 pub fn get_sharding_key_index_by_msg(msg: &MessageExt, index_size: usize) -> usize {
     let sharding_key = msg
         .message
-        .properties
+        .properties()
+        .as_map()
         .get(MessageConst::PROPERTY_SHARDING_KEY)
         .cloned()
         .unwrap_or_default();
@@ -238,7 +239,8 @@ mod tests {
         let mut message = MessageExt::default();
         message
             .message
-            .properties
+            .properties_mut()
+            .as_map_mut()
             .insert(MessageConst::PROPERTY_SHARDING_KEY.into(), "example_key".into());
         let index_size = 10;
         let result = get_sharding_key_index_by_msg(&message, index_size);
@@ -251,13 +253,15 @@ mod tests {
         let mut message1 = MessageExt::default();
         message1
             .message
-            .properties
+            .properties_mut()
+            .as_map_mut()
             .insert(MessageConst::PROPERTY_SHARDING_KEY.into(), "key1".into());
         messages.push(message1);
         let mut message2 = MessageExt::default();
         message2
             .message
-            .properties
+            .properties_mut()
+            .as_map_mut()
             .insert(MessageConst::PROPERTY_SHARDING_KEY.into(), "key2".into());
         messages.push(message2);
         let index_size = 10;

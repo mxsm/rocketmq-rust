@@ -1090,7 +1090,8 @@ where
                             );
                             message_ext
                                 .message
-                                .properties
+                                .properties_mut()
+                                .as_map_mut()
                                 .entry(CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK))
                                 .or_insert(ck_info.into());
 

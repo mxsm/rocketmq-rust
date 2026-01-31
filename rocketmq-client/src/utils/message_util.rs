@@ -16,7 +16,6 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 
@@ -29,7 +28,7 @@ impl MessageUtil {
         let mut reply_message = Message::default();
         let cluster = request_message.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CLUSTER));
         if let Some(cluster) = cluster {
-            reply_message.set_body(Bytes::copy_from_slice(body));
+            reply_message.set_body(Some(Bytes::copy_from_slice(body)));
             let reply_topic = mix_all::get_retry_topic(&cluster);
             reply_message.set_topic(CheetahString::from_string(reply_topic));
             MessageAccessor::put_property(

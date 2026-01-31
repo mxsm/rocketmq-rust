@@ -66,7 +66,10 @@ fn setup_test_environment(file_size: u64) -> (Arc<DefaultMappedFile>, TempDir, D
 /// Create a test message with pre-encoded buffer
 fn create_test_message_with_encoding(body_size: usize) -> MessageExtBrokerInner {
     let body = vec![b'A'; body_size];
-    let mut message = Message::new(CheetahString::from_static_str("BenchmarkTopic"), body.as_ref());
+    let mut message = Message::builder()
+        .topic(CheetahString::from_static_str("BenchmarkTopic"))
+        .body(body.clone())
+        .build_unchecked();
     message.set_tags(CheetahString::from_static_str("TAG1"));
 
     let mut msg_inner = MessageExtBrokerInner {

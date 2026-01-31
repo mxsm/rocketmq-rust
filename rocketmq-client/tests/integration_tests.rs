@@ -105,7 +105,10 @@ fn test_message_creation() {
     // Test: Verify basic message creation works
     use rocketmq_common::common::message::message_single::Message;
 
-    let msg = Message::new("test_topic", b"test_body");
+    let msg = Message::builder()
+        .topic("test_topic")
+        .body_slice(b"test_body")
+        .build_unchecked();
     assert_eq!(msg.get_topic(), "test_topic");
 }
 

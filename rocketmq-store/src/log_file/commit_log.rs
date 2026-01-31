@@ -31,6 +31,7 @@ use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::message::message_single::tags_string2tags_code;
 use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::message::MessageVersion;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
@@ -582,7 +583,7 @@ impl CommitLog {
 
     pub async fn put_message(&mut self, mut msg: MessageExtBrokerInner) -> PutMessageResult {
         // Set the message body CRC (consider the most appropriate setting on the client)
-        msg.message_ext_inner.body_crc = crc32_bytes(msg.message_ext_inner.message.body.as_ref());
+        msg.message_ext_inner.body_crc = crc32_bytes(msg.message_ext_inner.message.get_body());
         if self.enabled_append_prop_crc {
             // delete crc32 properties if exist
             msg.delete_property(MessageConst::PROPERTY_CRC32);

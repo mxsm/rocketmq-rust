@@ -1239,14 +1239,7 @@ mod tests {
             producer_config: Default::default(),
             default_mqproducer_impl: None,
         };
-        let msg = Message {
-            topic: "test-topic".into(),
-            flag: 0,
-            properties: Default::default(),
-            body: None,
-            compressed_body: None,
-            transaction_id: None,
-        };
+        let msg = Message::builder().topic("test-topic").empty_body().build_unchecked();
         let callback = |_msg: Option<&dyn MessageTrait>, _err: Option<&dyn std::error::Error>| {
             // no-op
         };
@@ -1269,14 +1262,7 @@ mod tests {
             producer_config: Default::default(),
             default_mqproducer_impl: None,
         };
-        let msg = Message {
-            topic: "test-topic".into(),
-            flag: 0,
-            properties: Default::default(),
-            body: None,
-            compressed_body: None,
-            transaction_id: None,
-        };
+        let msg = Message::builder().topic("test-topic").empty_body().build_unchecked();
         let selector = |queues: &[MessageQueue],
                         _msg: &dyn MessageTrait,
                         _arg: &dyn std::any::Any|
@@ -1300,14 +1286,7 @@ mod tests {
             producer_config: Default::default(),
             default_mqproducer_impl: None,
         };
-        let msg = Message {
-            topic: "test-topic".into(),
-            flag: 0,
-            properties: Default::default(),
-            body: None,
-            compressed_body: None,
-            transaction_id: None,
-        };
+        let msg = Message::builder().topic("test-topic").empty_body().build_unchecked();
         let selector = |queues: &[MessageQueue],
                         _msg: &dyn MessageTrait,
                         _arg: &dyn std::any::Any|
@@ -1336,14 +1315,10 @@ mod tests {
             producer_config: Default::default(),
             default_mqproducer_impl: None,
         };
-        let msg = Message {
-            topic: "test-topic".into(),
-            flag: 0,
-            properties: Default::default(),
-            body: Some(Bytes::from_static(b"Hello world")),
-            compressed_body: None,
-            transaction_id: None,
-        };
+        let msg = Message::builder()
+            .topic("test-topic")
+            .body(Bytes::from_static(b"Hello world"))
+            .build_unchecked();
         let callback = |_msg: Option<&SendResult>, _err: Option<&dyn std::error::Error>| {
             // no-op
         };
@@ -1366,14 +1341,10 @@ mod tests {
             producer_config: Default::default(),
             default_mqproducer_impl: None,
         };
-        let msg = Message {
-            topic: "test-topic".into(),
-            flag: 0,
-            properties: Default::default(),
-            body: Some(Bytes::from_static(b"Hello world")),
-            compressed_body: None,
-            transaction_id: None,
-        };
+        let msg = Message::builder()
+            .topic("test-topic")
+            .body(Bytes::from_static(b"Hello world"))
+            .build_unchecked();
         let callback = |_msg: Option<&SendResult>, _err: Option<&dyn std::error::Error>| {
             // no-op
         };
@@ -1398,14 +1369,10 @@ mod tests {
             producer_config: Default::default(),
             default_mqproducer_impl: None,
         };
-        let msg = Message {
-            topic: "test-topic".into(),
-            flag: 0,
-            properties: Default::default(),
-            body: Some(Bytes::from_static(b"Hello world")),
-            compressed_body: None,
-            transaction_id: None,
-        };
+        let msg = Message::builder()
+            .topic("test-topic")
+            .body(Bytes::from_static(b"Hello world"))
+            .build_unchecked();
         let callback = |_msg: Option<&SendResult>, _err: Option<&dyn std::error::Error>| {
             // no-op
         };

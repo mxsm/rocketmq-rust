@@ -29,13 +29,17 @@ use rocketmq_error::RocketMQResult;
 
 pub mod message_accessor;
 pub mod message_batch;
+pub mod message_body;
+pub mod message_builder;
 pub mod message_client_ext;
 pub mod message_client_id_setter;
 pub mod message_decoder;
 pub mod message_enum;
 pub mod message_ext;
 pub mod message_ext_broker_inner;
+pub mod message_flag;
 pub mod message_id;
+pub mod message_property;
 pub mod message_queue;
 pub mod message_queue_assignment;
 pub mod message_queue_for_c;

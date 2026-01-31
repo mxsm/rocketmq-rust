@@ -38,9 +38,24 @@ pub async fn main() -> RocketMQResult<()> {
     producer.start().await?;
 
     let messages = vec![
-        Message::with_keys(TOPIC, TAG, "OrderID001", "Hello world 0".as_bytes()),
-        Message::with_keys(TOPIC, TAG, "OrderID002", "Hello world 1".as_bytes()),
-        Message::with_keys(TOPIC, TAG, "OrderID003", "Hello world 2".as_bytes()),
+        Message::builder()
+            .topic(TOPIC)
+            .tags(TAG)
+            .key("OrderID001")
+            .body_slice("Hello world 0".as_bytes())
+            .build_unchecked(),
+        Message::builder()
+            .topic(TOPIC)
+            .tags(TAG)
+            .key("OrderID002")
+            .body_slice("Hello world 1".as_bytes())
+            .build_unchecked(),
+        Message::builder()
+            .topic(TOPIC)
+            .tags(TAG)
+            .key("OrderID003")
+            .body_slice("Hello world 2".as_bytes())
+            .build_unchecked(),
     ];
     let send_result = producer.send_batch(messages).await?;
     println!("send result: {}", send_result);

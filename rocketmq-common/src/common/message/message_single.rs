@@ -28,7 +28,12 @@ use bytes::Bytes;
 use cheetah_string::CheetahString;
 
 use crate::common::hasher::string_hasher::JavaStringHasher;
+use crate::common::message::message_body::MessageBody;
+use crate::common::message::message_builder::MessageBuilder;
 use crate::common::message::message_ext::MessageExt;
+use crate::common::message::message_flag::MessageFlag;
+use crate::common::message::message_property::MessageProperties;
+use crate::common::message::message_property::MessagePropertyKey;
 use crate::common::message::MessageConst;
 use crate::common::message::MessageTrait;
 use crate::common::message::MessageVersion;
@@ -38,43 +43,83 @@ use crate::MessageUtils;
 
 #[derive(Clone, Debug)]
 pub struct Message {
-    pub topic: CheetahString,
-    pub flag: i32,
-    pub properties: HashMap<CheetahString, CheetahString>,
-    // original bytes
-    pub body: Option<bytes::Bytes>,
-    // compressed bytes, maybe none, if no need to compress
-    pub compressed_body: Option<bytes::Bytes>,
-    pub transaction_id: Option<CheetahString>,
+    topic: CheetahString,
+    flag: MessageFlag,
+    properties: MessageProperties,
+    body: MessageBody,
+    transaction_id: Option<CheetahString>,
+}
+
+// Private internal constructor used by builder
+impl Message {
+    pub(crate) fn from_builder(
+        topic: CheetahString,
+        body: MessageBody,
+        properties: MessageProperties,
+        flag: MessageFlag,
+        transaction_id: Option<CheetahString>,
+    ) -> Self {
+        Self {
+            topic,
+            flag,
+            properties,
+            body,
+            transaction_id,
+        }
+    }
 }
 
 impl Default for Message {
     fn default() -> Self {
         Self {
             topic: CheetahString::new(),
-            flag: 0,
-            properties: HashMap::new(),
-            body: None,
-            compressed_body: None,
+            flag: MessageFlag::empty(),
+            properties: MessageProperties::new(),
+            body: MessageBody::empty(),
             transaction_id: None,
         }
     }
 }
 
 impl Message {
+    /// Creates a new message builder.
+    ///
+    /// This is the recommended way to create messages.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rocketmq_common::common::message::message_single::Message;
+    ///
+    /// let msg = Message::builder()
+    ///     .topic("test-topic")
+    ///     .body_slice(b"hello world")
+    ///     .tags("important")
+    ///     .build_unchecked();
+    /// ```
+    pub fn builder() -> MessageBuilder {
+        MessageBuilder::new()
+    }
+
     /// Create a new message with topic and body slice (will copy)
+    #[deprecated(since = "0.8.0", note = "Use Message::builder() instead")]
+    #[allow(deprecated)]
     #[inline]
     pub fn new(topic: impl Into<CheetahString>, body: &[u8]) -> Self {
         Self::with_details(topic, CheetahString::empty(), CheetahString::empty(), 0, body, true)
     }
 
     /// Create a new message with topic and Bytes (zero-copy)
+    #[deprecated(since = "0.8.0", note = "Use Message::builder() instead")]
+    #[allow(deprecated)]
     #[inline]
     pub fn new_with_bytes(topic: impl Into<CheetahString>, body: Bytes) -> Self {
         Self::with_details_bytes(topic, CheetahString::empty(), CheetahString::empty(), 0, body, true)
     }
 
     /// Create a new message with topic and Vec<u8> (zero-copy conversion to Bytes)
+    #[deprecated(since = "0.8.0", note = "Use Message::builder() instead")]
+    #[allow(deprecated)]
     #[inline]
     pub fn new_with_vec(topic: impl Into<CheetahString>, body: Vec<u8>) -> Self {
         Self::with_details_bytes(
@@ -87,24 +132,32 @@ impl Message {
         )
     }
 
+    #[deprecated(since = "0.8.0", note = "Use Message::builder() instead")]
+    #[allow(deprecated)]
     #[inline]
     pub fn new_body(topic: impl Into<CheetahString>, body: Option<Bytes>) -> Self {
         Self::with_details_body(topic, CheetahString::empty(), CheetahString::empty(), 0, body, true)
     }
 
     /// Create a message with tags and body slice (will copy)
+    #[deprecated(since = "0.8.0", note = "Use Message::builder() instead")]
+    #[allow(deprecated)]
     #[inline]
     pub fn with_tags(topic: impl Into<CheetahString>, tags: impl Into<CheetahString>, body: &[u8]) -> Self {
         Self::with_details(topic, tags, CheetahString::empty(), 0, body, true)
     }
 
     /// Create a message with tags and Bytes (zero-copy)
+    #[deprecated(since = "0.8.0", note = "Use Message::builder() instead")]
+    #[allow(deprecated)]
     #[inline]
     pub fn with_tags_bytes(topic: impl Into<CheetahString>, tags: impl Into<CheetahString>, body: Bytes) -> Self {
         Self::with_details_bytes(topic, tags, CheetahString::empty(), 0, body, true)
     }
 
     /// Create a message with keys and body slice (will copy)
+    #[deprecated(since = "0.8.0", note = "Use Message::builder() instead")]
+    #[allow(deprecated)]
     #[inline]
     pub fn with_keys(
         topic: impl Into<CheetahString>,
@@ -116,6 +169,8 @@ impl Message {
     }
 
     /// Create a message with keys and Bytes (zero-copy)
+    #[deprecated(since = "0.8.0", note = "Use Message::builder() instead")]
+    #[allow(deprecated)]
     #[inline]
     pub fn with_keys_bytes(
         topic: impl Into<CheetahString>,
@@ -127,6 +182,8 @@ impl Message {
     }
 
     /// Create message with body slice (will copy data)
+    #[deprecated(since = "0.8.0", note = "Use Message::builder() instead")]
+    #[allow(deprecated)]
     pub fn with_details(
         topic: impl Into<CheetahString>,
         tags: impl Into<CheetahString>,
@@ -139,6 +196,7 @@ impl Message {
     }
 
     /// Create message with Bytes (zero-copy)
+    #[deprecated(since = "0.8.0", note = "Use Message::builder() instead")]
     pub fn with_details_bytes(
         topic: impl Into<CheetahString>,
         tags: impl Into<CheetahString>,
@@ -175,10 +233,9 @@ impl Message {
 
         Message {
             topic,
-            flag,
-            properties,
-            body: Some(body),
-            compressed_body: None,
+            flag: MessageFlag::from_bits(flag),
+            properties: MessageProperties::from_map(properties),
+            body: MessageBody::from(body),
             transaction_id: None,
         }
     }
@@ -218,10 +275,13 @@ impl Message {
 
         Message {
             topic,
-            flag,
-            properties,
-            body,
-            compressed_body: None,
+            flag: MessageFlag::from_bits(flag),
+            properties: MessageProperties::from_map(properties),
+            body: if let Some(b) = body {
+                MessageBody::from(b)
+            } else {
+                MessageBody::empty()
+            },
             transaction_id: None,
         }
     }
@@ -229,38 +289,40 @@ impl Message {
     #[inline]
     pub fn set_tags(&mut self, tags: CheetahString) {
         self.properties
+            .as_map_mut()
             .insert(CheetahString::from_static_str(MessageConst::PROPERTY_TAGS), tags);
     }
 
     #[inline]
     pub fn set_keys(&mut self, keys: CheetahString) {
         self.properties
+            .as_map_mut()
             .insert(CheetahString::from_static_str(MessageConst::PROPERTY_KEYS), keys);
     }
 
     #[inline]
     pub fn clear_property(&mut self, name: impl Into<CheetahString>) {
-        self.properties.remove(name.into().as_str());
+        self.properties.as_map_mut().remove(name.into().as_str());
     }
 
     #[inline]
     pub fn set_properties(&mut self, properties: HashMap<CheetahString, CheetahString>) {
-        self.properties = properties;
+        self.properties = MessageProperties::from_map(properties);
     }
 
     #[inline]
     pub fn get_property(&self, key: &CheetahString) -> Option<CheetahString> {
-        self.properties.get(key).cloned()
+        self.properties.as_map().get(key).cloned()
     }
 
     #[inline]
     pub fn body(&self) -> Option<bytes::Bytes> {
-        self.body.as_ref().cloned()
+        self.body.raw().cloned()
     }
 
     #[inline]
     pub fn flag(&self) -> i32 {
-        self.flag
+        self.flag.bits()
     }
 
     #[inline]
@@ -269,7 +331,7 @@ impl Message {
     }
 
     #[inline]
-    pub fn properties(&self) -> &HashMap<CheetahString, CheetahString> {
+    pub fn properties(&self) -> &MessageProperties {
         &self.properties
     }
 
@@ -280,20 +342,18 @@ impl Message {
 
     #[inline]
     pub fn get_tags(&self) -> Option<CheetahString> {
-        self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_TAGS))
+        self.properties.as_map().get(MessageConst::PROPERTY_TAGS).cloned()
     }
 
     #[inline]
     pub fn is_wait_store_msg_ok(&self) -> bool {
-        self.properties
-            .get(MessageConst::PROPERTY_WAIT_STORE_MSG_OK)
-            .is_none_or(|value| value != "false")
+        self.properties.wait_store_msg_ok()
     }
 
     #[inline]
     fn set_wait_store_msg_ok(&mut self, wait_store_msg_ok: bool) {
         if !wait_store_msg_ok {
-            self.properties.insert(
+            self.properties.as_map_mut().insert(
                 CheetahString::from_static_str(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
                 CheetahString::from_static_str("false"),
             );
@@ -302,15 +362,12 @@ impl Message {
 
     #[inline]
     pub fn get_delay_time_level(&self) -> i32 {
-        match self.properties.get(MessageConst::PROPERTY_DELAY_TIME_LEVEL) {
-            Some(t) => t.parse::<i32>().unwrap_or(0),
-            None => 0,
-        }
+        self.properties.delay_level().unwrap_or(0)
     }
 
     #[inline]
     pub fn set_delay_time_level(&mut self, level: i32) {
-        self.properties.insert(
+        self.properties.as_map_mut().insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL),
             CheetahString::from(level.to_string()),
         );
@@ -318,7 +375,7 @@ impl Message {
 
     #[inline]
     pub fn get_user_property(&self, name: impl Into<CheetahString>) -> Option<CheetahString> {
-        self.properties.get(name.into().as_str()).cloned()
+        self.properties.as_map().get(name.into().as_str()).cloned()
     }
 
     #[inline]
@@ -328,10 +385,151 @@ impl Message {
 
     #[inline]
     pub fn set_instance_id(&mut self, instance_id: impl Into<CheetahString>) {
-        self.properties.insert(
+        self.properties.as_map_mut().insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_INSTANCE_ID),
             instance_id.into(),
         );
+    }
+
+    // ===== New Rust-idiomatic API methods =====
+
+    /// Returns the message body as a byte slice (borrows).
+    ///
+    /// This is the recommended way to access the message body.
+    #[inline]
+    pub fn body_slice(&self) -> &[u8] {
+        self.body.as_slice()
+    }
+
+    /// Consumes the message and returns the body.
+    #[inline]
+    pub fn into_body(self) -> MessageBody {
+        self.body
+    }
+
+    /// Returns the message tags.
+    #[inline]
+    pub fn tags(&self) -> Option<&str> {
+        self.properties.tags()
+    }
+
+    /// Returns the message keys as a vector.
+    #[inline]
+    pub fn keys(&self) -> Option<Vec<String>> {
+        self.properties.keys()
+    }
+
+    /// Returns a property value by key.
+    #[inline]
+    pub fn property(&self, key: &str) -> Option<&str> {
+        self.properties.as_map().get(key).map(|s| s.as_str())
+    }
+
+    /// Returns the message flag as a type-safe MessageFlag.
+    #[inline]
+    pub fn message_flag(&self) -> MessageFlag {
+        self.flag
+    }
+
+    /// Returns whether to wait for store confirmation.
+    #[inline]
+    pub fn wait_store_msg_ok(&self) -> bool {
+        self.is_wait_store_msg_ok()
+    }
+
+    /// Returns the delay time level.
+    #[inline]
+    pub fn delay_level(&self) -> i32 {
+        self.get_delay_time_level()
+    }
+
+    /// Returns the buyer ID.
+    #[inline]
+    pub fn buyer_id(&self) -> Option<&str> {
+        self.properties.buyer_id()
+    }
+
+    /// Returns the instance ID.
+    #[inline]
+    pub fn instance_id(&self) -> Option<&str> {
+        self.properties.instance_id()
+    }
+
+    // ===== Internal accessors for other modules =====
+
+    /// Returns a mutable reference to the topic (internal use only).
+    #[doc(hidden)]
+    #[inline]
+    pub fn topic_mut(&mut self) -> &mut CheetahString {
+        &mut self.topic
+    }
+
+    /// Returns a mutable reference to the flag (internal use only).
+    #[doc(hidden)]
+    #[inline]
+    pub fn flag_mut(&mut self) -> &mut MessageFlag {
+        &mut self.flag
+    }
+
+    /// Returns a mutable reference to properties (internal use only).
+    #[doc(hidden)]
+    #[inline]
+    pub fn properties_mut(&mut self) -> &mut MessageProperties {
+        &mut self.properties
+    }
+
+    /// Returns a mutable reference to the body (internal use only).
+    #[doc(hidden)]
+    #[inline]
+    pub fn body_mut(&mut self) -> &mut MessageBody {
+        &mut self.body
+    }
+
+    /// Returns a mutable reference to the transaction ID (internal use only).
+    #[doc(hidden)]
+    #[inline]
+    pub fn transaction_id_mut(&mut self) -> &mut Option<CheetahString> {
+        &mut self.transaction_id
+    }
+
+    /// Sets the topic (internal use only).
+    #[doc(hidden)]
+    #[inline]
+    pub fn set_topic(&mut self, topic: CheetahString) {
+        self.topic = topic;
+    }
+
+    /// Sets the flag (internal use only).
+    #[doc(hidden)]
+    #[inline]
+    pub fn set_flag(&mut self, flag: i32) {
+        self.flag = MessageFlag::from_bits(flag);
+    }
+
+    /// Sets the body (internal use only).
+    #[doc(hidden)]
+    #[inline]
+    pub fn set_body(&mut self, body: Option<Bytes>) {
+        self.body = if let Some(b) = body {
+            MessageBody::from(b)
+        } else {
+            MessageBody::empty()
+        };
+    }
+
+    /// Takes ownership of the body, leaving empty (internal use only).
+    #[doc(hidden)]
+    #[inline]
+    pub fn take_body(&mut self) -> Option<Bytes> {
+        let old = std::mem::take(&mut self.body);
+        old.raw().cloned()
+    }
+
+    /// Returns a reference to the compressed body (internal use only).
+    #[doc(hidden)]
+    #[inline]
+    pub fn compressed_body(&self) -> Option<&Bytes> {
+        self.body.compressed()
     }
 }
 
@@ -339,31 +537,28 @@ impl Display for Message {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let properties_str = self
             .properties
+            .as_map()
             .iter()
             .map(|(k, v)| format!("{k}: {v}"))
             .collect::<Vec<_>>()
             .join(", ");
 
-        let body_str = match &self.body {
-            Some(body) => format!("Some({body:?})"),
-            None => "None".to_string(),
-        };
-
-        let compressed_body_str = match &self.compressed_body {
-            Some(compressed_body) => format!("Some({compressed_body:?})"),
-            None => "None".to_string(),
+        let body_len = self.body.len();
+        let compressed = if self.body.is_compressed() {
+            "compressed"
+        } else {
+            "uncompressed"
         };
 
         let transaction_id_str = match &self.transaction_id {
-            Some(transaction_id) => transaction_id.to_string(),
+            Some(transaction_id) => format!("Some({transaction_id:?})"),
             None => "None".to_string(),
         };
 
         write!(
             f,
-            "Message {{ topic: {}, flag: {}, properties: {{ {} }}, body: {}, compressed_body: {}, transaction_id: {} \
-             }}",
-            self.topic, self.flag, properties_str, body_str, compressed_body_str, transaction_id_str
+            "Message {{ topic: {}, flag: {:?}, properties: {{ {} }}, body: {} bytes ({}), transaction_id: {} }}",
+            self.topic, self.flag, properties_str, body_len, compressed, transaction_id_str
         )
     }
 }
@@ -372,21 +567,21 @@ impl Display for Message {
 impl MessageTrait for Message {
     #[inline]
     fn put_property(&mut self, key: CheetahString, value: CheetahString) {
-        self.properties.insert(key, value);
+        self.properties.as_map_mut().insert(key, value);
     }
 
     #[inline]
     fn clear_property(&mut self, name: &str) {
-        self.properties.remove(name);
+        self.properties.as_map_mut().remove(name);
     }
 
     #[inline]
     fn get_property(&self, name: &CheetahString) -> Option<CheetahString> {
-        self.properties.get(name).cloned()
+        self.properties.as_map().get(name).cloned()
     }
 
     fn get_property_ref(&self, name: &CheetahString) -> Option<&CheetahString> {
-        self.properties.get(name)
+        self.properties.as_map().get(name)
     }
 
     #[inline]
@@ -396,37 +591,37 @@ impl MessageTrait for Message {
 
     #[inline]
     fn set_topic(&mut self, topic: CheetahString) {
-        self.topic = topic;
+        self.set_topic(topic);
     }
 
     #[inline]
     fn get_flag(&self) -> i32 {
-        self.flag
+        self.flag.bits()
     }
 
     #[inline]
     fn set_flag(&mut self, flag: i32) {
-        self.flag = flag;
+        self.set_flag(flag);
     }
 
     #[inline]
     fn get_body(&self) -> Option<&Bytes> {
-        self.body.as_ref()
+        self.body.raw()
     }
 
     #[inline]
     fn set_body(&mut self, body: Bytes) {
-        self.body = Some(body);
+        self.set_body(Some(body));
     }
 
     #[inline]
     fn get_properties(&self) -> &HashMap<CheetahString, CheetahString> {
-        &self.properties
+        self.properties.as_map()
     }
 
     #[inline]
     fn set_properties(&mut self, properties: HashMap<CheetahString, CheetahString>) {
-        self.properties = properties;
+        self.properties = MessageProperties::from_map(properties);
     }
 
     #[inline]
@@ -436,27 +631,27 @@ impl MessageTrait for Message {
 
     #[inline]
     fn set_transaction_id(&mut self, transaction_id: CheetahString) {
-        self.transaction_id = Some(transaction_id);
+        *self.transaction_id_mut() = Some(transaction_id);
     }
 
     #[inline]
     fn get_compressed_body_mut(&mut self) -> Option<&mut Bytes> {
-        self.compressed_body.as_mut()
+        self.body.compressed_mut().as_mut()
     }
 
     #[inline]
     fn get_compressed_body(&self) -> Option<&Bytes> {
-        self.compressed_body.as_ref()
+        self.compressed_body()
     }
 
     #[inline]
     fn set_compressed_body_mut(&mut self, compressed_body: Bytes) {
-        self.compressed_body = Some(compressed_body);
+        self.body.set_compressed(compressed_body);
     }
 
     #[inline]
     fn take_body(&mut self) -> Option<Bytes> {
-        self.body.take()
+        self.take_body()
     }
 
     #[inline]
@@ -490,6 +685,7 @@ pub fn tags_string2tags_code(tags: Option<&CheetahString>) -> i64 {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use bytes::Bytes;
 
@@ -540,7 +736,11 @@ mod tests {
         assert_eq!(msg.topic().as_str(), "test_topic");
         assert_eq!(msg.get_tags().unwrap().as_str(), "tag1");
         assert_eq!(
-            msg.properties().get(MessageConst::PROPERTY_KEYS).unwrap().as_str(),
+            msg.properties()
+                .as_map()
+                .get(MessageConst::PROPERTY_KEYS)
+                .unwrap()
+                .as_str(),
             "key1"
         );
     }

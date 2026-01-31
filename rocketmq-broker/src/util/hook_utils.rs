@@ -182,7 +182,8 @@ impl HookUtils {
             {
                 msg.message_ext_inner
                     .message
-                    .properties
+                    .properties_mut()
+                    .as_map_mut()
                     .remove(MessageConst::PROPERTY_TIMER_DELIVER_MS);
             }
             if msg
@@ -192,7 +193,8 @@ impl HookUtils {
             {
                 msg.message_ext_inner
                     .message
-                    .properties
+                    .properties_mut()
+                    .as_map_mut()
                     .remove(MessageConst::PROPERTY_TIMER_DELAY_SEC);
             }
             if msg
@@ -202,7 +204,8 @@ impl HookUtils {
             {
                 msg.message_ext_inner
                     .message
-                    .properties
+                    .properties_mut()
+                    .as_map_mut()
                     .remove(MessageConst::PROPERTY_TIMER_DELAY_MS);
             }
             return false;
@@ -261,25 +264,29 @@ impl HookUtils {
                 return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerFlowControl));
             }
 
-            msg.message_ext_inner.message.properties.insert(
+            msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
                 CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS),
                 CheetahString::from_string(deliver_ms.to_string()),
             );
-            msg.message_ext_inner.message.properties.insert(
+            let topic_value = CheetahString::from_slice(msg.topic());
+            msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
                 CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC),
-                CheetahString::from_slice(msg.topic()),
+                topic_value,
             );
-            msg.message_ext_inner.message.properties.insert(
+            msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
                 CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID),
                 CheetahString::from_string(msg.message_ext_inner.queue_id.to_string()),
             );
-            msg.properties_string = message_properties_to_string(&msg.message_ext_inner.message.properties);
-            msg.message_ext_inner.message.topic = CheetahString::from_static_str(timer_message_store::TIMER_TOPIC);
+            msg.properties_string = message_properties_to_string(msg.message_ext_inner.message.properties().as_map());
+            msg.message_ext_inner
+                .message
+                .set_topic(CheetahString::from_static_str(timer_message_store::TIMER_TOPIC));
             msg.message_ext_inner.queue_id = 0;
         } else if msg
             .message_ext_inner
             .message
-            .properties
+            .properties()
+            .as_map()
             .contains_key(MessageConst::PROPERTY_TIMER_DEL_UNIQKEY)
         {
             return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerMsgIllegal));
@@ -316,17 +323,20 @@ impl HookUtils {
         }
 
         // Backup real topic, queueId
-        msg.message_ext_inner.message.properties.insert(
+        let topic_value = CheetahString::from_string(msg.topic().to_string());
+        msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC), // real topic: %RETRY% + consumerGroup
-            CheetahString::from_string(msg.topic().to_string()),
+            topic_value,
         );
-        msg.message_ext_inner.message.properties.insert(
+        msg.message_ext_inner.message.properties_mut().as_map_mut().insert(
             CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID),
             CheetahString::from_string(msg.message_ext_inner.queue_id.to_string()),
         );
-        msg.properties_string = message_properties_to_string(&msg.message_ext_inner.message.properties);
+        msg.properties_string = message_properties_to_string(msg.message_ext_inner.message.properties().as_map());
 
-        msg.message_ext_inner.message.topic = CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC);
+        msg.message_ext_inner
+            .message
+            .set_topic(CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC));
         msg.message_ext_inner.queue_id = delay_level_to_queue_id(msg.message_ext_inner.message.get_delay_time_level());
     }
 
@@ -337,7 +347,7 @@ impl HookUtils {
         _broker_addr: &str,
     ) -> bool {
         for msg in msg_list.iter_mut() {
-            msg.message.properties.insert(
+            msg.message.properties_mut().as_map_mut().insert(
                 CheetahString::from_static_str(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
                 CheetahString::from_string(false.to_string()),
             );
@@ -379,7 +389,7 @@ mod tests {
         );
         let topic_config_table = Arc::new(topic_config_table);
         let mut msg = MessageExt::default();
-        msg.message.topic = "test_topic".into();
+        msg.message.set_topic("test_topic".into());
         msg.set_sys_flag(MessageSysFlag::INNER_BATCH_FLAG);
 
         let result = HookUtils::check_inner_batch(&topic_config_table, &msg);

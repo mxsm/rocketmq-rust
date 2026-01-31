@@ -1182,7 +1182,11 @@ impl DefaultMQPushConsumerImpl {
     async fn send_message_back_as_normal_message(&mut self, msg: &MessageExt) -> rocketmq_error::RocketMQResult<()> {
         let topic = mix_all::get_retry_topic(self.consumer_config.consumer_group());
         let body = msg.get_body().cloned();
-        let mut new_msg = Message::new_body(topic.as_str(), body);
+        let mut new_msg = if let Some(body) = body {
+            Message::builder().topic(topic.as_str()).body(body).build_unchecked()
+        } else {
+            Message::builder().topic(topic.as_str()).empty_body().build_unchecked()
+        };
         let origin_msg_id = MessageAccessor::get_origin_message_id(&new_msg).unwrap_or(msg.msg_id.clone());
         MessageAccessor::set_origin_message_id(&mut new_msg, origin_msg_id);
         new_msg.set_flag(msg.get_flag());

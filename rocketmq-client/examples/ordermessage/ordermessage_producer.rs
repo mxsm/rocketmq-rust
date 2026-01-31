@@ -41,12 +41,12 @@ pub async fn main() -> RocketMQResult<()> {
     let tags = ["TagA", "TagB", "TagC", "TagD", "TagE"];
 
     for i in 0..100 {
-        let message = Message::with_keys(
-            TOPIC,
-            tags[i % tags.len()],
-            format!("KEY{}", i),
-            format!("Hello RocketMQ {}", i).as_bytes(),
-        );
+        let message = Message::builder()
+            .topic(TOPIC)
+            .tags(tags[i % tags.len()])
+            .key(format!("KEY{}", i))
+            .body_slice(format!("Hello RocketMQ {}", i).as_bytes())
+            .build_unchecked();
         let order_id = i % 10;
         let send_result = producer
             .send_with_selector(

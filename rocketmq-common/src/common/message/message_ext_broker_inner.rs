@@ -193,7 +193,7 @@ impl MessageExtBrokerInner {
 
     #[inline]
     pub fn body_len(&self) -> usize {
-        self.message_ext_inner.message.body.as_ref().unwrap().len()
+        self.message_ext_inner.message.get_body().unwrap().len()
     }
 }
 

@@ -282,7 +282,7 @@ impl ProduceAccumulator {
                 let mut msg = Message::default();
                 msg.set_topic(boxed_msg.get_topic().clone());
                 if let Some(body) = boxed_msg.get_body() {
-                    msg.set_body(body.clone());
+                    msg.set_body(Some(body.clone()));
                 }
                 msg.set_flag(boxed_msg.get_flag());
                 msg.set_properties(boxed_msg.get_properties().clone());
@@ -345,7 +345,7 @@ impl ProduceAccumulator {
                 let mut msg = Message::default();
                 msg.set_topic(boxed_msg.get_topic().clone());
                 if let Some(body) = boxed_msg.get_body() {
-                    msg.set_body(body.clone());
+                    msg.set_body(Some(body.clone()));
                 }
                 msg.set_flag(boxed_msg.get_flag());
                 msg.set_properties(boxed_msg.get_properties().clone());
@@ -708,7 +708,7 @@ impl GuardForAsyncSendService {
                 let mut msg = Message::default();
                 msg.set_topic(boxed_msg.get_topic().clone());
                 if let Some(body) = boxed_msg.get_body() {
-                    msg.set_body(body.clone());
+                    msg.set_body(Some(body.clone()));
                 }
                 msg.set_flag(boxed_msg.get_flag());
                 msg.set_properties(boxed_msg.get_properties().clone());

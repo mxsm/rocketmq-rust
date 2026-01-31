@@ -40,7 +40,14 @@ pub async fn main() -> RocketMQResult<()> {
     producer.start().await?;
     let ttl = 3000;
     let message = producer
-        .request(Message::with_tags(TOPIC, "", "Hello RocketMQ".as_bytes()), ttl)
+        .request(
+            Message::builder()
+                .topic(TOPIC)
+                .tags("")
+                .body_slice("Hello RocketMQ".as_bytes())
+                .build_unchecked(),
+            ttl,
+        )
         .await?;
     println!("send result: {:?}", message);
     producer.shutdown().await;

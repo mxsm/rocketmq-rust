@@ -217,10 +217,10 @@ impl ConsumeMessageOrderlyService {
     }
 
     pub async fn send_message_back(&mut self, msg: &MessageExt) -> bool {
-        let mut new_msg = Message::new(
-            mix_all::get_retry_topic(self.consumer_group.as_str()),
-            msg.get_body().unwrap(),
-        );
+        let mut new_msg = Message::builder()
+            .topic(mix_all::get_retry_topic(self.consumer_group.as_str()))
+            .body(msg.get_body().unwrap().clone())
+            .build_unchecked();
         MessageAccessor::set_properties(&mut new_msg, msg.get_properties().clone());
         let origin_msg_id = MessageAccessor::get_origin_message_id(msg).unwrap_or(msg.msg_id.clone());
         MessageAccessor::set_origin_message_id(&mut new_msg, origin_msg_id);
