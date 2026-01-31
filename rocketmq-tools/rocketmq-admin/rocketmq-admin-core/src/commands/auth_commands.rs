@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod copy_acl_sub_command;
+mod copy_users_sub_command;
 mod update_acl_sub_command;
 mod update_user_sub_command;
 
@@ -33,6 +34,13 @@ pub enum AuthCommands {
     CopyAcl(copy_acl_sub_command::CopyAclSubCommand),
 
     #[command(
+        name = "copyUser",
+        about = "Copy user to cluster",
+        long_about = None,
+    )]
+    CopyUsers(copy_users_sub_command::CopyUsersSubCommand),
+
+    #[command(
         name = "updateAcl",
         about = "Update Access Control List (ACL)",
         long_about = None,
@@ -51,6 +59,7 @@ impl CommandExecute for AuthCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
             AuthCommands::CopyAcl(value) => value.execute(rpc_hook).await,
+            AuthCommands::CopyUsers(value) => value.execute(rpc_hook).await,
             AuthCommands::UpdateAcl(value) => value.execute(rpc_hook).await,
             AuthCommands::UpdateUser(value) => value.execute(rpc_hook).await,
         }

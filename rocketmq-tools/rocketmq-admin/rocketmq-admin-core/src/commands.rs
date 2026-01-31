@@ -136,6 +136,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Auth",
+                command: "copyUser",
+                remark: "Copy user to cluster.",
+            },
+            Command {
+                category: "Auth",
                 command: "updateAcl",
                 remark: "Update ACL.",
             },

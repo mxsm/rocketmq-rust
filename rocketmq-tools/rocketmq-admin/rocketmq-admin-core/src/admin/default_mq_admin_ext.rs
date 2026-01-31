@@ -229,6 +229,26 @@ impl DefaultMQAdminExt {
             .update_acl_with_acl_info(broker_addr, acl_info)
             .await
     }
+
+    pub async fn create_user_with_user_info(
+        &self,
+        broker_addr: CheetahString,
+        user_info: UserInfo,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        self.default_mqadmin_ext_impl
+            .create_user_with_user_info(broker_addr, user_info)
+            .await
+    }
+
+    pub async fn update_user_with_user_info(
+        &self,
+        broker_addr: CheetahString,
+        user_info: UserInfo,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        self.default_mqadmin_ext_impl
+            .update_user_with_user_info(broker_addr, user_info)
+            .await
+    }
 }
 
 impl Default for DefaultMQAdminExt {
