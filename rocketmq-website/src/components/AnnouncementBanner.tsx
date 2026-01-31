@@ -44,7 +44,7 @@ export default function AnnouncementBanner(): React.JSX.Element {
         </span>
                 <span style={{fontSize: '24px'}}>🚀</span>
                 <Link
-                    to="/docs/release-notes"
+                    to="/releases"
                     style={{
                         marginLeft: '8px',
                         padding: '6px 16px',

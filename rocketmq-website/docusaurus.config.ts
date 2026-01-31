@@ -65,6 +65,8 @@ const config: Config = {
                     },
                 },
                 blog: {
+                    path: './releases',
+                    routeBasePath: 'releases',
                     showReadingTime: true,
                     blogTitle: 'Release Notes',
                     blogDescription: 'RocketMQ-Rust release announcements and changelogs',
@@ -100,7 +102,7 @@ const config: Config = {
                     activeBaseRegex: '^/docs/(?!contributing|author)',
                 },
                 {
-                    to: '/blog',
+                    to: '/releases',
                     position: 'left',
                     label: 'Release Notes',
                 },

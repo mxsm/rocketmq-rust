@@ -309,7 +309,7 @@ export default function DeveloperStyleHero(): React.JSX.Element {
 
                     {/* Announcement Banner */}
                     <Link
-                        to="/docs/release-notes"
+                        to="/releases"
                         style={{
                             marginTop: '32px',
                             padding: '12px 20px',
