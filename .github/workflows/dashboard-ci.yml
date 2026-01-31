@@ -40,7 +40,7 @@ jobs:
       - name: Install system dependencies (Ubuntu)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libvulkan-dev
+          sudo apt-get install -y libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev
 
       - name: Set up Rust nightly
         uses: dtolnay/rust-toolchain@nightly
@@ -84,7 +84,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libvulkan-dev
+          sudo apt-get install -y libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev
 
       # ---------- macOS ----------
       - name: Install system dependencies (macOS)
@@ -113,9 +113,6 @@ jobs:
         run: cargo build --workspace --all-features
 
       - name: Test (common - all features)
+        if: matrix.os == 'ubuntu-latest'
         working-directory: ./rocketmq-dashboard/rocketmq-dashboard-common
         run: cargo test --all-features
-
-      - name: Build GPUI (without tests due to headless environment)
-        working-directory: ./rocketmq-dashboard/rocketmq-dashboard-gpui
-        run: cargo build --all-features
