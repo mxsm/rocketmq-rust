@@ -43,13 +43,13 @@ pub struct UpdateUserSubCommand {
     #[arg(short = 'u', long = "username", required = true)]
     username: String,
 
-    #[arg(short = 'p', long = "password", required = true)]
+    #[arg(short = 'p', long = "password")]
     password: Option<String>,
 
-    #[arg(short = 't', long = "userType", required = true)]
+    #[arg(short = 't', long = "userType")]
     user_type: Option<String>,
 
-    #[arg(short = 's', long = "userStatus", required = true)]
+    #[arg(short = 's', long = "userStatus")]
     user_status: Option<String>,
 }
 
