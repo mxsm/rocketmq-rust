@@ -996,8 +996,6 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         user_info.password = Option::from(password);
         user_info.user_status = Option::from(user_status);
 
-        dbg!(&user_info);
-
         if let Some(ref mq_client_instance) = self.client_instance {
             let mq_client_api = mq_client_instance.get_mq_client_api_impl();
             let timeout_millis = self.timeout_millis.as_millis() as u64;
