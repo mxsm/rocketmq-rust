@@ -6,8 +6,22 @@ permissions:
 on:
   push:
     branches: [ "main" ]
+    paths-ignore:
+      - 'rocketmq-dashboard/**'
+      - 'rocketmq-doc/**'
+      - 'rocketmq-website/**'
+      - 'docker/**'
+      - 'resources/**'
+      - 'distribution/**'
   pull_request:
     branches: [ "main" ]
+    paths-ignore:
+      - 'rocketmq-dashboard/**'
+      - 'rocketmq-doc/**'
+      - 'rocketmq-website/**'
+      - 'docker/**'
+      - 'resources/**'
+      - 'distribution/**'
 
 env:
   CARGO_TERM_COLOR: always
