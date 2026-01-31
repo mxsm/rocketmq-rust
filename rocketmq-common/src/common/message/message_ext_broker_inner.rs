@@ -347,3 +347,33 @@ impl MessageTrait for MessageExtBrokerInner {
         self
     }
 }
+
+// Conversion to new BrokerMessage type
+impl From<MessageExtBrokerInner> for crate::common::message::broker_message::BrokerMessage {
+    fn from(inner: MessageExtBrokerInner) -> Self {
+        use crate::common::message::broker_message::BrokerMessage;
+        use crate::common::message::message_envelope::MessageEnvelope;
+
+        let envelope = MessageEnvelope::from(inner.message_ext_inner);
+
+        BrokerMessage::new(envelope, inner.tags_code, inner.properties_string, inner.version)
+    }
+}
+
+// Conversion from new BrokerMessage type
+impl From<crate::common::message::broker_message::BrokerMessage> for MessageExtBrokerInner {
+    fn from(broker_msg: crate::common::message::broker_message::BrokerMessage) -> Self {
+        use crate::common::message::message_ext::MessageExt;
+
+        let message_ext_inner = MessageExt::from(broker_msg.envelope().clone());
+
+        Self {
+            message_ext_inner,
+            properties_string: CheetahString::from_string(broker_msg.properties_string().to_string()),
+            tags_code: broker_msg.tags_code(),
+            encoded_buff: broker_msg.encoded_buff().cloned(),
+            encode_completed: broker_msg.is_encode_completed(),
+            version: broker_msg.version(),
+        }
+    }
+}
