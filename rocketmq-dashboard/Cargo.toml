@@ -45,8 +45,3 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Error handling
 anyhow = "1"
-
-[patch.crates-io]
-# Unify core-graphics version to fix macOS type mismatch errors
-core-graphics = "0.25"
-core-graphics-types = "0.2"
