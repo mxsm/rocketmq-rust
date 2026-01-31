@@ -200,11 +200,13 @@ where
             return None;
         }
 
-        Some(Message::with_tags(
-            topic,
-            TransactionalMessageUtil::REMOVE_TAG,
-            sb.as_bytes(),
-        ))
+        Some(
+            Message::builder()
+                .topic(topic)
+                .tags(TransactionalMessageUtil::REMOVE_TAG)
+                .body_slice(sb.as_bytes())
+                .build_unchecked(),
+        )
     }
 
     pub async fn shutdown(&mut self) {

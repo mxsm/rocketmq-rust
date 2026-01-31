@@ -196,7 +196,10 @@ impl ConsumeMessagePopOrderlyService {
             Vec::new()
         };
 
-        let mut new_msg = Message::new(&retry_topic, &body);
+        let mut new_msg = Message::builder()
+            .topic(&retry_topic)
+            .body(body.clone())
+            .build_unchecked();
 
         new_msg.set_delay_time_level(3 + msg.reconsume_times);
 

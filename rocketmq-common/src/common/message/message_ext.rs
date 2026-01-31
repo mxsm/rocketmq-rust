@@ -236,7 +236,7 @@ impl MessageExt {
     }
 
     pub fn properties(&self) -> &HashMap<CheetahString, CheetahString> {
-        self.message.properties()
+        self.message.properties().as_map()
     }
 
     pub fn get_tags(&self) -> Option<CheetahString> {
@@ -329,7 +329,7 @@ impl MessageTrait for MessageExt {
     }
 
     fn set_body(&mut self, body: Bytes) {
-        self.message.set_body(body);
+        self.message.set_body(Some(body));
     }
 
     fn get_properties(&self) -> &HashMap<CheetahString, CheetahString> {
@@ -371,5 +371,20 @@ impl MessageTrait for MessageExt {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+}
+
+// Automatic deref to Message for convenient access
+impl std::ops::Deref for MessageExt {
+    type Target = Message;
+
+    fn deref(&self) -> &Self::Target {
+        &self.message
+    }
+}
+
+impl std::ops::DerefMut for MessageExt {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.message
     }
 }

@@ -26,6 +26,7 @@ use rocketmq_error::RocketMQError;
 
 use crate::common::message::message_decoder;
 use crate::common::message::message_ext_broker_inner::MessageExtBrokerInner;
+use crate::common::message::message_property::MessageProperties;
 use crate::common::message::message_single::Message;
 use crate::common::message::MessageTrait;
 use crate::common::mix_all;
@@ -82,7 +83,7 @@ impl MessageBatch {
                 let mut m = Message::default();
                 m.set_topic(msg.get_topic().clone());
                 if let Some(body) = msg.get_body() {
-                    m.set_body(body.clone());
+                    m.set_body(Some(body.clone()));
                 }
                 m.set_flag(msg.get_flag());
                 if let Some(transaction_id) = msg.get_transaction_id() {
@@ -122,10 +123,8 @@ impl MessageBatch {
             }
         }
         let first = first.unwrap();
-        let mut final_message = Message {
-            topic: first.topic.clone(),
-            ..Message::default()
-        };
+        let mut final_message = Message::default();
+        final_message.set_topic(first.topic().clone());
         final_message.set_wait_store_msg_ok(first.is_wait_store_msg_ok());
         Ok(MessageBatch {
             final_message,
@@ -173,81 +172,81 @@ impl fmt::Display for MessageBatch {
 impl MessageTrait for MessageBatch {
     #[inline]
     fn put_property(&mut self, key: CheetahString, value: CheetahString) {
-        self.final_message.properties.insert(key, value);
+        self.final_message.properties_mut().as_map_mut().insert(key, value);
     }
 
     #[inline]
     fn clear_property(&mut self, name: &str) {
-        self.final_message.properties.remove(name);
+        self.final_message.properties_mut().as_map_mut().remove(name);
     }
 
     #[inline]
     fn get_property(&self, name: &CheetahString) -> Option<CheetahString> {
-        self.final_message.properties.get(name).cloned()
+        self.final_message.properties().as_map().get(name).cloned()
     }
 
     fn get_property_ref(&self, name: &CheetahString) -> Option<&CheetahString> {
-        self.final_message.properties.get(name)
+        self.final_message.properties().as_map().get(name)
     }
 
     #[inline]
     fn get_topic(&self) -> &CheetahString {
-        &self.final_message.topic
+        self.final_message.topic()
     }
 
     #[inline]
     fn set_topic(&mut self, topic: CheetahString) {
-        self.final_message.topic = topic;
+        self.final_message.set_topic(topic);
     }
 
     #[inline]
     fn get_flag(&self) -> i32 {
-        self.final_message.flag
+        self.final_message.flag()
     }
 
     #[inline]
     fn set_flag(&mut self, flag: i32) {
-        self.final_message.flag = flag;
+        self.final_message.set_flag(flag);
     }
 
     #[inline]
     fn get_body(&self) -> Option<&Bytes> {
-        self.final_message.body.as_ref()
+        self.final_message.get_body()
     }
 
     #[inline]
     fn set_body(&mut self, body: Bytes) {
-        self.final_message.body = Some(body);
+        self.final_message.set_body(Some(body));
     }
 
     #[inline]
     fn get_properties(&self) -> &HashMap<CheetahString, CheetahString> {
-        &self.final_message.properties
+        self.final_message.properties().as_map()
     }
 
     #[inline]
     fn set_properties(&mut self, properties: HashMap<CheetahString, CheetahString>) {
-        self.final_message.properties = properties;
+        *self.final_message.properties_mut() = MessageProperties::from_map(properties);
     }
 
     #[inline]
     fn get_transaction_id(&self) -> Option<&CheetahString> {
-        self.final_message.transaction_id.as_ref()
+        self.final_message.get_transaction_id()
     }
 
     #[inline]
     fn set_transaction_id(&mut self, transaction_id: CheetahString) {
-        self.final_message.transaction_id = Some(transaction_id);
+        *self.final_message.transaction_id_mut() = Some(transaction_id);
     }
 
     #[inline]
     fn get_compressed_body_mut(&mut self) -> Option<&mut Bytes> {
-        self.final_message.compressed_body.as_mut()
+        self.final_message.body_mut().compressed_mut().as_mut()
     }
 
     #[inline]
     fn get_compressed_body(&self) -> Option<&Bytes> {
-        self.final_message.compressed_body.as_ref()
+        self.final_message.compressed_body()
     }
 
     #[inline]
@@ -279,7 +278,7 @@ mod tests {
     fn create_test_message(topic: &str) -> Message {
         let mut msg = Message::default();
         msg.set_topic(CheetahString::from_string(topic.to_string()));
-        msg.set_body(Bytes::from_static(b"test body"));
+        msg.set_body(Some(Bytes::from_static(b"test body")));
         msg
     }
 

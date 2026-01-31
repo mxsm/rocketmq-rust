@@ -73,7 +73,10 @@ fn create_commit_log_with_config(_config: Arc<MessageStoreConfig>, _broker_confi
 /// Create a test message with specified size
 fn create_test_message(topic: &'static str, _queue_id: i32, body_size: usize) -> MessageExtBrokerInner {
     let body = vec![b'X'; body_size];
-    let mut message = Message::new(CheetahString::from_static_str(topic), body.as_ref());
+    let mut message = Message::builder()
+        .topic(CheetahString::from_static_str(topic))
+        .body(body.clone())
+        .build_unchecked();
     message.set_tags(CheetahString::from_static_str("TagA"));
 
     MessageExtBrokerInner {

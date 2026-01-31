@@ -36,6 +36,7 @@ use crate::common::compression::compressor_factory::CompressorFactory;
 use crate::common::message::message_client_ext::MessageClientExt;
 use crate::common::message::message_ext::MessageExt;
 use crate::common::message::message_id::MessageId;
+use crate::common::message::message_property::MessageProperties;
 use crate::common::message::message_single::Message;
 use crate::common::message::MessageConst;
 use crate::common::message::MessageTrait;
@@ -194,7 +195,7 @@ pub fn decode(
 
     // 5 FLAG
     let flag = byte_buffer.get_i32();
-    msg_ext.message.flag = flag;
+    msg_ext.message.set_flag(flag);
 
     // 6 QUEUEOFFSET
     let queue_offset = byte_buffer.get_i64();
@@ -283,7 +284,7 @@ pub fn decode(
                     CompressionType::find_by_value((flag & MessageSysFlag::COMPRESSION_TYPE_COMPARATOR) >> 8);
                 body_bytes = compression_type.decompression(&body_bytes)
             }
-            msg_ext.message.body = Some(body_bytes);
+            msg_ext.message.set_body(Some(body_bytes));
         } else {
             let _ = byte_buffer.split_to(
                 BORN_TIMESTAMP_POSITION
@@ -305,7 +306,7 @@ pub fn decode(
     let mut topic = vec![0; topic_len];
     byte_buffer.copy_to_slice(&mut topic);
     let topic_str = str::from_utf8(&topic).unwrap();
-    msg_ext.message.topic = CheetahString::from_slice(topic_str);
+    msg_ext.message.set_topic(CheetahString::from_slice(topic_str));
 
     // 17 properties
     let properties_length = byte_buffer.get_i16();
@@ -318,13 +319,13 @@ pub fn decode(
             let properties_string =
                 CheetahString::from_string(String::from_utf8_lossy(properties.as_slice()).to_string());
             let message_properties = string_to_message_properties(Some(&properties_string));
-            msg_ext.message.properties = message_properties;
+            *msg_ext.message.properties_mut() = MessageProperties::from_map(message_properties);
         } else {
             let properties_string =
                 CheetahString::from_string(String::from_utf8_lossy(properties.as_slice()).to_string());
             let mut message_properties = string_to_message_properties(Some(&properties_string));
             message_properties.insert(CheetahString::from_static_str("propertiesString"), properties_string);
-            msg_ext.message.properties = message_properties;
+            *msg_ext.message.properties_mut() = MessageProperties::from_map(message_properties);
         }
     }
     let msg_id = build_message_id(store_host_address, physic_offset);
@@ -367,9 +368,9 @@ pub fn encode_messages(messages: &[Message]) -> Bytes {
 }
 
 pub fn encode_message(message: &Message) -> Bytes {
-    let body = message.body.as_ref().unwrap();
+    let body = message.get_body().unwrap();
     let body_len = body.len();
-    let properties = message_properties_to_string(&message.properties);
+    let properties = message_properties_to_string(message.properties().as_map());
     let properties_bytes = properties.as_bytes();
     let properties_length = properties_bytes.len();
 
@@ -392,7 +393,7 @@ pub fn encode_message(message: &Message) -> Bytes {
     bytes.put_u32(0);
 
     // 4 FLAG
-    bytes.put_i32(message.flag);
+    bytes.put_i32(message.flag());
 
     // 5 BODY
     bytes.put_i32(body_len as i32);
@@ -430,7 +431,7 @@ pub fn decodes_batch_client(byte_buffer: &mut Bytes, read_body: bool, decompress
 }
 
 pub fn decode_messages_from(mut message_ext: MessageExt, vec_: &mut Vec<MessageExt>) {
-    let messages = decode_messages(message_ext.message.body.as_mut().unwrap());
+    let messages = decode_messages(message_ext.message.body_mut().raw_mut().as_mut().unwrap());
     for message in messages {
         let mut message_ext_inner = MessageExt {
             message,
@@ -487,12 +488,11 @@ pub fn decode_message(buffer: &mut Bytes) -> Message {
     // to_string()));
     let message_properties = str_to_message_properties(Some(str::from_utf8(&properties).unwrap()));
 
-    Message {
-        body: Some(body),
-        properties: message_properties,
-        flag,
-        ..Message::default()
-    }
+    let mut message = Message::default();
+    message.set_body(Some(body));
+    message.set_properties(message_properties);
+    message.set_flag(flag);
+    message
 }
 
 pub fn decode_message_id(msg_id: &str) -> MessageId {
@@ -578,7 +578,7 @@ pub fn encode(message_ext: &MessageExt, need_compress: bool) -> rocketmq_error::
     byte_buffer.put_i32(message_ext.queue_id);
 
     // 5 FLAG
-    byte_buffer.put_i32(message_ext.message.flag);
+    byte_buffer.put_i32(message_ext.message.flag());
 
     // 6 QUEUEOFFSET
     byte_buffer.put_i64(message_ext.queue_offset);
@@ -696,7 +696,7 @@ pub fn encode_uniquely(message_ext: &MessageExt, need_compress: bool) -> rocketm
     byte_buffer.put_i32(message_ext.queue_id);
 
     // 5 FLAG
-    byte_buffer.put_i32(message_ext.message.flag);
+    byte_buffer.put_i32(message_ext.message.flag());
 
     // 6 QUEUEOFFSET
     byte_buffer.put_i64(message_ext.queue_offset);

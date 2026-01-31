@@ -109,7 +109,7 @@ where
             MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
         ));
         let header = CheckTransactionStateRequestHeader {
-            topic: Some(msg_ext.message.topic.clone()),
+            topic: Some(msg_ext.message.topic().clone()),
             commit_log_offset: msg_ext.commit_log_offset,
             offset_msg_id: Some(msg_ext.msg_id().clone()),
             msg_id: msg_id.clone(),

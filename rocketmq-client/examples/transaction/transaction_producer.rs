@@ -53,7 +53,11 @@ pub async fn main() -> RocketMQResult<()> {
     producer.start().await?;
 
     for _ in 0..10 {
-        let message = Message::with_tags(TOPIC, TAG, "Hello RocketMQ".as_bytes());
+        let message = Message::builder()
+            .topic(TOPIC)
+            .tags(TAG)
+            .body_slice("Hello RocketMQ".as_bytes())
+            .build_unchecked();
         let send_result = producer.send_message_in_transaction::<(), _>(message, None).await?;
         println!("send result: {}", send_result);
     }

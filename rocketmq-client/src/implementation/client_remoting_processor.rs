@@ -101,7 +101,7 @@ impl ClientRemotingProcessor {
             .unwrap();
 
         let mut msg = MessageExt::default();
-        msg.message.topic = request_header.topic.clone();
+        msg.message.set_topic(request_header.topic.clone());
         msg.queue_id = request_header.queue_id;
         msg.store_timestamp = request_header.store_timestamp;
         if !request_header.born_host.is_empty() {
@@ -137,13 +137,13 @@ impl ClientRemotingProcessor {
             let de_result = CompressorFactory::get_compressor(MessageSysFlag::get_compression_type(sys_flag))
                 .decompress(body.unwrap());
             if let Ok(decompressed) = de_result {
-                msg.message.body = Some(decompressed);
+                msg.message.set_body(Some(decompressed));
             } else {
                 warn!("err when uncompress constant");
-                msg.message.body = body.cloned();
+                msg.message.set_body(body.cloned());
             }
         }
-        msg.message.flag = request_header.flag;
+        msg.message.set_flag(request_header.flag);
         MessageAccessor::set_properties(
             &mut msg.message,
             MessageDecoder::string_to_message_properties(request_header.properties.as_ref()),

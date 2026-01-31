@@ -96,7 +96,10 @@ fn bench_concurrent_producer_access(c: &mut Criterion) {
 fn bench_message_creation(c: &mut Criterion) {
     c.bench_function("message_creation", |b| {
         b.iter(|| {
-            let msg = Message::new(CheetahString::from_static_str("TestTopic"), "Hello RocketMQ".as_bytes());
+            let msg = Message::builder()
+                .topic(CheetahString::from_static_str("TestTopic"))
+                .body_slice("Hello RocketMQ".as_bytes())
+                .build_unchecked();
             black_box(msg);
         });
     });
@@ -130,10 +133,10 @@ fn bench_concurrent_message_preparation(c: &mut Criterion) {
                 b.iter(|| {
                     let messages: Vec<_> = (0..msg_count)
                         .map(|i| {
-                            Message::new(
-                                CheetahString::from_slice(format!("Topic_{}", i % 10).as_str()),
-                                format!("Message body {}", i).as_bytes(),
-                            )
+                            Message::builder()
+                                .topic(CheetahString::from_slice(format!("Topic_{}", i % 10).as_str()))
+                                .body_slice(format!("Message body {}", i).as_bytes())
+                                .build_unchecked()
                         })
                         .collect();
                     black_box(messages);

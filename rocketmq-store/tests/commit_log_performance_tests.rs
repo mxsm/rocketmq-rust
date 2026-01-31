@@ -27,7 +27,10 @@ use rocketmq_common::common::message::message_single::Message;
 /// Helper function to create test message
 fn create_test_message(topic: &str, queue_id: i32, body_size: usize) -> MessageExtBrokerInner {
     let body = vec![b'X'; body_size];
-    let mut message = Message::new(CheetahString::from(topic), body.as_ref());
+    let mut message = Message::builder()
+        .topic(CheetahString::from(topic))
+        .body(body.clone())
+        .build_unchecked();
     message.set_tags(CheetahString::from_static_str("TestTag"));
 
     let mut inner = MessageExtBrokerInner {

@@ -577,11 +577,12 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         let store_host = msg_ext.store_host();
         let reconsume_times = msg_ext.reconsume_times();
         let message = msg_ext.message;
-        if let Some(body) = message.body {
-            inner.set_body(body);
+        let message_properties = message.properties().as_map().clone();
+        if let Some(body) = message.get_body() {
+            inner.set_body(body.clone());
         }
-        inner.set_flag(message.flag);
-        MessageAccessor::set_properties(&mut inner, message.properties);
+        inner.set_flag(message.flag());
+        MessageAccessor::set_properties(&mut inner, message_properties);
         let topic_filter_type = message_single::parse_topic_filter_type(inner.sys_flag());
         let tags_code = MessageExtBrokerInner::tags_string2tags_code(
             &topic_filter_type,

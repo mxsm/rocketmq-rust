@@ -1298,18 +1298,17 @@ impl DefaultMQProducerImpl {
 
     fn try_to_compress_message<T: MessageTrait>(&self, msg: &mut T) -> bool {
         if let Some(message) = msg.as_any_mut().downcast_mut::<Message>() {
-            if let Some(body) = message.compressed_body.as_mut() {
-                if body.len() >= self.producer_config.compress_msg_body_over_howmuch() as usize {
-                    let data = self
-                        .producer_config
-                        .compressor()
-                        .unwrap()
-                        .compress(body, self.producer_config.compress_level());
-                    if let Ok(data) = data {
-                        //store the compressed data
-                        msg.set_compressed_body_mut(data);
-                        return true;
-                    }
+            let body_len = message.body_slice().len();
+            if body_len >= self.producer_config.compress_msg_body_over_howmuch() as usize {
+                let data = self
+                    .producer_config
+                    .compressor()
+                    .unwrap()
+                    .compress(message.body_slice(), self.producer_config.compress_level());
+                if let Ok(data) = data {
+                    //store the compressed data
+                    msg.set_compressed_body_mut(data);
+                    return true;
                 }
             }
         }

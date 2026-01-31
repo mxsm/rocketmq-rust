@@ -299,19 +299,22 @@ where
             )));
         }
         let mut message_ext = MessageExtBrokerInner::default();
-        message_ext.message_ext_inner.message.topic = request_header.topic().clone();
+        message_ext
+            .message_ext_inner
+            .message
+            .set_topic(request_header.topic().clone());
         message_ext.message_ext_inner.queue_id = queue_id;
         let mut sys_flag = request_header.sys_flag;
         if TopicFilterType::MultiTag == topic_config.topic_filter_type {
             sys_flag |= MessageSysFlag::MULTI_TAGS_FLAG;
         }
         message_ext.message_ext_inner.sys_flag = sys_flag;
-        message_ext.message_ext_inner.message.flag = request_header.flag;
+        message_ext.message_ext_inner.message.set_flag(request_header.flag);
         message_ext
             .message_ext_inner
             .message
             .set_properties(string_to_message_properties(request_header.properties.as_ref()));
-        message_ext.message_ext_inner.message.body = request.body().cloned();
+        message_ext.message_ext_inner.message.set_body(request.body().cloned());
         message_ext.message_ext_inner.born_timestamp = request_header.born_timestamp;
         message_ext.message_ext_inner.born_host = channel.remote_address();
         message_ext.message_ext_inner.store_host = self.store_host;
@@ -348,8 +351,8 @@ where
                     .message_ext_broker_inner
                     .message_ext_inner
                     .message
-                    .body
-                    .clone(),
+                    .get_body()
+                    .cloned(),
             );
             batch_message
                 .message_ext_broker_inner
@@ -364,7 +367,8 @@ where
                     .message_ext_broker_inner
                     .message_ext_inner
                     .message
-                    .properties(),
+                    .properties()
+                    .as_map(),
             );
             response_header.set_batch_uniq_id(batch_uniq_id);
             is_inner_batch = true;
@@ -443,7 +447,10 @@ where
         }
 
         let mut message_ext = MessageExtBrokerInner::default();
-        message_ext.message_ext_inner.message.topic = request_header.topic().clone();
+        message_ext
+            .message_ext_inner
+            .message
+            .set_topic(request_header.topic().clone());
         message_ext.message_ext_inner.queue_id = queue_id;
         let mut ori_props = MessageDecoder::string_to_message_properties(request_header.properties.as_ref());
         if !self
@@ -459,8 +466,8 @@ where
         {
             return Ok(Some(response));
         }
-        message_ext.message_ext_inner.message.body = request.body().cloned();
-        message_ext.message_ext_inner.message.flag = request_header.flag;
+        message_ext.message_ext_inner.message.set_body(request.body().cloned());
+        message_ext.message_ext_inner.message.set_flag(request_header.flag);
 
         let uniq_key = ori_props.get(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX);
         if !uniq_key.is_some_and(|uniq_key_inner| uniq_key_inner.is_empty()) {
@@ -473,14 +480,15 @@ where
         let tra_flag = ori_props
             .get(MessageConst::PROPERTY_TRANSACTION_PREPARED)
             .is_some_and(|tra_flag_inner| tra_flag_inner.parse().unwrap_or(false));
-        message_ext.message_ext_inner.message.properties = ori_props;
+        message_ext.message_ext_inner.message.set_properties(ori_props);
         let cleanup_policy = CleanupPolicyUtils::get_delete_policy(Some(&topic_config));
 
         if cleanup_policy == CleanupPolicy::COMPACTION {
             if let Some(value) = message_ext
                 .message_ext_inner
                 .message
-                .properties
+                .properties()
+                .as_map()
                 .get(MessageConst::PROPERTY_KEYS)
             {
                 if value.trim().is_empty() {
@@ -502,18 +510,23 @@ where
         message_ext.message_ext_inner.store_host = self.store_host;
         message_ext.message_ext_inner.reconsume_times = request_header.reconsume_times.unwrap_or(0);
 
-        message_ext.message_ext_inner.message.properties.insert(
-            CheetahString::from_static_str(MessageConst::PROPERTY_CLUSTER),
-            self.inner
-                .broker_runtime_inner
-                .broker_config()
-                .broker_identity
-                .broker_cluster_name
-                .clone(),
-        );
+        message_ext
+            .message_ext_inner
+            .message
+            .properties_mut()
+            .as_map_mut()
+            .insert(
+                CheetahString::from_static_str(MessageConst::PROPERTY_CLUSTER),
+                self.inner
+                    .broker_runtime_inner
+                    .broker_config()
+                    .broker_identity
+                    .broker_cluster_name
+                    .clone(),
+            );
 
         message_ext.properties_string =
-            MessageDecoder::message_properties_to_string(&message_ext.message_ext_inner.message.properties);
+            MessageDecoder::message_properties_to_string(message_ext.message_ext_inner.message.properties().as_map());
         let send_transaction_prepare_message = if tra_flag
             && !(message_ext.reconsume_times() > 0 && message_ext.message_ext_inner.message.get_delay_time_level() > 0)
         {
@@ -1003,7 +1016,7 @@ where
                     )
                     .await;
                 // can optimize
-                msg.message.topic = CheetahString::from_string(new_topic.to_string());
+                msg.message.set_topic(CheetahString::from_string(new_topic.to_string()));
                 msg.queue_id = queue_id_int;
                 msg.message.set_delay_time_level(0);
                 if new_topic_config.is_none() {
