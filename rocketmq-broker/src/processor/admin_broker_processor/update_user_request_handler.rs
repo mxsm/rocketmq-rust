@@ -64,9 +64,12 @@ impl<MS: MessageStore> UpdateUserRequestHandler<MS> {
             ));
         }
 
-        //TODO get authentication metadata manager and do operations
-        response.set_code_ref(ResponseCode::Success);
-        Ok(Some(response))
+        // TODO get authentication metadata manager and do operations
+        Ok(Some(
+            response
+                .set_code(ResponseCode::SystemError)
+                .set_remark("UpdateUser not implemented: authentication metadata manager not configured"),
+        ))
     }
 
     async fn is_not_super_user_login(&self, request: &RemotingCommand) -> bool {
