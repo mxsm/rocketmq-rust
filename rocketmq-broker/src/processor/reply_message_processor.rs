@@ -418,7 +418,7 @@ where
         request_header: &SendMessageRequestHeader,
         msg: &mut M,
     ) -> PushReplyResult {
-        let sender_id = msg.get_property(&CheetahString::from_static_str(
+        let sender_id = msg.property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT,
         ));
 
@@ -483,7 +483,7 @@ where
                     remark,
                     request_header.topic(),
                     request_header.queue_id,
-                    msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
+                    msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
                 );
                 // Reuse extracted values to avoid duplicate format
                 PushReplyResult::failure(format!(
@@ -570,10 +570,10 @@ fn parse_request_header(request: &RemotingCommand) -> rocketmq_error::RocketMQRe
 ///
 /// Correlation ID if found, `None` otherwise
 fn get_correlation_id_with_fallback<M: MessageTrait>(msg: &M) -> Option<CheetahString> {
-    msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
+    msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
         .or_else(|| {
             // Fallback to old property name for backward compatibility
-            msg.get_property(&CheetahString::from_static_str("REPLY_CORRELATION_ID"))
+            msg.property(&CheetahString::from_static_str("REPLY_CORRELATION_ID"))
         })
 }
 

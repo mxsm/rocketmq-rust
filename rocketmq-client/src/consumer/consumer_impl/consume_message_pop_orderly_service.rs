@@ -235,7 +235,7 @@ impl ConsumeMessagePopOrderlyService {
 
     async fn change_invisible_time(&self, msg: &MessageExt, invisible_time: u64) {
         if let Some(ref impl_) = self.default_mqpush_consumer_impl {
-            if let Some(extra_info) = msg.get_property(&CheetahString::from_static_str("POP_CK")) {
+            if let Some(extra_info) = msg.property(&CheetahString::from_static_str("POP_CK")) {
                 let result = impl_
                     .mut_from_ref()
                     .change_pop_invisible_time_async(

@@ -425,7 +425,7 @@ impl ConsumeMessagePopConcurrentlyService {
         } else {
             delay_level_table[delay_level as usize]
         };
-        let extra_info = message.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK));
+        let extra_info = message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK));
 
         struct DefaultAckCallback;
 
@@ -483,9 +483,7 @@ impl ConsumeRequest {
         let mut invisible_time = 0u64;
 
         if !msgs.is_empty() {
-            if let Some(extra_info) =
-                msgs[0].get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK))
-            {
+            if let Some(extra_info) = msgs[0].property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK)) {
                 let extra_info_strs = ExtraInfoUtil::split(&extra_info);
                 if let Ok(pt) = ExtraInfoUtil::get_pop_time(&extra_info_strs) {
                     pop_time = pt as u64;

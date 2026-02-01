@@ -738,7 +738,7 @@ where
 
     /// Check if message needs to be discarded
     fn need_discard(&self, msg_ext: &mut MessageExt, transaction_check_max: i32) -> bool {
-        let check_times_str = msg_ext.get_property(&CheetahString::from_static_str(
+        let check_times_str = msg_ext.property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_TRANSACTION_CHECK_TIMES,
         ));
         let mut check_time = 1;

@@ -76,12 +76,12 @@ impl MessageTrait for MessageClientExt {
     }
 
     #[inline]
-    fn get_property(&self, name: &CheetahString) -> Option<CheetahString> {
-        self.message_ext_inner.get_property(name)
+    fn property(&self, name: &CheetahString) -> Option<CheetahString> {
+        self.message_ext_inner.property(name)
     }
 
-    fn get_property_ref(&self, name: &CheetahString) -> Option<&CheetahString> {
-        self.message_ext_inner.get_property_ref(name)
+    fn property_ref(&self, name: &CheetahString) -> Option<&CheetahString> {
+        self.message_ext_inner.property_ref(name)
     }
 
     #[inline]

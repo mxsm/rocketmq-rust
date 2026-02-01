@@ -181,11 +181,11 @@ impl MessageTrait for MessageBatch {
     }
 
     #[inline]
-    fn get_property(&self, name: &CheetahString) -> Option<CheetahString> {
+    fn property(&self, name: &CheetahString) -> Option<CheetahString> {
         self.final_message.properties().as_map().get(name).cloned()
     }
 
-    fn get_property_ref(&self, name: &CheetahString) -> Option<&CheetahString> {
+    fn property_ref(&self, name: &CheetahString) -> Option<&CheetahString> {
         self.final_message.properties().as_map().get(name)
     }
 

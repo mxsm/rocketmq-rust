@@ -1193,7 +1193,7 @@ where
                 format!("look message by offset failed, the offset is {}", request_header.offset),
             )));
         };
-        let retry_topic = msg_ext.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC));
+        let retry_topic = msg_ext.property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC));
         if retry_topic.is_none() {
             let topic = msg_ext.get_topic().clone();
             MessageAccessor::put_property(
@@ -1280,7 +1280,7 @@ where
             PutMessageStatus::PutOk => {
                 let mut _back_topic = msg_ext.get_topic().clone();
                 let correct_topic =
-                    msg_ext.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC));
+                    msg_ext.property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC));
                 if let Some(topic) = correct_topic {
                     _back_topic = topic;
                 }

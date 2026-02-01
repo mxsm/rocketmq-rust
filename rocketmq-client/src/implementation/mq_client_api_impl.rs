@@ -550,7 +550,7 @@ impl MQClientAPIImpl {
         T: MessageTrait,
     {
         let begin_start_time = Instant::now();
-        let msg_type = msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_MESSAGE_TYPE));
+        let msg_type = msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_MESSAGE_TYPE));
         let is_reply = msg_type.is_some() && msg_type.unwrap() == mix_all::REPLY_MESSAGE_FLAG;
         let mut request = if is_reply {
             if *SEND_SMART_MSG {
@@ -1867,10 +1867,10 @@ impl MQClientAPIImpl {
                     )),
                 );
             } else {
-                let ck = message.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK));
+                let ck = message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK));
                 if ck.is_none() {
                     let dispatch = message
-                        .get_property(&CheetahString::from_static_str(
+                        .property(&CheetahString::from_static_str(
                             MessageConst::PROPERTY_INNER_MULTI_DISPATCH,
                         ))
                         .unwrap_or_default();
@@ -1879,7 +1879,7 @@ impl MQClientAPIImpl {
                     {
                         let queues: Vec<&str> = dispatch.split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
                         let data = message
-                            .get_property(&CheetahString::from_static_str(
+                            .property(&CheetahString::from_static_str(
                                 MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET,
                             ))
                             .unwrap_or_default();
@@ -2175,7 +2175,7 @@ fn build_queue_offset_sorted_map(
     for message_ext in msg_found_list {
         let key: String;
         let dispatch = message_ext
-            .get_property(&CheetahString::from_static_str(
+            .property(&CheetahString::from_static_str(
                 MessageConst::PROPERTY_INNER_MULTI_DISPATCH,
             ))
             .unwrap_or_default();
@@ -2183,7 +2183,7 @@ fn build_queue_offset_sorted_map(
             // process LMQ
             let queues: Vec<&str> = dispatch.split(mix_all::MULTI_DISPATCH_QUEUE_SPLITTER).collect();
             let data = message_ext
-                .get_property(&CheetahString::from_static_str(
+                .property(&CheetahString::from_static_str(
                     MessageConst::PROPERTY_INNER_MULTI_QUEUE_OFFSET,
                 ))
                 .unwrap_or_default();
@@ -2202,7 +2202,7 @@ fn build_queue_offset_sorted_map(
         key = ExtraInfoUtil::get_start_offset_info_map_key_with_pop_ck(
             message_ext.get_topic(),
             message_ext
-                .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK))
+                .property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK))
                 .clone()
                 .as_ref()
                 .map(|item| item.as_str()),

@@ -184,7 +184,7 @@ impl ProcessQueue {
         let acc_total = if !messages.is_empty() {
             let message_ext = messages.last().unwrap();
             if let Some(property) =
-                message_ext.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_MAX_OFFSET))
+                message_ext.property(&CheetahString::from_static_str(MessageConst::PROPERTY_MAX_OFFSET))
             {
                 property.parse::<i64>().unwrap() - message_ext.queue_offset
             } else {
