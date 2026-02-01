@@ -14,7 +14,6 @@ rust-version.workspace = true
 
 [dependencies]
 # Shared common code
-rocketmq-dashboard-common = { path = "../rocketmq-dashboard-common" }
 
 # GPUI framework
 gpui = { version = "0.2.2" }
@@ -30,8 +29,11 @@ tracing-subscriber = { workspace = true }
 # Async runtime
 tokio = { workspace = true }
 
-# Fix core-graphics version conflict on macOS
+# Force specific version to resolve core-graphics conflicts on macOS
 [target.'cfg(target_os = "macos")'.dependencies]
+font-kit = "0.14.3"
+
+
 
 [build-dependencies]
 anyhow = { workspace = true }
