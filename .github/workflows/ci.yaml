@@ -7,7 +7,6 @@ on:
   push:
     branches: [ "main" ]
     paths-ignore:
-      - 'rocketmq-dashboard/**'
       - 'rocketmq-doc/**'
       - 'rocketmq-website/**'
       - 'docker/**'
@@ -16,7 +15,6 @@ on:
   pull_request:
     branches: [ "main" ]
     paths-ignore:
-      - 'rocketmq-dashboard/**'
       - 'rocketmq-doc/**'
       - 'rocketmq-website/**'
       - 'docker/**'
