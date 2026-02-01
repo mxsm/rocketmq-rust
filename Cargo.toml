@@ -17,7 +17,9 @@ members = [
     "rocketmq-store",
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-core",
     "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui",
-    "rocketmq-tools/rocketmq-store-inspect"
+    "rocketmq-tools/rocketmq-store-inspect",
+    "rocketmq-dashboard/rocketmq-dashboard-common",
+    "rocketmq-dashboard/rocketmq-dashboard-gpui",
 ]
 resolver = "2"
 
