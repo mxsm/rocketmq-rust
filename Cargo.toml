@@ -23,6 +23,13 @@ members = [
 ]
 resolver = "2"
 
+[workspace.metadata.patch-policy]
+# Force all packages to use core-graphics 0.25.0 to avoid version conflicts
+# This is specifically needed for zed-font-kit on macOS
+
+[profile.dev.package."*"]
+opt-level = 0
+
 [workspace.package]
 version = "0.8.0"
 authors = ["mxsm <mxsm@apache.org>"]
