@@ -14,7 +14,6 @@ rust-version.workspace = true
 
 [dependencies]
 # Shared common code
-rocketmq-dashboard-common = { path = "../rocketmq-dashboard-common" }
 
 # GPUI framework
 gpui = { version = "0.2.2" }
