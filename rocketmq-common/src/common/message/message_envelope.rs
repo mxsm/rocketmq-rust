@@ -345,12 +345,12 @@ impl crate::common::message::MessageTrait for MessageEnvelope {
         self.message.clear_property(name);
     }
 
-    fn get_property(&self, name: &CheetahString) -> Option<CheetahString> {
+    fn property(&self, name: &CheetahString) -> Option<CheetahString> {
         self.message.get_property(name)
     }
 
-    fn get_property_ref(&self, name: &CheetahString) -> Option<&CheetahString> {
-        self.message.get_property_ref(name)
+    fn property_ref(&self, name: &CheetahString) -> Option<&CheetahString> {
+        self.message.property_ref(name)
     }
 
     fn get_topic(&self) -> &CheetahString {

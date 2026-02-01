@@ -1422,11 +1422,11 @@ fn process_pull_result(pull_result: &mut PullResultExt, broker_name: &CheetahStr
         let mut bytes = pull_result.message_binary.take().unwrap_or_default();
         let mut message_list = MessageDecoder::decodes_batch(&mut bytes, true, true);
         for message in message_list.iter_mut() {
-            let tra_flag = message.get_property(&CheetahString::from_static_str(
+            let tra_flag = message.property(&CheetahString::from_static_str(
                 MessageConst::PROPERTY_TRANSACTION_PREPARED,
             ));
             if tra_flag.is_some() && tra_flag.unwrap() == "true" {
-                if let Some(id) = message.get_property(&CheetahString::from_static_str(
+                if let Some(id) = message.property(&CheetahString::from_static_str(
                     MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
                 )) {
                     message.set_transaction_id(id);

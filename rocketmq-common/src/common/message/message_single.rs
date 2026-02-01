@@ -576,11 +576,11 @@ impl MessageTrait for Message {
     }
 
     #[inline]
-    fn get_property(&self, name: &CheetahString) -> Option<CheetahString> {
+    fn property(&self, name: &CheetahString) -> Option<CheetahString> {
         self.properties.as_map().get(name).cloned()
     }
 
-    fn get_property_ref(&self, name: &CheetahString) -> Option<&CheetahString> {
+    fn property_ref(&self, name: &CheetahString) -> Option<&CheetahString> {
         self.properties.as_map().get(name)
     }
 

@@ -1069,7 +1069,7 @@ impl DefaultMQProducerImpl {
             sys_flag |= self.producer_config.compress_type().get_compression_flag();
             msg_body_compressed = true;
         }
-        let tran_msg = msg.get_property(&CheetahString::from_static_str(
+        let tran_msg = msg.property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_TRANSACTION_PREPARED,
         ));
         if let Some(value) = tran_msg {
@@ -1145,16 +1145,16 @@ impl DefaultMQProducerImpl {
             let namespace = self.client_config.get_namespace();
             let producer_group = self.producer_config.producer_group().clone();
             let born_host = self.client_config.client_ip.clone();
-            let is_trans = msg.get_property(&CheetahString::from_static_str(
+            let is_trans = msg.property(&CheetahString::from_static_str(
                 MessageConst::PROPERTY_TRANSACTION_PREPARED,
             ));
             let msg_type_flag = msg
-                .get_property(&CheetahString::from_static_str(
+                .property(&CheetahString::from_static_str(
                     MessageConst::PROPERTY_STARTDE_LIVER_TIME,
                 ))
                 .is_some()
                 || msg
-                    .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL))
+                    .property(&CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL))
                     .is_some();
             let mut send_message_context = SendMessageContext {
                 producer: self
@@ -1510,7 +1510,7 @@ impl DefaultMQProducerImpl {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
         let correlation_id = msg
-            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
             .unwrap();
         let request_response_future = Arc::new(RequestResponseFuture::new(correlation_id.clone(), timeout, None));
         REQUEST_FUTURE_HOLDER
@@ -1564,7 +1564,7 @@ impl DefaultMQProducerImpl {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
         let correlation_id = msg
-            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
             .unwrap();
         let request_response_future = Arc::new(RequestResponseFuture::new(
             correlation_id.clone(),
@@ -1613,7 +1613,7 @@ impl DefaultMQProducerImpl {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
         let correlation_id = msg
-            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
             .unwrap();
         let request_response_future = Arc::new(RequestResponseFuture::new(correlation_id.clone(), timeout, None));
         REQUEST_FUTURE_HOLDER
@@ -1664,7 +1664,7 @@ impl DefaultMQProducerImpl {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
         let correlation_id = msg
-            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
             .unwrap();
         let request_response_future = Arc::new(RequestResponseFuture::new(
             correlation_id.clone(),
@@ -1712,7 +1712,7 @@ impl DefaultMQProducerImpl {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
         let correlation_id = msg
-            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
             .unwrap();
         let request_response_future = Arc::new(RequestResponseFuture::new(
             correlation_id.clone(),
@@ -1766,7 +1766,7 @@ impl DefaultMQProducerImpl {
         let begin_timestamp = Instant::now();
         self.prepare_send_request(&mut msg, timeout).await;
         let correlation_id = msg
-            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
             .unwrap();
         let request_response_future = Arc::new(RequestResponseFuture::new(correlation_id.clone(), timeout, None));
         REQUEST_FUTURE_HOLDER
@@ -1916,7 +1916,7 @@ impl DefaultMQProducerImpl {
                     )
                     .map_err(|e| mq_client_err!(e.to_string()))?;
                 }
-                let transaction_id = msg.get_property(&CheetahString::from_static_str(
+                let transaction_id = msg.property(&CheetahString::from_static_str(
                     MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
                 ));
                 if let Some(transaction_id) = transaction_id {
@@ -2091,7 +2091,7 @@ impl MQProducerInner for DefaultMQProducerImpl {
 
         // Spawn independent task without storing handle (matches Java's executor.submit behavior)
         tokio::spawn(async move {
-            let mut unique_key = msg.get_property(&CheetahString::from_static_str(
+            let mut unique_key = msg.property(&CheetahString::from_static_str(
                 MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
             ));
             if unique_key.is_none() {
@@ -2446,16 +2446,16 @@ impl DefaultMQProducerImpl {
         M: MessageTrait,
     {
         if msg
-            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL))
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL))
             .is_some()
             || msg
-                .get_property(&CheetahString::from_static_str("TIMER_DELAY_MS"))
+                .property(&CheetahString::from_static_str("TIMER_DELAY_MS"))
                 .is_some()
             || msg
-                .get_property(&CheetahString::from_static_str("TIMER_DELAY_SEC"))
+                .property(&CheetahString::from_static_str("TIMER_DELAY_SEC"))
                 .is_some()
             || msg
-                .get_property(&CheetahString::from_static_str("TIMER_DELIVER_MS"))
+                .property(&CheetahString::from_static_str("TIMER_DELIVER_MS"))
                 .is_some()
         {
             return Err(mq_client_err!("Transactional messages do not support delayed delivery"));

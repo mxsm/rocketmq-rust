@@ -1072,8 +1072,7 @@ impl DefaultMQPushConsumerImpl {
         let group_topic = mix_all::get_retry_topic(consumer_group);
         let namespace = self.client_config.get_namespace().unwrap_or_default();
         for msg in msgs.iter_mut() {
-            if let Some(retry_topic) =
-                msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC))
+            if let Some(retry_topic) = msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC))
             {
                 if group_topic == msg.get_topic().as_str() {
                     msg.set_topic(retry_topic);
@@ -1225,7 +1224,7 @@ impl DefaultMQPushConsumerImpl {
 
     pub(crate) async fn ack_async(&mut self, message: &MessageExt, consumer_group: &CheetahString) {
         let extra_info = message
-            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK))
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK))
             .unwrap_or_default();
         let extra_info_strs = ExtraInfoUtil::split(extra_info.as_str());
         /*        if extra_info_strs.is_err() {

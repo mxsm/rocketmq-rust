@@ -599,11 +599,11 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_DELAY_TIME_LEVEL);
         MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_TIMER_DELIVER_MS);
         MessageAccessor::clear_property(&mut inner, MessageConst::PROPERTY_TIMER_DELAY_SEC);
-        let topic = inner.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC));
+        let topic = inner.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC));
         if let Some(topic) = topic {
             inner.set_topic(topic);
         }
-        let queue_id = inner.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID));
+        let queue_id = inner.property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID));
         if let Some(queue_id_str) = queue_id {
             match queue_id_str.parse::<i32>() {
                 Ok(qid) => {

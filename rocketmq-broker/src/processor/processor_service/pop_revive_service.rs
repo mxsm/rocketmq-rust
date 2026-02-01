@@ -135,7 +135,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         MessageAccessor::set_properties(&mut msg_inner, message_ext.properties().clone());
         if message_ext.reconsume_times() == 0
             || msg_inner
-                .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_FIRST_POP_TIME))
+                .property(&CheetahString::from_static_str(MessageConst::PROPERTY_FIRST_POP_TIME))
                 .is_none()
         {
             msg_inner.put_property(

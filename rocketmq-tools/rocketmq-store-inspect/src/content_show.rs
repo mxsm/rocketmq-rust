@@ -74,10 +74,11 @@ pub fn print_content(from: Option<u32>, to: Option<u32>, path: Option<PathBuf>) 
                     message_id: value.msg_id,
                     client_message_id: value
                         .message
-                        .get_property(&CheetahString::from_static_str(
+                        .property(&CheetahString::from_static_str(
                             MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
                         ))
-                        .unwrap_or(CheetahString::empty()),
+                        .map(Into::into)
+                        .unwrap_or_else(CheetahString::new),
                 });
             }
         }

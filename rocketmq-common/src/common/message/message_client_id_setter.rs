@@ -67,7 +67,7 @@ impl MessageClientIDSetter {
     where
         T: MessageTrait,
     {
-        message.get_property(&CheetahString::from_static_str(
+        message.property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
         ))
     }
@@ -109,7 +109,7 @@ impl MessageClientIDSetter {
         T: MessageTrait,
     {
         if message
-            .get_property(&CheetahString::from_static_str(
+            .property(&CheetahString::from_static_str(
                 MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
             ))
             .is_none()

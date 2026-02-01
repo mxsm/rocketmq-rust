@@ -136,7 +136,7 @@ pub fn get_message_num(
         if let Some(num) = msg_inner
             .message_ext_inner
             .message
-            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_INNER_NUM))
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_INNER_NUM))
         {
             message_num = num.parse().unwrap_or(1i16);
         }

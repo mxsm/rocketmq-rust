@@ -26,41 +26,41 @@ pub struct MessageUtil;
 impl MessageUtil {
     pub fn create_reply_message(request_message: &Message, body: &[u8]) -> rocketmq_error::RocketMQResult<Message> {
         let mut reply_message = Message::default();
-        let cluster = request_message.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CLUSTER));
+        let cluster = request_message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_CLUSTER));
         if let Some(cluster) = cluster {
             reply_message.set_body(Some(Bytes::copy_from_slice(body)));
-            let reply_topic = mix_all::get_retry_topic(&cluster);
+            let reply_topic = mix_all::get_retry_topic(cluster);
             reply_message.set_topic(CheetahString::from_string(reply_topic));
             MessageAccessor::put_property(
                 &mut reply_message,
                 CheetahString::from_static_str(MessageConst::PROPERTY_MESSAGE_TYPE),
                 CheetahString::from_static_str(mix_all::REPLY_MESSAGE_FLAG),
             );
-            if let Some(reply_to) = request_message.get_property(&CheetahString::from_static_str(
+            if let Some(reply_to) = request_message.property(&CheetahString::from_static_str(
                 MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT,
             )) {
                 MessageAccessor::put_property(
                     &mut reply_message,
                     CheetahString::from_static_str(MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT),
-                    reply_to,
+                    reply_to.into(),
                 );
             }
             if let Some(correlation_id) =
-                request_message.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
+                request_message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
             {
                 MessageAccessor::put_property(
                     &mut reply_message,
                     CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID),
-                    correlation_id,
+                    correlation_id.into(),
                 );
             }
             if let Some(ttl) =
-                request_message.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_MESSAGE_TTL))
+                request_message.property(&CheetahString::from_static_str(MessageConst::PROPERTY_MESSAGE_TTL))
             {
                 MessageAccessor::put_property(
                     &mut reply_message,
                     CheetahString::from_static_str(MessageConst::PROPERTY_MESSAGE_TTL),
-                    ttl,
+                    ttl.into(),
                 );
             }
             Ok(reply_message)
@@ -77,8 +77,10 @@ impl MessageUtil {
     }
 
     pub fn get_reply_to_client(reply_message: &Message) -> Option<CheetahString> {
-        reply_message.get_property(&CheetahString::from_static_str(
-            MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT,
-        ))
+        reply_message
+            .property(&CheetahString::from_static_str(
+                MessageConst::PROPERTY_MESSAGE_REPLY_TO_CLIENT,
+            ))
+            .map(Into::into)
     }
 }

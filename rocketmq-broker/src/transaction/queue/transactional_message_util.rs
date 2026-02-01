@@ -50,13 +50,13 @@ impl TransactionalMessageUtil {
         msg_inner.message_ext_inner.set_msg_id(msg_ext.msg_id().clone());
         msg_inner.set_topic(
             msg_ext
-                .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+                .property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
                 .unwrap_or_default(),
         );
         if let Some(body) = msg_ext.get_body() {
             msg_inner.set_body(body.clone());
         }
-        if let Some(real_queue_id_str) = msg_ext.get_property(&CheetahString::from_static_str("REAL_QUEUE_ID")) {
+        if let Some(real_queue_id_str) = msg_ext.property(&CheetahString::from_static_str("REAL_QUEUE_ID")) {
             if let Ok(value) = real_queue_id_str.parse::<i32>() {
                 msg_inner.message_ext_inner.set_queue_id(value);
             }
@@ -67,7 +67,7 @@ impl TransactionalMessageUtil {
         msg_inner.message_ext_inner.set_born_timestamp(msg_ext.born_timestamp);
         msg_inner.message_ext_inner.set_born_host(msg_ext.born_host);
 
-        if let Some(transaction_id) = msg_ext.get_property(&CheetahString::from_static_str(
+        if let Some(transaction_id) = msg_ext.property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
         )) {
             msg_inner.set_transaction_id(transaction_id);
@@ -140,7 +140,7 @@ mod tests {
         assert_eq!(
             msg_inner.get_topic(),
             &msg_ext
-                .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+                .property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
                 .unwrap_or_default()
         );
         assert_eq!(msg_inner.get_body(), msg_ext.get_body());
@@ -148,7 +148,7 @@ mod tests {
         assert_eq!(
             msg_inner.get_transaction_id(),
             msg_ext
-                .get_property(&CheetahString::from_static_str(
+                .property(&CheetahString::from_static_str(
                     MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX
                 ))
                 .as_ref()

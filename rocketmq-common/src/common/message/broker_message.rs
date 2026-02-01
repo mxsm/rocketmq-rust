@@ -266,11 +266,11 @@ impl MessageTrait for BrokerMessage {
         self.delete_property(name);
     }
 
-    fn get_property(&self, name: &CheetahString) -> Option<CheetahString> {
+    fn property(&self, name: &CheetahString) -> Option<CheetahString> {
         self.envelope.properties().get(name).cloned()
     }
 
-    fn get_property_ref(&self, name: &CheetahString) -> Option<&CheetahString> {
+    fn property_ref(&self, name: &CheetahString) -> Option<&CheetahString> {
         self.envelope.properties().get(name)
     }
 

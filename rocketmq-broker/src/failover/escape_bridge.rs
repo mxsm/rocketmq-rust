@@ -254,7 +254,7 @@ where
 
     fn get_producer_group(&self, message_ext: &MessageExtBrokerInner) -> CheetahString {
         let producer_group =
-            message_ext.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP));
+            message_ext.property(&CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP));
         match producer_group {
             None => self.inner_producer_group_name.clone(),
             Some(value) => value,
