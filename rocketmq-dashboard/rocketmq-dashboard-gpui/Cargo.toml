@@ -31,7 +31,7 @@ tokio = { workspace = true }
 
 # Force specific version to resolve core-graphics conflicts on macOS
 [target.'cfg(target_os = "macos")'.dependencies]
-core-graphics = "=0.25.0"
+font-kit = "0.14.3"
 
 
 
