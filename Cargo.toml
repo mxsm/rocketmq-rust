@@ -105,3 +105,8 @@ smallvec = "1.13"
 
 opentelemetry = { version = "0.31", features = ["metrics"] }
 opentelemetry_sdk = { version = "0.31", features = ["metrics", "rt-tokio"] }
+
+# Patch to fix core-graphics version conflicts on macOS for zed-font-kit
+[patch.crates-io]
+core-graphics = { version = "0.25.0" }
+core-text = { version = "21.1.0" }

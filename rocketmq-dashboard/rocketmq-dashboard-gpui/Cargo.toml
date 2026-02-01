@@ -30,10 +30,5 @@ tracing-subscriber = { workspace = true }
 # Async runtime
 tokio = { workspace = true }
 
-# Fix core-graphics version conflict on macOS
-[target.'cfg(target_os = "macos")'.dependencies]
-core-graphics = "0.24"
-core-text = "21.1"
-
 [build-dependencies]
 anyhow = { workspace = true }
