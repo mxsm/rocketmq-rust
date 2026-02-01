@@ -82,6 +82,7 @@ use rocketmq_remoting::protocol::header::change_invisible_time_request_header::C
 use rocketmq_remoting::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
+use rocketmq_remoting::protocol::header::create_user_request_header::CreateUserRequestHeader;
 use rocketmq_remoting::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
 use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
@@ -199,6 +200,41 @@ impl MQClientAPIImpl {
                 ResponseCode::Success => {}
                 _ => err_response = Some(response),
             }
+        }
+
+        if let Some(err_response) = err_response {
+            return Err(mq_client_err!(
+                err_response.code(),
+                err_response.remark().map_or("".to_string(), |s| s.to_string())
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn create_user(
+        &self,
+        broker_address: CheetahString,
+        user_info: &UserInfo,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let mut request_header = CreateUserRequestHeader::default();
+        let username = user_info
+            .username
+            .clone()
+            .ok_or_else(|| mq_client_err!(-1, "username is required".to_string()))?;
+        request_header.set_username(username);
+        let mut request = RemotingCommand::create_request_command(RequestCode::AuthCreateUser, request_header);
+        request = request.set_body(user_info.encode()?);
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_address), request.clone(), timeout_millis)
+            .await?;
+
+        let mut err_response = None;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {}
+            _ => err_response = Some(response),
         }
 
         if let Some(err_response) = err_response {
