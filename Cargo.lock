@@ -6729,6 +6729,8 @@ name = "rocketmq-dashboard-gpui"
 version = "0.8.0"
 dependencies = [
  "anyhow",
+ "core-graphics 0.24.0",
+ "core-text",
  "gpui",
  "gpui-component",
  "rocketmq-dashboard-common",
