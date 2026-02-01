@@ -5,7 +5,7 @@ import {themes as prismThemes} from 'prism-react-renderer';
 const config: Config = {
     title: 'RocketMQ-Rust',
     tagline: 'High-performance messaging middleware built with Rust',
-    favicon: 'img/favicon.svg',
+    favicon: 'img/favicon.ico',
 
     // Set the production url of your site here
     url: 'https://rocketmqrust.com',
@@ -92,7 +92,7 @@ const config: Config = {
             title: 'RocketMQ-Rust',
             logo: {
                 alt: 'RocketMQ-Rust Logo',
-                src: 'img/logo.svg',
+                src: 'img/Rocketmq-rust-logo.png',
             },
             items: [
                 {

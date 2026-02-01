@@ -64,6 +64,29 @@
   --ifm-table-border-color: #334155;
 }
 
+/* Navbar logo customization */
+.navbar__logo {
+  display: flex !important;
+  align-items: center !important;
+}
+
+.navbar__logo img {
+  height: 40px !important;
+  width: auto !important;
+  vertical-align: middle !important;
+}
+
+/* Ensure navbar height remains consistent */
+.navbar {
+  min-height: 60px !important;
+  max-height: 60px !important;
+}
+
+.navbar__inner {
+  display: flex !important;
+  align-items: center !important;
+}
+
 /* Custom hero gradient - removed to use module CSS */
 .hero {
   /* Hero styles now in index.module.css */
