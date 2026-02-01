@@ -1,14 +1,17 @@
 <p align="center">
+    <img src="resources/RocketMQ-Rust.png" width="30%" height="auto"/>
     <img src="resources/logo.png" width="30%" height="auto"/>
 </p>
 
 <div align="center">
-    
+
 [![GitHub last commit](https://img.shields.io/github/last-commit/mxsm/rocketmq-rust)](https://github.com/mxsm/rocketmq-rust/commits/main)
 [![Crates.io](https://img.shields.io/crates/v/rocketmq-rust.svg)](https://crates.io/crates/rocketmq-rust)
 [![Docs.rs](https://docs.rs/rocketmq-rust/badge.svg)](https://docs.rs/rocketmq-rust)
 [![CI](https://github.com/mxsm/rocketmq-rust/workflows/CI/badge.svg)](https://github.com/mxsm/rocketmq-rust/actions)
-[![CodeCov][codecov-image]][codecov-url] [![GitHub contributors](https://img.shields.io/github/contributors/mxsm/rocketmq-rust)](https://github.com/mxsm/rocketmq-rust/graphs/contributors) [![Crates.io License](https://img.shields.io/crates/l/rocketmq-rust)](#license) 
+[![Website Deploy](https://github.com/mxsm/rocketmq-rust/workflows/Deploy%20to%20GitHub%20Pages/badge.svg)](https://github.com/mxsm/rocketmq-rust/actions/workflows/deploy.yml)
+[![Website Check](https://github.com/mxsm/rocketmq-rust/workflows/Website%20Deploy%20Check/badge.svg)](https://github.com/mxsm/rocketmq-rust/actions/workflows/website-check.yml)
+[![CodeCov][codecov-image]][codecov-url] [![GitHub contributors](https://img.shields.io/github/contributors/mxsm/rocketmq-rust)](https://github.com/mxsm/rocketmq-rust/graphs/contributors) [![Crates.io License](https://img.shields.io/crates/l/rocketmq-rust)](#license)
 <br/>
 ![GitHub repo size](https://img.shields.io/github/repo-size/mxsm/rocketmq-rust)
 ![Static Badge](https://img.shields.io/badge/MSRV-1.85.0%2B-25b373)
@@ -23,10 +26,11 @@
 
 # RocketMQ-Rust
 
-🚀 A high-performance, reliable, and feature-rich **unofficial Rust implementation** of [Apache RocketMQ](https://github.com/apache/rocketmq), designed to bring enterprise-grade message middleware to the Rust ecosystem.
+🚀 A high-performance, reliable, and feature-rich **unofficial Rust implementation** of [Apache RocketMQ](https://github.com/apache/rocketmq), designed to bring
+enterprise-grade message middleware to the Rust ecosystem.
 
 <div align="center">
-    
+
 [![Overview](https://img.shields.io/badge/📖_Overview-4A90E2?style=flat-square&labelColor=2C5F9E&color=4A90E2)](#-overview)
 [![Quick Start](https://img.shields.io/badge/🚀_Quick_Start-50C878?style=flat-square&labelColor=2D7A4F&color=50C878)](#-quick-start)
 [![Documentation](https://img.shields.io/badge/📚_Documentation-FF8C42?style=flat-square&labelColor=CC6A2F&color=FF8C42)](#-documentation)
@@ -42,11 +46,14 @@
 
 ## ✨ Overview
 
-**RocketMQ-Rust** is a complete reimplementation of Apache RocketMQ in Rust, leveraging Rust's unique advantages in memory safety, zero-cost abstractions, and fearless concurrency. This project aims to provide Rust developers with a production-ready distributed message queue system that delivers exceptional performance while maintaining full compatibility with the RocketMQ protocol.
+**RocketMQ-Rust** is a complete reimplementation of Apache RocketMQ in Rust, leveraging Rust's unique advantages in memory safety, zero-cost abstractions, and
+fearless concurrency. This project aims to provide Rust developers with a production-ready distributed message queue system that delivers exceptional
+performance while maintaining full compatibility with the RocketMQ protocol.
 
 ### 🎯 Why RocketMQ-Rust?
 
-- **🦀 Memory Safety**: Built on Rust's ownership model, eliminating entire classes of bugs like null pointer dereferences, buffer overflows, and data races at compile time
+- **🦀 Memory Safety**: Built on Rust's ownership model, eliminating entire classes of bugs like null pointer dereferences, buffer overflows, and data races at
+  compile time
 - **⚡ High Performance**: Zero-cost abstractions and efficient async runtime deliver exceptional throughput with minimal resource overhead
 - **🔒 Thread Safety**: Fearless concurrency enables safe parallel processing without the risk of race conditions
 - **🌐 Cross-Platform**: First-class support for Linux, Windows, and macOS with native performance on each platform
@@ -62,7 +69,7 @@
 RocketMQ-Rust implements a distributed architecture with the following core components:
 
 - **Name Server**: Lightweight service discovery and routing coordination
-- **Broker**: Message storage and delivery engine with support for topics, queues, and consumer groups  
+- **Broker**: Message storage and delivery engine with support for topics, queues, and consumer groups
 - **Producer Client**: High-performance message publishing with various sending modes
 - **Consumer Client**: Flexible message consumption with push and pull models
 - **Store**: Efficient local storage engine optimized for sequential writes
@@ -153,19 +160,19 @@ async fn main() -> Result<()> {
         .producer_group("example_producer_group")
         .name_server_addr("127.0.0.1:9876")
         .build();
-    
+
     // Start producer
     producer.start().await?;
-    
+
     // Create and send message
     let message = Message::builder()
         .topic("TestTopic")
         .body("Hello RocketMQ from Rust!".as_bytes().to_vec())
         .build();
-    
+
     let send_result = producer.send(message).await?;
     println!("Message sent: {:?}", send_result);
-    
+
     // Shutdown producer
     producer.shutdown().await;
     Ok(())
@@ -173,6 +180,7 @@ async fn main() -> Result<()> {
 ```
 
 For more examples including batch sending, transactions, and consumer patterns, check out:
+
 - [Send single messages](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#send-a-single-message)
 - [Send batch messages](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#send-batch-messages)
 - [RPC messaging](https://github.com/mxsm/rocketmq-rust/blob/main/rocketmq-client/README.md#send-rpc-messages)
@@ -182,21 +190,21 @@ For more examples including batch sending, transactions, and consumer patterns, 
 
 RocketMQ-Rust is organized as a monorepo with the following crates:
 
-| Crate | Description | Status |
-|-------|-------------|--------|
-| [rocketmq-namesrv](./rocketmq-namesrv) | Name server for service discovery | ✅ Production |
-| [rocketmq-broker](./rocketmq-broker) | Message broker and storage engine | ✅ Production |
-| [rocketmq-client](./rocketmq-client) | Producer and consumer SDK | ✅ Production |
-| [rocketmq-store](./rocketmq-store) | Local storage implementation | ✅ Production |
-| [rocketmq-remoting](./rocketmq-remoting) | Network communication layer | ✅ Production |
-| [rocketmq-common](./rocketmq-common) | Common utilities and data structures | ✅ Production |
-| [rocketmq-runtime](./rocketmq-runtime) | Async runtime abstractions | ✅ Production |
-| [rocketmq-filter](./rocketmq-filter) | Message filtering engine | ✅ Production |
-| [rocketmq-auth](./rocketmq-auth) | Authentication and authorization | ✅ Production |
-| [rocketmq-controller](./rocketmq-controller) | High availability controller | 🚧 In Development |
-| [rocketmq-proxy](./rocketmq-proxy) | Protocol proxy layer | 🚧 In Development |
-| [rocketmq-cli](./rocketmq-cli) | Command-line tools | ✅ Production |
-| [rocketmq-tui](./rocketmq-tui) | Terminal UI for management | 🚧 In Development |
+| Crate                                        | Description                          | Status            |
+|----------------------------------------------|--------------------------------------|-------------------|
+| [rocketmq-namesrv](./rocketmq-namesrv)       | Name server for service discovery    | ✅ Production      |
+| [rocketmq-broker](./rocketmq-broker)         | Message broker and storage engine    | ✅ Production      |
+| [rocketmq-client](./rocketmq-client)         | Producer and consumer SDK            | ✅ Production      |
+| [rocketmq-store](./rocketmq-store)           | Local storage implementation         | ✅ Production      |
+| [rocketmq-remoting](./rocketmq-remoting)     | Network communication layer          | ✅ Production      |
+| [rocketmq-common](./rocketmq-common)         | Common utilities and data structures | ✅ Production      |
+| [rocketmq-runtime](./rocketmq-runtime)       | Async runtime abstractions           | ✅ Production      |
+| [rocketmq-filter](./rocketmq-filter)         | Message filtering engine             | ✅ Production      |
+| [rocketmq-auth](./rocketmq-auth)             | Authentication and authorization     | ✅ Production      |
+| [rocketmq-controller](./rocketmq-controller) | High availability controller         | 🚧 In Development |
+| [rocketmq-proxy](./rocketmq-proxy)           | Protocol proxy layer                 | 🚧 In Development |
+| [rocketmq-cli](./rocketmq-cli)               | Command-line tools                   | ✅ Production      |
+| [rocketmq-tui](./rocketmq-tui)               | Terminal UI for management           | 🚧 In Development |
 
 ## 🗺️ Roadmap
 
@@ -209,7 +217,7 @@ Our development follows the RocketMQ architecture with focus on:
 - [ ] **Message Filtering**: Tag-based and SQL92 filtering
 - [ ] **Transactions**: Distributed transaction message support
 - [ ] **Controller Mode**: Enhanced high availability with Raft consensus
-- [ ] **Tiered Storage**: Cloud-native tiered storage implementation  
+- [ ] **Tiered Storage**: Cloud-native tiered storage implementation
 - [ ] **Proxy**: Multi-protocol gateway support
 - [ ] **Observability**: Metrics, tracing, and monitoring integration
 
@@ -333,7 +341,8 @@ The minimum supported Rust version is 1.85.0 (stable or nightly).
 <details>
 <summary><b>How does performance compare to Java RocketMQ?</b></summary>
 
-RocketMQ-Rust leverages Rust's zero-cost abstractions and efficient async runtime to deliver comparable or better performance with lower memory footprint. Benchmarks are available in individual component documentation.
+RocketMQ-Rust leverages Rust's zero-cost abstractions and efficient async runtime to deliver comparable or better performance with lower memory footprint.
+Benchmarks are available in individual component documentation.
 </details>
 
 <details>
@@ -346,6 +355,7 @@ Yes, you can deploy RocketMQ-Rust components alongside Java RocketMQ. For exampl
 <summary><b>How can I migrate from Java RocketMQ to RocketMQ-Rust?</b></summary>
 
 Migration can be done incrementally:
+
 1. Start by using Rust client SDK with existing Java brokers
 2. Gradually replace brokers with Rust implementation
 3. Both implementations can coexist during migration
@@ -393,5 +403,6 @@ You may choose either license for your use.
 </p>
 
 [codecov-image]: https://codecov.io/gh/mxsm/rocketmq-rust/branch/main/graph/badge.svg
+
 [codecov-url]: https://codecov.io/gh/mxsm/rocketmq-rust
 
