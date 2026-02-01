@@ -28,47 +28,72 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Parser)]
 #[command(group(ArgGroup::new("target")
     .required(true)
-    .args(&["cluster_name", "broker_addr"])),
-    group(ArgGroup::new("update_field")
-    .required(true)
-    .args(&["password", "user_type","user_status"]))
+    .args(&["cluster_name", "broker_addr"]))
 )]
-pub struct UpdateUserSubCommand {
-    #[arg(short = 'c', long = "clusterName", required = false)]
+pub struct CreateUserSubCommand {
+    #[arg(
+        short = 'c',
+        long = "clusterName",
+        required = false,
+        help = "create user to which cluster"
+    )]
     cluster_name: Option<String>,
 
-    #[arg(short = 'b', long = "brokerAddr", required = false)]
+    #[arg(
+        short = 'b',
+        long = "brokerAddr",
+        required = false,
+        help = "create user to which broker"
+    )]
     broker_addr: Option<String>,
 
-    #[arg(short = 'u', long = "username", required = true)]
+    #[arg(
+        short = 'u',
+        long = "username",
+        required = true,
+        help = "the username of user to create"
+    )]
     username: String,
 
-    #[arg(short = 'p', long = "password")]
-    password: Option<String>,
+    #[arg(
+        short = 'p',
+        long = "password",
+        required = true,
+        help = "the password of user to create"
+    )]
+    password: String,
 
-    #[arg(short = 't', long = "userType")]
+    #[arg(
+        short = 't',
+        long = "userType",
+        required = false,
+        help = "the userType of user to create"
+    )]
     user_type: Option<String>,
-
-    #[arg(short = 's', long = "userStatus")]
-    user_status: Option<String>,
 }
 
 #[derive(Clone)]
-struct ParsedUpdateUserSubCommand {
+struct ParsedCreateUserSubCommand {
     cluster_name: Option<CheetahString>,
     broker_addr: Option<CheetahString>,
     username: CheetahString,
     password: CheetahString,
     user_type: CheetahString,
-    user_status: CheetahString,
 }
 
-impl ParsedUpdateUserSubCommand {
-    fn new(command: &UpdateUserSubCommand) -> Result<Self, RocketMQError> {
+impl ParsedCreateUserSubCommand {
+    fn new(command: &CreateUserSubCommand) -> Result<Self, RocketMQError> {
         let username = command.username.trim();
         if username.is_empty() {
             return Err(RocketMQError::IllegalArgument(
-                "UpdateUserSubCommand: username cannot be empty".into(),
+                "CreateUserSubCommand: username cannot be empty".into(),
+            ));
+        }
+
+        let password = command.password.trim();
+        if password.is_empty() {
+            return Err(RocketMQError::IllegalArgument(
+                "CreateUserSubCommand: password cannot be empty".into(),
             ));
         }
 
@@ -86,18 +111,9 @@ impl ParsedUpdateUserSubCommand {
                 .filter(|s| !s.is_empty())
                 .map(CheetahString::from),
             username: username.into(),
-            password: command
-                .password
-                .as_deref()
-                .map(|s| CheetahString::from(s.trim()))
-                .unwrap_or_default(),
+            password: password.into(),
             user_type: command
                 .user_type
-                .as_deref()
-                .map(|s| CheetahString::from(s.trim()))
-                .unwrap_or_default(),
-            user_status: command
-                .user_status
                 .as_deref()
                 .map(|s| CheetahString::from(s.trim()))
                 .unwrap_or_default(),
@@ -105,9 +121,9 @@ impl ParsedUpdateUserSubCommand {
     }
 }
 
-impl CommandExecute for UpdateUserSubCommand {
+impl CommandExecute for CreateUserSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let parsed_command = ParsedUpdateUserSubCommand::new(self)?;
+        let parsed_command = ParsedCreateUserSubCommand::new(self)?;
 
         let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
             DefaultMQAdminExt::with_rpc_hook(rpc_hook)
@@ -120,45 +136,43 @@ impl CommandExecute for UpdateUserSubCommand {
 
         MQAdminExt::start(&mut default_mqadmin_ext)
             .await
-            .map_err(|e| RocketMQError::Internal(format!("UpdateUserSubCommand: Failed to start MQAdminExt: {}", e)))?;
+            .map_err(|e| RocketMQError::Internal(format!("CreateUserSubCommand: Failed to start MQAdminExt: {}", e)))?;
 
-        let operation_result = update_user(&parsed_command, &default_mqadmin_ext).await;
+        let operation_result = create_user(&parsed_command, &default_mqadmin_ext).await;
 
         MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
         operation_result
     }
 }
 
-async fn update_user(
-    parsed_command: &ParsedUpdateUserSubCommand,
+async fn create_user(
+    parsed_command: &ParsedCreateUserSubCommand,
     default_mqadmin_ext: &DefaultMQAdminExt,
 ) -> RocketMQResult<()> {
     if let Some(ref broker) = parsed_command.broker_addr {
         default_mqadmin_ext
-            .update_user(
+            .create_user(
                 broker.clone(),
                 parsed_command.username.clone(),
                 parsed_command.password.clone(),
                 parsed_command.user_type.clone(),
-                parsed_command.user_status.clone(),
             )
             .await?;
-        println!("update user to {} success.", broker);
+        println!("create user to {} success.", broker);
     } else if let Some(ref cluster_name) = parsed_command.cluster_name {
         let cluster_info = default_mqadmin_ext.examine_broker_cluster_info().await?;
 
-        let addresses = CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name.as_str())?;
+        let addresses = CommandUtil::fetch_master_and_slave_addr_by_cluster_name(&cluster_info, cluster_name.as_str())?;
         for address in addresses {
             default_mqadmin_ext
-                .update_user(
+                .create_user(
                     address.clone(),
                     parsed_command.username.clone(),
                     parsed_command.password.clone(),
                     parsed_command.user_type.clone(),
-                    parsed_command.user_status.clone(),
                 )
                 .await?;
-            println!("update user to {} success.", address);
+            println!("create user to {} success.", address);
         }
     }
 

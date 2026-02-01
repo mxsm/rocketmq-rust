@@ -1013,7 +1013,23 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         password: CheetahString,
         user_type: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        let user_info = UserInfo {
+            username: Some(username),
+            user_type: Some(user_type),
+            password: Some(password),
+            user_status: None,
+        };
+
+        if let Some(ref mq_client_instance) = self.client_instance {
+            let mq_client_api = mq_client_instance.get_mq_client_api_impl();
+            let timeout_millis = self.timeout_millis.as_millis() as u64;
+            mq_client_api
+                .create_user(broker_addr, &user_info, timeout_millis)
+                .await?;
+            Ok(())
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn update_user(
