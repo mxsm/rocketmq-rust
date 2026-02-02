@@ -843,7 +843,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         password: CheetahString,
         user_type: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .create_user(broker_addr, username, password, user_type)
+            .await
     }
 
     async fn update_user(
