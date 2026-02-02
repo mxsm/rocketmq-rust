@@ -259,7 +259,7 @@ where
                     // Record metrics for successful rollback
                     if let Some(prepare_msg) = result.prepare_message.as_ref() {
                         let real_topic = prepare_msg
-                            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+                            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
                             .unwrap_or_default();
 
                         if let Some(metrics) = BrokerMetricsManager::try_global() {
@@ -318,7 +318,7 @@ where
         let mut command = RemotingCommand::create_response_command();
         if let Some(message_ext) = message_ext {
             let pgroup_read =
-                message_ext.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP));
+                message_ext.property(&CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP));
             match pgroup_read {
                 Some(pgroup) if pgroup == request_header.producer_group.as_str() => {
                     // Producer group matches, continue validation

@@ -82,7 +82,7 @@ impl MessageAccessor {
     /// * `Option<String>` - The transfer flag value if it exists.
     #[inline]
     pub fn get_transfer_flag<T: MessageTrait>(msg: &T) -> Option<CheetahString> {
-        msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_TRANSFER_FLAG))
+        msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_TRANSFER_FLAG))
     }
 
     /// Sets the correction flag of a message.
@@ -110,7 +110,7 @@ impl MessageAccessor {
     /// * `Option<String>` - The correction flag value if it exists.
     #[inline]
     pub fn get_correction_flag<T: MessageTrait>(msg: &T) -> Option<CheetahString> {
-        msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRECTION_FLAG))
+        msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRECTION_FLAG))
     }
 
     /// Sets the origin message ID of a message.
@@ -138,7 +138,7 @@ impl MessageAccessor {
     /// * `Option<String>` - The origin message ID value if it exists.
     #[inline]
     pub fn get_origin_message_id<T: MessageTrait>(msg: &T) -> Option<CheetahString> {
-        msg.get_property(&CheetahString::from_static_str(
+        msg.property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_ORIGIN_MESSAGE_ID,
         ))
     }
@@ -165,7 +165,7 @@ impl MessageAccessor {
     /// * `Option<String>` - The MQ2 flag value if it exists.
     #[inline]
     pub fn get_mq2_flag<T: MessageTrait>(msg: &T) -> Option<CheetahString> {
-        msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_MQ2_FLAG))
+        msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_MQ2_FLAG))
     }
 
     /// Sets the reconsume time of a message.
@@ -193,7 +193,7 @@ impl MessageAccessor {
     /// * `Option<String>` - The reconsume time value if it exists.
     #[inline]
     pub fn get_reconsume_time<T: MessageTrait>(msg: &T) -> Option<CheetahString> {
-        msg.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_RECONSUME_TIME))
+        msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_RECONSUME_TIME))
     }
 
     /// Sets the maximum reconsume times of a message.
@@ -221,7 +221,7 @@ impl MessageAccessor {
     /// * `Option<String>` - The maximum reconsume times value if it exists.
     #[inline]
     pub fn get_max_reconsume_times<T: MessageTrait>(msg: &T) -> Option<CheetahString> {
-        msg.get_property(&CheetahString::from_static_str(
+        msg.property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_MAX_RECONSUME_TIMES,
         ))
     }
@@ -254,7 +254,7 @@ impl MessageAccessor {
     /// * `Option<String>` - The consume start timestamp value if it exists.
     #[inline]
     pub fn get_consume_start_time_stamp<T: MessageTrait>(msg: &T) -> Option<CheetahString> {
-        msg.get_property(&CheetahString::from_static_str(
+        msg.property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_CONSUME_START_TIMESTAMP,
         ))
     }

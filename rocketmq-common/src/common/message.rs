@@ -116,7 +116,7 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// An `Option<String>` containing the property value if it exists, otherwise `None`.
     fn get_user_property(&self, name: &CheetahString) -> Option<CheetahString> {
-        self.get_property(name)
+        self.property(name)
     }
 
     /// Retrieves a reference to a user-defined property from the message.
@@ -131,7 +131,7 @@ pub trait MessageTrait: Any + Display + Debug {
     /// An `Option<&CheetahString>` containing a reference to the property value if it exists,
     /// otherwise `None`.
     fn get_user_property_ref(&self, name: &CheetahString) -> Option<&CheetahString> {
-        self.get_property_ref(name)
+        self.property_ref(name)
     }
 
     /// Retrieves a property from the message.
@@ -143,7 +143,7 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Returns
     ///
     /// An `Option<String>` containing the property value if it exists, otherwise `None`.
-    fn get_property(&self, name: &CheetahString) -> Option<CheetahString>;
+    fn property(&self, name: &CheetahString) -> Option<CheetahString>;
 
     /// Retrieves a reference to a property value from the message.
     ///
@@ -156,7 +156,7 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// An `Option<&CheetahString>` containing a reference to the property value if it exists,
     /// otherwise `None`.
-    fn get_property_ref(&self, name: &CheetahString) -> Option<&CheetahString>;
+    fn property_ref(&self, name: &CheetahString) -> Option<&CheetahString>;
 
     /// Retrieves the topic of the message.
     ///
@@ -178,7 +178,7 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// An `Option<String>` containing the tags if they exist, otherwise `None`.
     fn get_tags(&self) -> Option<CheetahString> {
-        self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_TAGS))
+        self.property(&CheetahString::from_static_str(MessageConst::PROPERTY_TAGS))
     }
 
     /// Sets the tags for the message.
@@ -196,7 +196,7 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// An `Option<CheetahString>` containing the keys if they exist, otherwise `None`.
     fn get_keys(&self) -> Option<CheetahString> {
-        self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_KEYS))
+        self.property(&CheetahString::from_static_str(MessageConst::PROPERTY_KEYS))
     }
     /// Retrieves the keys associated with the message.
     ///
@@ -205,7 +205,7 @@ pub trait MessageTrait: Any + Display + Debug {
     /// An `Option<&CheetahString>` containing a reference to the keys if they exist, otherwise
     /// `None`.
     fn get_keys_ref(&self) -> Option<&CheetahString> {
-        self.get_property_ref(&CheetahString::from_static_str(MessageConst::PROPERTY_KEYS))
+        self.property_ref(&CheetahString::from_static_str(MessageConst::PROPERTY_KEYS))
     }
     /// Sets multiple keys from a collection for the message.
     ///
@@ -223,7 +223,7 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// An `i32` representing the delay time level, defaults to 0 if not set or invalid.
     fn get_delay_time_level(&self) -> i32 {
-        self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL))
+        self.property(&CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL))
             .and_then(|v| v.parse().ok())
             .unwrap_or(0)
     }
@@ -247,7 +247,7 @@ pub trait MessageTrait: Any + Display + Debug {
     /// `true` if the message should wait for store acknowledgment; `false` otherwise.
     /// Defaults to `true` if not set.
     fn is_wait_store_msg_ok(&self) -> bool {
-        self.get_property(&CheetahString::from_static_str(
+        self.property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_WAIT_STORE_MSG_OK,
         ))
         .map(|v| v.as_str() != "false")
@@ -326,7 +326,7 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// An `Option<String>` containing the buyer ID if it exists, otherwise `None`.
     fn get_buyer_id(&self) -> Option<CheetahString> {
-        self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_BUYER_ID))
+        self.property(&CheetahString::from_static_str(MessageConst::PROPERTY_BUYER_ID))
     }
 
     /// Sets the buyer ID for the message.
@@ -373,7 +373,7 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// The delay time in seconds, defaults to 0 if not set or invalid.
     fn get_delay_time_sec(&self) -> u64 {
-        self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_SEC))
+        self.property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_SEC))
             .and_then(|v| v.parse().ok())
             .unwrap_or(0)
     }
@@ -396,7 +396,7 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// The delay time in milliseconds, defaults to 0 if not set or invalid.
     fn get_delay_time_ms(&self) -> u64 {
-        self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_MS))
+        self.property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELAY_MS))
             .and_then(|v| v.parse().ok())
             .unwrap_or(0)
     }
@@ -419,7 +419,7 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// The delivery time in milliseconds, defaults to 0 if not set or invalid.
     fn get_deliver_time_ms(&self) -> u64 {
-        self.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVER_MS))
+        self.property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_DELIVER_MS))
             .and_then(|v| v.parse().ok())
             .unwrap_or(0)
     }

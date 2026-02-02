@@ -161,9 +161,10 @@ impl ClientRemotingProcessor {
     }
 
     async fn process_reply_message(reply_msg: MessageExt) {
-        let correlation_id = reply_msg
+        let correlation_id: CheetahString = reply_msg
             .message
-            .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_CORRELATION_ID))
+            .map(Into::into)
             .unwrap_or_default();
         if let Some(request_response_future) = REQUEST_FUTURE_HOLDER.get_request(correlation_id.as_str()).await {
             request_response_future.put_response_message(Some(Box::new(reply_msg)));
@@ -221,7 +222,7 @@ impl ClientRemotingProcessor {
                 );
                 message_ext.set_topic(CheetahString::from_string(topic));
             }
-            let transaction_id = message_ext.get_property(&CheetahString::from_static_str(
+            let transaction_id = message_ext.property(&CheetahString::from_static_str(
                 MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
             ));
             if let Some(transaction_id) = transaction_id {
@@ -229,8 +230,7 @@ impl ClientRemotingProcessor {
                     message_ext.set_transaction_id(transaction_id);
                 }
             }
-            let group =
-                message_ext.get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP));
+            let group = message_ext.property(&CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP));
             if let Some(group) = group {
                 let producer = self.client_instance.select_producer(&group).await;
                 if let Some(producer) = producer {
