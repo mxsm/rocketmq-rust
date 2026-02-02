@@ -16,6 +16,7 @@ mod copy_acl_sub_command;
 mod copy_users_sub_command;
 mod create_acl_sub_command;
 mod create_user_sub_command;
+mod list_users_sub_command;
 mod update_acl_sub_command;
 mod update_user_sub_command;
 
@@ -57,6 +58,13 @@ pub enum AuthCommands {
     CreateUser(create_user_sub_command::CreateUserSubCommand),
 
     #[command(
+        name = "listUsers",
+        about = "List users.",
+        long_about = None,
+    )]
+    ListUsers(list_users_sub_command::ListUsersSubCommand),
+
+    #[command(
         name = "updateAcl",
         about = "Update Access Control List (ACL)",
         long_about = None,
@@ -78,6 +86,7 @@ impl CommandExecute for AuthCommands {
             AuthCommands::CopyUsers(value) => value.execute(rpc_hook).await,
             AuthCommands::CreateAcl(value) => value.execute(rpc_hook).await,
             AuthCommands::CreateUser(value) => value.execute(rpc_hook).await,
+            AuthCommands::ListUsers(value) => value.execute(rpc_hook).await,
             AuthCommands::UpdateAcl(value) => value.execute(rpc_hook).await,
             AuthCommands::UpdateUser(value) => value.execute(rpc_hook).await,
         }

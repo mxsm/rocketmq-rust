@@ -395,7 +395,7 @@ where
         provider.get_user(username).await.map_err(|e| self.handle_exception(e))
     }
 
-    async fn list_user(&self, filter: Option<&str>) -> ManagerResult<Vec<User>> {
+    async fn list_users(&self, filter: Option<&str>) -> ManagerResult<Vec<User>> {
         let guard = self.authentication_metadata_provider.read().await;
         let provider = match &*guard {
             Some(p) => p,

@@ -149,7 +149,7 @@ pub trait AuthenticationMetadataManager: Send + Sync {
     ///
     /// * `Ok(Vec<User>)` - List of matching users
     /// * `Err(RocketMQError)` - Query error
-    async fn list_user(&self, filter: Option<&str>) -> ManagerResult<Vec<User>>;
+    async fn list_users(&self, filter: Option<&str>) -> ManagerResult<Vec<User>>;
 
     /// Check if a user is a super user.
     ///

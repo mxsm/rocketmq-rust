@@ -102,7 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 7. List all users
     println!("\n7. Listing all users...");
-    let all_users: Vec<User> = manager.list_user(None).await?;
+    let all_users: Vec<User> = manager.list_users(None).await?;
     println!("   Total users: {}", all_users.len());
     for user in &all_users {
         let user_type = user
@@ -125,7 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   ✓ User 'alice' and related ACLs deleted");
 
     // Verify deletion
-    let remaining_users: Vec<User> = manager.list_user(None).await?;
+    let remaining_users: Vec<User> = manager.list_users(None).await?;
     println!("   Remaining users: {}", remaining_users.len());
 
     println!("\n=== Example completed successfully! ===");

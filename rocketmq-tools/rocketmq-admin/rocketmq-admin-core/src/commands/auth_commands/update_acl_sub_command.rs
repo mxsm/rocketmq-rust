@@ -178,7 +178,7 @@ impl CommandExecute for UpdateAclSubCommand {
             } else {
                 // This case can not happen.
                 Err(RocketMQError::Internal(
-                    "UpdateAclSubCommand: Failed to start MQAdminExt:".into(),
+                    "UpdateAclSubCommand: broker_address or cluster_name must be set.".into(),
                 ))
             }
         }

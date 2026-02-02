@@ -1298,10 +1298,10 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn list_users(
         &self,
-        _broker_addr: CheetahString,
-        _filter: CheetahString,
+        broker_addr: CheetahString,
+        filter: CheetahString,
     ) -> rocketmq_error::RocketMQResult<Vec<UserInfo>> {
-        unimplemented!("list_users not implemented yet")
+        self.default_mqadmin_ext_impl.list_users(broker_addr, filter).await
     }
 
     async fn create_acl_with_info(
