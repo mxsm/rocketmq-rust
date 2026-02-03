@@ -17,6 +17,10 @@ use serde::Serialize;
 
 use crate::common::tools::track_type::TrackType;
 
+#[deprecated(
+    since = "0.7.0",
+    note = "This type has been moved to rocketmq_common::common::tools::message_track::MessageTrack"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MessageTrack {

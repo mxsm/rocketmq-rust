@@ -21,6 +21,10 @@ use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
 
+#[deprecated(
+    since = "0.7.0",
+    note = "This type has been moved to rocketmq_common::common::tools::track_type::TrackType"
+)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TrackType {
     Consumed,

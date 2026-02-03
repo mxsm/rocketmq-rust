@@ -14,6 +14,10 @@
 
 use cheetah_string::CheetahString;
 
+#[deprecated(
+    since = "0.7.0",
+    note = "This type has been moved to rocketmq_common::common::tools::broker_operator_result::BrokerOperatorResult"
+)]
 #[derive(Debug, Clone)]
 pub struct BrokerOperatorResult {
     success_list: Vec<CheetahString>,
