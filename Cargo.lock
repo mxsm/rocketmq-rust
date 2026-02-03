@@ -3573,6 +3573,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rocketmq-dashboard-common"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "rocketmq-client-rust",
+ "rocketmq-common",
+ "rocketmq-remoting",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "rocketmq-error"
 version = "0.8.0"
 dependencies = [
