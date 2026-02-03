@@ -12,13 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[allow(deprecated)]
+use crate::common::tools::track_type::TrackType;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::common::tools::track_type::TrackType;
-
+#[deprecated(
+    since = "0.7.0",
+    note = "This type has been moved to rocketmq_common::common::tools::message_track::MessageTrack"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(deprecated)]
 pub struct MessageTrack {
     pub consumer_group: String,
     pub track_type: Option<TrackType>,
@@ -26,6 +31,7 @@ pub struct MessageTrack {
 }
 
 #[allow(dead_code)]
+#[allow(deprecated)]
 impl MessageTrack {
     pub fn get_consumer_group(&self) -> String {
         self.consumer_group.clone()
@@ -51,7 +57,7 @@ impl MessageTrack {
         self.exception_desc = exception_desc;
     }
 }
-
+#[allow(deprecated)]
 impl std::fmt::Display for MessageTrack {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let track_type_str = self
@@ -72,6 +78,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(deprecated)]
     pub fn test_message_track() {
         let mut message_track = MessageTrack {
             consumer_group: "test_consumer_group".to_string(),

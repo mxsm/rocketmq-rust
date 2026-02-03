@@ -21,6 +21,10 @@ use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
 
+#[deprecated(
+    since = "0.7.0",
+    note = "This type has been moved to rocketmq_common::common::tools::track_type::TrackType"
+)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TrackType {
     Consumed,
@@ -31,7 +35,7 @@ pub enum TrackType {
     ConsumeBroadcasting,
     Unknown,
 }
-
+#[allow(deprecated)]
 impl std::fmt::Display for TrackType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -45,7 +49,7 @@ impl std::fmt::Display for TrackType {
         }
     }
 }
-
+#[allow(deprecated)]
 impl Serialize for TrackType {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -63,7 +67,7 @@ impl Serialize for TrackType {
         serializer.serialize_str(s)
     }
 }
-
+#[allow(deprecated)]
 impl<'de> Deserialize<'de> for TrackType {
     fn deserialize<D>(deserializer: D) -> Result<TrackType, D::Error>
     where
@@ -114,6 +118,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(deprecated)]
     fn serialize_consumed_but_filtered() {
         let track_type = TrackType::ConsumedButFiltered;
         let serialized = serde_json::to_string(&track_type).unwrap();
@@ -121,6 +126,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn deserialize_not_consumed_yet() {
         let json = "\"NOT_CONSUME_YET\"";
         let deserialized: TrackType = serde_json::from_str(json).unwrap();
@@ -128,6 +134,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn serialize_not_online() {
         let track_type = TrackType::NotOnline;
         let serialized = serde_json::to_string(&track_type).unwrap();
@@ -135,6 +142,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn deserialize_consume_broadcasting() {
         let json = "\"CONSUME_BROADCASTING\"";
         let deserialized: TrackType = serde_json::from_str(json).unwrap();
@@ -142,6 +150,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn display_pull_variant() {
         let track_type = TrackType::Pull;
         assert_eq!(track_type.to_string(), "PULL");

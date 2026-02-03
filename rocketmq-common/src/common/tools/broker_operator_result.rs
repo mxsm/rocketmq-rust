@@ -14,12 +14,16 @@
 
 use cheetah_string::CheetahString;
 
+#[deprecated(
+    since = "0.7.0",
+    note = "This type has been moved to rocketmq_common::common::tools::broker_operator_result::BrokerOperatorResult"
+)]
 #[derive(Debug, Clone)]
 pub struct BrokerOperatorResult {
     success_list: Vec<CheetahString>,
     failure_list: Vec<CheetahString>,
 }
-
+#[allow(deprecated)]
 impl Default for BrokerOperatorResult {
     fn default() -> Self {
         Self::new()
@@ -27,6 +31,7 @@ impl Default for BrokerOperatorResult {
 }
 
 #[allow(dead_code)]
+#[allow(deprecated)]
 impl BrokerOperatorResult {
     pub fn new() -> Self {
         BrokerOperatorResult {
@@ -51,7 +56,7 @@ impl BrokerOperatorResult {
         self.failure_list = failure_list;
     }
 }
-
+#[allow(deprecated)]
 impl std::fmt::Display for BrokerOperatorResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -69,6 +74,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(deprecated)]
     fn broker_operator_result_default_values() {
         let result = BrokerOperatorResult::new();
         assert!(result.get_success_list().is_empty());
@@ -76,6 +82,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn broker_operator_result_set_success_list() {
         let mut result = BrokerOperatorResult::new();
         let success_list = vec![CheetahString::from("success1"), CheetahString::from("success2")];
@@ -84,6 +91,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn broker_operator_result_set_failure_list() {
         let mut result = BrokerOperatorResult::new();
         let failure_list = vec![CheetahString::from("failure1"), CheetahString::from("failure2")];
@@ -92,6 +100,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn broker_operator_result_display_format() {
         let mut result = BrokerOperatorResult::new();
         let success_list = vec![CheetahString::from("success1")];
