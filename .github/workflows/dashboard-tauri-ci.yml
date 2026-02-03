@@ -1,0 +1,178 @@
+name: Dashboard Tauri CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'rocketmq-dashboard/rocketmq-dashboard-tauri/**'
+      - '.github/workflows/dashboard-tauri-ci.yml'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'rocketmq-dashboard/rocketmq-dashboard-tauri/**'
+      - '.github/workflows/dashboard-tauri-ci.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
+  CI: true
+
+defaults:
+  run:
+    working-directory: rocketmq-dashboard/rocketmq-dashboard-tauri
+
+jobs:
+  # =========================
+  # Frontend Check & Build
+  # =========================
+  frontend-check:
+    name: Frontend Check & Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: rocketmq-dashboard/rocketmq-dashboard-tauri/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript Check
+        run: npx tsc --noEmit
+
+      - name: Build Frontend
+        run: npm run build
+
+  # =========================
+  # Rust Backend Check
+  # =========================
+  rust-check:
+    name: Rust Check (fmt + clippy)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Set up Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri
+          shared-key: dashboard-tauri-ubuntu
+
+      - name: Format check
+        working-directory: rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri
+        run: cargo fmt --all -- --check
+
+      - name: Clippy check
+        working-directory: rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  # =========================
+  # Tauri Build (Multi-platform)
+  # =========================
+  tauri-build:
+    name: Tauri Build (${{ matrix.platform }})
+    needs: [frontend-check, rust-check]
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    runs-on: ${{ matrix.platform.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: rocketmq-dashboard/rocketmq-dashboard-tauri/package-lock.json
+
+      # ---------- Ubuntu ----------
+      - name: Install system dependencies (Ubuntu)
+        if: matrix.platform.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      # ---------- macOS ----------
+      - name: Install system dependencies (macOS)
+        if: matrix.platform.os == 'macos-latest'
+        run: |
+          # Xcode Command Line Tools are pre-installed on GitHub runners
+
+      # ---------- Windows ----------
+      - name: Install system dependencies (Windows)
+        if: matrix.platform.os == 'windows-latest'
+        run: |
+          # WebView2 is pre-installed on GitHub Windows runners
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri
+          shared-key: dashboard-tauri-${{ matrix.platform.os }}-${{ matrix.platform.target }}
+
+      - name: Install Tauri CLI
+        run: npm install -g @tauri-apps/cli@latest
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri App
+        run: npm run tauri build -- --target ${{ matrix.platform.target }}
