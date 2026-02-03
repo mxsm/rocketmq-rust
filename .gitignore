@@ -42,3 +42,7 @@ _asset_bundler_cache
 _site
 
 .claude
+
+#tauri
+**/src-tauri/target
+**/gen/schemas
