@@ -159,7 +159,7 @@ async fn get_user_from_cluster(
                 .await;
 
             let (users, errors): (Vec<_>, Vec<_>) = results.into_iter().partition(Result::is_ok);
-            let users: Vec<UserInfo> = users.into_iter().map(Result::unwrap).flatten().collect();
+            let users: Vec<UserInfo> = users.into_iter().filter_map(Result::unwrap).collect();
             let failed_addr: Vec<CheetahString> = errors.into_iter().map(Result::unwrap_err).collect();
 
             Ok((users, failed_addr))
