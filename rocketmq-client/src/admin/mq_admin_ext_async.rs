@@ -21,7 +21,9 @@ use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+#[allow(deprecated)]
 use rocketmq_common::common::tools::broker_operator_result::BrokerOperatorResult;
+#[allow(deprecated)]
 use rocketmq_common::common::tools::message_track::MessageTrack;
 use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
 use rocketmq_remoting::protocol::admin::consume_stats_list::ConsumeStatsList;
@@ -234,7 +236,7 @@ pub trait MQAdminExt: Send {
         addrs: HashSet<CheetahString>,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()>;
-
+    #[allow(deprecated)]
     async fn delete_topic_in_broker_concurrent(
         &self,
         addrs: HashSet<CheetahString>,
@@ -291,7 +293,7 @@ pub trait MQAdminExt: Send {
         topic: CheetahString,
         timestamp: u64,
     ) -> rocketmq_error::RocketMQResult<()>;
-
+    #[allow(deprecated)]
     async fn reset_offset_new_concurrent(
         &self,
         group: CheetahString,
@@ -379,9 +381,9 @@ pub trait MQAdminExt: Send {
         topic: CheetahString,
         msg_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<ConsumeMessageDirectlyResult>;
-
+    #[allow(deprecated)]
     async fn message_track_detail(&self, msg_id: CheetahString) -> rocketmq_error::RocketMQResult<Vec<MessageTrack>>;
-
+    #[allow(deprecated)]
     async fn message_track_detail_concurrent(&self, msg_id: CheetahString) -> AdminToolResult<Vec<MessageTrack>>;
 
     async fn clone_group_offset(

@@ -29,7 +29,9 @@ use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+#[allow(deprecated)]
 use rocketmq_common::common::tools::broker_operator_result::BrokerOperatorResult;
+#[allow(deprecated)]
 use rocketmq_common::common::tools::message_track::MessageTrack;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_error::RocketMQResult;
@@ -1124,7 +1126,7 @@ impl MQAdminExt for DefaultMQAdminExt {
     ) -> rocketmq_error::RocketMQResult<ProducerTableInfo> {
         unimplemented!("get_all_producer_info not implemented yet")
     }
-
+    #[allow(deprecated)]
     async fn delete_topic_in_broker_concurrent(
         &self,
         _addrs: HashSet<CheetahString>,
@@ -1142,7 +1144,7 @@ impl MQAdminExt for DefaultMQAdminExt {
     ) -> rocketmq_error::RocketMQResult<Vec<RollbackStats>> {
         unimplemented!("reset_offset_by_timestamp_old not implemented yet")
     }
-
+    #[allow(deprecated)]
     async fn reset_offset_new_concurrent(
         &self,
         _group: CheetahString,
@@ -1167,11 +1169,11 @@ impl MQAdminExt for DefaultMQAdminExt {
     ) -> AdminToolResult<Vec<QueueTimeSpan>> {
         unimplemented!("query_consume_time_span_concurrent not implemented yet")
     }
-
+    #[allow(deprecated)]
     async fn message_track_detail(&self, _msg_id: CheetahString) -> rocketmq_error::RocketMQResult<Vec<MessageTrack>> {
         unimplemented!("message_track_detail not implemented yet")
     }
-
+    #[allow(deprecated)]
     async fn message_track_detail_concurrent(&self, _msg_id: CheetahString) -> AdminToolResult<Vec<MessageTrack>> {
         unimplemented!("message_track_detail_concurrent not implemented yet")
     }
