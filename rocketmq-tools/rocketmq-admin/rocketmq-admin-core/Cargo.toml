@@ -32,7 +32,7 @@ tokio                = { workspace = true }
 tracing              = { workspace = true }
 
 cheetah-string = { workspace = true }
-clap           = { version = "4.5.56", features = ["derive"] }
+clap           = { version = "4.5.57", features = ["derive"] }
 clap_complete  = "4.5"
 tabled         = { version = "0.20.0", features = ["derive"] }
 futures        = "0.3.31"
