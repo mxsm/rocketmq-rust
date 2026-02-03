@@ -54,7 +54,7 @@ uuid                    = { workspace = true }
 cheetah-string          = { workspace = true }
 
 bitvec   = "1.0.1"
-bytemuck = "1.24.0"
+bytemuck = "1.25.0"
 
 dashmap = { workspace = true, features = ["serde"] }
 
