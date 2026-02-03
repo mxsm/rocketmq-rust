@@ -238,7 +238,7 @@ define_request_code! {
         AuthUpdateUser = 3002,
         AuthDeleteUser = 3003,
         AuthGetUser = 3004,
-        AuthListUser = 3005,
+        AuthListUsers = 3005,
         AuthCreateAcl = 3006,
         AuthUpdateAcl = 3007,
         AuthDeleteAcl = 3008,

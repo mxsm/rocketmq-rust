@@ -17,6 +17,7 @@ use crate::processor::admin_broker_processor::batch_mq_handler::BatchMqHandler;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 use crate::processor::admin_broker_processor::broker_epoch_cache_handler::BrokerEpochCacheHandler;
 use crate::processor::admin_broker_processor::consumer_request_handler::ConsumerRequestHandler;
+use crate::processor::admin_broker_processor::list_users_request_handler::ListUsersRequestHandler;
 use crate::processor::admin_broker_processor::message_related_handler::MessageRelatedHandler;
 use crate::processor::admin_broker_processor::notify_broker_role_change_handler::NotifyBrokerRoleChangeHandler;
 use crate::processor::admin_broker_processor::notify_min_broker_id_handler::NotifyMinBrokerChangeIdHandler;
@@ -41,6 +42,7 @@ mod batch_mq_handler;
 mod broker_config_request_handler;
 mod broker_epoch_cache_handler;
 mod consumer_request_handler;
+mod list_users_request_handler;
 mod message_related_handler;
 mod notify_broker_role_change_handler;
 mod notify_min_broker_id_handler;
@@ -70,6 +72,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     message_related_handler: MessageRelatedHandler<MS>,
     producer_request_handler: ProducerRequestHandler<MS>,
     update_user_request_handler: UpdateUserRequestHandler<MS>,
+    list_users_request_handler: ListUsersRequestHandler<MS>,
 }
 
 impl<MS> RequestProcessor for AdminBrokerProcessor<MS>
@@ -109,6 +112,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
         let message_related_handler = MessageRelatedHandler::new(broker_runtime_inner.clone());
         let producer_request_handler = ProducerRequestHandler::new(broker_runtime_inner.clone());
         let update_user_request_handler = UpdateUserRequestHandler::new(broker_runtime_inner.clone());
+        let list_users_request_handler = ListUsersRequestHandler::new(broker_runtime_inner.clone());
 
         AdminBrokerProcessor {
             topic_request_handler,
@@ -126,6 +130,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             message_related_handler,
             producer_request_handler,
             update_user_request_handler,
+            list_users_request_handler,
         }
     }
 }
@@ -327,7 +332,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             RequestCode::AuthUpdateUser => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::AuthDeleteUser => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::AuthGetUser => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::AuthListUser => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::AuthListUsers => {
+                self.list_users_request_handler
+                    .list_users_request(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::AuthCreateAcl => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::AuthUpdateAcl => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::AuthDeleteAcl => Ok(get_unknown_cmd_response(request_code)),

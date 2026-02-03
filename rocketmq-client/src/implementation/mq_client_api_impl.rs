@@ -92,6 +92,7 @@ use rocketmq_remoting::protocol::header::get_max_offset_request_header::GetMaxOf
 use rocketmq_remoting::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
 use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
 use rocketmq_remoting::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
+use rocketmq_remoting::protocol::header::list_users_request_header::ListUsersRequestHeader;
 use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
@@ -279,6 +280,35 @@ impl MQClientAPIImpl {
             ));
         }
         Ok(())
+    }
+
+    pub(crate) async fn list_users(
+        &self,
+        broker_address: CheetahString,
+        filter: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<Vec<UserInfo>> {
+        let request_header = ListUsersRequestHeader { filter };
+        let request = RemotingCommand::create_request_command(RequestCode::AuthListUsers, request_header);
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_address), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                if let Some(body) = response.get_body() {
+                    Vec::<UserInfo>::decode(body.as_ref())
+                } else {
+                    Ok(Vec::new())
+                }
+            }
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string())
+            )),
+        }
     }
 
     pub(crate) async fn update_name_server_config(

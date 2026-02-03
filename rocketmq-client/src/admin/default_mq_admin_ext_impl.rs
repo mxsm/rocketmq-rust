@@ -1470,10 +1470,17 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
 
     async fn list_users(
         &self,
-        _broker_addr: CheetahString,
-        _filter: CheetahString,
+        broker_addr: CheetahString,
+        filter: CheetahString,
     ) -> rocketmq_error::RocketMQResult<Vec<UserInfo>> {
-        unimplemented!("list_users not implemented yet")
+        if let Some(ref mq_client_instance) = self.client_instance {
+            let mq_client_api = mq_client_instance.get_mq_client_api_impl();
+            let timeout_millis = self.timeout_millis.as_millis() as u64;
+            let result = mq_client_api.list_users(broker_addr, filter, timeout_millis).await?;
+            Ok(result)
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn create_acl_with_info(
