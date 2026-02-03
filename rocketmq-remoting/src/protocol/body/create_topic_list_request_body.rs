@@ -22,3 +22,56 @@ use serde::Serialize;
 pub struct CreateTopicListRequestBody {
     pub topic_config_list: Vec<ArcMut<TopicConfig>>,
 }
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn default_create_topic_list_request_body() {
+        let body = CreateTopicListRequestBody::default();
+        assert!(body.topic_config_list.is_empty());
+    }
+
+    #[test]
+    fn serialize_create_topic_list_request_body() {
+        let topic = TopicConfig::new("test_topic");
+        let body = CreateTopicListRequestBody {
+            topic_config_list: vec![ArcMut::new(topic)],
+        };
+        let json = serde_json::to_string(&body).unwrap();
+
+        assert!(json.contains("topicConfigList"));
+        assert!(json.contains("test_topic"));
+    }
+
+    #[test]
+    fn deserialize_create_topic_list_request_body() {
+        let json = r#"
+    {
+        "topicConfigList": [
+            {
+                "topicName": "test_topic",
+                "readQueueNums": 2,
+                "writeQueueNums": 8,
+                "perm": 6,
+                "topicFilterType": "SINGLE_TAG",
+                "topicSysFlag": 0,
+                "order": false,
+                "attributes": {}
+            }
+        ]
+    }
+    "#;
+
+        let body: CreateTopicListRequestBody = serde_json::from_str(json).unwrap();
+
+        assert_eq!(body.topic_config_list.len(), 1);
+
+        let topic = &body.topic_config_list[0];
+
+        assert_eq!(topic.topic_name.as_deref(), Some("test_topic"));
+        assert_eq!(topic.read_queue_nums, 2);
+    }
+}
