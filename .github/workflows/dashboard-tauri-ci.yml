@@ -159,6 +159,9 @@ jobs:
         with:
           targets: ${{ matrix.platform.target }}
 
+      - name: Install Rust target (ensure it's available)
+        run: rustup target add ${{ matrix.platform.target }}
+
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
