@@ -12,6 +12,8 @@ on:
       - 'docker/**'
       - 'resources/**'
       - 'distribution/**'
+      - 'rocketmq-dashboard/rocketmq-dashboard-gpui/**'
+      - 'rocketmq-dashboard/rocketmq-dashboard-tauri/**'
   pull_request:
     branches: [ "main" ]
     paths-ignore:
@@ -20,6 +22,8 @@ on:
       - 'docker/**'
       - 'resources/**'
       - 'distribution/**'
+      - 'rocketmq-dashboard/rocketmq-dashboard-gpui/**'
+      - 'rocketmq-dashboard/rocketmq-dashboard-tauri/**'
 
 env:
   CARGO_TERM_COLOR: always
