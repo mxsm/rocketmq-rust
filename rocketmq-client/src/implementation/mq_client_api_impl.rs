@@ -85,6 +85,7 @@ use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::
 use rocketmq_remoting::protocol::header::create_user_request_header::CreateUserRequestHeader;
 use rocketmq_remoting::protocol::header::delete_acl_request_header::DeleteAclRequestHeader;
 use rocketmq_remoting::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
+use rocketmq_remoting::protocol::header::delete_user_request_header::DeleteUserRequestHeader;
 use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
@@ -335,6 +336,36 @@ impl MQClientAPIImpl {
                 response.remark().map_or("".to_string(), |s| s.to_string())
             )),
         }
+    }
+
+    pub(crate) async fn delete_user(
+        &self,
+        broker_address: CheetahString,
+        username: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let mut request_header = DeleteUserRequestHeader::default();
+        request_header.set_username(username);
+        let request = RemotingCommand::create_request_command(RequestCode::AuthDeleteUser, request_header);
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_address), request.clone(), timeout_millis)
+            .await?;
+
+        let mut err_response = None;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {}
+            _ => err_response = Some(response),
+        }
+
+        if let Some(err_response) = err_response {
+            return Err(mq_client_err!(
+                err_response.code(),
+                err_response.remark().map_or("".to_string(), |s| s.to_string())
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) async fn update_name_server_config(

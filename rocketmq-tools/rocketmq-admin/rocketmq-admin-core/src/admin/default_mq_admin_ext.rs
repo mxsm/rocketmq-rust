@@ -868,7 +868,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         broker_addr: CheetahString,
         username: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl.delete_user(broker_addr, username).await
     }
 
     async fn create_acl(

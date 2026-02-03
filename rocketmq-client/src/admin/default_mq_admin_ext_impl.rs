@@ -1066,7 +1066,14 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         broker_addr: CheetahString,
         username: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        if let Some(ref mq_client_instance) = self.client_instance {
+            let mq_client_api = mq_client_instance.get_mq_client_api_impl();
+            let timeout_millis = self.timeout_millis.as_millis() as u64;
+            mq_client_api.delete_user(broker_addr, username, timeout_millis).await?;
+            Ok(())
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn create_acl(
