@@ -637,7 +637,7 @@ pub trait MQAdminExt: Send {
         &self,
         broker_addr: CheetahString,
         username: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<UserInfo>;
+    ) -> rocketmq_error::RocketMQResult<Option<UserInfo>>;
 
     async fn list_users(
         &self,

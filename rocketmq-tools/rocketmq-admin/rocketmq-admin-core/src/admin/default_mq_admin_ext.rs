@@ -1294,10 +1294,10 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn get_user(
         &self,
-        _broker_addr: CheetahString,
-        _username: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<UserInfo> {
-        unimplemented!("get_user not implemented yet")
+        broker_addr: CheetahString,
+        username: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<Option<UserInfo>> {
+        self.default_mqadmin_ext_impl.get_user(broker_addr, username).await
     }
 
     async fn list_users(

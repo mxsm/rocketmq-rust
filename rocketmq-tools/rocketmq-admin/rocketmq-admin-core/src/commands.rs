@@ -18,6 +18,7 @@ mod auth_commands;
 mod consumer_commands;
 mod controller_commands;
 mod namesrv_commands;
+mod target;
 mod topic_commands;
 
 use std::sync::Arc;

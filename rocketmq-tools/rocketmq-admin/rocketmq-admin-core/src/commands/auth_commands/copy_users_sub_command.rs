@@ -141,8 +141,11 @@ async fn copy_users(
                 .get_user(source_broker.into(), username.clone())
                 .await
             {
-                Ok(user_info) => {
+                Ok(Some(user_info)) => {
                     user_list.push(user_info);
+                }
+                Ok(None) => {
+                    eprintln!("Warning: Could not find user {} at broker {}", username, source_broker);
                 }
                 Err(e) => {
                     eprintln!("Warning: Failed to get user {} from {}: {}", username, source_broker, e);
