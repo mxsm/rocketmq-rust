@@ -97,7 +97,7 @@ jobs:
   # Tauri Build (Multi-platform)
   # =========================
   tauri-build:
-    name: Tauri Build (${{ matrix.platform }})
+    name: Tauri Build (${{ matrix.platform.os }} / ${{ matrix.platform.target }})
     needs: [frontend-check, rust-check]
     
     strategy:
