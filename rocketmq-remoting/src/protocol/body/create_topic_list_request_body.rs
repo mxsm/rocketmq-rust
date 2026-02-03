@@ -71,7 +71,7 @@ mod tests {
 
         let topic = &body.topic_config_list[0];
 
-        assert_eq!(topic.topic_name.as_deref(), Some("test_topic".into()));
+        assert_eq!(topic.topic_name.as_deref(), Some("test_topic"));
         assert_eq!(topic.read_queue_nums, 2);
     }
 }
