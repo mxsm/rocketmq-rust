@@ -17,7 +17,7 @@ rocketmq-common = { workspace = true }
 rocketmq-store  = { workspace = true }
 
 
-clap           = { version = "4.5.56", features = ["derive"] }
+clap           = { version = "4.5.57", features = ["derive"] }
 tabled         = "0.20.0"
 bytes          = { workspace = true }
 cheetah-string = { workspace = true }
