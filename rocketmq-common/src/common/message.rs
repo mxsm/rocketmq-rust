@@ -62,6 +62,7 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Arguments
     ///
     /// * `keys` - The keys to set, converted into a `String`.
+    #[inline]
     fn set_keys(&mut self, keys: CheetahString) {
         self.put_property(CheetahString::from_static_str(MessageConst::PROPERTY_KEYS), keys);
     }
