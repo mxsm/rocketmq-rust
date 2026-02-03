@@ -81,29 +81,3 @@ impl AddWritePermOfBrokerResponseHeader {
         self.add_topic_count
     }
 }
-
-// impl CommandCustomHeader for AddWritePermOfBrokerResponseHeader {
-//     fn to_map(&self) -> Option<HashMap<CheetahString, CheetahString>> {
-//         Some(HashMap::from([(
-//             CheetahString::from_static_str(Self::ADD_TOPIC_COUNT),
-//             CheetahString::from_string(self.add_topic_count.to_string()),
-//         )]))
-//     }
-// }
-
-// impl FromMap for AddWritePermOfBrokerResponseHeader {
-//     type Error = rocketmq_error::RocketmqError;
-
-//     type Target = Self;
-
-//     fn from(map: &HashMap<CheetahString, CheetahString>) -> Result<Self::Target, Self::Error> {
-//         Ok(AddWritePermOfBrokerResponseHeader {
-//             add_topic_count: map
-//                 .get(&CheetahString::from_static_str(
-//                     AddWritePermOfBrokerResponseHeader::ADD_TOPIC_COUNT,
-//                 ))
-//                 .and_then(|s| s.parse::<i32>().ok())
-//                 .unwrap_or(0),
-//         })
-//     }
-// }
