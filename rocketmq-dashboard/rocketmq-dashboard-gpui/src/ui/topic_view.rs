@@ -255,14 +255,14 @@ impl TopicView {
             TopicType::System,
         ];
 
-        div()
-            .flex()
-            .flex_wrap()
-            .gap_2()
-            .children(topic_types.iter().map(|topic_type| {
-                let is_active = self.active_filters.contains(topic_type);
-                self.render_filter_checkbox(topic_type, is_active, cx)
-            }))
+        let mut container = div().flex().flex_wrap().gap_2();
+        
+        for topic_type in &topic_types {
+            let is_active = self.active_filters.contains(topic_type);
+            container = container.child(self.render_filter_checkbox(topic_type, is_active, cx));
+        }
+        
+        container
     }
 
     /// Render a filter checkbox
