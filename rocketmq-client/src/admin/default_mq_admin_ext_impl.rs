@@ -1099,7 +1099,14 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         subject: CheetahString,
         resource: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        if let Some(ref client_instance) = self.client_instance {
+            let mq_client_api = client_instance.get_mq_client_api_impl();
+            mq_client_api
+                .delete_acl(broker_addr, subject, resource, self.timeout_millis.as_millis() as u64)
+                .await
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn create_lite_pull_topic(

@@ -903,7 +903,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         subject: CheetahString,
         resource: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .delete_acl(broker_addr, subject, resource)
+            .await
     }
 
     async fn create_lite_pull_topic(

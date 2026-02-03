@@ -23,6 +23,7 @@ pub mod consumer_send_msg_back_request_header;
 pub mod controller;
 pub mod create_topic_request_header;
 pub mod create_user_request_header;
+pub mod delete_acl_request_header;
 pub mod delete_subscription_group_request_header;
 pub mod delete_topic_request_header;
 pub mod elect_master_response_header;
