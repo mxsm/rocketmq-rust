@@ -13,7 +13,7 @@ import {
 import { toast } from 'sonner@2.0.3';
 import { MessageDetailModal } from './MessageDetailModal';
 import { Pagination } from './Pagination';
-import { Input } from './ui/Input';
+import { Input } from './ui/input';
 
 export const MessageView = () => {
   const [activeTab, setActiveTab] = useState('Topic');

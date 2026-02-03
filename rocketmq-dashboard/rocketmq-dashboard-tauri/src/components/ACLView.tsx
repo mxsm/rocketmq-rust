@@ -1,25 +1,25 @@
-import React, {useState} from 'react';
+import React, {useState, ReactNode} from 'react';
 import {
-    Shield,
     Search,
     Plus,
     Eye,
     EyeOff,
-    MoreHorizontal,
     Database,
     X,
-    Check,
-    Server,
-    User,
-    Lock,
-    Filter
 } from 'lucide-react';
 import {motion, AnimatePresence} from 'motion/react';
-// @ts-ignore
 import {toast} from 'sonner@2.0.3';
 
+interface CardProps {
+    children: ReactNode;
+    className?: string;
+    title?: string;
+    description?: string;
+    headerAction?: ReactNode;
+}
+
 // Internal Card Component to match the style
-const Card = ({children, className = "", title, description, headerAction}: any) => (
+const Card = ({children, className = "", title, description, headerAction}: CardProps) => (
     <div
         className={`bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm p-6 transition-colors duration-200 ${className}`}>
         {(title || description) && (
@@ -35,8 +35,13 @@ const Card = ({children, className = "", title, description, headerAction}: any)
     </div>
 );
 
+interface TableProps {
+    headers: string[];
+    children: ReactNode;
+}
+
 // Reusable Table Component
-const Table = ({headers, children}: { headers: string[], children: React.ReactNode }) => (
+const Table = ({headers, children}: TableProps) => (
     <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-800">
         <table className="w-full text-left text-sm">
             <thead className="bg-gray-50 dark:bg-gray-800/50">
@@ -55,8 +60,12 @@ const Table = ({headers, children}: { headers: string[], children: React.ReactNo
     </div>
 );
 
+interface EmptyStateProps {
+    message: string;
+}
+
 // Empty State Component
-const EmptyState = ({message}: { message: string }) => (
+const EmptyState = ({message}: EmptyStateProps) => (
     <div className="flex flex-col items-center justify-center py-12 text-gray-400">
         <div className="w-16 h-16 mb-4 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center">
             <Database className="w-8 h-8 opacity-40"/>
@@ -153,7 +162,7 @@ export const ACLView = () => {
                                 </button>
                             </div>
 
-                            <Table headers={['Username', 'Password', 'User Type', 'User Status', 'Operation']} children={undefined}>
+                            <Table headers={['Username', 'Password', 'User Type', 'User Status', 'Operation']}>
                                 {/* Empty State or Data Mapping */}
                                 <tr>
                                     <td colSpan={5} className="py-12">
@@ -183,8 +192,7 @@ export const ACLView = () => {
                                 </div>
                             </div>
 
-                            <Table headers={['Username/Subject', 'Policy Type', 'Resource Name', 'Operation Type', 'Source IP', 'Decision', 'Operation']}
-                                   children={undefined}>
+                            <Table headers={['Username/Subject', 'Policy Type', 'Resource Name', 'Operation Type', 'Source IP', 'Decision', 'Operation']}>
                                 {/* Empty State or Data Mapping */}
                                 <tr>
                                     <td colSpan={7} className="py-12">

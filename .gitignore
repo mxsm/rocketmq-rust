@@ -26,10 +26,15 @@ target/
 # Node.js and NPM
 node_modules
 npm-debug.log*
-# Ignore package-lock.json except for rocketmq-website
+# Ignore package-lock.json except for rocketmq-website and rocketmq-dashboard-tauri
 package-lock.json
 !rocketmq-website/package-lock.json
+!rocketmq-dashboard/rocketmq-dashboard-tauri/package-lock.json
 codekit-config.json
+
+# Build output
+build
+dist
 
 # macOS
 .DS_Store
@@ -43,6 +48,6 @@ _site
 
 .claude
 
-#tauri
+# Tauri
 **/src-tauri/target
 **/gen/schemas
