@@ -83,6 +83,7 @@ use rocketmq_remoting::protocol::header::change_invisible_time_response_header::
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
 use rocketmq_remoting::protocol::header::create_user_request_header::CreateUserRequestHeader;
+use rocketmq_remoting::protocol::header::delete_acl_request_header::DeleteAclRequestHeader;
 use rocketmq_remoting::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
 use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
@@ -280,6 +281,31 @@ impl MQClientAPIImpl {
             ));
         }
         Ok(())
+    }
+
+    pub(crate) async fn delete_acl(
+        &self,
+        broker_address: CheetahString,
+        subject: CheetahString,
+        resource: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let resource_option = if resource.is_empty() { None } else { Some(resource) };
+        let request_header = DeleteAclRequestHeader::new(subject, resource_option);
+        let request = RemotingCommand::create_request_command(RequestCode::AuthDeleteAcl, request_header);
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_address), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => Ok(()),
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string())
+            )),
+        }
     }
 
     pub(crate) async fn list_users(
