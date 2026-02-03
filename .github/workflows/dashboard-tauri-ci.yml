@@ -46,10 +46,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: TypeScript Check
-        run: npx tsc --noEmit
-
-      - name: Build Frontend
+      - name: TypeScript Check & Build Frontend
         run: npm run build
 
   # =========================
