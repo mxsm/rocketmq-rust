@@ -184,8 +184,6 @@ export const ClusterView = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
                 {clusterData.map((broker, index) => {
                     const isMaster = broker.role === 'Master';
-                    // @ts-ignore
-                    // @ts-ignore
                     return (
                         <motion.div
                             key={index}

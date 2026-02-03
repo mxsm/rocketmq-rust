@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useState, ReactNode} from 'react';
 import {motion, AnimatePresence} from 'motion/react';
 import {
     Activity,
@@ -37,7 +37,19 @@ import {toast} from 'sonner@2.0.3';
 import {Button} from '../components/ui/LegacyButton';
 import {Pagination} from './Pagination';
 
-const TopicRouterModal = ({isOpen, onClose, topic}: any) => {
+interface Topic {
+    name: string;
+    type: string;
+    operations: string[];
+}
+
+interface TopicRouterModalProps {
+    isOpen: boolean;
+    onClose: () => void;
+    topic: Topic | null;
+}
+
+const TopicRouterModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
     if (!isOpen) return null;
 
     // Mock data to match screenshot structure
@@ -185,7 +197,7 @@ const TopicRouterModal = ({isOpen, onClose, topic}: any) => {
     );
 };
 
-const TopicConfigModal = ({isOpen, onClose, topic}: any) => {
+const TopicConfigModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
     const [selectedBrokers, setSelectedBrokers] = useState(['mxsm']);
     const [isBrokerDropdownOpen, setIsBrokerDropdownOpen] = useState(false);
     // Mock broker data
@@ -419,7 +431,7 @@ const TopicConfigModal = ({isOpen, onClose, topic}: any) => {
     );
 };
 
-const TopicStatusModal = ({isOpen, onClose, topic}: any) => {
+const TopicStatusModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
     if (!isOpen) return null;
 
     const mockData = [
@@ -621,7 +633,7 @@ const TopicStatusModal = ({isOpen, onClose, topic}: any) => {
     );
 };
 
-const TopicConsumerManageModal = ({isOpen, onClose, topic}: any) => {
+const TopicConsumerManageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
     if (!isOpen) return null;
 
     const subscriptionGroups = [
@@ -768,7 +780,7 @@ const TopicConsumerManageModal = ({isOpen, onClose, topic}: any) => {
     );
 };
 
-const TopicSendMessageModal = ({isOpen, onClose, topic}: any) => {
+const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
     if (!isOpen) return null;
 
     return (
@@ -910,7 +922,7 @@ const TopicSendMessageModal = ({isOpen, onClose, topic}: any) => {
     );
 };
 
-const TopicResetOffsetModal = ({isOpen, onClose, topic}: any) => {
+const TopicResetOffsetModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
     if (!isOpen) return null;
 
     return (
@@ -1009,7 +1021,7 @@ const TopicResetOffsetModal = ({isOpen, onClose, topic}: any) => {
     );
 };
 
-const TopicSkipMessageAccumulateModal = ({isOpen, onClose, topic}: any) => {
+const TopicSkipMessageAccumulateModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
     if (!isOpen) return null;
 
     return (
@@ -1109,13 +1121,13 @@ export const TopicView = () => {
         SYSTEM: true
     });
     const [currentPage, setCurrentPage] = useState(1);
-    const [statusModal, setStatusModal] = useState<{ isOpen: boolean, topic: any }>({isOpen: false, topic: null});
-    const [routerModal, setRouterModal] = useState<{ isOpen: boolean, topic: any }>({isOpen: false, topic: null});
-    const [configModal, setConfigModal] = useState<{ isOpen: boolean, topic: any }>({isOpen: false, topic: null});
-    const [consumerModal, setConsumerModal] = useState<{ isOpen: boolean, topic: any }>({isOpen: false, topic: null});
-    const [sendMessageModal, setSendMessageModal] = useState<{ isOpen: boolean, topic: any }>({isOpen: false, topic: null});
-    const [resetOffsetModal, setResetOffsetModal] = useState<{ isOpen: boolean, topic: any }>({isOpen: false, topic: null});
-    const [skipAccumulateModal, setSkipAccumulateModal] = useState<{ isOpen: boolean, topic: any }>({isOpen: false, topic: null});
+    const [statusModal, setStatusModal] = useState<{ isOpen: boolean, topic: Topic | null }>({isOpen: false, topic: null});
+    const [routerModal, setRouterModal] = useState<{ isOpen: boolean, topic: Topic | null }>({isOpen: false, topic: null});
+    const [configModal, setConfigModal] = useState<{ isOpen: boolean, topic: Topic | null }>({isOpen: false, topic: null});
+    const [consumerModal, setConsumerModal] = useState<{ isOpen: boolean, topic: Topic | null }>({isOpen: false, topic: null});
+    const [sendMessageModal, setSendMessageModal] = useState<{ isOpen: boolean, topic: Topic | null }>({isOpen: false, topic: null});
+    const [resetOffsetModal, setResetOffsetModal] = useState<{ isOpen: boolean, topic: Topic | null }>({isOpen: false, topic: null});
+    const [skipAccumulateModal, setSkipAccumulateModal] = useState<{ isOpen: boolean, topic: Topic | null }>({isOpen: false, topic: null});
 
     // Mock Topic Data
     const topics = [
@@ -1142,10 +1154,10 @@ export const TopicView = () => {
     ];
 
     const toggleFilter = (key: string) => {
-        setSelectedFilters((prev: any) => ({...prev, [key]: !prev[key]}));
+        setSelectedFilters((prev) => ({...prev, [key]: !prev[key]}));
     };
 
-    const handleOperation = (op: string, topic: any) => {
+    const handleOperation = (op: string, topic: Topic) => {
         if (op === 'Status') {
             setStatusModal({isOpen: true, topic});
         } else if (op === 'Router') {
@@ -1294,7 +1306,7 @@ export const TopicView = () => {
                         <Filter className="w-3 h-3 mr-1"/>
                         Types:
                     </div>
-                    {Object.entries(selectedFilters).map(([key, checked]: any) => {
+                    {Object.entries(selectedFilters).map(([key, checked]) => {
                         const Icon = getFilterIcon(key);
                         return (
                             <button
@@ -1327,7 +1339,6 @@ export const TopicView = () => {
                             transition={{delay: index * 0.05, type: "spring", stiffness: 300, damping: 25}}
                             whileHover={{
                                 y: -4,
-                                shadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)",
                                 transition: {duration: 0.2}
                             }}
                             className={`bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden flex flex-col group relative ring-1 ring-transparent hover:ring-2 transition-all ${

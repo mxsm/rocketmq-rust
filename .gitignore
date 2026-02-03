@@ -32,6 +32,10 @@ package-lock.json
 !rocketmq-dashboard/rocketmq-dashboard-tauri/package-lock.json
 codekit-config.json
 
+# Build output
+build
+dist
+
 # macOS
 .DS_Store
 
@@ -44,6 +48,6 @@ _site
 
 .claude
 
-#tauri
+# Tauri
 **/src-tauri/target
 **/gen/schemas
