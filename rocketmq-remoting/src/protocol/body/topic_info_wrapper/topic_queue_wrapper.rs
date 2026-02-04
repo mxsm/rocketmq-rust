@@ -58,3 +58,66 @@ impl TopicQueueMappingSerializeWrapper {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cheetah_string::CheetahString;
+    use dashmap::DashMap;
+    use rocketmq_rust::ArcMut;
+
+    fn create_test_map() -> DashMap<CheetahString, ArcMut<TopicQueueMappingDetail>> {
+        let map = DashMap::new();
+        let detail = TopicQueueMappingDetail::default();
+        map.insert(CheetahString::from("test_topic"), ArcMut::new(detail));
+        map
+    }
+
+    #[test]
+    fn test_new_and_getters() {
+        let map = create_test_map();
+        let version = DataVersion::default();
+
+        let wrapper = TopicQueueMappingSerializeWrapper::new(Some(map), Some(version.clone()));
+
+        assert!(wrapper.topic_queue_mapping_info_map().is_some());
+        assert_eq!(wrapper.topic_queue_mapping_info_map().unwrap().len(), 1);
+        assert!(wrapper.data_version().is_some());
+    }
+
+    #[test]
+    fn test_default_values() {
+        let wrapper = TopicQueueMappingSerializeWrapper::default();
+
+        assert!(wrapper.topic_queue_mapping_info_map().is_none());
+        assert!(wrapper.data_version().is_none());
+    }
+
+    #[test]
+    fn test_take_topic_queue_mapping_info_map() {
+        let map = create_test_map();
+        let mut wrapper = TopicQueueMappingSerializeWrapper::new(Some(map), None);
+
+        let taken_map = wrapper.take_topic_queue_mapping_info_map();
+
+        assert!(taken_map.is_some());
+        assert_eq!(taken_map.unwrap().len(), 1);
+        assert!(wrapper.topic_queue_mapping_info_map().is_none());
+    }
+
+    #[test]
+    fn test_serialization_deserialization() {
+        let map = create_test_map();
+        let version = DataVersion::default();
+        let wrapper = TopicQueueMappingSerializeWrapper::new(Some(map), Some(version));
+
+        let json = serde_json::to_string(&wrapper).expect("Should serialize");
+
+        assert!(json.contains("topicQueueMappingInfoMap"));
+        assert!(json.contains("dataVersion"));
+
+        let deserialized: TopicQueueMappingSerializeWrapper = serde_json::from_str(&json).expect("Should deserialize");
+
+        assert_eq!(deserialized.topic_queue_mapping_info_map().unwrap().len(), 1);
+    }
+}
