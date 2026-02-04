@@ -1,5 +1,4 @@
-
-  # RocketMQ-Rust Dashboard (Tauri)
+# RocketMQ-Rust Dashboard (Tauri)
 
 A RocketMQ-Rust Dashboard GUI implemented with [Tauri](https://tauri.app/).
 
@@ -9,10 +8,10 @@ A RocketMQ-Rust Dashboard GUI implemented with [Tauri](https://tauri.app/).
 - Cross-platform support (Linux, macOS, Windows)
 - Backend written in Rust
 - Frontend built with modern web technologies:
-  - **React** - UI Library
-  - **Vite** - Build Tool
-  - **Tailwind CSS** & **Radix UI** - Styling and UI Components
-  - **Recharts** - Data Visualization
+    - **React** - UI Library
+    - **Vite** - Build Tool
+    - **Tailwind CSS** & **Radix UI** - Styling and UI Components
+    - **Recharts** - Data Visualization
 - Small bundle size and low resource usage
 - Secure with minimal attack surface
 
@@ -24,19 +23,19 @@ A RocketMQ-Rust Dashboard GUI implemented with [Tauri](https://tauri.app/).
 
 ## Feature Development Roadmap
 
-| Category | Feature | Status |
-|----------|---------|--------|
-| **Platform** | NameServer | 🚧 In Development |
-| | Dashboard | 🚧 In Development |
-| | Proxy | 🚧 In Development |
-| | Cluster | 🚧 In Development |
-| **Messaging** | Topic | 🚧 In Development |
-| | Consumer | 🚧 In Development |
-| | Producer | 🚧 In Development |
-| | Message | 🚧 In Development |
-| | MessageTrace | 🚧 In Development |
-| | DLQMessage | 🚧 In Development |
-| **Advanced** | ACL Management | 🚧 In Development |
+| Category      | Feature        | Status            |
+|---------------|----------------|-------------------|
+| **Platform**  | NameServer     | 🚧 In Development |
+|               | Dashboard      | 🚧 In Development |
+|               | Proxy          | 🚧 In Development |
+|               | Cluster        | 🚧 In Development |
+| **Messaging** | Topic          | 🚧 In Development |
+|               | Consumer       | 🚧 In Development |
+|               | Producer       | 🚧 In Development |
+|               | Message        | 🚧 In Development |
+|               | MessageTrace   | 🚧 In Development |
+|               | DLQMessage     | 🚧 In Development |
+| **Advanced**  | ACL Management | 🚧 In Development |
 
 ## Installation
 
@@ -45,9 +44,9 @@ A RocketMQ-Rust Dashboard GUI implemented with [Tauri](https://tauri.app/).
 - Rust toolchain (1.77.2 or later)
 - Node.js and npm
 - Platform-specific dependencies:
-  - **Windows**: WebView2
-  - **macOS**: No additional dependencies
-  - **Linux**: webkit2gtk, libssl, and other dependencies (see [Tauri prerequisites](https://tauri.app/v1/guides/getting-started/prerequisites))
+    - **Windows**: WebView2
+    - **macOS**: No additional dependencies
+    - **Linux**: webkit2gtk, libssl, and other dependencies (see [Tauri prerequisites](https://tauri.app/v1/guides/getting-started/prerequisites))
 
 ### Build from source
 
@@ -86,6 +85,25 @@ cargo tauri build
 The binary will be available in `src-tauri/target/release/`.
 
 ## Quick Start
+
+### Default Login Credentials
+
+> **⚠️ Note**: This is a temporary authentication implementation. A more comprehensive authentication system with additional security features (password change UI, multi-user support, role-based access control) will be implemented in future versions.
+
+When you first run the application, a default configuration will be created with the following credentials:
+
+- **Username**: `admin`
+- **Password**: `admin123`
+
+⚠️ **Security Notice**: Please change the default password after your first login!
+
+The authentication configuration is stored at:
+
+- **Windows**: `%APPDATA%\com.rocketmqrust.dashboard\auth_config.json`
+- **macOS**: `~/Library/Application Support/com.rocketmqrust.dashboard/auth_config.json`
+- **Linux**: `~/.config/rocketmq-rust-dashboard/auth_config.json`
+
+For more details on authentication and security, see [AUTH_CONFIG.md](doc/AUTH_CONFIG.md).
 
 ### Development Mode
 
