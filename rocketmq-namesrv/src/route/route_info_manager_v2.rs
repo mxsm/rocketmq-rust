@@ -145,17 +145,6 @@ impl RouteInfoManagerV2 {
     }
 
     /// Start the route manager
-    ///
-    /// This matches Java's start() method which only starts the unRegisterService.
-    /// Channel disconnection events are handled by BrokerHousekeepingService through
-    /// ChannelEventListener interface (on_channel_close, on_channel_exception, on_channel_idle).
-    ///
-    /// Java code:
-    /// ```java
-    /// public void start() {
-    ///     this.unRegisterService.start();
-    /// }
-    /// ```
     pub fn start(&self) {
         info!("Starting RouteInfoManager v2 with DashMap tables");
         self.un_register_service.mut_from_ref().start();
