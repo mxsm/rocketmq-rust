@@ -66,8 +66,8 @@ impl CommandExecute for TopicStatusSubCommand {
                         let offset_table = default_mq_admin_ext
                             .examine_topic_stats(topic.into(), addr)
                             .await?
-                            .get_offset_table();
-                        total_offset_table.extend(offset_table.into_iter());
+                            .into_offset_table();
+                        total_offset_table.extend(offset_table);
                     }
                     topic_stats_table.set_offset_table(total_offset_table);
                 }
@@ -77,16 +77,13 @@ impl CommandExecute for TopicStatusSubCommand {
             }
         };
 
-        let mut mq_list = vec![];
-        for item in topic_status.get_offset_table().keys() {
-            mq_list.push(item.clone());
-        }
+        let offset_table = topic_status.get_offset_table();
+        let mut mq_list: Vec<_> = offset_table.keys().cloned().collect();
         mq_list.sort();
 
         println!("#Broker Name #QID #Min Offset #Max Offset #Last Updated");
 
         for queue in &mq_list {
-            let offset_table = topic_status.get_offset_table();
             let topic_offset = offset_table.get(queue);
             if let Some(offset) = topic_offset {
                 if offset.get_last_update_timestamp() > 0 {
