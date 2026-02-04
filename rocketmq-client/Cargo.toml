@@ -41,7 +41,7 @@ futures        = { workspace = true }
 cheetah-string = { workspace = true }
 
 [dev-dependencies]
-criterion = { version = "0.8.1", features = ["async_tokio"] }
+criterion = { version = "0.8.2", features = ["async_tokio"] }
 
 [[bench]]
 name    = "produce_accumulator_benchmark"
