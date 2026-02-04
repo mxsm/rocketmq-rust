@@ -46,9 +46,11 @@
     "sonner": "^2.0.3",
     "tailwind-merge": "*",
     "tailwindcss": "*",
-    "vaul": "^1.1.2"
+    "vaul": "^1.1.2",
+    "@tauri-apps/api": "^2.10.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.3.0",
     "@types/node": "^20.10.0",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
