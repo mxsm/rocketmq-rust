@@ -93,6 +93,7 @@ use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_heade
 use rocketmq_remoting::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
 use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
+use rocketmq_remoting::protocol::header::get_user_request_headers::GetUserRequestHeader;
 use rocketmq_remoting::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
 use rocketmq_remoting::protocol::header::list_users_request_header::ListUsersRequestHeader;
 use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
@@ -305,6 +306,39 @@ impl MQClientAPIImpl {
             _ => Err(mq_client_err!(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string())
+            )),
+        }
+    }
+
+    pub(crate) async fn get_user(
+        &self,
+        broker_address: CheetahString,
+        username: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<Option<UserInfo>> {
+        let request_header = GetUserRequestHeader {
+            username: username.clone(),
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::AuthGetUser, request_header);
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_address), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                let body = response.get_body();
+                if let Some(body) = response.get_body() {
+                    let user_info = UserInfo::decode(body)?;
+                    Ok(Some(user_info))
+                } else {
+                    Ok(None)
+                }
+            }
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map(|s| s.to_string()).unwrap_or_default()
             )),
         }
     }

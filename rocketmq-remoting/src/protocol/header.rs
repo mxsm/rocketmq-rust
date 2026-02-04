@@ -50,6 +50,7 @@ pub mod get_producer_connection_list_request_header;
 pub mod get_topic_config_request_header;
 pub mod get_topic_stats_info_request_header;
 pub mod get_topic_stats_request_header;
+pub mod get_user_request_headers;
 pub mod heartbeat_request_header;
 pub mod list_users_request_header;
 pub mod lock_batch_mq_request_header;

@@ -141,8 +141,11 @@ async fn copy_users(
                 .get_user(source_broker.into(), username.clone())
                 .await
             {
-                Ok(user_info) => {
+                Ok(Some(user_info)) => {
                     user_list.push(user_info);
+                }
+                Ok(None) => {
+                    eprintln!("Warning: Could not find user {} at broker {}", username, source_broker);
                 }
                 Err(e) => {
                     eprintln!("Warning: Failed to get user {} from {}: {}", username, source_broker, e);
@@ -180,14 +183,17 @@ async fn copy_users(
             .get_user(target_broker.into(), username.clone())
             .await;
 
-        let copy_result = if target_user_result.is_err() {
-            default_mqadmin_ext
-                .create_user_with_user_info(target_broker.into(), user_info.clone())
-                .await
-        } else {
-            default_mqadmin_ext
-                .update_user_with_user_info(target_broker.into(), user_info.clone())
-                .await
+        let copy_result = match target_user_result {
+            Ok(Some(_)) => {
+                default_mqadmin_ext
+                    .update_user_with_user_info(target_broker.into(), user_info.clone())
+                    .await
+            }
+            Ok(None) | Err(_) => {
+                default_mqadmin_ext
+                    .create_user_with_user_info(target_broker.into(), user_info.clone())
+                    .await
+            }
         };
 
         match copy_result {

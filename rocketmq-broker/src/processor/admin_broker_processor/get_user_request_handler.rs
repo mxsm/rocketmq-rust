@@ -22,28 +22,28 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 
 #[derive(Clone)]
-pub struct ListUsersRequestHandler<MS: MessageStore> {
+pub struct GetUserRequestHandler<MS: MessageStore> {
     broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
 }
 
-impl<MS: MessageStore> ListUsersRequestHandler<MS> {
+impl<MS: MessageStore> GetUserRequestHandler<MS> {
     pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
         Self { broker_runtime_inner }
     }
 
-    pub async fn list_users(
+    pub async fn get_user(
         &mut self,
         _channel: Channel,
         _ctx: ConnectionHandlerContext,
         _request_code: RequestCode,
         _request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        // let request_header = request.decode_command_custom_header::<ListUsersRequestHeader>()?;
+        // let request_header = request.decode_command_custom_header::<GetUserRequestHeader>()?;
         let response = RemotingCommand::default();
 
         // TODO get authentication metadata manager and do operations
         Ok(Some(response.set_code(ResponseCode::SystemError).set_remark(
-            "ListUsers not implemented: authentication metadata manager not configured",
+            "GetUser not implemented: authentication metadata manager not configured",
         )))
     }
 }

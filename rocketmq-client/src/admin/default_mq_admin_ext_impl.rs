@@ -1476,10 +1476,17 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
 
     async fn get_user(
         &self,
-        _broker_addr: CheetahString,
-        _username: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<UserInfo> {
-        unimplemented!("get_user not implemented yet")
+        broker_addr: CheetahString,
+        username: CheetahString,
+    ) -> rocketmq_error::RocketMQResult<Option<UserInfo>> {
+        if let Some(ref mq_client_instance) = self.client_instance {
+            let mq_client_api = mq_client_instance.get_mq_client_api_impl();
+            let timeout_millis = self.timeout_millis.as_millis() as u64;
+            let result = mq_client_api.get_user(broker_addr, username, timeout_millis).await?;
+            Ok(result)
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn list_users(
