@@ -232,7 +232,7 @@ Our development follows the RocketMQ architecture with focus on:
 - [ ] **Proxy**: Multi-protocol gateway support
 - [ ] **Observability**: Metrics, tracing, and monitoring integration
 
-For detailed progress and planned features, see our [roadmap diagram](resources/rocektmq-rust-roadmap.excalidraw).
+For detailed progress and planned features, see our [roadmap diagram](resources/rocektmq-rust-roadmap.png).
 
 ## 💡 Features & Highlights
 
