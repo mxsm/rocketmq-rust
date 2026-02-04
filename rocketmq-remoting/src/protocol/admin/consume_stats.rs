@@ -124,9 +124,9 @@ mod tests {
     #[test]
     fn test_getters_and_setters() {
         let mut stats = ConsumeStats::new();
-        stats.set_consume_tps(3.14);
+        stats.set_consume_tps(5.67);
 
-        assert_eq!(stats.get_consume_tps(), 3.14);
+        assert_eq!(stats.get_consume_tps(), 5.67);
         assert!(stats.get_offset_table().is_empty());
 
         stats
