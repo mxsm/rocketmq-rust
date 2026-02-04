@@ -1,4 +1,4 @@
-name: Dashboard Tauri CI
+name: RocketMQ-RustDashboard Tauri CI
 
 permissions:
   contents: read
@@ -92,6 +92,10 @@ jobs:
       - name: Clippy check
         working-directory: rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri
         run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        working-directory: rocketmq-dashboard/rocketmq-dashboard-tauri/src-tauri
+        run: cargo test --all-features
 
   # =========================
   # Tauri Build (Multi-platform)
