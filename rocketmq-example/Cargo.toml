@@ -1,15 +1,19 @@
+[workspace]
+# This is a standalone project, not part of the parent workspace
+
 [package]
-name                   = "rocketmq-example"
-version.workspace      = true
-authors.workspace      = true
-edition.workspace      = true
-homepage.workspace     = true
-repository.workspace   = true
-license.workspace      = true
-keywords.workspace     = true
-readme                 = "README.md"
-description.workspace  = true
-rust-version.workspace = true
+name           = "rocketmq-example"
+version        = "0.8.0"
+authors        = ["mxsm <mxsm@apache.org>"]
+edition        = "2024"
+homepage       = "https://github.com/mxsm/rocketmq-rust"
+repository     = "https://github.com/mxsm/rocketmq-rust"
+license        = "MIT OR Apache-2.0"
+keywords       = ["apache-rocketmq", "rocketmq-rust", "rocketmq-rs", "rust", "rocketmq-client"]
+readme         = "README.md"
+description    = "Examples for RocketMQ Rust implementation"
+rust-version   = "1.85.0"
+resolver = "3"
 
 [dependencies]
 
@@ -18,12 +22,11 @@ name = "pop-consumer"
 path = "examples/consumer/pop_consumer.rs"
 
 [dev-dependencies]
-cheetah-string       = { workspace = true }
-rocketmq-client-rust = { workspace = true }
-rocketmq-common      = { workspace = true }
-rocketmq-error       = { workspace = true }
-rocketmq-rust        = { workspace = true }
-rocketmq-tools       = { workspace = true }
-tokio                = { workspace = true }
-
-tracing.workspace = true
+cheetah-string       = { version = "1.0.1", features = ["serde", "bytes", "simd"] }
+rocketmq-client-rust = { path = "../rocketmq-client" }
+rocketmq-common      = { path = "../rocketmq-common" }
+rocketmq-error       = { path = "../rocketmq-error" }
+rocketmq-rust        = { path = "../rocketmq" }
+rocketmq-tools       = { path = "../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", package = "rocketmq-admin-core" }
+tokio                = { version = "1.49", features = ["full"] }
+tracing              = "0.1.44"
