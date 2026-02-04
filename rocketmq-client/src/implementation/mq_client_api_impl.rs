@@ -66,6 +66,7 @@ use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
+use rocketmq_remoting::protocol::body::acl_info::AclInfo;
 use rocketmq_remoting::protocol::body::batch_ack_message_request_body::BatchAckMessageRequestBody;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_remoting::protocol::body::check_client_request_body::CheckClientRequestBody;
@@ -95,6 +96,7 @@ use rocketmq_remoting::protocol::header::get_max_offset_response_header::GetMaxO
 use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
 use rocketmq_remoting::protocol::header::get_user_request_headers::GetUserRequestHeader;
 use rocketmq_remoting::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
+use rocketmq_remoting::protocol::header::list_acl_request_header::ListAclRequestHeader;
 use rocketmq_remoting::protocol::header::list_users_request_header::ListUsersRequestHeader;
 use rocketmq_remoting::protocol::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
@@ -303,6 +305,39 @@ impl MQClientAPIImpl {
 
         match ResponseCode::from(response.code()) {
             ResponseCode::Success => Ok(()),
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string())
+            )),
+        }
+    }
+
+    pub(crate) async fn list_acl(
+        &self,
+        broker_address: CheetahString,
+        subject_filter: CheetahString,
+        resource_filter: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<Vec<AclInfo>> {
+        let request_header = ListAclRequestHeader {
+            subject_filter,
+            resource_filter,
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::AuthListAcl, request_header);
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_address), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                if let Some(body) = response.get_body() {
+                    Vec::<AclInfo>::decode(body.as_ref())
+                } else {
+                    Ok(Vec::new())
+                }
+            }
             _ => Err(mq_client_err!(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string())
