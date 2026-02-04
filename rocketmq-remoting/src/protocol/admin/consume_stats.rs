@@ -74,9 +74,6 @@ impl ConsumeStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::admin::offset_wrapper::OffsetWrapper;
-    use rocketmq_common::common::message::message_queue::MessageQueue;
-    use std::collections::HashMap;
 
     fn create_offset_wrapper(broker: i64, consumer: i64, pull: i64) -> OffsetWrapper {
         let mut wrapper = OffsetWrapper::new();
