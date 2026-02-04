@@ -174,71 +174,71 @@ impl MessageExt {
     pub fn prepared_transaction_offset(&self) -> i64 {
         self.prepared_transaction_offset
     }
-
+    #[inline]
     pub fn set_message_inner(&mut self, message_inner: Message) {
         self.message = message_inner;
     }
-
+    #[inline]
     pub fn set_broker_name(&mut self, broker_name: CheetahString) {
         self.broker_name = broker_name;
     }
-
+    #[inline]
     pub fn set_queue_id(&mut self, queue_id: i32) {
         self.queue_id = queue_id;
     }
-
+    #[inline]
     pub fn set_store_size(&mut self, store_size: i32) {
         self.store_size = store_size;
     }
-
+    #[inline]
     pub fn set_queue_offset(&mut self, queue_offset: i64) {
         self.queue_offset = queue_offset;
     }
-
+    #[inline]
     pub fn set_sys_flag(&mut self, sys_flag: i32) {
         self.sys_flag = sys_flag;
     }
-
+    #[inline]
     pub fn set_born_timestamp(&mut self, born_timestamp: i64) {
         self.born_timestamp = born_timestamp;
     }
-
+    #[inline]
     pub fn set_born_host(&mut self, born_host: SocketAddr) {
         self.born_host = born_host;
     }
-
+    #[inline]
     pub fn set_store_timestamp(&mut self, store_timestamp: i64) {
         self.store_timestamp = store_timestamp;
     }
-
+    #[inline]
     pub fn set_store_host(&mut self, store_host: SocketAddr) {
         self.store_host = store_host;
     }
-
+    #[inline]
     pub fn set_msg_id(&mut self, msg_id: CheetahString) {
         self.msg_id = msg_id;
     }
-
+    #[inline]
     pub fn set_commit_log_offset(&mut self, commit_log_offset: i64) {
         self.commit_log_offset = commit_log_offset;
     }
-
+    #[inline]
     pub fn set_body_crc(&mut self, body_crc: u32) {
         self.body_crc = body_crc;
     }
-
+    #[inline]
     pub fn set_reconsume_times(&mut self, reconsume_times: i32) {
         self.reconsume_times = reconsume_times;
     }
-
+    #[inline]
     pub fn set_prepared_transaction_offset(&mut self, prepared_transaction_offset: i64) {
         self.prepared_transaction_offset = prepared_transaction_offset;
     }
-
+    #[inline]
     pub fn properties(&self) -> &HashMap<CheetahString, CheetahString> {
         self.message.properties().as_map()
     }
-
+    #[inline]
     pub fn get_tags(&self) -> Option<CheetahString> {
         self.message.get_tags()
     }
