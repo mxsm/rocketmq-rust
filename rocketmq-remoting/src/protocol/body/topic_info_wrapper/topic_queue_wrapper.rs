@@ -62,9 +62,6 @@ impl TopicQueueMappingSerializeWrapper {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cheetah_string::CheetahString;
-    use dashmap::DashMap;
-    use rocketmq_rust::ArcMut;
 
     fn create_test_map() -> DashMap<CheetahString, ArcMut<TopicQueueMappingDetail>> {
         let map = DashMap::new();
