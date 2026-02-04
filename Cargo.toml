@@ -7,7 +7,6 @@ members = [
     "rocketmq-common",
     "rocketmq-controller",
     "rocketmq-error",
-    "rocketmq-example",
     "rocketmq-filter",
     "rocketmq-macros",
     "rocketmq-namesrv",
