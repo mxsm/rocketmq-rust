@@ -182,21 +182,32 @@ async fn main() -> Result<()> {
 
 RocketMQ-Rust 组织为具有以下 crate 的单体仓库：
 
-| Crate | 描述 | 状态 |
-|-------|------|------|
-| [rocketmq-namesrv](./rocketmq-namesrv) | 服务发现的 Name server | ✅ 生产环境 |
-| [rocketmq-broker](./rocketmq-broker) | 消息代理和存储引擎 | ✅ 生产环境 |
-| [rocketmq-client](./rocketmq-client) | Producer 和 Consumer SDK | ✅ 生产环境 |
-| [rocketmq-store](./rocketmq-store) | 本地存储实现 | ✅ 生产环境 |
-| [rocketmq-remoting](./rocketmq-remoting) | 网络通信层 | ✅ 生产环境 |
-| [rocketmq-common](./rocketmq-common) | 通用工具和数据结构 | ✅ 生产环境 |
-| [rocketmq-runtime](./rocketmq-runtime) | 异步运行时抽象 | ✅ 生产环境 |
-| [rocketmq-filter](./rocketmq-filter) | 消息过滤引擎 | ✅ 生产环境 |
-| [rocketmq-auth](./rocketmq-auth) | 认证和授权 | ✅ 生产环境 |
-| [rocketmq-controller](./rocketmq-controller) | 高可用控制器 | 🚧 开发中 |
-| [rocketmq-proxy](./rocketmq-proxy) | 协议代理层 | 🚧 开发中 |
-| [rocketmq-cli](./rocketmq-cli) | 命令行工具 | ✅ 生产环境 |
-| [rocketmq-tui](./rocketmq-tui) | 管理终端 UI | 🚧 开发中 |
+| Crate                                        | 描述                                | 状态            |
+|----------------------------------------------|-------------------------------------|-----------------|
+| [rocketmq](./rocketmq)                       | 核心库和主入口点                    | ✅ 生产环境      |
+| [rocketmq-namesrv](./rocketmq-namesrv)       | 服务发现的 Name server              | ✅ 生产环境      |
+| [rocketmq-broker](./rocketmq-broker)         | 消息代理和存储引擎                  | ✅ 生产环境      |
+| [rocketmq-client](./rocketmq-client)         | Producer 和 Consumer SDK            | ✅ 生产环境      |
+| [rocketmq-store](./rocketmq-store)           | 本地存储实现                        | ✅ 生产环境      |
+| [rocketmq-remoting](./rocketmq-remoting)     | 网络通信层                          | ✅ 生产环境      |
+| [rocketmq-common](./rocketmq-common)         | 通用工具和数据结构                  | ✅ 生产环境      |
+| [rocketmq-runtime](./rocketmq-runtime)       | 异步运行时抽象                      | ✅ 生产环境      |
+| [rocketmq-filter](./rocketmq-filter)         | 消息过滤引擎                        | ✅ 生产环境      |
+| [rocketmq-auth](./rocketmq-auth)             | 认证和授权                          | ✅ 生产环境      |
+| [rocketmq-error](./rocketmq-error)           | 错误类型和处理                      | ✅ 生产环境      |
+| [rocketmq-macros](./rocketmq-macros)         | 过程宏和派生宏                      | ✅ 生产环境      |
+| [rocketmq-controller](./rocketmq-controller) | 高可用控制器                        | 🚧 开发中       |
+| [rocketmq-proxy](./rocketmq-proxy)           | 协议代理层                          | 🚧 开发中       |
+| [rocketmq-example](./rocketmq-example)       | 示例应用程序和演示                  | ✅ 生产环境      |
+| [rocketmq-tools](./rocketmq-tools)           | 命令行工具和实用程序                | 🚧 开发中       |
+| ├─ [rocketmq-admin](./rocketmq-tools/rocketmq-admin) | 集群管理的管理工具         | 🚧 开发中       |
+| │  ├─ [rocketmq-admin-core](./rocketmq-tools/rocketmq-admin/rocketmq-admin-core) | 核心管理功能 | 🚧 开发中 |
+| │  └─ [rocketmq-admin-tui](./rocketmq-tools/rocketmq-admin/rocketmq-admin-tui) | 管理操作的终端 UI | 🚧 开发中 |
+| └─ [rocketmq-store-inspect](./rocketmq-tools/rocketmq-store-inspect) | 存储检查工具 | ✅ 生产环境 |
+| [rocketmq-dashboard](./rocketmq-dashboard)   | 管理仪表板和 UI                     | 🚧 开发中       |
+| ├─ [rocketmq-dashboard-common](./rocketmq-dashboard/rocketmq-dashboard-common) | 共享仪表板组件 | 🚧 开发中 |
+| ├─ [rocketmq-dashboard-gpui](./rocketmq-dashboard/rocketmq-dashboard-gpui) | 基于 GPUI 的桌面仪表板 | 🚧 开发中 |
+| └─ [rocketmq-dashboard-tauri](./rocketmq-dashboard/rocketmq-dashboard-tauri) | 基于 Tauri 的跨平台仪表板 | 🚧 开发中 |
 
 ## 🗺️ 路线图
 

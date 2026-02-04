@@ -190,21 +190,32 @@ For more examples including batch sending, transactions, and consumer patterns, 
 
 RocketMQ-Rust is organized as a monorepo with the following crates:
 
-| Crate                                        | Description                          | Status            |
-|----------------------------------------------|--------------------------------------|-------------------|
-| [rocketmq-namesrv](./rocketmq-namesrv)       | Name server for service discovery    | ✅ Production      |
-| [rocketmq-broker](./rocketmq-broker)         | Message broker and storage engine    | ✅ Production      |
-| [rocketmq-client](./rocketmq-client)         | Producer and consumer SDK            | ✅ Production      |
-| [rocketmq-store](./rocketmq-store)           | Local storage implementation         | ✅ Production      |
-| [rocketmq-remoting](./rocketmq-remoting)     | Network communication layer          | ✅ Production      |
-| [rocketmq-common](./rocketmq-common)         | Common utilities and data structures | ✅ Production      |
-| [rocketmq-runtime](./rocketmq-runtime)       | Async runtime abstractions           | ✅ Production      |
-| [rocketmq-filter](./rocketmq-filter)         | Message filtering engine             | ✅ Production      |
-| [rocketmq-auth](./rocketmq-auth)             | Authentication and authorization     | ✅ Production      |
-| [rocketmq-controller](./rocketmq-controller) | High availability controller         | 🚧 In Development |
-| [rocketmq-proxy](./rocketmq-proxy)           | Protocol proxy layer                 | 🚧 In Development |
-| [rocketmq-cli](./rocketmq-cli)               | Command-line tools                   | ✅ Production      |
-| [rocketmq-tui](./rocketmq-tui)               | Terminal UI for management           | 🚧 In Development |
+| Crate                                        | Description                                | Status            |
+|----------------------------------------------|--------------------------------------------|-------------------|
+| [rocketmq](./rocketmq)                       | Core library and main entry point          | ✅ Production      |
+| [rocketmq-namesrv](./rocketmq-namesrv)       | Name server for service discovery          | ✅ Production      |
+| [rocketmq-broker](./rocketmq-broker)         | Message broker and storage engine          | ✅ Production      |
+| [rocketmq-client](./rocketmq-client)         | Producer and consumer SDK                  | ✅ Production      |
+| [rocketmq-store](./rocketmq-store)           | Local storage implementation               | ✅ Production      |
+| [rocketmq-remoting](./rocketmq-remoting)     | Network communication layer                | ✅ Production      |
+| [rocketmq-common](./rocketmq-common)         | Common utilities and data structures       | ✅ Production      |
+| [rocketmq-runtime](./rocketmq-runtime)       | Async runtime abstractions                 | ✅ Production      |
+| [rocketmq-filter](./rocketmq-filter)         | Message filtering engine                   | ✅ Production      |
+| [rocketmq-auth](./rocketmq-auth)             | Authentication and authorization           | ✅ Production      |
+| [rocketmq-error](./rocketmq-error)           | Error types and handling                   | ✅ Production      |
+| [rocketmq-macros](./rocketmq-macros)         | Procedural macros and derive macros        | ✅ Production      |
+| [rocketmq-controller](./rocketmq-controller) | High availability controller               | 🚧 In Development |
+| [rocketmq-proxy](./rocketmq-proxy)           | Protocol proxy layer                       | 🚧 In Development |
+| [rocketmq-example](./rocketmq-example)       | Example applications and demos             | ✅ Production      |
+| [rocketmq-tools](./rocketmq-tools)           | Command-line tools and utilities           | 🚧 In Development |
+| ├─ [rocketmq-admin](./rocketmq-tools/rocketmq-admin) | Admin tools for cluster management | 🚧 In Development |
+| │  ├─ [rocketmq-admin-core](./rocketmq-tools/rocketmq-admin/rocketmq-admin-core) | Core admin functionality | 🚧 In Development |
+| │  └─ [rocketmq-admin-tui](./rocketmq-tools/rocketmq-admin/rocketmq-admin-tui) | Terminal UI for admin operations | 🚧 In Development |
+| └─ [rocketmq-store-inspect](./rocketmq-tools/rocketmq-store-inspect) | Storage inspection tools | ✅ Production |
+| [rocketmq-dashboard](./rocketmq-dashboard)   | Management dashboard and UI                | 🚧 In Development |
+| ├─ [rocketmq-dashboard-common](./rocketmq-dashboard/rocketmq-dashboard-common) | Shared dashboard components | 🚧 In Development |
+| ├─ [rocketmq-dashboard-gpui](./rocketmq-dashboard/rocketmq-dashboard-gpui) | GPUI-based desktop dashboard | 🚧 In Development |
+| └─ [rocketmq-dashboard-tauri](./rocketmq-dashboard/rocketmq-dashboard-tauri) | Tauri-based cross-platform dashboard | 🚧 In Development |
 
 ## 🗺️ Roadmap
 
