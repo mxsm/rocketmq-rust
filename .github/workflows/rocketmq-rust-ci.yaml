@@ -15,6 +15,7 @@ on:
       - 'rocketmq-dashboard/rocketmq-dashboard-gpui/**'
       - 'rocketmq-dashboard/rocketmq-dashboard-tauri/**'
       - 'rocketmq-dashboard/README*.md'
+      - 'rocketmq-example'
   pull_request:
     branches: [ "main" ]
     paths-ignore:
@@ -26,6 +27,7 @@ on:
       - 'rocketmq-dashboard/rocketmq-dashboard-gpui/**'
       - 'rocketmq-dashboard/rocketmq-dashboard-tauri/**'
       - 'rocketmq-dashboard/README*.md'
+      - 'rocketmq-example'
 
 env:
   CARGO_TERM_COLOR: always
