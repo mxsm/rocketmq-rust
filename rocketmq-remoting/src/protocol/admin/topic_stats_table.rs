@@ -51,3 +51,47 @@ impl TopicStatsTable {
         self.offset_table = offset_table;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offset_table_accessors_work_with_borrow_and_move() {
+        let queue_0 = MessageQueue::from_parts("TopicA", "BrokerA", 0);
+        let queue_1 = MessageQueue::from_parts("TopicA", "BrokerA", 1);
+
+        let mut offset_0 = TopicOffset::new();
+        offset_0.set_min_offset(10);
+        offset_0.set_max_offset(20);
+        offset_0.set_last_update_timestamp(1000);
+
+        let mut offset_1 = TopicOffset::new();
+        offset_1.set_min_offset(30);
+        offset_1.set_max_offset(40);
+        offset_1.set_last_update_timestamp(2000);
+
+        let mut table = TopicStatsTable::new();
+        table.set_offset_table(HashMap::from([(queue_0.clone(), offset_0)]));
+
+        let offset_table = table.get_offset_table();
+        assert_eq!(offset_table.len(), 1);
+        assert_eq!(offset_table.get(&queue_0).unwrap().get_max_offset(), 20);
+
+        table.get_offset_table_mut().insert(queue_1.clone(), offset_1);
+        assert_eq!(table.get_offset_table().len(), 2);
+        assert_eq!(
+            table
+                .get_offset_table()
+                .get(&queue_1)
+                .unwrap()
+                .get_last_update_timestamp(),
+            2000
+        );
+
+        let moved = table.into_offset_table();
+        assert_eq!(moved.len(), 2);
+        assert!(moved.contains_key(&queue_0));
+        assert!(moved.contains_key(&queue_1));
+    }
+}
