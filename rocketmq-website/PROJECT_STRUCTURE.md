@@ -13,72 +13,121 @@ rocketmq-website/
 ├── package.json                   # Project dependency management
 ├── tsconfig.json                  # TypeScript configuration
 ├── README.md                      # Project description
+├── QUICKSTART.md                  # Quick start guide (English)
+├── QUICKSTART_zh-CN.md            # Quick start guide (Chinese)
+├── PROJECT_STRUCTURE.md           # Project structure (English)
+├── PROJECT_STRUCTURE_zh-CN.md     # Project structure (Chinese)
 ├── .gitignore                     # Git ignore file
 ├── .nvmrc                         # Node.js version management
 │
 ├── docs/                          # Documentation content directory
+│   ├── author.md                  # Author information
 │   ├── introduction.md            # Project introduction
 │   │
 │   ├── getting-started/           # Getting Started
+│   │   ├── _category_.json        # Category configuration
 │   │   ├── installation.md        # Installation guide
 │   │   ├── quick-start.md         # Quick start
 │   │   └── basic-concepts.md      # Basic concepts
 │   │
 │   ├── architecture/              # Architecture documentation
+│   │   ├── _category_.json        # Category configuration
 │   │   ├── overview.md            # Architecture overview
 │   │   ├── message-model.md       # Message model
 │   │   └── storage.md             # Storage mechanism
 │   │
 │   ├── producer/                  # Producer documentation
+│   │   ├── _category_.json        # Category configuration
 │   │   ├── overview.md            # Producer overview
 │   │   ├── sending-messages.md    # Sending messages
 │   │   └── transaction-messages.md # Transaction messages
 │   │
 │   ├── consumer/                  # Consumer documentation
+│   │   ├── _category_.json        # Category configuration
 │   │   ├── overview.md            # Consumer overview
 │   │   ├── push-consumer.md       # Push consumer
 │   │   ├── pull-consumer.md       # Pull consumer
 │   │   └── message-filtering.md   # Message filtering
 │   │
 │   ├── configuration/             # Configuration documentation
+│   │   ├── _category_.json        # Category configuration
 │   │   ├── broker-config.md       # Broker configuration
 │   │   ├── client-config.md       # Client configuration
 │   │   └── performance-tuning.md  # Performance tuning
 │   │
 │   ├── faq/                       # FAQ
+│   │   ├── _category_.json        # Category configuration
 │   │   ├── common-issues.md       # Common issues
 │   │   ├── performance.md         # Performance issues
 │   │   └── troubleshooting.md     # Troubleshooting
 │   │
 │   └── contributing/              # Contributing guide
+│       ├── _category_.json        # Category configuration
 │       ├── overview.md            # Contributing overview
 │       ├── development-guide.md   # Development guide
 │       └── coding-standards.md    # Coding standards
 │
+├── releases/                      # Release notes directory
+│   ├── authors.yml                # Release authors
+│   ├── 2024-01-28-v0.1.0.md       # v0.1.0 release notes
+│   ├── 2024-06-05-v0.2.0.md       # v0.2.0 release notes
+│   ├── 2024-11-17-v0.3.0.md       # v0.3.0 release notes
+│   ├── 2025-02-16-v0.4.0.md       # v0.4.0 release notes
+│   ├── 2025-05-19-v0.5.0.md       # v0.5.0 release notes
+│   ├── 2025-08-19-v0.6.0.md       # v0.6.0 release notes
+│   └── 2025-12-07-v0.7.0.md       # v0.7.0 release notes
+│
 ├── src/                           # Source code directory
 │   ├── components/                # React components
 │   │   ├── HomepageFeatures.tsx   # Homepage features component
-│   │   └── HomepageFeatures.module.css
+│   │   ├── HomepageFeatures.module.css
+│   │   ├── DeveloperStyleHero.tsx # Developer style hero section
+│   │   ├── AnnouncementBanner.tsx # Announcement banner component
+│   │   ├── DevWarningBanner.tsx   # Development warning banner
+│   │   ├── DevWarningBannerWrapper.tsx # Banner wrapper
+│   │   ├── OrbBackground.tsx      # Orb background effect
+│   │   ├── OrbBackground.centered.tsx
+│   │   ├── OrbBackground.global.tsx
+│   │   ├── OrbBackground.module.css
+│   │   ├── OrbBackground.test.tsx # Orb background tests
+│   │   ├── OrbBackground.test.module.css
+│   │   └── SimpleOrb.tsx          # Simple orb component
 │   │
 │   ├── pages/                     # Page components
 │   │   ├── index.tsx              # Homepage
 │   │   └── index.module.css
 │   │
-│   └── css/                       # Style files
-│       └── custom.css             # Custom styles
+│   ├── css/                       # Style files
+│   │   └── custom.css             # Custom styles
+│   │
+│   └── theme/                     # Theme customization
 │
 ├── static/                        # Static assets
-│   └── img/                       # Image assets
-│       └── rust-logo.svg          # Rust Logo
+│   ├── CNAME                      # Custom domain configuration
+│   ├── google0e604df170413726.html # Google verification
+│   ├── img/                       # Image assets
+│   └── js/                        # JavaScript files
 │
-└── i18n/                          # Internationalization files
-    ├── en/                        # English translation
-    │   ├── code.json
-    │   └── docusaurus-theme-classic.json
-    │
-    └── zh-CN/                     # Chinese translation
-        ├── code.json
-        └── docusaurus-theme-classic.json
+├── i18n/                          # Internationalization files
+│   ├── en/                        # English translation
+│   │   ├── code.json              # UI text translations
+│   │   ├── docusaurus-theme-classic.json
+│   │   ├── docusaurus-plugin-content-pages/
+│   │   └── docusaurus-theme-classic/
+│   │
+│   └── zh-CN/                     # Chinese translation
+│       ├── code.json              # UI text translations
+│       ├── docusaurus-theme-classic.json
+│       ├── docusaurus-plugin-content-docs/  # Translated docs
+│       ├── docusaurus-plugin-content-pages/
+│       └── docusaurus-theme-classic/
+│           ├── navbar.json        # Navbar translations
+│           └── footer.json        # Footer translations
+│
+└── .docusaurus/                   # Build output (auto-generated)
+    ├── client-modules.js
+    ├── routes.js
+    └── ... (other build artifacts)
 ```
 
 ## Core Configuration Files
