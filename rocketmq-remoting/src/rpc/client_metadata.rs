@@ -23,7 +23,7 @@ use rocketmq_common::common::mix_all::MASTER_ID;
 
 use crate::protocol::body::broker_body::cluster_info::ClusterInfo;
 use crate::protocol::route::topic_route_data::TopicRouteData;
-use crate::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
+use crate::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 use crate::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
 
 pub struct ClientMetadata {

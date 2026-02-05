@@ -28,8 +28,8 @@ use rocketmq_rust::ArcMut;
 
 use crate::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
 use crate::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
-use crate::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
 use crate::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use crate::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 use crate::protocol::static_topic::topic_queue_mapping_one::TopicQueueMappingOne;
 use crate::protocol::static_topic::topic_remapping_detail_wrapper;
 use crate::protocol::static_topic::topic_remapping_detail_wrapper::TopicRemappingDetailWrapper;

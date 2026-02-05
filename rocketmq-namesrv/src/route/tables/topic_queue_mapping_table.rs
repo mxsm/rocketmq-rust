@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_remoting::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
+use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 
 use crate::route::types::BrokerName;
 use crate::route::types::TopicName;
@@ -40,7 +40,7 @@ use crate::route::types::TopicName;
 /// ```no_run
 /// use cheetah_string::CheetahString;
 /// use rocketmq_namesrv::route::tables::TopicQueueMappingInfoTable;
-/// use rocketmq_remoting::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
+/// use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 ///
 /// let table = TopicQueueMappingInfoTable::new();
 /// let topic = CheetahString::from_static_str("test-topic");

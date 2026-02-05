@@ -15,9 +15,9 @@
 pub mod logic_queue_mapping_item;
 
 pub mod topic_config_and_queue_mapping;
-pub mod topic_queue_info;
 pub mod topic_queue_mapping_context;
 pub mod topic_queue_mapping_detail;
+pub mod topic_queue_mapping_info;
 pub mod topic_queue_mapping_one;
 pub mod topic_queue_mapping_utils;
 pub mod topic_remapping_detail_wrapper;
