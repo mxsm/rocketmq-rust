@@ -4,7 +4,12 @@ on:
   push:
     branches:
       - main
-      - master
+    paths:
+      - 'rocketmq-website/**'
+      - '.github/workflows/deploy.yml'
+  pull_request:
+    branches:
+      - main
     paths:
       - 'rocketmq-website/**'
       - '.github/workflows/deploy.yml'
@@ -55,6 +60,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     needs: build
+    if: github.event_name != 'pull_request'
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
