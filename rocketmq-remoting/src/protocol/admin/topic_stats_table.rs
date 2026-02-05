@@ -47,7 +47,6 @@ impl TopicStatsTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     fn create_custom_mq(topic: &str, queue_id: i32) -> MessageQueue {
         let json = format!(
