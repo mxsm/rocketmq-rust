@@ -9,8 +9,7 @@ pub struct LogicQueueMappingItem {
     pub queue_id: i32, // Immutable
     pub bname: Option<CheetahString>, // Immutable
     #[serde(rename = "logicOffset")]
-    pub logic_offset: i64, /* Start of the logic offset, Important, can be changed by command
-                   * only once */
+    pub logic_offset: i64, // Start of the logic offset, Important, can be changed by command only once
     #[serde(rename = "startOffset")]
     pub start_offset: i64, // Start of the physical offset, Should always be 0, Immutable
     #[serde(rename = "endOffset")]
@@ -76,5 +75,116 @@ impl LogicQueueMappingItem {
         } else {
             self.logic_offset
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn logic_queue_mapping_item_default() {
+        let item = LogicQueueMappingItem::default();
+        assert_eq!(item.gen, 0);
+        assert_eq!(item.queue_id, 0);
+        assert!(item.bname.is_none());
+        assert_eq!(item.logic_offset, 0);
+        assert_eq!(item.start_offset, 0);
+        assert_eq!(item.end_offset, -1);
+        assert_eq!(item.time_of_start, -1);
+        assert_eq!(item.time_of_end, -1);
+    }
+
+    #[test]
+    fn logic_queue_mapping_item_serde() {
+        let item = LogicQueueMappingItem {
+            gen: 1,
+            queue_id: 2,
+            bname: Some(CheetahString::from("broker-a")),
+            logic_offset: 100,
+            start_offset: 0,
+            end_offset: 200,
+            time_of_start: 123456,
+            time_of_end: 789012,
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        let expected = r#"{"gen":1,"queueId":2,"bname":"broker-a","logicOffset":100,"startOffset":0,"endOffset":200,"timeOfStart":123456,"timeOfEnd":789012}"#;
+        assert_eq!(json, expected);
+        let deserialized: LogicQueueMappingItem = serde_json::from_str(&json).unwrap();
+        assert_eq!(item, deserialized);
+    }
+
+    #[test]
+    fn compute_static_queue_offset_strictly() {
+        let item = LogicQueueMappingItem {
+            start_offset: 100,
+            logic_offset: 500,
+            ..Default::default()
+        };
+        assert_eq!(item.compute_static_queue_offset_strictly(150), 500);
+        assert_eq!(item.compute_static_queue_offset_strictly(50), 450);
+    }
+
+    #[test]
+    fn compute_static_queue_offset_loosely() {
+        let mut item = LogicQueueMappingItem {
+            logic_offset: -1,
+            ..Default::default()
+        };
+        assert_eq!(item.compute_static_queue_offset_loosely(100), -1);
+
+        item.logic_offset = 500;
+        item.start_offset = 100;
+        assert_eq!(item.compute_static_queue_offset_loosely(50), 500);
+
+        item.end_offset = 200;
+        assert_eq!(item.compute_static_queue_offset_loosely(250), 600);
+
+        assert_eq!(item.compute_static_queue_offset_loosely(150), 550);
+    }
+
+    #[test]
+    fn compute_physical_queue_offset() {
+        let item = LogicQueueMappingItem {
+            start_offset: 100,
+            logic_offset: 500,
+            ..Default::default()
+        };
+        assert_eq!(item.compute_physical_queue_offset(550), 150);
+    }
+
+    #[test]
+    fn compute_offset_delta() {
+        let item = LogicQueueMappingItem {
+            start_offset: 100,
+            logic_offset: 500,
+            ..Default::default()
+        };
+        assert_eq!(item.compute_offset_delta(), 400);
+    }
+
+    #[test]
+    fn check_if_end_offset_decided() {
+        let mut item = LogicQueueMappingItem {
+            start_offset: 100,
+            end_offset: 50,
+            ..Default::default()
+        };
+        assert!(!item.check_if_end_offset_decided());
+        item.end_offset = 150;
+        assert!(item.check_if_end_offset_decided());
+    }
+
+    #[test]
+    fn compute_max_static_queue_offset() {
+        let mut item = LogicQueueMappingItem {
+            logic_offset: 500,
+            start_offset: 100,
+            end_offset: 50,
+            ..Default::default()
+        };
+        assert_eq!(item.compute_max_static_queue_offset(), 500);
+        item.end_offset = 200;
+        assert_eq!(item.compute_max_static_queue_offset(), 600);
     }
 }
