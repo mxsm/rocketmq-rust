@@ -70,3 +70,90 @@ impl ConsumeStats {
         self.consume_tps = consume_tps;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_offset_wrapper(broker: i64, consumer: i64, pull: i64) -> OffsetWrapper {
+        let mut wrapper = OffsetWrapper::new();
+        wrapper.set_broker_offset(broker);
+        wrapper.set_consumer_offset(consumer);
+        wrapper.set_pull_offset(pull);
+        wrapper
+    }
+
+    fn create_mq(topic: &str, queue_id: i32) -> MessageQueue {
+        let json = format!(
+            r#"{{"topic": "{}", "brokerName": "broker_1", "queueId": {}}}"#,
+            topic, queue_id
+        );
+        serde_json::from_str(&json).expect("Failed to create MessageQueue for test")
+    }
+
+    #[test]
+    fn test_compute_total_diff() {
+        let mut stats = ConsumeStats::new();
+        let mut map = HashMap::new();
+
+        // queue 1
+        map.insert(create_mq("topic_a", 0), create_offset_wrapper(500, 400, 450));
+        // queue 2
+        map.insert(create_mq("topic_a", 1), create_offset_wrapper(200, 150, 180));
+
+        stats.set_offset_table(map);
+
+        assert_eq!(stats.compute_total_diff(), 150);
+    }
+
+    #[test]
+    fn test_compute_inflight_total_diff() {
+        let mut stats = ConsumeStats::new();
+        let mut map = HashMap::new();
+        map.insert(create_mq("topic_b", 0), create_offset_wrapper(500, 400, 450));
+        map.insert(create_mq("topic_b", 1), create_offset_wrapper(200, 150, 180));
+
+        stats.set_offset_table(map);
+
+        assert_eq!(stats.compute_inflight_total_diff(), 80);
+    }
+
+    #[test]
+    fn test_getters_and_setters() {
+        let mut stats = ConsumeStats::new();
+        stats.set_consume_tps(5.67);
+
+        assert_eq!(stats.get_consume_tps(), 5.67);
+        assert!(stats.get_offset_table().is_empty());
+
+        stats
+            .get_offset_table_mut()
+            .insert(create_mq("test", 0), OffsetWrapper::new());
+        assert_eq!(stats.get_offset_table().len(), 1);
+    }
+
+    #[test]
+    fn test_empty_stats_diff() {
+        let stats = ConsumeStats::new();
+
+        assert_eq!(stats.compute_total_diff(), 0);
+        assert_eq!(stats.compute_inflight_total_diff(), 0);
+    }
+
+    #[test]
+    fn test_serialization_json_any_key() {
+        let mut stats = ConsumeStats::new();
+        let mq = create_mq("order", 2);
+        stats.get_offset_table_mut().insert(mq, create_offset_wrapper(10, 5, 8));
+        stats.set_consume_tps(1.0);
+
+        let serialized = serde_json::to_string(&stats).expect("Serialization failed");
+
+        assert!(serialized.contains("offset_table"));
+        assert!(serialized.contains("consume_tps"));
+
+        let deserialized: ConsumeStats = serde_json::from_str(&serialized).expect("Deserialization failed");
+        assert_eq!(deserialized.get_offset_table().len(), 1);
+        assert_eq!(deserialized.compute_total_diff(), 5);
+    }
+}
