@@ -32,10 +32,6 @@
 //! use rocketmq_remoting::protocol::headers::SendMessageRequestHeader;
 //! ```
 
-// ============================================================================
-// Message Operation Headers (Most Common)
-// ============================================================================
-
 /// Send and receive message headers
 pub mod message {
     pub use super::super::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
@@ -81,10 +77,6 @@ pub mod view {
     pub use super::super::header::view_message_response_header::ViewMessageResponseHeader;
 }
 
-// ============================================================================
-// Client Management Headers
-// ============================================================================
-
 pub mod client {
     pub use super::super::header::client_request_header::GetRouteInfoRequestHeader;
     pub use super::super::header::get_consumer_connection_list_request_header::GetConsumerConnectionListRequestHeader;
@@ -96,10 +88,6 @@ pub mod client {
     pub use super::super::header::notify_consumer_ids_changed_request_header::NotifyConsumerIdsChangedRequestHeader;
     pub use super::super::header::unregister_client_request_header::UnregisterClientRequestHeader;
 }
-
-// ============================================================================
-// NameServer Operation Headers
-// ============================================================================
 
 pub mod namesrv {
     pub use super::super::header::namesrv::broker_request::BrokerHeartbeatRequestHeader;
@@ -125,17 +113,9 @@ pub mod namesrv {
     pub use super::super::header::namesrv::topic_operation_header::TopicRequestHeader;
 }
 
-// ============================================================================
-// Broker Operation Headers
-// ============================================================================
-
 pub mod broker {
     pub use super::super::header::broker::broker_heartbeat_request_header::BrokerHeartbeatRequestHeader;
 }
-
-// ============================================================================
-// Controller Operation Headers
-// ============================================================================
 
 pub mod controller {
     pub use super::super::header::controller::alter_sync_state_set_request_header::AlterSyncStateSetRequestHeader;
@@ -151,10 +131,6 @@ pub mod controller {
     pub use super::super::header::controller::register_broker_to_controller_response_header::RegisterBrokerToControllerResponseHeader;
 }
 
-// ============================================================================
-// Administrative Headers
-// ============================================================================
-
 pub mod admin {
     pub use super::super::header::create_topic_request_header::CreateTopicRequestHeader;
     pub use super::super::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
@@ -167,18 +143,10 @@ pub mod admin {
     pub use super::super::header::get_topic_stats_request_header::GetTopicStatsRequestHeader;
 }
 
-// ============================================================================
-// Transaction Headers
-// ============================================================================
-
 pub mod transaction {
     pub use super::super::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
     pub use super::super::header::end_transaction_request_header::EndTransactionRequestHeader;
 }
-
-// ============================================================================
-// Consumer Offset Headers
-// ============================================================================
 
 pub mod offset {
     pub use super::super::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
@@ -190,18 +158,10 @@ pub mod offset {
     pub use super::super::header::update_consumer_offset_header::UpdateConsumerOffsetResponseHeader;
 }
 
-// ============================================================================
-// Message Queue Lock Headers
-// ============================================================================
-
 pub mod lock {
     pub use super::super::header::lock_batch_mq_request_header::LockBatchMqRequestHeader;
     pub use super::super::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
 }
-
-// ============================================================================
-// Offset Query Headers
-// ============================================================================
 
 pub mod min_offset {
     pub use super::super::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
@@ -213,10 +173,6 @@ pub mod max_offset {
     pub use super::super::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
 }
 
-// ============================================================================
-// ACL and Security Headers
-// ============================================================================
-
 pub mod acl {
     pub use super::super::header::create_user_request_header::CreateUserRequestHeader;
     pub use super::super::header::delete_acl_request_header::DeleteAclRequestHeader;
@@ -227,19 +183,11 @@ pub mod acl {
     pub use super::super::header::update_user_request_header::UpdateUserRequestHeader;
 }
 
-// ============================================================================
-// Special Message Headers
-// ============================================================================
-
 pub mod special {
     pub use super::super::header::consume_message_directly_result_request_header::ConsumeMessageDirectlyResultRequestHeader;
     pub use super::super::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
     pub use super::super::header::reply_message_request_header::ReplyMessageRequestHeader;
 }
-
-// ============================================================================
-// Notification and HA Headers
-// ============================================================================
 
 pub mod notification {
     pub use super::super::header::notification_request_header::NotificationRequestHeader;
@@ -253,10 +201,6 @@ pub mod ha {
     pub use super::super::header::reset_master_flush_offset_header::ResetMasterFlushOffsetHeader;
 }
 
-// ============================================================================
-// Utility Headers
-// ============================================================================
-
 pub mod util {
     pub use super::super::header::elect_master_response_header::ElectMasterResponseHeader;
     pub use super::super::header::empty_header::EmptyHeader;
@@ -264,11 +208,7 @@ pub mod util {
     pub use super::super::header::get_meta_data_response_header::GetMetaDataResponseHeader;
 }
 
-// ============================================================================
-// Top-Level Exports (Most Frequently Used Headers)
-// ============================================================================
 // These are available as: rocketmq_remoting::protocol::headers::<TypeName>
-
 // Message operations (most frequently used)
 pub use super::header::ack_message_request_header::AckMessageRequestHeader;
 pub use super::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;

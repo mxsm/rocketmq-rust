@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Tests for the new re-export functionality
+//! Tests for categorized re-exports in headers and bodies modules
 
 #[test]
 fn test_protocol_headers_reexports() {
