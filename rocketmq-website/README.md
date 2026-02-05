@@ -172,7 +172,6 @@ Configuration:
 
 - [Docusaurus Documentation](https://docusaurus.io/docs)
 - [RocketMQ-Rust Repository](https://github.com/mxsm/rocketmq-rust)
-- [Developer Style Guide](./DEVELOPER_STYLE_README.md)
 - [Project Structure](./PROJECT_STRUCTURE.md)
 - [Quick Start Guide](QUICKSTART.md)
 
