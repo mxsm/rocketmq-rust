@@ -116,17 +116,15 @@ fn test_categorized_imports_by_functionality() {
 #[test]
 fn test_static_topic_reexports() {
     // Test importing static_topic types through categorized re-exports
-    use rocketmq_remoting::protocol::bodies::static_topic::{
-        LogicQueueMappingItem,
-        TopicConfigAndQueueMapping,
-        TopicQueueMappingContext,
-        TopicQueueMappingDetail,
-        TopicQueueMappingInfo,
-        TopicQueueMappingOne,
-        MappingAllocator,
-        TopicQueueMappingUtils,
-        TopicRemappingDetailWrapper,
-    };
+    use rocketmq_remoting::protocol::bodies::static_topic::LogicQueueMappingItem;
+    use rocketmq_remoting::protocol::bodies::static_topic::MappingAllocator;
+    use rocketmq_remoting::protocol::bodies::static_topic::TopicConfigAndQueueMapping;
+    use rocketmq_remoting::protocol::bodies::static_topic::TopicQueueMappingContext;
+    use rocketmq_remoting::protocol::bodies::static_topic::TopicQueueMappingDetail;
+    use rocketmq_remoting::protocol::bodies::static_topic::TopicQueueMappingInfo;
+    use rocketmq_remoting::protocol::bodies::static_topic::TopicQueueMappingOne;
+    use rocketmq_remoting::protocol::bodies::static_topic::TopicQueueMappingUtils;
+    use rocketmq_remoting::protocol::bodies::static_topic::TopicRemappingDetailWrapper;
 
     // Verify all types are accessible
     let _item: Option<LogicQueueMappingItem> = None;
