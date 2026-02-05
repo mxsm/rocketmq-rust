@@ -135,6 +135,19 @@ pub mod user {
     pub use super::super::body::user_info::UserInfo;
 }
 
+// Static Topic Bodies
+pub mod static_topic {
+    pub use super::super::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
+    pub use super::super::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
+    pub use super::super::static_topic::topic_queue_mapping_context::TopicQueueMappingContext;
+    pub use super::super::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+    pub use super::super::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
+    pub use super::super::static_topic::topic_queue_mapping_one::TopicQueueMappingOne;
+    pub use super::super::static_topic::topic_queue_mapping_utils::MappingAllocator;
+    pub use super::super::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
+    pub use super::super::static_topic::topic_remapping_detail_wrapper::TopicRemappingDetailWrapper;
+}
+
 // Controller and Sync Bodies
 pub mod controller {
     pub use super::super::body::elect_master_response_body::ElectMasterResponseBody;
