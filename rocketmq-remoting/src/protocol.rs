@@ -30,12 +30,14 @@ use serde::Serializer;
 use crate::rocketmq_serializable::RocketMQSerializable;
 
 pub mod admin;
+pub mod bodies;
 pub mod body;
 pub mod broker_sync_info;
 pub mod command_custom_header;
 pub mod filter;
 pub mod forbidden_type;
 pub mod header;
+pub mod headers;
 pub mod heartbeat;
 pub mod namespace_util;
 pub mod namesrv;
@@ -47,6 +49,11 @@ pub mod route;
 pub mod static_topic;
 pub mod subscription;
 pub mod topic;
+
+// Re-export commonly used protocol types at protocol module level
+pub use self::command_custom_header::CommandCustomHeader;
+pub use self::command_custom_header::FromMap;
+pub use self::remoting_command::RemotingCommand;
 
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq)]
