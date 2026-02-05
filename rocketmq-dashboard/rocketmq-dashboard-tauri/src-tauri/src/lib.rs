@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod auth;
+
+use auth::AuthConfig;
+use tauri::Manager;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -23,8 +28,14 @@ pub fn run() {
                         .build(),
                 )?;
             }
+
+            // Initialize auth configuration
+            let auth_config = AuthConfig::load(app.handle())?;
+            app.manage(auth_config);
+
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![auth::verify_login])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

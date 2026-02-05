@@ -1334,11 +1334,13 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn list_acl(
         &self,
-        _broker_addr: CheetahString,
-        _subject_filter: CheetahString,
-        _resource_filter: CheetahString,
+        broker_addr: CheetahString,
+        subject_filter: CheetahString,
+        resource_filter: CheetahString,
     ) -> rocketmq_error::RocketMQResult<Vec<AclInfo>> {
-        unimplemented!("list_acl not implemented yet")
+        self.default_mqadmin_ext_impl
+            .list_acl(broker_addr, subject_filter, resource_filter)
+            .await
     }
 
     async fn get_broker_lite_info(

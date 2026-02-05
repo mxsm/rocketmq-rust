@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **feat(tools):** Add `ListAclSubCommand` for ACL enumeration and subject filtering ([#5663](https://github.com/mxsm/rocketmq-rust/issues/5663))
 - **feat(tools):** Add `UpdateAclSubCommand` ([#5665](https://github.com/mxsm/rocketmq-rust/issues/5665))
 - **feat(tools):** Add `UpdateSubGroupSubCommand` in update_sub_group_sub_command.rs ([#5653](https://github.com/mxsm/rocketmq-rust/issues/5653))
 - **feat(tools):** Add `GetControllerMetadataSubCommand` ([#5624](https://github.com/mxsm/rocketmq-rust/issues/5624))
@@ -17,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **refactor(remoting/tools):** Return references from `TopicStatsTable::get_offset_table` and add `into_offset_table`/`get_offset_table_mut` to avoid unnecessary `HashMap` cloning in topic status flows
 - **refactor(common):** Rename foundational `MessageTrait` methods to the idiomatic Rust naming: `get_property` to `property` and `get_property_ref` to `property_ref` (other getters like `get_topic`, `get_flag`, etc.. will be renamed in subsequent commits)
 - **refactor(client):** Refactor `default_mq_producer::start` in `default_mq_producer.rs` removing repeated `as_mut().unwrap()`([#5576](https://github.com/mxsm/rocketmq-rust/issues/5576))
 - **refactor(tui):** Reformat `rocketmq-tui` using `taplo`([#5242](https://github.com/mxsm/rocketmq-rust/issues/5242))

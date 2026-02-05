@@ -162,6 +162,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Auth",
+                command: "listAcl",
+                remark: "List acl from cluster.",
+            },
+            Command {
+                category: "Auth",
                 command: "updateAcl",
                 remark: "Update ACL.",
             },

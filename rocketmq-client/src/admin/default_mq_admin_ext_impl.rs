@@ -1530,11 +1530,20 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
 
     async fn list_acl(
         &self,
-        _broker_addr: CheetahString,
-        _subject_filter: CheetahString,
-        _resource_filter: CheetahString,
+        broker_addr: CheetahString,
+        subject_filter: CheetahString,
+        resource_filter: CheetahString,
     ) -> rocketmq_error::RocketMQResult<Vec<AclInfo>> {
-        unimplemented!("list_acl not implemented yet")
+        if let Some(ref mq_client_instance) = self.client_instance {
+            let mq_client_api = mq_client_instance.get_mq_client_api_impl();
+            let timeout_millis = self.timeout_millis.as_millis() as u64;
+            let result = mq_client_api
+                .list_acl(broker_addr, subject_filter, resource_filter, timeout_millis)
+                .await?;
+            Ok(result)
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn get_broker_lite_info(
