@@ -211,4 +211,4 @@ Licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
 ## Support
 
 - GitHub Issues: https://github.com/mxsm/rocketmq-rust/issues
-- Mailing List: general@mxsm.apache.org
+- Mailing: mxsm@apache.org
