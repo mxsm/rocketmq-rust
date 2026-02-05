@@ -13,72 +13,121 @@ rocketmq-website/
 ├── package.json                   # 项目依赖管理
 ├── tsconfig.json                  # TypeScript 配置
 ├── README.md                      # 项目描述
+├── QUICKSTART.md                  # 快速开始指南（英文）
+├── QUICKSTART_zh-CN.md            # 快速开始指南（中文）
+├── PROJECT_STRUCTURE.md           # 项目结构（英文）
+├── PROJECT_STRUCTURE_zh-CN.md     # 项目结构（中文）
 ├── .gitignore                     # Git 忽略文件
 ├── .nvmrc                         # Node.js 版本管理
 │
 ├── docs/                          # 文档内容目录
+│   ├── author.md                  # 作者信息
 │   ├── introduction.md            # 项目介绍
 │   │
 │   ├── getting-started/           # 快速开始
+│   │   ├── _category_.json        # 分类配置
 │   │   ├── installation.md        # 安装指南
 │   │   ├── quick-start.md         # 快速开始
 │   │   └── basic-concepts.md      # 基本概念
 │   │
 │   ├── architecture/              # 架构文档
+│   │   ├── _category_.json        # 分类配置
 │   │   ├── overview.md            # 架构概览
 │   │   ├── message-model.md       # 消息模型
 │   │   └── storage.md             # 存储机制
 │   │
 │   ├── producer/                  # 生产者文档
+│   │   ├── _category_.json        # 分类配置
 │   │   ├── overview.md            # 生产者概览
 │   │   ├── sending-messages.md    # 发送消息
 │   │   └── transaction-messages.md # 事务消息
 │   │
 │   ├── consumer/                  # 消费者文档
+│   │   ├── _category_.json        # 分类配置
 │   │   ├── overview.md            # 消费者概览
 │   │   ├── push-consumer.md       # 推送消费者
 │   │   ├── pull-consumer.md       # 拉取消费者
 │   │   └── message-filtering.md   # 消息过滤
 │   │
 │   ├── configuration/             # 配置文档
+│   │   ├── _category_.json        # 分类配置
 │   │   ├── broker-config.md       # Broker 配置
 │   │   ├── client-config.md       # 客户端配置
 │   │   └── performance-tuning.md  # 性能调优
 │   │
 │   ├── faq/                       # 常见问题
+│   │   ├── _category_.json        # 分类配置
 │   │   ├── common-issues.md       # 常见问题
 │   │   ├── performance.md         # 性能问题
 │   │   └── troubleshooting.md     # 故障排除
 │   │
 │   └── contributing/              # 贡献指南
+│       ├── _category_.json        # 分类配置
 │       ├── overview.md            # 贡献概览
 │       ├── development-guide.md   # 开发指南
 │       └── coding-standards.md    # 编码规范
 │
+├── releases/                      # 版本发布说明目录
+│   ├── authors.yml                # 发布作者信息
+│   ├── 2024-01-28-v0.1.0.md       # v0.1.0 发布说明
+│   ├── 2024-06-05-v0.2.0.md       # v0.2.0 发布说明
+│   ├── 2024-11-17-v0.3.0.md       # v0.3.0 发布说明
+│   ├── 2025-02-16-v0.4.0.md       # v0.4.0 发布说明
+│   ├── 2025-05-19-v0.5.0.md       # v0.5.0 发布说明
+│   ├── 2025-08-19-v0.6.0.md       # v0.6.0 发布说明
+│   └── 2025-12-07-v0.7.0.md       # v0.7.0 发布说明
+│
 ├── src/                           # 源代码目录
 │   ├── components/                # React 组件
 │   │   ├── HomepageFeatures.tsx   # 首页特性组件
-│   │   └── HomepageFeatures.module.css
+│   │   ├── HomepageFeatures.module.css
+│   │   ├── DeveloperStyleHero.tsx # 开发者风格的 Hero 区块
+│   │   ├── AnnouncementBanner.tsx # 公告横幅组件
+│   │   ├── DevWarningBanner.tsx   # 开发环境警告横幅
+│   │   ├── DevWarningBannerWrapper.tsx # 横幅包装器
+│   │   ├── OrbBackground.tsx      # 球体背景效果
+│   │   ├── OrbBackground.centered.tsx
+│   │   ├── OrbBackground.global.tsx
+│   │   ├── OrbBackground.module.css
+│   │   ├── OrbBackground.test.tsx # 球体背景测试
+│   │   ├── OrbBackground.test.module.css
+│   │   └── SimpleOrb.tsx          # 简单球体组件
 │   │
 │   ├── pages/                     # 页面组件
 │   │   ├── index.tsx              # 首页
 │   │   └── index.module.css
 │   │
-│   └── css/                       # 样式文件
-│       └── custom.css             # 自定义样式
+│   ├── css/                       # 样式文件
+│   │   └── custom.css             # 自定义样式
+│   │
+│   └── theme/                     # 主题定制
 │
 ├── static/                        # 静态资源
-│   └── img/                       # 图片资源
-│       └── rust-logo.svg          # Rust Logo
+│   ├── CNAME                      # 自定义域名配置
+│   ├── google0e604df170413726.html # Google 验证文件
+│   ├── img/                       # 图片资源
+│   └── js/                        # JavaScript 文件
 │
-└── i18n/                          # 国际化文件
-    ├── en/                        # 英文翻译
-    │   ├── code.json
-    │   └── docusaurus-theme-classic.json
-    │
-    └── zh-CN/                     # 中文翻译
-        ├── code.json
-        └── docusaurus-theme-classic.json
+├── i18n/                          # 国际化文件
+│   ├── en/                        # 英文翻译
+│   │   ├── code.json              # UI 文本翻译
+│   │   ├── docusaurus-theme-classic.json
+│   │   ├── docusaurus-plugin-content-pages/
+│   │   └── docusaurus-theme-classic/
+│   │
+│   └── zh-CN/                     # 中文翻译
+│       ├── code.json              # UI 文本翻译
+│       ├── docusaurus-theme-classic.json
+│       ├── docusaurus-plugin-content-docs/  # 翻译后的文档
+│       ├── docusaurus-plugin-content-pages/
+│       └── docusaurus-theme-classic/
+│           ├── navbar.json        # 导航栏翻译
+│           └── footer.json        # 页脚翻译
+│
+└── .docusaurus/                   # 构建输出（自动生成）
+    ├── client-modules.js
+    ├── routes.js
+    └── ... (其他构建产物)
 ```
 
 ## 核心配置文件

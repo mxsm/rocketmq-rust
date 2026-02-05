@@ -27,12 +27,10 @@ npm install
 
 ```bash
 # Start English version (default)
-npm start
-# or
-node ./node_modules/@docusaurus/core/bin/docusaurus.mjs start
+npm run start
 
 # Start Chinese version
-node ./node_modules/@docusaurus/core/bin/docusaurus.mjs start --locale zh-CN
+npm run start:zh
 ```
 
 The website will be available at:
@@ -55,8 +53,6 @@ npm run build -- --locale zh-CN
 
 ```bash
 npm run clear
-# or
-node ./node_modules/@docusaurus/core/bin/docusaurus.mjs clear
 ```
 
 ## 🌍 Internationalization (i18n)
@@ -94,24 +90,34 @@ i18n/
 ```
 rocketmq-website/
 ├── docs/                    # Documentation source files (English)
+│   ├── author.md
+│   ├── introduction.md
 │   ├── getting-started/
 │   ├── architecture/
 │   ├── producer/
 │   ├── consumer/
 │   ├── configuration/
 │   ├── contributing/
-│   ├── faq/
-│   └── release-notes/
+│   └── faq/
+├── releases/                # Release notes
+│   └── 2024-01-28-v0.1.0.md → 2025-12-07-v0.7.0.md
 ├── i18n/                    # Internationalization files
+│   ├── en/                  # English translations
+│   └── zh-CN/               # Chinese translations
 ├── src/                     # Custom React components
-│   ├── components/
-│   ├── css/
-│   └── pages/
-├── static/                  # Static assets (images, etc.)
+│   ├── components/          # UI components
+│   ├── css/                 # Custom styles
+│   ├── pages/               # Custom pages
+│   └── theme/               # Theme customization
+├── static/                  # Static assets (images, CNAME, etc.)
+├── .docusaurus/             # Build output (auto-generated)
 ├── docusaurus.config.ts     # Docusaurus configuration
-├── sidebars.ts             # Sidebar configuration
-└── tsconfig.json           # TypeScript configuration
+├── sidebars.ts              # Sidebar configuration
+├── package.json             # Dependencies and scripts
+└── tsconfig.json            # TypeScript configuration
 ```
+
+For detailed structure, see [PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md).
 
 ## 🎨 Customization
 
@@ -123,8 +129,12 @@ Edit `src/css/custom.css` to customize theme colors and styles.
 
 Custom React components are located in `src/components/`:
 
-- `DeveloperStyleHero.tsx` - Homepage hero section
-- `HomepageFeatures.tsx` - Feature cards
+- `HomepageFeatures.tsx` - Homepage feature cards
+- `DeveloperStyleHero.tsx` - Developer-style hero section
+- `AnnouncementBanner.tsx` - Site-wide announcement banner
+- `DevWarningBanner.tsx` - Development environment warning
+- `OrbBackground.tsx` - Animated orb background effects
+- `SimpleOrb.tsx` - Simple orb component
 
 ## 📝 Writing Documentation
 
