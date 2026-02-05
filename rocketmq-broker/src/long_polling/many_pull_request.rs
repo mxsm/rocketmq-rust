@@ -50,11 +50,6 @@ impl ManyPullRequest {
         }
     }
 
-    /*    pub fn get_pull_request_list(&self) -> Vec<PullRequest> {
-        let list = self.pull_request_list.lock();
-        list.clone()
-    }*/
-
     pub fn is_empty(&self) -> bool {
         let list = self.pull_request_list.lock();
         list.is_empty()
