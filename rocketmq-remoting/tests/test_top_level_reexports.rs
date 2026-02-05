@@ -79,7 +79,9 @@ fn test_top_level_body_imports() {
 #[test]
 fn test_top_level_core_types() {
     // Test importing core types directly from crate root
-    use rocketmq_remoting::{CompositeCodec, RemotingCommand, RemotingCommandCodec};
+    use rocketmq_remoting::CompositeCodec;
+    use rocketmq_remoting::RemotingCommand;
+    use rocketmq_remoting::RemotingCommandCodec;
 
     // Verify types are accessible
     let _command: Option<RemotingCommand> = None;
