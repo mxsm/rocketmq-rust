@@ -21,8 +21,8 @@ use rocketmq_rust::ArcMut;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
 use crate::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
+use crate::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 use crate::protocol::DataVersion;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

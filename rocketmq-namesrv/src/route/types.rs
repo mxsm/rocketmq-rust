@@ -24,7 +24,7 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
 use rocketmq_remoting::protocol::route::route_data_view::QueueData;
-use rocketmq_remoting::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
+use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 
 use crate::route::tables::BrokerLiveInfo;
 use crate::route_info::broker_addr_info::BrokerAddrInfo;

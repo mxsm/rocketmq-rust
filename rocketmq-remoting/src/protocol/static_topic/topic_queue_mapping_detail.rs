@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::protocol::static_topic::logic_queue_mapping_item::LogicQueueMappingItem;
-use crate::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
+use crate::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct TopicQueueMappingDetail {

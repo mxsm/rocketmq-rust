@@ -79,7 +79,7 @@ use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
 use rocketmq_remoting::protocol::route::route_data_view::QueueData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
-use rocketmq_remoting::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
+use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_rust::ArcMut;
 use tracing::debug;

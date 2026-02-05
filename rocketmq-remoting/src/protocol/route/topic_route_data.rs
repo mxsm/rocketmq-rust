@@ -20,7 +20,7 @@ use serde::Serialize;
 
 use crate::protocol::route::route_data_view::BrokerData;
 use crate::protocol::route::route_data_view::QueueData;
-use crate::protocol::static_topic::topic_queue_info::TopicQueueMappingInfo;
+use crate::protocol::static_topic::topic_queue_mapping_info::TopicQueueMappingInfo;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, Eq, PartialEq)]
 pub struct TopicRouteData {
