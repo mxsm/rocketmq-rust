@@ -87,7 +87,19 @@ pub use crate::protocol::header::get_topic_config_request_header::GetTopicConfig
 // Common response headers
 pub use crate::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
 pub use crate::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
+pub use crate::protocol::header::pop_message_response_header::PopMessageResponseHeader;
 pub use crate::protocol::header::pull_message_response_header::PullMessageResponseHeader;
+
+// Transaction operations (frequently used in transactional messaging)
+pub use crate::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
+pub use crate::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
+
+// Offset management (common in consumer operations)
+pub use crate::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
+pub use crate::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
+
+// Client management
+pub use crate::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 
 // Most Common Bodies (Top-Level Exports)
 
@@ -114,6 +126,12 @@ pub use crate::protocol::body::response::lock_batch_response_body::LockBatchResp
 
 // Query operations
 pub use crate::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
+
+// NameServer operations
+pub use crate::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
+
+// Producer operations
+pub use crate::protocol::body::producer_connection::ProducerConnection;
 
 // Utility types
 pub use crate::protocol::body::kv_table::KVTable;
