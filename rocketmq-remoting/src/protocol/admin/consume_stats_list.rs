@@ -28,10 +28,10 @@ pub struct ConsumeStatsList {
     #[serde(rename = "brokerAddr")]
     pub broker_addr: Option<CheetahString>,
 
-    #[serde(rename = "total_diff")]
+    #[serde(rename = "totalDiff")]
     pub total_diff: i64,
 
-    #[serde(rename = "total_inflight_diff")]
+    #[serde(rename = "totalInflightDiff")]
     pub total_inflight_diff: i64,
 }
 
