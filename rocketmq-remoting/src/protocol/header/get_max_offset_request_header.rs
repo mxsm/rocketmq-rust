@@ -123,11 +123,12 @@ impl TopicRequestHeaderTrait for GetMaxOffsetRequestHeader {
 
 #[cfg(test)]
 mod tests {
-    use cheetah_string::{self, CheetahString};
     use crate::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
     use crate::protocol::header::message_operation_header::TopicRequestHeaderTrait;
     use crate::rpc::rpc_request_header::RpcRequestHeader;
     use crate::rpc::topic_request_header::TopicRequestHeader;
+    use cheetah_string::CheetahString;
+    use cheetah_string::{self};
     #[test]
     fn get_max_offset_request_header_with_required_fields_only() {
         let header = GetMaxOffsetRequestHeader {
@@ -217,7 +218,7 @@ mod tests {
         };
 
         assert_eq!(header.lo(), Some(true));
-    } 
+    }
 
     #[test]
     fn fn_set_lo() {
