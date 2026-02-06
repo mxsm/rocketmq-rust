@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **test(remoting):** Add comprehensive test coverage for `GetMaxOffsetRequestHeader` including required fields, optional nested headers, trait implementation methods, and edge cases
 - **feat(tools):** Add `ListAclSubCommand` for ACL enumeration and subject filtering ([#5663](https://github.com/mxsm/rocketmq-rust/issues/5663))
 - **feat(tools):** Add `UpdateAclSubCommand` ([#5665](https://github.com/mxsm/rocketmq-rust/issues/5665))
+- **feat(tools):** Add `UpdateSubGroupListSubCommand` for batch subscription group updates ([#5652](https://github.com/mxsm/rocketmq-rust/issues/5652))
 - **feat(tools):** Add `UpdateSubGroupSubCommand` in update_sub_group_sub_command.rs ([#5653](https://github.com/mxsm/rocketmq-rust/issues/5653))
 - **feat(tools):** Add `GetControllerMetadataSubCommand` ([#5624](https://github.com/mxsm/rocketmq-rust/issues/5624))
 - **feat(common):** Add `filter_type` module to filter.rs in rocketmq-common crate ([#5454](https://github.com/mxsm/rocketmq-rust/issues/5454))

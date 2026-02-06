@@ -15,6 +15,7 @@
 mod consumer_status_sub_command;
 mod consumer_sub_command;
 mod delete_subscription_group_sub_command;
+mod update_sub_group_list_sub_command;
 mod update_sub_group_sub_command;
 use std::sync::Arc;
 
@@ -50,6 +51,12 @@ pub enum ConsumerCommands {
         long_about = None,
     )]
     UpdateSubGroupSubCommand(update_sub_group_sub_command::UpdateSubGroupSubCommand),
+    #[command(
+        name = "updateSubGroupList",
+        about = "Create or update subscription groups in batch.",
+        long_about = None,
+    )]
+    UpdateSubGroupList(update_sub_group_list_sub_command::UpdateSubGroupListSubCommand),
 }
 
 impl CommandExecute for ConsumerCommands {
@@ -59,6 +66,7 @@ impl CommandExecute for ConsumerCommands {
             ConsumerCommands::ConsumerSubCommand(cmd) => cmd.execute(rpc_hook).await,
             ConsumerCommands::DeleteSubGroup(cmd) => cmd.execute(rpc_hook).await,
             ConsumerCommands::UpdateSubGroupSubCommand(value) => value.execute(rpc_hook).await,
+            ConsumerCommands::UpdateSubGroupList(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }
