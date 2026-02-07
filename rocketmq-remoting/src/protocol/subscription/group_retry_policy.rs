@@ -32,7 +32,6 @@ pub struct GroupRetryPolicy {
     type_: GroupRetryPolicyType,
     exponential_retry_policy: Option<ExponentialRetryPolicy>,
     customized_retry_policy: Option<CustomizedRetryPolicy>,
-    //default_retry_policy: CustomizedRetryPolicy,
 }
 
 impl Default for GroupRetryPolicy {
@@ -41,7 +40,6 @@ impl Default for GroupRetryPolicy {
             type_: GroupRetryPolicyType::Customized,
             exponential_retry_policy: None,
             customized_retry_policy: None,
-            //default_retry_policy: CustomizedRetryPolicy::default(),
         }
     }
 }
@@ -84,5 +82,55 @@ impl GroupRetryPolicy {
                 .map(|p| p as &dyn RetryPolicy)
                 .unwrap_or(DEFAULT_RETRY_POLICY.deref() as &dyn RetryPolicy),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn group_retry_policy_default() {
+        let policy = GroupRetryPolicy::default();
+        assert_eq!(policy.type_(), GroupRetryPolicyType::Customized);
+        assert!(policy.exponential_retry_policy().is_none());
+        assert!(policy.customized_retry_policy().is_none());
+    }
+
+    #[test]
+    fn group_retry_policy_setters_and_getters() {
+        let mut policy = GroupRetryPolicy::default();
+        let exp = ExponentialRetryPolicy::default();
+        let cust = CustomizedRetryPolicy::default();
+
+        policy.set_type_(GroupRetryPolicyType::Exponential);
+        policy.set_exponential_retry_policy(Some(exp.clone()));
+        policy.set_customized_retry_policy(Some(cust.clone()));
+
+        assert_eq!(policy.type_(), GroupRetryPolicyType::Exponential);
+        assert_eq!(
+            policy.exponential_retry_policy().unwrap().next_delay_duration(1),
+            exp.next_delay_duration(1)
+        );
+        assert_eq!(
+            policy.customized_retry_policy().unwrap().next_delay_duration(1),
+            cust.next_delay_duration(1)
+        );
+    }
+
+    #[test]
+    fn group_retry_policy_get_retry_policy_fallback() {
+        let mut policy = GroupRetryPolicy::default();
+        let retry_policy = policy.get_retry_policy();
+        assert_eq!(
+            retry_policy.next_delay_duration(1),
+            DEFAULT_RETRY_POLICY.next_delay_duration(1)
+        );
+        policy.set_type_(GroupRetryPolicyType::Exponential);
+        let retry_policy = policy.get_retry_policy();
+        assert_eq!(
+            retry_policy.next_delay_duration(1),
+            DEFAULT_RETRY_POLICY.next_delay_duration(1)
+        );
     }
 }
