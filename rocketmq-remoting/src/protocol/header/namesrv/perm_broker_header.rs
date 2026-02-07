@@ -69,15 +69,40 @@ pub struct AddWritePermOfBrokerResponseHeader {
 }
 
 impl AddWritePermOfBrokerResponseHeader {
-    //const ADD_TOPIC_COUNT: &'static str = "addTopicCount";
-
     pub fn new(add_topic_count: i32) -> Self {
         Self { add_topic_count }
     }
-}
 
-impl AddWritePermOfBrokerResponseHeader {
     pub fn get_add_topic_count(&self) -> i32 {
         self.add_topic_count
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wipe_write_perm_of_broker_request_header_new() {
+        let header = WipeWritePermOfBrokerRequestHeader::new("broker1");
+        assert_eq!(header.broker_name, CheetahString::from("broker1"));
+    }
+
+    #[test]
+    fn wipe_write_perm_of_broker_response_header_new_and_getters() {
+        let header = WipeWritePermOfBrokerResponseHeader::new(10);
+        assert_eq!(header.get_wipe_topic_count(), 10);
+    }
+
+    #[test]
+    fn add_write_perm_of_broker_request_header_new() {
+        let header = AddWritePermOfBrokerRequestHeader::new("broker1");
+        assert_eq!(header.broker_name, CheetahString::from("broker1"));
+    }
+
+    #[test]
+    fn add_write_perm_of_broker_response_header_new_and_getters() {
+        let header = AddWritePermOfBrokerResponseHeader::new(20);
+        assert_eq!(header.get_add_topic_count(), 20);
     }
 }
