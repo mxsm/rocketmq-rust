@@ -1,10 +1,3 @@
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::collections::HashSet;
-
-use cheetah_string::CheetahString;
-use rand::seq::SliceRandom;
-use rocketmq_common::common::config::TopicConfig;
 // Copyright 2023 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +11,14 @@ use rocketmq_common::common::config::TopicConfig;
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
+use std::cmp::Ordering;
+use std::collections::HashMap;
+use std::collections::HashSet;
+
+use cheetah_string::CheetahString;
+use rand::seq::SliceRandom;
+use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::EnvUtils::EnvUtils;
 use rocketmq_common::FileUtils::string_to_file;
