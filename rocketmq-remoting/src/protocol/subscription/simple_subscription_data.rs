@@ -50,3 +50,26 @@ impl SimpleSubscriptionData {
         self.version
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simple_subscription_data_default() {
+        let data = SimpleSubscriptionData::default();
+        assert_eq!(data.topic(), "");
+        assert_eq!(data.expression_type(), "");
+        assert_eq!(data.expression(), "");
+        assert_eq!(data.version(), 0);
+    }
+
+    #[test]
+    fn simple_subscription_data_new_and_getters() {
+        let data = SimpleSubscriptionData::new("topic".to_string(), "TAG".to_string(), "*".to_string(), 123);
+        assert_eq!(data.topic(), "topic");
+        assert_eq!(data.expression_type(), "TAG");
+        assert_eq!(data.expression(), "*");
+        assert_eq!(data.version(), 123);
+    }
+}
