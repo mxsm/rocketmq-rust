@@ -42,8 +42,8 @@ use tokio::time::timeout;
 /// # Example
 ///
 /// ```no_run
-/// use std::time::Duration;
 /// use rocketmq_error::RocketMQResult;
+/// use std::time::Duration;
 ///
 /// async fn send_message() -> RocketMQResult<String> {
 ///     // Simulate work
@@ -124,8 +124,8 @@ where
 /// # Example
 ///
 /// ```no_run
-/// use std::time::Duration;
 /// use rocketmq_error::RocketMQResult;
+/// use std::time::Duration;
 ///
 /// async fn send_message(id: usize) -> RocketMQResult<usize> {
 ///     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -135,7 +135,8 @@ where
 /// # async fn example() -> RocketMQResult<()> {
 /// use rocketmq_client_rust::producer::producer_impl::timeout_utils::with_timeout_all;
 /// let futures = vec![send_message(1), send_message(2), send_message(3)];
-/// let results: RocketMQResult<Vec<usize>> = with_timeout_all(Duration::from_secs(1), futures).await;
+/// let results: RocketMQResult<Vec<usize>> =
+///     with_timeout_all(Duration::from_secs(1), futures).await;
 /// assert!(results.is_ok());
 /// assert_eq!(results.unwrap().len(), 3);
 /// # Ok(())
