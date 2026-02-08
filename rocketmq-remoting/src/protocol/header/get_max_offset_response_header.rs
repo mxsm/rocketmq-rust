@@ -20,3 +20,41 @@ use serde::Serialize;
 pub struct GetMaxOffsetResponseHeader {
     pub offset: i64,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use cheetah_string::CheetahString;
+
+    use super::*;
+    use crate::protocol::command_custom_header::FromMap;
+
+    #[test]
+    fn get_max_offset_response_header_default() {
+        let header = GetMaxOffsetResponseHeader::default();
+        assert_eq!(header.offset, 0);
+    }
+
+    #[test]
+    fn get_max_offset_response_header_serialization() {
+        let header = GetMaxOffsetResponseHeader { offset: 12345 };
+        let json = serde_json::to_string(&header).unwrap();
+        assert_eq!(json, r#"{"offset":12345}"#);
+    }
+
+    #[test]
+    fn get_max_offset_response_header_deserialization() {
+        let json = r#"{"offset":12345}"#;
+        let header: GetMaxOffsetResponseHeader = serde_json::from_str(json).unwrap();
+        assert_eq!(header.offset, 12345);
+    }
+
+    #[test]
+    fn get_max_offset_response_header_from_map() {
+        let mut map = HashMap::new();
+        map.insert(CheetahString::from("offset"), CheetahString::from("12345"));
+        let header = <GetMaxOffsetResponseHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.offset, 12345);
+    }
+}
