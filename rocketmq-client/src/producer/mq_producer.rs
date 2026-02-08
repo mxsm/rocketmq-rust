@@ -770,4 +770,34 @@ pub trait MQProducer {
     ///
     /// * `&mut dyn Any` - A mutable reference to the object as a trait object of type `Any`.
     fn as_any_mut(&mut self) -> &mut dyn Any;
+
+    /// Recalls a previously sent message based on its recall handle.
+    ///
+    /// This method attempts to recall a message that was previously sent and identified
+    /// by a recall handle. The message recall feature allows producers to retrieve
+    /// or cancel messages that have been sent but not yet consumed.
+    ///
+    /// # Arguments
+    ///
+    /// * `topic` - A string slice that holds the name of the topic from which to recall the message.
+    /// * `recall_handle` - A string slice that holds the recall handle identifying the message to recall.
+    ///
+    /// # Returns
+    ///
+    /// * `rocketmq_error::RocketMQResult<String>` - A result containing a string indicating the
+    ///   recall result or an error.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if:
+    /// - The producer is not initialized
+    /// - The topic does not exist
+    /// - The recall handle is invalid
+    /// - The broker is unavailable
+    /// - The message cannot be recalled (e.g., already consumed)
+    async fn recall_message(
+        &mut self,
+        topic: &str,
+        recall_handle: &str,
+    ) -> rocketmq_error::RocketMQResult<String>;
 }
