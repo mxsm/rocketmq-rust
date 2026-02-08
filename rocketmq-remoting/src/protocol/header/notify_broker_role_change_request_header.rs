@@ -44,3 +44,21 @@ impl Display for NotifyBrokerRoleChangedRequestHeader {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notify_broker_role_changed_request_header_display() {
+        let header = NotifyBrokerRoleChangedRequestHeader {
+            master_address: Some(CheetahString::from("addr")),
+            master_epoch: Some(1),
+            sync_state_set_epoch: Some(2),
+            master_broker_id: Some(3),
+        };
+        let display = format!("{}", header);
+        let expected = r#"(master_address=Some("addr"), master_epoch=Some(1), sync_state_set_epoch=Some(2), master_broker_id=Some(3))"#;
+        assert_eq!(display, expected);
+    }
+}
