@@ -779,8 +779,10 @@ pub trait MQProducer {
     ///
     /// # Arguments
     ///
-    /// * `topic` - A string slice that holds the name of the topic from which to recall the message.
-    /// * `recall_handle` - A string slice that holds the recall handle identifying the message to recall.
+    /// * `topic` - A string slice that holds the name of the topic from which to recall the
+    ///   message.
+    /// * `recall_handle` - A string slice that holds the recall handle identifying the message to
+    ///   recall.
     ///
     /// # Returns
     ///
@@ -795,9 +797,5 @@ pub trait MQProducer {
     /// - The recall handle is invalid
     /// - The broker is unavailable
     /// - The message cannot be recalled (e.g., already consumed)
-    async fn recall_message(
-        &mut self,
-        topic: &str,
-        recall_handle: &str,
-    ) -> rocketmq_error::RocketMQResult<String>;
+    async fn recall_message(&mut self, topic: &str, recall_handle: &str) -> rocketmq_error::RocketMQResult<String>;
 }

@@ -1224,12 +1224,8 @@ impl MQProducer for DefaultMQProducer {
         self
     }
 
-    async fn recall_message(
-        &mut self,
-        topic: &str,
-        recall_handle: &str,
-    ) -> rocketmq_error::RocketMQResult<String> {
-       unimplemented!("DefaultMQProducer does not implement recall_message")
+    async fn recall_message(&mut self, topic: &str, recall_handle: &str) -> rocketmq_error::RocketMQResult<String> {
+        unimplemented!("DefaultMQProducer does not implement recall_message")
     }
 }
 

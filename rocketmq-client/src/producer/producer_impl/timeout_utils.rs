@@ -21,7 +21,8 @@
 use std::future::Future;
 use std::time::Duration;
 
-use rocketmq_error::{RocketMQError, RocketMQResult};
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
 use tokio::time::timeout;
 
 /// Applies a timeout to a future operation.
@@ -55,19 +56,14 @@ use tokio::time::timeout;
 ///     assert!(result.is_ok());
 /// }
 /// ```
-pub async fn with_timeout<F, T>(
-    duration: Duration,
-    future: F,
-) -> RocketMQResult<T>
+pub async fn with_timeout<F, T>(duration: Duration, future: F) -> RocketMQResult<T>
 where
     F: Future<Output = RocketMQResult<T>>,
 {
-    timeout(duration, future)
-        .await
-        .map_err(|_| RocketMQError::Timeout {
-            operation: "async operation",
-            timeout_ms: duration.as_millis() as u64,
-        })?
+    timeout(duration, future).await.map_err(|_| RocketMQError::Timeout {
+        operation: "async operation",
+        timeout_ms: duration.as_millis() as u64,
+    })?
 }
 
 /// Applies a timeout with a custom operation name for better error messages.
@@ -81,20 +77,14 @@ where
 /// # Returns
 ///
 /// * `RocketMQResult<T>` - The result of the operation or a timeout error
-pub async fn with_timeout_named<F, T>(
-    operation: &'static str,
-    duration: Duration,
-    future: F,
-) -> RocketMQResult<T>
+pub async fn with_timeout_named<F, T>(operation: &'static str, duration: Duration, future: F) -> RocketMQResult<T>
 where
     F: Future<Output = RocketMQResult<T>>,
 {
-    timeout(duration, future)
-        .await
-        .map_err(|_| RocketMQError::Timeout {
-            operation,
-            timeout_ms: duration.as_millis() as u64,
-        })?
+    timeout(duration, future).await.map_err(|_| RocketMQError::Timeout {
+        operation,
+        timeout_ms: duration.as_millis() as u64,
+    })?
 }
 
 /// Applies a timeout specified in milliseconds.
@@ -108,11 +98,7 @@ where
 /// # Returns
 ///
 /// * `RocketMQResult<T>` - The result of the operation or a timeout error
-pub async fn with_timeout_millis<F, T>(
-    operation: &'static str,
-    timeout_ms: u64,
-    future: F,
-) -> RocketMQResult<T>
+pub async fn with_timeout_millis<F, T>(operation: &'static str, timeout_ms: u64, future: F) -> RocketMQResult<T>
 where
     F: Future<Output = RocketMQResult<T>>,
 {
@@ -151,10 +137,7 @@ where
 ///     assert_eq!(results.unwrap().len(), 3);
 /// }
 /// ```
-pub async fn with_timeout_all<F, T>(
-    duration: Duration,
-    futures: Vec<F>,
-) -> RocketMQResult<Vec<T>>
+pub async fn with_timeout_all<F, T>(duration: Duration, futures: Vec<F>) -> RocketMQResult<Vec<T>>
 where
     F: Future<Output = RocketMQResult<T>> + Send + 'static,
     T: Send + 'static,
@@ -212,8 +195,7 @@ mod tests {
             Ok("Success".to_string())
         }
 
-        let result =
-            with_timeout_named("test_operation", Duration::from_millis(50), slow_operation()).await;
+        let result = with_timeout_named("test_operation", Duration::from_millis(50), slow_operation()).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             RocketMQError::Timeout { operation, timeout_ms } => {
