@@ -55,6 +55,12 @@ pub use crate::protocol::header::client_request_header::GetRouteInfoRequestHeade
 pub use crate::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
 pub use crate::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 
+// RPC types (remote procedure call infrastructure)
+pub use crate::rpc::rpc_request::RpcRequest;
+pub use crate::rpc::rpc_request_header::RpcRequestHeader;
+pub use crate::rpc::rpc_response::RpcResponse;
+pub use crate::rpc::topic_request_header::TopicRequestHeader;
+
 // NameServer operations
 pub use crate::protocol::header::namesrv::broker_request::UnRegisterBrokerRequestHeader;
 pub use crate::protocol::header::namesrv::register_broker_header::RegisterBrokerRequestHeader;
