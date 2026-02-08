@@ -101,6 +101,12 @@ pub use crate::protocol::header::update_consumer_offset_header::UpdateConsumerOf
 // Client management
 pub use crate::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 
+// RPC types (remote procedure call infrastructure)
+pub use crate::rpc::rpc_request::RpcRequest;
+pub use crate::rpc::rpc_request_header::RpcRequestHeader;
+pub use crate::rpc::rpc_response::RpcResponse;
+pub use crate::rpc::topic_request_header::TopicRequestHeader;
+
 // Most Common Bodies (Top-Level Exports)
 
 // Message operations
