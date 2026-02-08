@@ -37,3 +37,19 @@ impl GetConsumerConnectionListRequestHeader {
         self.consumer_group = consumer_group;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn getters_and_setters() {
+        let mut header = GetConsumerConnectionListRequestHeader {
+            consumer_group: CheetahString::from("group1"),
+            rpc_request_header: None,
+        };
+        assert_eq!(header.get_consumer_group(), "group1");
+        header.set_consumer_group(CheetahString::from("group2"));
+        assert_eq!(header.get_consumer_group(), "group2");
+    }
+}

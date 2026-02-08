@@ -89,7 +89,7 @@ pub use crate::protocol::body::broker_body::cluster_info::ClusterInfo;
 pub use crate::protocol::body::broker_body::register_broker_body::RegisterBrokerBody;
 pub use crate::protocol::body::consumer_connection::ConsumerConnection;
 pub use crate::protocol::body::consumer_running_info::ConsumerRunningInfo;
-pub use crate::protocol::body::get_consumer_listby_group_response_body::GetConsumerListByGroupResponseBody;
+pub use crate::protocol::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody;
 pub use crate::protocol::body::producer_connection::ProducerConnection;
 pub use crate::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
 pub use crate::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper;

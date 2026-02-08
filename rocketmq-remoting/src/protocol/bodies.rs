@@ -60,7 +60,7 @@ pub mod consumer {
     pub use super::super::body::consumer_connection::ConsumerConnection;
     pub use super::super::body::consumer_offset_serialize_wrapper::ConsumerOffsetSerializeWrapper;
     pub use super::super::body::consumer_running_info::ConsumerRunningInfo;
-    pub use super::super::body::get_consumer_listby_group_response_body::GetConsumerListByGroupResponseBody;
+    pub use super::super::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody;
     pub use super::super::body::get_lite_client_info_response_body::GetLiteClientInfoResponseBody;
     pub use super::super::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
     pub use super::super::body::lite_lag_info::LiteLagInfo;
@@ -177,7 +177,7 @@ pub use super::body::broker_body::cluster_info::ClusterInfo;
 // Consumer operations
 pub use super::body::consumer_connection::ConsumerConnection;
 pub use super::body::consumer_running_info::ConsumerRunningInfo;
-pub use super::body::get_consumer_listby_group_response_body::GetConsumerListByGroupResponseBody;
+pub use super::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody;
 
 // Topic operations
 pub use super::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;

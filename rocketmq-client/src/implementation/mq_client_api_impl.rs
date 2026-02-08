@@ -70,7 +70,7 @@ use rocketmq_remoting::protocol::body::acl_info::AclInfo;
 use rocketmq_remoting::protocol::body::batch_ack_message_request_body::BatchAckMessageRequestBody;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_remoting::protocol::body::check_client_request_body::CheckClientRequestBody;
-use rocketmq_remoting::protocol::body::get_consumer_listby_group_response_body::GetConsumerListByGroupResponseBody;
+use rocketmq_remoting::protocol::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody;
 use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
 use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
 use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;

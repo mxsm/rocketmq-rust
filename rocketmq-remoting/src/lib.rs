@@ -118,7 +118,7 @@ pub use crate::protocol::body::broker_body::cluster_info::ClusterInfo;
 // Consumer operations
 pub use crate::protocol::body::consumer_connection::ConsumerConnection;
 pub use crate::protocol::body::consumer_running_info::ConsumerRunningInfo;
-pub use crate::protocol::body::get_consumer_listby_group_response_body::GetConsumerListByGroupResponseBody;
+pub use crate::protocol::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody;
 
 // Topic operations
 pub use crate::protocol::body::topic_info_wrapper::topic_config_wrapper::TopicConfigSerializeWrapper;
