@@ -304,39 +304,6 @@ mod tests {
     }
 
     #[test]
-    fn consumer_group_info_update_channel() {
-        /* let group_name = "test_group".to_string();
-        let consume_type = ConsumeType::ConsumePassively;
-        let message_model = MessageModel::Clustering;
-        let consume_from_where = ConsumeFromWhere::ConsumeFromLastOffset;
-
-        let mut consumer_group_info = ConsumerGroupInfo::new(
-            group_name.clone(),
-            consume_type,
-            message_model,
-            consume_from_where,
-        );
-
-        let channel = Channel::new(
-            "127.0.0.1:8080".parse().unwrap(),
-            "192.168.0.1:8080".parse().unwrap(),
-        );
-        let client_channel_info = ClientChannelInfo::new(
-            channel.clone(),
-            "client_id".to_string(),
-            LanguageCode::RUST,
-            1,
-        );
-
-        assert!(consumer_group_info.update_channel(
-            client_channel_info,
-            consume_type,
-            message_model,
-            consume_from_where
-        )); */
-    }
-
-    #[test]
     fn consumer_group_info_update_subscription() {
         let group_name = "test_group".to_string();
         let consume_type = ConsumeType::ConsumePassively;
