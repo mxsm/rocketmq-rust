@@ -28,3 +28,36 @@ pub struct GetTopicStatsRequestHeader {
     #[serde(flatten)]
     pub topic_request_header: Option<TopicRequestHeader>,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::protocol::command_custom_header::FromMap;
+
+    #[test]
+    fn get_topic_stats_request_header_serialization() {
+        let header = GetTopicStatsRequestHeader {
+            topic: CheetahString::from("topic1"),
+            topic_request_header: None,
+        };
+        let json = serde_json::to_string(&header).unwrap();
+        assert!(json.contains("\"topic\":\"topic1\""));
+    }
+
+    #[test]
+    fn get_topic_stats_request_header_deserialization() {
+        let json = r#"{"topic":"topic1"}"#;
+        let header: GetTopicStatsRequestHeader = serde_json::from_str(json).unwrap();
+        assert_eq!(header.topic, "topic1");
+    }
+
+    #[test]
+    fn get_topic_stats_request_header_from_map() {
+        let mut map = HashMap::new();
+        map.insert(CheetahString::from("topic"), CheetahString::from("topic1"));
+        let header = <GetTopicStatsRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.topic, "topic1");
+    }
+}

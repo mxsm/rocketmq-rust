@@ -37,3 +37,47 @@ impl GetTopicConfigRequestHeader {
         self.topic = topic;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::protocol::command_custom_header::FromMap;
+
+    #[test]
+    fn get_topic_config_request_header_serialization() {
+        let header = GetTopicConfigRequestHeader {
+            topic: CheetahString::from("topic1"),
+            topic_request_header: None,
+        };
+        let json = serde_json::to_string(&header).unwrap();
+        assert!(json.contains("\"topic\":\"topic1\""));
+    }
+
+    #[test]
+    fn get_topic_config_request_header_deserialization() {
+        let json = r#"{"topic":"topic1"}"#;
+        let header: GetTopicConfigRequestHeader = serde_json::from_str(json).unwrap();
+        assert_eq!(header.topic, "topic1");
+    }
+
+    #[test]
+    fn get_topic_config_request_header_from_map() {
+        let mut map = HashMap::new();
+        map.insert(CheetahString::from("topic"), CheetahString::from("topic1"));
+        let header = <GetTopicConfigRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.topic, "topic1");
+    }
+
+    #[test]
+    fn getters_and_setters() {
+        let mut header = GetTopicConfigRequestHeader {
+            topic: CheetahString::from("topic1"),
+            topic_request_header: None,
+        };
+        assert_eq!(header.get_topic(), "topic1");
+        header.set_topic(CheetahString::from("topic2"));
+        assert_eq!(header.get_topic(), "topic2");
+    }
+}
