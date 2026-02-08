@@ -41,20 +41,22 @@ use tokio::time::timeout;
 ///
 /// # Example
 ///
-/// ```rust
-/// use rocketmq_client::producer::timeout_utils::with_timeout;
+/// ```no_run
 /// use std::time::Duration;
+/// use rocketmq_error::RocketMQResult;
 ///
-/// async fn send_message() -> rocketmq_error::RocketMQResult<String> {
+/// async fn send_message() -> RocketMQResult<String> {
 ///     // Simulate work
 ///     tokio::time::sleep(Duration::from_millis(100)).await;
 ///     Ok("Message sent".to_string())
 /// }
 ///
-/// async fn example() {
-///     let result = with_timeout(Duration::from_secs(1), send_message()).await;
-///     assert!(result.is_ok());
-/// }
+/// # async fn example() -> RocketMQResult<()> {
+/// use rocketmq_client_rust::producer::producer_impl::timeout_utils::with_timeout;
+/// let result: RocketMQResult<String> = with_timeout(Duration::from_secs(1), send_message()).await;
+/// assert!(result.is_ok());
+/// # Ok(())
+/// # }
 /// ```
 pub async fn with_timeout<F, T>(duration: Duration, future: F) -> RocketMQResult<T>
 where
@@ -121,21 +123,23 @@ where
 ///
 /// # Example
 ///
-/// ```rust
-/// use rocketmq_client::producer::timeout_utils::with_timeout_all;
+/// ```no_run
 /// use std::time::Duration;
+/// use rocketmq_error::RocketMQResult;
 ///
-/// async fn send_message(id: usize) -> rocketmq_error::RocketMQResult<usize> {
+/// async fn send_message(id: usize) -> RocketMQResult<usize> {
 ///     tokio::time::sleep(Duration::from_millis(100)).await;
 ///     Ok(id)
 /// }
 ///
-/// async fn example() {
-///     let futures = vec![send_message(1), send_message(2), send_message(3)];
-///     let results = with_timeout_all(Duration::from_secs(1), futures).await;
-///     assert!(results.is_ok());
-///     assert_eq!(results.unwrap().len(), 3);
-/// }
+/// # async fn example() -> RocketMQResult<()> {
+/// use rocketmq_client_rust::producer::producer_impl::timeout_utils::with_timeout_all;
+/// let futures = vec![send_message(1), send_message(2), send_message(3)];
+/// let results: RocketMQResult<Vec<usize>> = with_timeout_all(Duration::from_secs(1), futures).await;
+/// assert!(results.is_ok());
+/// assert_eq!(results.unwrap().len(), 3);
+/// # Ok(())
+/// # }
 /// ```
 pub async fn with_timeout_all<F, T>(duration: Duration, futures: Vec<F>) -> RocketMQResult<Vec<T>>
 where
