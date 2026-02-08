@@ -35,6 +35,22 @@ pub struct UnRegisterBrokerRequestHeader {
     pub broker_id: u64,
 }
 
+impl UnRegisterBrokerRequestHeader {
+    pub fn new(
+        broker_name: impl Into<CheetahString>,
+        broker_addr: impl Into<CheetahString>,
+        cluster_name: impl Into<CheetahString>,
+        broker_id: u64,
+    ) -> Self {
+        Self {
+            broker_name: broker_name.into(),
+            broker_addr: broker_addr.into(),
+            cluster_name: cluster_name.into(),
+            broker_id,
+        }
+    }
+}
+
 impl Display for UnRegisterBrokerRequestHeader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -77,7 +93,6 @@ impl GetBrokerMemberGroupRequestHeader {
     pub fn new(cluster_name: impl Into<CheetahString>, broker_name: impl Into<CheetahString>) -> Self {
         Self {
             cluster_name: cluster_name.into(),
-
             broker_name: broker_name.into(),
         }
     }
@@ -85,8 +100,6 @@ impl GetBrokerMemberGroupRequestHeader {
 
 #[cfg(test)]
 mod tests {
-    use cheetah_string::CheetahString;
-
     use super::*;
 
     #[test]
@@ -206,5 +219,14 @@ mod tests {
         assert_eq!(header.confirm_offset, Some(50));
         assert_eq!(header.heartbeat_timeout_mills, Some(3000));
         assert_eq!(header.election_priority, Some(1));
+    }
+
+    #[test]
+    fn unregister_broker_request_header_display() {
+        let header = UnRegisterBrokerRequestHeader::new("name", "addr", "cluster", 1);
+        let display = format!("{}", header);
+        let expected =
+            "UnRegisterBrokerRequestHeader { brokerName: name, brokerAddr: addr, clusterName: cluster, brokerId: 1 }";
+        assert_eq!(display, expected);
     }
 }
