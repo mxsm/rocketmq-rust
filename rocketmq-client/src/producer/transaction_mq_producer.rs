@@ -475,6 +475,10 @@ impl MQProducer for TransactionMQProducer {
             .await
     }
 
+    async fn recall_message(&mut self, topic: &str, recall_handle: &str) -> rocketmq_error::RocketMQResult<String> {
+        self.default_producer.recall_message(topic, recall_handle).await
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }

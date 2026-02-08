@@ -1223,6 +1223,16 @@ impl MQProducer for DefaultMQProducer {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
+
+    async fn recall_message(&mut self, topic: &str, recall_handle: &str) -> rocketmq_error::RocketMQResult<String> {
+        if recall_handle.is_empty() {
+            return Err(RocketMQError::illegal_argument("Recall handle cannot be empty"));
+        }
+        if self.default_mqproducer_impl.is_none() {
+            return Err(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"));
+        }
+        Err(RocketMQError::illegal_argument("recall_message not implemented yet"))
+    }
 }
 
 #[cfg(test)]
@@ -1388,5 +1398,46 @@ mod tests {
             }
             other => panic!("Unexpected error: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn recall_message_not_initialized() {
+        // Arrange
+        let mut producer = DefaultMQProducer {
+            client_config: Default::default(),
+            producer_config: Default::default(),
+            default_mqproducer_impl: None,
+        };
+
+        // Act
+        let result = producer.recall_message("test-topic", "recall-handle-123").await;
+
+        // Assert
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            RocketMQError::NotInitialized(reason) => {
+                assert!(reason.contains("not initialized"), "unexpected error message: {reason}");
+            }
+            other => panic!("Unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn recall_message_empty_handle() {
+        // Arrange
+        let mut producer = DefaultMQProducer {
+            client_config: Default::default(),
+            producer_config: Default::default(),
+            default_mqproducer_impl: None,
+        };
+
+        // Act
+        let result = producer.recall_message("test-topic", "").await;
+
+        // Assert
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Recall handle cannot be empty"));
     }
 }
