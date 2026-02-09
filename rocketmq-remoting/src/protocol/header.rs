@@ -77,6 +77,7 @@ pub mod query_subscription_by_consumer_request_header;
 pub mod query_topic_consume_by_who_request_header;
 pub mod query_topics_by_consumer_request_header;
 pub mod recall_message_request_header;
+pub mod recall_message_response_header;
 pub mod reply_message_request_header;
 pub mod reset_master_flush_offset_header;
 pub mod reset_offset_request_header;
