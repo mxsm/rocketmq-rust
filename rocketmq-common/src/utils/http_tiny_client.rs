@@ -509,8 +509,11 @@ mod tests {
 
         match result {
             Ok(response) => {
-                if response.code == 503 {
-                    eprintln!("httpbin.org is unavailable (503), skipping test");
+                if response.code >= 500 {
+                    eprintln!(
+                        "httpbin.org is unavailable or having issues ({}), skipping test",
+                        response.code
+                    );
                 } else {
                     assert!(response.is_success());
                     // httpbin echoes back headers
@@ -533,9 +536,12 @@ mod tests {
                 assert!(matches!(e, RocketMQError::Network(_)));
             }
             Ok(response) => {
-                // httpbin.org might return 503 if service is unavailable
-                if response.code == 503 {
-                    eprintln!("httpbin.org is unavailable (503), skipping timeout test");
+                // httpbin.org might return 5xx errors if service is unavailable or having issues
+                if response.code >= 500 {
+                    eprintln!(
+                        "httpbin.org is unavailable or having issues ({}), skipping timeout test",
+                        response.code
+                    );
                 } else {
                     panic!(
                         "Expected timeout error but got success response with code: {}",
