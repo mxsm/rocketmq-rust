@@ -15,6 +15,7 @@
 mod consumer_status_sub_command;
 mod consumer_sub_command;
 mod delete_subscription_group_sub_command;
+mod set_consume_mode_sub_command;
 mod update_sub_group_list_sub_command;
 mod update_sub_group_sub_command;
 use std::sync::Arc;
@@ -57,6 +58,12 @@ pub enum ConsumerCommands {
         long_about = None,
     )]
     UpdateSubGroupList(update_sub_group_list_sub_command::UpdateSubGroupListSubCommand),
+    #[command(
+        name = "setConsumeMode",
+        about = "Set consume message mode. pull/pop etc.",
+        long_about = None,
+    )]
+    SetConsumeMode(set_consume_mode_sub_command::SetConsumeModeSubCommand),
 }
 
 impl CommandExecute for ConsumerCommands {
@@ -67,6 +74,7 @@ impl CommandExecute for ConsumerCommands {
             ConsumerCommands::DeleteSubGroup(cmd) => cmd.execute(rpc_hook).await,
             ConsumerCommands::UpdateSubGroupSubCommand(value) => value.execute(rpc_hook).await,
             ConsumerCommands::UpdateSubGroupList(cmd) => cmd.execute(rpc_hook).await,
+            ConsumerCommands::SetConsumeMode(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }
