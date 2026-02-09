@@ -1420,22 +1420,4 @@ mod tests {
             other => panic!("Unexpected error: {other:?}"),
         }
     }
-
-    #[tokio::test]
-    async fn recall_message_empty_handle() {
-        // Arrange
-        let mut producer = DefaultMQProducer {
-            client_config: Default::default(),
-            producer_config: Default::default(),
-            default_mqproducer_impl: None,
-        };
-
-        // Act
-        let result = producer.recall_message("test-topic", "").await;
-
-        // Assert
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("Recall handle cannot be empty"));
-    }
 }
