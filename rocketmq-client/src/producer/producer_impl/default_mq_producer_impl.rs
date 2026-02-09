@@ -2474,6 +2474,10 @@ impl DefaultMQProducerImpl {
         self.make_sure_state_ok()?;
         Validators::check_topic(topic)?;
 
+        if recall_handle.is_empty() {
+            return Err(mq_client_err!("Recall handle cannot be empty"));
+        }
+
         if NamespaceUtil::is_retry_topic(topic) || NamespaceUtil::is_dlq_topic(topic) {
             return Err(mq_client_err!("topic is not supported"));
         }
