@@ -2021,6 +2021,7 @@ name = "rocketmq-common"
 version = "0.8.0"
 dependencies = [
  "anyhow",
+ "base64",
  "byteorder",
  "bytes",
  "cheetah-string",

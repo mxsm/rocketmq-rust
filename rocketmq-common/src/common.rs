@@ -48,6 +48,7 @@ pub mod mix_all;
 pub mod mq_version;
 pub mod namesrv;
 pub mod pop_ack_constants;
+pub mod producer;
 
 pub mod running;
 pub mod server;
