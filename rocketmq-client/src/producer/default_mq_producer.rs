@@ -1225,13 +1225,11 @@ impl MQProducer for DefaultMQProducer {
     }
 
     async fn recall_message(&mut self, topic: &str, recall_handle: &str) -> rocketmq_error::RocketMQResult<String> {
-        if recall_handle.is_empty() {
-            return Err(RocketMQError::illegal_argument("Recall handle cannot be empty"));
-        }
-        if self.default_mqproducer_impl.is_none() {
-            return Err(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"));
-        }
-        Err(RocketMQError::illegal_argument("recall_message not implemented yet"))
+        self.default_mqproducer_impl
+            .as_mut()
+            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .recall_message(topic, recall_handle)
+            .await
     }
 }
 
@@ -1421,23 +1419,5 @@ mod tests {
             }
             other => panic!("Unexpected error: {other:?}"),
         }
-    }
-
-    #[tokio::test]
-    async fn recall_message_empty_handle() {
-        // Arrange
-        let mut producer = DefaultMQProducer {
-            client_config: Default::default(),
-            producer_config: Default::default(),
-            default_mqproducer_impl: None,
-        };
-
-        // Act
-        let result = producer.recall_message("test-topic", "").await;
-
-        // Assert
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("Recall handle cannot be empty"));
     }
 }

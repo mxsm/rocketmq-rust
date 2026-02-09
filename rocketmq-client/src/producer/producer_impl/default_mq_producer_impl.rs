@@ -43,12 +43,14 @@ use rocketmq_common::common::FAQUrl;
 use rocketmq_common::utils::correlation_id_util::CorrelationIdUtil;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
+use rocketmq_common::RecallMessageHandle;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_error::ClientErr;
 use rocketmq_error::RocketmqError::RemotingTooMuchRequestError;
 use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header::SendMessageRequestHeader;
+use rocketmq_remoting::protocol::header::recall_message_request_header::RecallMessageRequestHeader;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader;
@@ -2466,6 +2468,74 @@ impl DefaultMQProducerImpl {
     pub async fn destroy_transaction_env(&mut self) {
         // Transaction check tasks are independent, no cleanup needed
         // Tasks will complete naturally when spawned
+    }
+
+    pub async fn recall_message(&mut self, topic: &str, recall_handle: &str) -> rocketmq_error::RocketMQResult<String> {
+        self.make_sure_state_ok()?;
+        Validators::check_topic(topic)?;
+
+        if recall_handle.is_empty() {
+            return Err(mq_client_err!("Recall handle cannot be empty"));
+        }
+
+        if NamespaceUtil::is_retry_topic(topic) || NamespaceUtil::is_dlq_topic(topic) {
+            return Err(mq_client_err!("topic is not supported"));
+        }
+
+        let handle_entity = RecallMessageHandle::decode_handle(recall_handle)
+            .map_err(|e| mq_client_err!(format!("Failed to decode recall handle: {}", e)))?;
+
+        self.try_to_find_topic_publish_info(&CheetahString::from_string(topic.to_string()))
+            .await;
+
+        let broker_name_cs = CheetahString::from_string(handle_entity.broker_name().to_string());
+        let mut broker_addr = self
+            .client_instance
+            .as_ref()
+            .unwrap()
+            .find_broker_address_in_publish(&broker_name_cs)
+            .await;
+
+        if broker_addr.is_none() {
+            broker_addr = self
+                .client_instance
+                .as_ref()
+                .unwrap()
+                .find_broker_addr_by_topic(topic)
+                .await;
+        }
+
+        let broker_addr = broker_addr.ok_or_else(|| {
+            warn!(
+                "Can't find broker service address for broker: {}",
+                handle_entity.broker_name()
+            );
+            mq_client_err!("The broker service address not found")
+        })?;
+
+        let mut request_header =
+            RecallMessageRequestHeader::new(topic, recall_handle, Some(self.producer_config.producer_group()));
+
+        request_header.topic_request_header = Some(TopicRequestHeader {
+            rpc_request_header: Some(RpcRequestHeader {
+                broker_name: Some(broker_name_cs.clone()),
+                namespace: None,
+                namespaced: None,
+                oneway: None,
+            }),
+            lo: None,
+        });
+
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .recall_message(
+                &broker_addr,
+                request_header,
+                self.producer_config.send_msg_timeout() as u64,
+            )
+            .await
     }
 }
 

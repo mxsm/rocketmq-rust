@@ -141,7 +141,8 @@ impl NamespaceUtil {
         !resource.is_empty() && resource.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX)
     }
 
-    fn is_dlq_topic(resource: &str) -> bool {
+    #[inline]
+    pub fn is_dlq_topic(resource: &str) -> bool {
         !resource.is_empty() && resource.starts_with(mix_all::DLQ_GROUP_TOPIC_PREFIX)
     }
 }
