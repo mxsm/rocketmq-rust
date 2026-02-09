@@ -37,7 +37,7 @@ pub struct SetConsumeModeSubCommand {
         long = "brokerAddr",
         required = false,
         conflicts_with = "cluster_name",
-        help = "Create subscription group to which broker"
+        help = "Set consume mode on which broker"
     )]
     broker_addr: Option<String>,
 
@@ -46,7 +46,7 @@ pub struct SetConsumeModeSubCommand {
         long = "clusterName",
         required = false,
         conflicts_with = "broker_addr",
-        help = "Create subscription group to which cluster"
+        help = "Set consume mode on which cluster"
     )]
     cluster_name: Option<String>,
 
@@ -82,14 +82,28 @@ fn parse_consume_mode(s: &str) -> Result<MessageRequestMode, String> {
     }
 }
 
+fn validate_cluster_consume_mode_success(success_count: usize) -> RocketMQResult<()> {
+    if success_count == 0 {
+        Err(RocketMQError::Internal(
+            "SetConsumeModeSubCommand: Failed to set consume mode on all brokers in cluster".into(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 impl CommandExecute for SetConsumeModeSubCommand {
-    async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
+    async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         let topic_name = self.topic_name.trim();
         let group_name = self.group_name.trim();
         let mode = self.mode;
         let pop_share_queue_num = self.pop_share_queue_num.unwrap_or(0);
 
-        let mut admin_ext = DefaultMQAdminExt::new();
+        let mut admin_ext = if let Some(rpc_hook) = rpc_hook {
+            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
+        } else {
+            DefaultMQAdminExt::new()
+        };
         admin_ext
             .client_config_mut()
             .set_instance_name(get_current_millis().to_string().into());
@@ -128,6 +142,7 @@ impl CommandExecute for SetConsumeModeSubCommand {
             let cluster_info = admin_ext.examine_broker_cluster_info().await?;
             let master_set = CommandUtil::fetch_master_addr_by_cluster_name(&cluster_info, cluster_name)?;
 
+            let mut success_count = 0;
             for addr in &master_set {
                 match admin_ext
                     .set_message_request_mode(
@@ -142,6 +157,7 @@ impl CommandExecute for SetConsumeModeSubCommand {
                 {
                     Ok(_) => {
                         println!("set consume mode to {} success.", addr);
+                        success_count += 1;
                     }
                     Err(e) => {
                         eprintln!("{}", e);
@@ -149,6 +165,7 @@ impl CommandExecute for SetConsumeModeSubCommand {
                     }
                 }
             }
+            validate_cluster_consume_mode_success(success_count)?;
             println!(
                 "topic[{}] group[{}] consume mode[{}] popShareQueueNum[{}]",
                 topic_name,
@@ -262,5 +279,26 @@ mod tests {
         let result = parse_consume_mode("PUSH");
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Invalid consume mode: PUSH. Must be PULL or POP");
+    }
+
+    #[test]
+    fn test_validate_cluster_consume_mode_success_when_all_brokers_fail() {
+        let result = validate_cluster_consume_mode_success(0);
+        assert!(result.is_err());
+        match result {
+            Err(RocketMQError::Internal(message)) => {
+                assert_eq!(
+                    message,
+                    "SetConsumeModeSubCommand: Failed to set consume mode on all brokers in cluster"
+                );
+            }
+            _ => panic!("Expected RocketMQError::Internal"),
+        }
+    }
+
+    #[test]
+    fn test_validate_cluster_consume_mode_success_when_at_least_one_broker_succeeds() {
+        assert!(validate_cluster_consume_mode_success(1).is_ok());
+        assert!(validate_cluster_consume_mode_success(3).is_ok());
     }
 }
