@@ -17,6 +17,9 @@ use std::fmt;
 use base64::engine::general_purpose::URL_SAFE;
 use base64::Engine;
 
+use crate::RocketMQError;
+use crate::RocketMQResult;
+
 const SEPARATOR: &str = " ";
 const VERSION_1: &str = "v1";
 
@@ -39,7 +42,7 @@ impl RecallMessageHandle {
     /// # Returns
     ///
     /// * `Ok(RecallMessageHandle)` - Successfully decoded handle
-    /// * `Err(String)` - Error message if decoding fails
+    /// * `Err(RocketMQError)` - Error if decoding fails
     ///
     /// # Examples
     ///
@@ -50,21 +53,28 @@ impl RecallMessageHandle {
     /// let handle = RecallMessageHandle::decode_handle(handle_str);
     /// assert!(handle.is_ok());
     /// ```
-    pub fn decode_handle(handle: &str) -> Result<Self, String> {
+    pub fn decode_handle(handle: &str) -> RocketMQResult<Self> {
         if handle.is_empty() {
-            return Err("recall handle is invalid".to_string());
+            return Err(RocketMQError::deserialization_failed("RecallHandle", "handle is empty"));
         }
 
         let raw_bytes = URL_SAFE
             .decode(handle.as_bytes())
-            .map_err(|_| "recall handle is invalid".to_string())?;
+            .map_err(|_| RocketMQError::deserialization_failed("RecallHandle", "invalid base64 encoding"))?;
 
-        let raw_string = String::from_utf8(raw_bytes).map_err(|_| "recall handle is invalid".to_string())?;
+        let raw_string = String::from_utf8(raw_bytes)
+            .map_err(|_| RocketMQError::deserialization_failed("RecallHandle", "invalid UTF-8 encoding"))?;
 
         let items: Vec<&str> = raw_string.split(SEPARATOR).collect();
 
         if items.is_empty() || items[0] != VERSION_1 || items.len() < 5 {
-            return Err("recall handle is invalid".to_string());
+            return Err(RocketMQError::deserialization_failed(
+                "RecallHandle",
+                format!(
+                    "invalid format: expected 'v1 topic broker timestamp msgid', got {} parts",
+                    items.len()
+                ),
+            ));
         }
 
         Ok(RecallMessageHandle::V1(HandleV1::new(
@@ -213,14 +223,16 @@ mod tests {
     fn test_handle_invalid_empty() {
         let result = RecallMessageHandle::decode_handle("");
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "recall handle is invalid");
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("empty"));
     }
 
     #[test]
     fn test_handle_invalid_not_base64() {
         let result = RecallMessageHandle::decode_handle("invalid base64!");
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "recall handle is invalid");
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("base64") || err.to_string().contains("Decoding"));
     }
 
     #[test]
@@ -228,7 +240,8 @@ mod tests {
         let invalid_handle = URL_SAFE.encode("v2 a b c d");
         let result = RecallMessageHandle::decode_handle(&invalid_handle);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "recall handle is invalid");
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("invalid format") || err.to_string().contains("Decoding"));
     }
 
     #[test]
@@ -236,7 +249,8 @@ mod tests {
         let invalid_handle = URL_SAFE.encode("v1 a b c");
         let result = RecallMessageHandle::decode_handle(&invalid_handle);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "recall handle is invalid");
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("4 parts") || err.to_string().contains("invalid format"));
     }
 
     #[test]

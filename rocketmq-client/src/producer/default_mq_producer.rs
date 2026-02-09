@@ -1225,13 +1225,11 @@ impl MQProducer for DefaultMQProducer {
     }
 
     async fn recall_message(&mut self, topic: &str, recall_handle: &str) -> rocketmq_error::RocketMQResult<String> {
-        if recall_handle.is_empty() {
-            return Err(RocketMQError::illegal_argument("Recall handle cannot be empty"));
-        }
-        if self.default_mqproducer_impl.is_none() {
-            return Err(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"));
-        }
-        Err(RocketMQError::illegal_argument("recall_message not implemented yet"))
+        self.default_mqproducer_impl
+            .as_mut()
+            .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
+            .recall_message(topic, recall_handle)
+            .await
     }
 }
 

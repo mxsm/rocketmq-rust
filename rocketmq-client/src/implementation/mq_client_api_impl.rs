@@ -114,6 +114,8 @@ use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessag
 use rocketmq_remoting::protocol::header::pull_message_response_header::PullMessageResponseHeader;
 use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
+use rocketmq_remoting::protocol::header::recall_message_request_header::RecallMessageRequestHeader;
+use rocketmq_remoting::protocol::header::recall_message_response_header::RecallMessageResponseHeader;
 use rocketmq_remoting::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
@@ -1334,6 +1336,38 @@ impl MQClientAPIImpl {
             ));
         }
         Ok(())
+    }
+
+    pub async fn recall_message(
+        &mut self,
+        addr: &str,
+        request_header: RecallMessageRequestHeader,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<String> {
+        let request = RemotingCommand::create_request_command(RequestCode::RecallMessage, request_header);
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(CheetahString::from_slice(addr).as_ref()), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                // Decode RecallMessageResponseHeader from response
+                match response.decode_command_custom_header::<RecallMessageResponseHeader>() {
+                    Ok(header) => Ok(header.msg_id().to_string()),
+                    Err(_) => {
+                        // Fallback to remark if header decode fails
+                        Ok(response.remark().map_or(String::new(), |s| s.to_string()))
+                    }
+                }
+            }
+            _ => Err(client_broker_err!(
+                response.code(),
+                response.remark().map_or(String::new(), |s| s.to_string()),
+                addr.to_string()
+            )),
+        }
     }
 
     pub async fn get_consumer_id_list_by_group(
