@@ -118,3 +118,91 @@ impl TopicRequestHeaderTrait for GetMinOffsetRequestHeader {
         self.queue_id = queue_id;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::protocol::command_custom_header::FromMap;
+    use crate::rpc::rpc_request_header::RpcRequestHeader;
+
+    #[test]
+    fn get_min_offset_request_header_default() {
+        let header = GetMinOffsetRequestHeader::default();
+        assert_eq!(header.topic, "");
+        assert_eq!(header.queue_id, 0);
+        assert!(header.topic_request_header.is_none());
+    }
+
+    #[test]
+    fn get_min_offset_request_header_trait_impl() {
+        let mut header = GetMinOffsetRequestHeader::default();
+
+        assert!(header.lo().is_none());
+        header.topic_request_header = Some(TopicRequestHeader::default());
+        header.set_lo(Some(true));
+        assert_eq!(header.lo(), Some(true));
+
+        header.set_topic(CheetahString::from("test_topic"));
+        assert_eq!(header.topic(), &CheetahString::from("test_topic"));
+
+        assert!(header.broker_name().is_none());
+        header.topic_request_header.as_mut().unwrap().rpc_request_header = Some(RpcRequestHeader::default());
+        header.set_broker_name(CheetahString::from("broker"));
+        assert_eq!(header.broker_name(), Some(&CheetahString::from("broker")));
+
+        assert!(header.namespace().is_none());
+        header.set_namespace(CheetahString::from("ns"));
+        assert_eq!(header.namespace(), Some("ns"));
+
+        assert!(header.namespaced().is_none());
+        header.set_namespaced(true);
+        assert_eq!(header.namespaced(), Some(true));
+
+        assert!(header.oneway().is_none());
+        header.set_oneway(true);
+        assert_eq!(header.oneway(), Some(true));
+
+        header.set_queue_id(1);
+        assert_eq!(header.queue_id(), 1);
+    }
+
+    #[test]
+    fn get_min_offset_request_header_serialization() {
+        let header = GetMinOffsetRequestHeader {
+            topic: CheetahString::from("test"),
+            queue_id: 1,
+            topic_request_header: Some(TopicRequestHeader {
+                lo: Some(true),
+                ..Default::default()
+            }),
+        };
+        let json = serde_json::to_string(&header).unwrap();
+        assert!(json.contains("\"topic\":\"test\""));
+        assert!(json.contains("\"queueId\":1"));
+        assert!(json.contains("\"lo\":true"));
+    }
+
+    #[test]
+    fn get_min_offset_request_header_deserialization() {
+        let json = r#"{"topic":"test","queueId":1,"lo":true}"#;
+        let header: GetMinOffsetRequestHeader = serde_json::from_str(json).unwrap();
+        assert_eq!(header.topic, "test");
+        assert_eq!(header.queue_id, 1);
+        assert_eq!(header.topic_request_header.unwrap().lo, Some(true));
+    }
+
+    #[test]
+    fn get_min_offset_request_header_from_map() {
+        let mut map = HashMap::new();
+        map.insert(CheetahString::from("topic"), CheetahString::from("test_topic"));
+        map.insert(CheetahString::from("queueId"), CheetahString::from("2"));
+        map.insert(CheetahString::from("lo"), CheetahString::from("true"));
+
+        let header = <GetMinOffsetRequestHeader as FromMap>::from(&map).unwrap();
+        assert_eq!(header.topic, "test_topic");
+        assert_eq!(header.queue_id, 2);
+        assert_eq!(header.topic_request_header.unwrap().lo, Some(true));
+    }
+}
