@@ -117,6 +117,18 @@ define_request_code! {
         ChangeMessageInvisibleTime = 200053,
         Notification = 200054,
         PollingInfo = 200055,
+        PopRollback = 200056,
+
+        PopLiteMessage = 200070,
+        LiteSubscriptionCtl = 200071,
+        AckLiteMessage = 200072,
+        NotifyUnsubscribeLite = 200073,
+        GetBrokerLiteInfo = 200074,
+        GetParentTopicInfo = 200075,
+        GetLiteTopicInfo = 200076,
+        GetLiteClientInfo = 200077,
+        GetLiteGroupInfo = 200078,
+        TriggerLiteDispatch = 200079,
 
         PutKvConfig = 100,
         GetKvConfig = 101,
@@ -189,8 +201,10 @@ define_request_code! {
         GetSubscriptionGroupConfig = 352,
         UpdateAndGetGroupForbidden = 353,
         CheckRocksdbCqWriteProgress = 354,
+        ExportRocksdbConfigToJson = 355,
 
         LitePullMessage = 361,
+        RecallMessage = 370,
 
         QueryAssignment = 400,
         SetMessageRequestMode = 401,
@@ -244,6 +258,8 @@ define_request_code! {
         AuthDeleteAcl = 3008,
         AuthGetAcl = 3009,
         AuthListAcl = 3010,
+
+        SwitchTimerEngine = 5001,
 
         Unknown = -9999999,
     }
