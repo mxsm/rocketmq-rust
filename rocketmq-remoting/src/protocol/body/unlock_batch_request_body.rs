@@ -41,3 +41,61 @@ impl Display for UnlockBatchRequestBody {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unlock_batch_request_body_default() {
+        let body = UnlockBatchRequestBody::default();
+        assert!(body.consumer_group.is_none());
+        assert!(body.client_id.is_none());
+        assert!(!body.only_this_broker);
+        assert!(body.mq_set.is_empty());
+    }
+
+    #[test]
+    fn unlock_batch_request_body_display() {
+        let body = UnlockBatchRequestBody {
+            consumer_group: Some(CheetahString::from("group")),
+            client_id: Some(CheetahString::from("client")),
+            only_this_broker: false,
+            ..Default::default()
+        };
+        let display = format!("{}", body);
+        assert!(display.contains("consumer_group=group"));
+        assert!(display.contains("client_id=client"));
+        assert!(display.contains("only_this_broker=false"));
+    }
+
+    #[test]
+    fn unlock_batch_request_body_serialization() {
+        let mut mq_set = HashSet::new();
+        mq_set.insert(MessageQueue::from_parts("topic", "broker", 1));
+        let body = UnlockBatchRequestBody {
+            consumer_group: Some(CheetahString::from("group")),
+            client_id: Some(CheetahString::from("client")),
+            only_this_broker: true,
+            mq_set,
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("\"consumerGroup\":\"group\""));
+        assert!(json.contains("\"clientId\":\"client\""));
+        assert!(json.contains("\"onlyThisBroker\":true"));
+        assert!(json.contains("\"mqSet\""));
+    }
+
+    #[test]
+    fn unlock_batch_request_body_deserialization() {
+        let json = r#"{"consumerGroup":"group","clientId":"client","onlyThisBroker":true,"mqSet":[{"topic":"topic","brokerName":"broker","queueId":1}]}"#;
+        let body: UnlockBatchRequestBody = serde_json::from_str(json).unwrap();
+        assert_eq!(body.consumer_group, Some(CheetahString::from("group")));
+        assert_eq!(body.client_id, Some(CheetahString::from("client")));
+        assert!(body.only_this_broker);
+        assert_eq!(body.mq_set.len(), 1);
+        let mq = body.mq_set.iter().next().unwrap();
+        assert_eq!(mq, &MessageQueue::from_parts("topic", "broker", 1));
+    }
+}
+//
