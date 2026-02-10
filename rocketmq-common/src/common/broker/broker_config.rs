@@ -231,6 +231,14 @@ mod defaults {
         true
     }
 
+    pub fn recall_message_enable() -> bool {
+        true
+    }
+
+    pub fn allow_recall_when_broker_not_writeable() -> bool {
+        false
+    }
+
     pub fn transaction_timeout() -> u64 {
         6_000
     }
@@ -629,6 +637,12 @@ pub struct BrokerConfig {
     #[serde(default = "defaults::store_reply_message_enable")]
     pub store_reply_message_enable: bool,
 
+    #[serde(default = "defaults::recall_message_enable")]
+    pub recall_message_enable: bool,
+
+    #[serde(default = "defaults::allow_recall_when_broker_not_writeable")]
+    pub allow_recall_when_broker_not_writeable: bool,
+
     #[serde(default)]
     pub lock_in_strict_mode: bool,
 
@@ -872,6 +886,8 @@ impl Default for BrokerConfig {
             transaction_op_batch_interval: 3_000,
             compatible_with_old_name_srv: true,
             broker_heartbeat_interval: 1000,
+            recall_message_enable: true,
+            allow_recall_when_broker_not_writeable: false,
         }
     }
 }
