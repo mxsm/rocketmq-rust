@@ -562,9 +562,13 @@ impl MQPushConsumer for DefaultMQPushConsumer {
             .register_message_listener(self.consumer_config.message_listener.clone());
     }
 
-    async fn subscribe(&mut self, topic: &str, sub_expression: &str) -> rocketmq_error::RocketMQResult<()> {
-        let topic = CheetahString::from_slice(topic);
-        let sub_expression = CheetahString::from_slice(sub_expression);
+    async fn subscribe(
+        &mut self,
+        topic: impl Into<CheetahString>,
+        sub_expression: impl Into<CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let topic = topic.into();
+        let sub_expression = sub_expression.into();
 
         self.default_mqpush_consumer_impl
             .as_mut()
