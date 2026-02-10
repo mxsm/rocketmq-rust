@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_ext::MessageExt;
 
 use crate::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
@@ -79,13 +80,33 @@ pub trait MQPushConsumer: MQConsumer {
     ///
     /// # Parameters
     ///
-    /// * `topic` - The topic to subscribe to.
-    /// * `sub_expression` - The subscription expression.
+    /// * `topic` - The topic to subscribe to. Can be `&str`, `String`, or `CheetahString`.
+    /// * `sub_expression` - The subscription expression. Can be `&str`, `String`, or
+    ///   `CheetahString`.
     ///
     /// # Returns
     ///
     /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or an error.
-    async fn subscribe(&mut self, topic: &str, sub_expression: &str) -> rocketmq_error::RocketMQResult<()>;
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Using &str
+    /// consumer.subscribe("TopicTest", "*").await?;
+    ///
+    /// // Using String
+    /// let topic = String::from("TopicTest");
+    /// consumer.subscribe(topic, "*").await?;
+    ///
+    /// // Using CheetahString
+    /// let topic = CheetahString::from_slice("TopicTest");
+    /// consumer.subscribe(topic, "*").await?;
+    /// ```
+    async fn subscribe(
+        &mut self,
+        topic: impl Into<CheetahString>,
+        sub_expression: impl Into<CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<()>;
 
     /// Subscribes to a topic with an optional message selector.
     ///
