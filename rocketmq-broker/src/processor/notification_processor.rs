@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 
 use cheetah_string::CheetahString;
-use rand::Rng;
+use rand::RngExt;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::key_builder::KeyBuilder;

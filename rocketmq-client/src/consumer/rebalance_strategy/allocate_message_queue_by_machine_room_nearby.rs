@@ -105,7 +105,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::collections::BTreeSet;
 
-    use rand::Rng;
+    use rand::RngExt;
     use rand::SeedableRng;
 
     use super::*;

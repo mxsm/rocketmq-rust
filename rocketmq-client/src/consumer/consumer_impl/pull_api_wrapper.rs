@@ -17,7 +17,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rand::Rng;
+use rand::RngExt;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_queue::MessageQueue;
