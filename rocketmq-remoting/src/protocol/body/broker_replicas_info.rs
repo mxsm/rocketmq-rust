@@ -227,8 +227,6 @@ impl fmt::Display for ReplicaIdentity {
 
 #[cfg(test)]
 mod tests {
-    use cheetah_string::CheetahString;
-
     use super::*;
 
     #[test]

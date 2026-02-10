@@ -55,3 +55,47 @@ impl BrokerStatsItem {
         self.avgpt = avgpt;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn broker_stats_item_default() {
+        let item = BrokerStatsItem::default();
+        assert_eq!(item.get_sum(), 0);
+        assert_eq!(item.get_tps(), 0.0);
+        assert_eq!(item.get_avgpt(), 0.0);
+    }
+
+    #[test]
+    fn broker_stats_item_new() {
+        let item = BrokerStatsItem::new(100, 10.5, 1.2);
+        assert_eq!(item.get_sum(), 100);
+        assert_eq!(item.get_tps(), 10.5);
+        assert_eq!(item.get_avgpt(), 1.2);
+    }
+
+    #[test]
+    fn broker_stats_item_setters() {
+        let mut item = BrokerStatsItem::default();
+        item.set_sum(200);
+        item.set_tps(20.5);
+        item.set_avgpt(2.2);
+        assert_eq!(item.get_sum(), 200);
+        assert_eq!(item.get_tps(), 20.5);
+        assert_eq!(item.get_avgpt(), 2.2);
+    }
+
+    #[test]
+    fn broker_stats_item_serde() {
+        let item = BrokerStatsItem::new(100, 10.5, 1.2);
+        let json = serde_json::to_string(&item).unwrap();
+        let expected = r#"{"sum":100,"tps":10.5,"avgpt":1.2}"#;
+        assert_eq!(json, expected);
+        let deserialized: BrokerStatsItem = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.get_sum(), 100);
+        assert_eq!(deserialized.get_tps(), 10.5);
+        assert_eq!(deserialized.get_avgpt(), 1.2);
+    }
+}
