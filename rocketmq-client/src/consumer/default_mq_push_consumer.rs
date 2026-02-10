@@ -14,7 +14,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::thread;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
@@ -26,7 +25,6 @@ use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
-use tokio::runtime::Handle;
 
 use crate::base::client_config::ClientConfig;
 use crate::base::mq_admin::MQAdmin;
@@ -564,27 +562,15 @@ impl MQPushConsumer for DefaultMQPushConsumer {
             .register_message_listener(self.consumer_config.message_listener.clone());
     }
 
-    fn subscribe(&mut self, topic: &str, sub_expression: &str) -> rocketmq_error::RocketMQResult<()> {
-        let handle = Handle::current();
-        let mut default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.clone();
-        let topic = topic.to_string();
-        let sub_expression = sub_expression.to_string();
-        match thread::spawn(move || {
-            handle.block_on(async move {
-                default_mqpush_consumer_impl
-                    .as_mut()
-                    .unwrap()
-                    .subscribe(topic.into(), sub_expression.into())
-                    .await
-            })
-        })
-        .join()
-        {
-            Ok(value) => value,
-            Err(er) => {
-                panic!("Error: {er:?}");
-            }
-        }
+    async fn subscribe(&mut self, topic: &str, sub_expression: &str) -> rocketmq_error::RocketMQResult<()> {
+        let topic = CheetahString::from_slice(topic);
+        let sub_expression = CheetahString::from_slice(sub_expression);
+
+        self.default_mqpush_consumer_impl
+            .as_mut()
+            .expect("default_mqpush_consumer_impl is not initialized")
+            .subscribe(topic, sub_expression)
+            .await
     }
 
     async fn subscribe_with_selector(

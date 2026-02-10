@@ -44,7 +44,7 @@ pub async fn main() -> RocketMQResult<()> {
         .name_server_addr(DEFAULT_NAMESRVADDR.to_string())
         .message_model(MessageModel::Broadcasting)
         .build();
-    consumer.subscribe(TOPIC, SUB_EXPRESSION)?;
+    consumer.subscribe(TOPIC, SUB_EXPRESSION).await?;
     consumer.set_consume_from_where(ConsumeFromWhere::ConsumeFromFirstOffset);
     consumer.register_message_listener_concurrently(MyMessageListener);
     consumer.start().await?;
