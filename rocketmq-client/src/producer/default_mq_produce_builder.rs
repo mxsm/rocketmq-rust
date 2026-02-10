@@ -23,13 +23,11 @@ use rocketmq_remoting::runtime::RPCHook;
 use crate::base::client_config::ClientConfig;
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::produce_accumulator::ProduceAccumulator;
-use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
 use crate::trace::trace_dispatcher::TraceDispatcher;
 
 #[derive(Default)]
 pub struct DefaultMQProducerBuilder {
-    client_config: Option<ClientConfig>,
-    default_mqproducer_impl: Option<DefaultMQProducerImpl>,
+    client_config: ClientConfig,
     retry_response_codes: Option<HashSet<i32>>,
     producer_group: Option<CheetahString>,
     topics: Option<Vec<CheetahString>>,
@@ -54,43 +52,14 @@ pub struct DefaultMQProducerBuilder {
 }
 
 impl DefaultMQProducerBuilder {
+    #[must_use]
     pub fn new() -> Self {
-        Self {
-            client_config: Some(Default::default()),
-            default_mqproducer_impl: None,
-            retry_response_codes: None,
-            producer_group: None,
-            topics: None,
-            create_topic_key: None,
-            default_topic_queue_nums: None,
-            send_msg_timeout: None,
-            compress_msg_body_over_howmuch: None,
-            retry_times_when_send_failed: None,
-            retry_times_when_send_async_failed: None,
-            retry_another_broker_when_not_store_ok: None,
-            max_message_size: None,
-            trace_dispatcher: None,
-            auto_batch: None,
-            produce_accumulator: None,
-            enable_backpressure_for_async_mode: None,
-            back_pressure_for_async_send_num: None,
-            back_pressure_for_async_send_size: None,
-            rpc_hook: None,
-            compress_level: None,
-            compress_type: None,
-            compressor: None,
-        }
+        Self::default()
     }
 
     #[inline]
     pub fn client_config(mut self, client_config: ClientConfig) -> Self {
-        self.client_config = Some(client_config);
-        self
-    }
-
-    #[inline]
-    pub fn default_mqproducer_impl(mut self, default_mqproducer_impl: DefaultMQProducerImpl) -> Self {
-        self.default_mqproducer_impl = Some(default_mqproducer_impl);
+        self.client_config = client_config;
         self
     }
 
@@ -114,12 +83,10 @@ impl DefaultMQProducerBuilder {
 
     #[inline]
     pub fn name_server_addr(mut self, name_server_addr: impl Into<CheetahString>) -> Self {
-        if let Some(client_config) = self.client_config.as_mut() {
-            client_config.namesrv_addr = Some(name_server_addr.into());
-            client_config
-                .namespace_initialized
-                .store(false, std::sync::atomic::Ordering::Release);
-        }
+        self.client_config.namesrv_addr = Some(name_server_addr.into());
+        self.client_config
+            .namespace_initialized
+            .store(false, std::sync::atomic::Ordering::Release);
         self
     }
 
@@ -233,86 +200,80 @@ impl DefaultMQProducerBuilder {
 
     pub fn build(self) -> DefaultMQProducer {
         let mut mq_producer = DefaultMQProducer::default();
-        if let Some(client_config) = self.client_config {
-            mq_producer.set_client_config(client_config);
+        mq_producer.set_client_config(self.client_config);
+
+        // Set optional fields
+        if let Some(value) = self.retry_response_codes {
+            mq_producer.set_retry_response_codes(value);
+        }
+        if let Some(value) = self.producer_group {
+            mq_producer.set_producer_group(value);
+        }
+        if let Some(value) = self.topics {
+            mq_producer.set_topics(value);
+        }
+        if let Some(value) = self.create_topic_key {
+            mq_producer.set_create_topic_key(value);
+        }
+        if let Some(value) = self.default_topic_queue_nums {
+            mq_producer.set_default_topic_queue_nums(value);
+        }
+        if let Some(value) = self.send_msg_timeout {
+            mq_producer.set_send_msg_timeout(value);
+        }
+        if let Some(value) = self.compress_msg_body_over_howmuch {
+            mq_producer.set_compress_msg_body_over_howmuch(value);
+        }
+        if let Some(value) = self.retry_times_when_send_failed {
+            mq_producer.set_retry_times_when_send_failed(value);
+        }
+        if let Some(value) = self.retry_times_when_send_async_failed {
+            mq_producer.set_retry_times_when_send_async_failed(value);
+        }
+        if let Some(value) = self.retry_another_broker_when_not_store_ok {
+            mq_producer.set_retry_another_broker_when_not_store_ok(value);
+        }
+        if let Some(value) = self.max_message_size {
+            mq_producer.set_max_message_size(value);
+        }
+        if let Some(value) = self.trace_dispatcher {
+            mq_producer.set_trace_dispatcher(value);
+        }
+        if let Some(value) = self.auto_batch {
+            mq_producer.set_auto_batch(value);
+        }
+        if let Some(value) = self.produce_accumulator {
+            mq_producer.set_produce_accumulator(value);
+        }
+        if let Some(value) = self.enable_backpressure_for_async_mode {
+            mq_producer.set_enable_backpressure_for_async_mode(value);
+        }
+        if let Some(value) = self.back_pressure_for_async_send_num {
+            mq_producer.set_back_pressure_for_async_send_num(value);
+        }
+        if let Some(value) = self.back_pressure_for_async_send_size {
+            mq_producer.set_back_pressure_for_async_send_size(value);
+        }
+        if let Some(value) = self.rpc_hook {
+            mq_producer.set_rpc_hook(value);
+        }
+        if let Some(value) = self.compress_level {
+            mq_producer.set_compress_level(value);
+        }
+        if let Some(value) = self.compress_type {
+            mq_producer.set_compress_type(value);
+        }
+        if let Some(value) = self.compressor {
+            mq_producer.set_compressor(Some(value));
         }
 
-        if let Some(retry_response_codes) = self.retry_response_codes {
-            mq_producer.set_retry_response_codes(retry_response_codes);
-        }
-        if let Some(producer_group) = self.producer_group {
-            mq_producer.set_producer_group(producer_group);
-        }
-        if let Some(topics) = self.topics {
-            mq_producer.set_topics(topics);
-        }
-        if let Some(create_topic_key) = self.create_topic_key {
-            mq_producer.set_create_topic_key(create_topic_key);
-        }
-        if let Some(default_topic_queue_nums) = self.default_topic_queue_nums {
-            mq_producer.set_default_topic_queue_nums(default_topic_queue_nums);
-        }
-        if let Some(send_msg_timeout) = self.send_msg_timeout {
-            mq_producer.set_send_msg_timeout(send_msg_timeout);
-        }
-        if let Some(compress_msg_body_over_howmuch) = self.compress_msg_body_over_howmuch {
-            mq_producer.set_compress_msg_body_over_howmuch(compress_msg_body_over_howmuch);
-        }
-        if let Some(retry_times_when_send_failed) = self.retry_times_when_send_failed {
-            mq_producer.set_retry_times_when_send_failed(retry_times_when_send_failed);
-        }
-        if let Some(retry_times_when_send_async_failed) = self.retry_times_when_send_async_failed {
-            mq_producer.set_retry_times_when_send_async_failed(retry_times_when_send_async_failed);
-        }
-        if let Some(retry_another_broker_when_not_store_ok) = self.retry_another_broker_when_not_store_ok {
-            mq_producer.set_retry_another_broker_when_not_store_ok(retry_another_broker_when_not_store_ok);
-        }
-        if let Some(max_message_size) = self.max_message_size {
-            mq_producer.set_max_message_size(max_message_size);
-        }
-
-        if let Some(trace_dispatcher) = self.trace_dispatcher {
-            mq_producer.set_trace_dispatcher(trace_dispatcher);
-        }
-        if let Some(auto_batch) = self.auto_batch {
-            mq_producer.set_auto_batch(auto_batch);
-        }
-        if let Some(produce_accumulator) = self.produce_accumulator {
-            mq_producer.set_produce_accumulator(produce_accumulator);
-        }
-
-        if let Some(enable_backpressure_for_async_mode) = self.enable_backpressure_for_async_mode {
-            mq_producer.set_enable_backpressure_for_async_mode(enable_backpressure_for_async_mode);
-        }
-        if let Some(back_pressure_for_async_send_num) = self.back_pressure_for_async_send_num {
-            mq_producer.set_back_pressure_for_async_send_num(back_pressure_for_async_send_num);
-        }
-        if let Some(back_pressure_for_async_send_size) = self.back_pressure_for_async_send_size {
-            mq_producer.set_back_pressure_for_async_send_size(back_pressure_for_async_send_size);
-        }
-        if let Some(rpc_hook) = self.rpc_hook {
-            mq_producer.set_rpc_hook(rpc_hook);
-        }
-        if let Some(compress_level) = self.compress_level {
-            mq_producer.set_compress_level(compress_level);
-        }
-        if let Some(compress_type) = self.compress_type {
-            mq_producer.set_compress_type(compress_type);
-        }
-        if let Some(compressor) = self.compressor {
-            mq_producer.set_compressor(Some(compressor));
-        }
-
-        if let Some(default_mqproducer_impl) = self.default_mqproducer_impl {
-            mq_producer.set_default_mqproducer_impl(default_mqproducer_impl);
-        } else {
-            let producer_impl = DefaultMQProducerImpl::new(
-                mq_producer.client_config().clone(),
-                mq_producer.producer_config().clone(),
-                mq_producer.rpc_hook().clone(),
-            );
-            mq_producer.set_default_mqproducer_impl(producer_impl);
-        }
+        // Create and set the producer implementation
+        let producer_impl = crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl::new(
+            mq_producer.client_config().clone(),
+            mq_producer.producer_config().clone(),
+            mq_producer.rpc_hook().clone(),
+        );
+        mq_producer.set_default_mqproducer_impl(producer_impl);
 
         mq_producer
     }
