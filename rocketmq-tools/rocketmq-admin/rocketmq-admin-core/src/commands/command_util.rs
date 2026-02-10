@@ -21,6 +21,7 @@ pub struct CommandUtil;
 
 impl CommandUtil {
     const MASTER_ID: u64 = 0;
+    pub const NO_MASTER_PLACEHOLDER: &'static str = "NO_MASTER";
 
     pub fn fetch_master_addr_by_cluster_name(
         cluster_info: &ClusterInfo,
@@ -130,6 +131,62 @@ impl CommandUtil {
             }
         }
         Ok(all_addrs)
+    }
+
+    pub fn fetch_master_and_slave_distinguish(
+        cluster_info: &ClusterInfo,
+        cluster_name: &str,
+    ) -> RocketMQResult<std::collections::HashMap<CheetahString, Vec<CheetahString>>> {
+        let mut master_and_slave_map = std::collections::HashMap::new();
+
+        let cluster_addr_table = cluster_info.cluster_addr_table.as_ref().ok_or_else(|| {
+            RocketMQError::Internal("CommandUtil: No cluster address table available from nameserver.".into())
+        })?;
+
+        let broker_names = cluster_addr_table.get(cluster_name).ok_or_else(|| {
+            RocketMQError::Internal(format!(
+                "CommandUtil: Make sure the specified clusterName exists or the nameserver which connected to is \
+                 correct. Cluster: {}",
+                cluster_name
+            ))
+        })?;
+
+        let broker_addr_table = cluster_info.broker_addr_table.as_ref().ok_or_else(|| {
+            RocketMQError::Internal("CommandUtil: No broker address table available from nameserver.".into())
+        })?;
+
+        for broker_name in broker_names {
+            let broker_data = match broker_addr_table.get(broker_name) {
+                Some(data) => data,
+                None => continue,
+            };
+
+            let broker_addrs = broker_data.broker_addrs();
+            if broker_addrs.is_empty() {
+                continue;
+            }
+
+            let master_addr = broker_addrs.get(&Self::MASTER_ID);
+
+            let key = if let Some(addr) = master_addr {
+                master_and_slave_map.entry(addr.clone()).or_insert_with(Vec::new);
+                addr.clone()
+            } else {
+                let placeholder = CheetahString::from_static_str(Self::NO_MASTER_PLACEHOLDER);
+                master_and_slave_map.entry(placeholder.clone()).or_insert_with(Vec::new);
+                placeholder
+            };
+
+            for (broker_id, addr) in broker_addrs {
+                if *broker_id != Self::MASTER_ID {
+                    if let Some(slaves) = master_and_slave_map.get_mut(&key) {
+                        slaves.push(addr.clone());
+                    }
+                }
+            }
+        }
+
+        Ok(master_and_slave_map)
     }
 }
 
@@ -243,5 +300,63 @@ mod tests {
         let result = CommandUtil::fetch_master_and_slave_addr_by_cluster_name(&cluster_info, "NonExistentCluster");
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn fetch_master_and_slave_distinguish() {
+        let cluster_info = create_test_cluster_info();
+        let result = CommandUtil::fetch_master_and_slave_distinguish(&cluster_info, "DefaultCluster").unwrap();
+
+        assert_eq!(result.len(), 1);
+        let master_addr = CheetahString::from_static_str("192.168.1.1:10911");
+        assert!(result.contains_key(&master_addr));
+
+        let slaves = result.get(&master_addr).unwrap();
+        assert_eq!(slaves.len(), 1);
+        assert_eq!(slaves[0].as_str(), "192.168.1.2:10911");
+    }
+
+    #[test]
+    fn fetch_master_and_slave_distinguish_not_found() {
+        let cluster_info = create_test_cluster_info();
+        let result = CommandUtil::fetch_master_and_slave_distinguish(&cluster_info, "NonExistentCluster");
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Make sure the specified clusterName exists"));
+        assert!(err_msg.contains("NonExistentCluster"));
+    }
+
+    #[test]
+    fn fetch_master_and_slave_distinguish_no_master() {
+        let mut broker_addr_table = HashMap::new();
+        let mut broker_addrs = HashMap::new();
+        // Only add slave, no master (broker id = 0)
+        broker_addrs.insert(1u64, CheetahString::from_static_str("192.168.1.2:10911"));
+        broker_addrs.insert(2u64, CheetahString::from_static_str("192.168.1.3:10911"));
+
+        let broker_data = BrokerData::new(
+            CheetahString::from_static_str("DefaultCluster"),
+            CheetahString::from_static_str("broker-a"),
+            broker_addrs,
+            None,
+        );
+        broker_addr_table.insert(CheetahString::from_static_str("broker-a"), broker_data);
+
+        let mut cluster_addr_table = HashMap::new();
+        let mut broker_names = HashSet::new();
+        broker_names.insert(CheetahString::from_static_str("broker-a"));
+        cluster_addr_table.insert(CheetahString::from_static_str("DefaultCluster"), broker_names);
+
+        let cluster_info = ClusterInfo::new(Some(broker_addr_table), Some(cluster_addr_table));
+        let result = CommandUtil::fetch_master_and_slave_distinguish(&cluster_info, "DefaultCluster").unwrap();
+
+        // Should have NO_MASTER_PLACEHOLDER as key
+        assert_eq!(result.len(), 1);
+        let no_master_key = CheetahString::from_static_str(CommandUtil::NO_MASTER_PLACEHOLDER);
+        assert!(result.contains_key(&no_master_key));
+
+        let slaves = result.get(&no_master_key).unwrap();
+        assert_eq!(slaves.len(), 2);
     }
 }

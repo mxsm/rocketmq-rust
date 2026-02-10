@@ -1,4 +1,4 @@
-// Copyright 2023 The RocketMQ Rust Authors
+// Copyright 2026 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod clean_unused_topic_command;
+mod get_broker_config_sub_command;
 mod switch_timer_engine_sub_command;
 
 use std::sync::Arc;
@@ -40,6 +41,13 @@ pub enum BrokerCommands {
         long_about = None,
     )]
     SwitchTimerEngine(SwitchTimerEngineSubCommand),
+
+    #[command(
+        name = "getBrokerConfig",
+        about = "Get broker config by cluster or special broker.",
+        long_about = None,
+    )]
+    GetBrokerConfigSubCommand(get_broker_config_sub_command::GetBrokerConfigSubCommand),
 }
 
 impl CommandExecute for BrokerCommands {
@@ -47,6 +55,7 @@ impl CommandExecute for BrokerCommands {
         match self {
             BrokerCommands::CleanUnusedTopic(value) => value.execute(rpc_hook).await,
             BrokerCommands::SwitchTimerEngine(value) => value.execute(rpc_hook).await,
+            BrokerCommands::GetBrokerConfigSubCommand(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }
