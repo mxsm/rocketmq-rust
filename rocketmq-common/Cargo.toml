@@ -60,7 +60,7 @@ time             = "0.3.47"
 iana-time-zone   = "0.1"
 
 parking_lot             = { workspace = true }
-tempfile                = "3.24.0"
+tempfile                = "3.25.0"
 trait-variant.workspace = true
 
 dashmap   = "6.1.0"
