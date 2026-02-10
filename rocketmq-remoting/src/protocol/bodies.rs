@@ -44,10 +44,10 @@ pub mod broker {
     pub use super::super::body::broker_body::broker_member_group::GetBrokerMemberGroupResponseBody;
     pub use super::super::body::broker_body::cluster_info::ClusterInfo;
     pub use super::super::body::broker_body::register_broker_body::RegisterBrokerBody;
-    pub use super::super::body::broker_item::BrokerStatsItem;
     pub use super::super::body::broker_replicas_info::BrokerReplicasInfo;
     pub use super::super::body::broker_replicas_info::ReplicaIdentity;
     pub use super::super::body::broker_replicas_info::ReplicasInfo;
+    pub use super::super::body::broker_stats_item::BrokerStatsItem;
     pub use super::super::body::get_broker_lite_info_response_body::GetBrokerLiteInfoResponseBody;
 }
 

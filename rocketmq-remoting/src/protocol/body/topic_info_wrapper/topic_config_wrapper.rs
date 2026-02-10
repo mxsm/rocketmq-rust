@@ -40,14 +40,6 @@ pub struct TopicConfigAndMappingSerializeWrapper {
     pub topic_config_serialize_wrapper: TopicConfigSerializeWrapper,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct TopicConfigSerializeWrapper {
-    #[serde(rename = "topicConfigTable")]
-    pub topic_config_table: HashMap<CheetahString, TopicConfig>,
-    #[serde(rename = "dataVersion")]
-    pub data_version: DataVersion,
-}
-
 impl TopicConfigAndMappingSerializeWrapper {
     pub fn topic_queue_mapping_info_map(&self) -> &DashMap<CheetahString, ArcMut<TopicQueueMappingInfo>> {
         &self.topic_queue_mapping_info_map
@@ -65,6 +57,14 @@ impl TopicConfigAndMappingSerializeWrapper {
     pub fn topic_config_serialize_wrapper(&self) -> &TopicConfigSerializeWrapper {
         &self.topic_config_serialize_wrapper
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct TopicConfigSerializeWrapper {
+    #[serde(rename = "topicConfigTable")]
+    pub topic_config_table: HashMap<CheetahString, TopicConfig>,
+    #[serde(rename = "dataVersion")]
+    pub data_version: DataVersion,
 }
 
 impl TopicConfigSerializeWrapper {
@@ -86,12 +86,12 @@ mod tests {
         let wrapper = TopicConfigAndMappingSerializeWrapper::default();
         assert!(wrapper.topic_queue_mapping_info_map.is_empty());
         assert!(wrapper.topic_queue_mapping_detail_map.is_empty());
-        //assert_eq!(wrapper.mapping_data_version, DataVersion::new());
+        assert_eq!(wrapper.mapping_data_version, DataVersion::new());
         assert!(wrapper.topic_config_serialize_wrapper().topic_config_table().is_empty());
-        // assert_eq!(
-        //     wrapper.topic_config_serialize_wrapper().data_version(),
-        //     &DataVersion::new()
-        // );
+        assert_eq!(
+            wrapper.topic_config_serialize_wrapper().data_version(),
+            &DataVersion::new()
+        );
     }
 
     #[test]
@@ -100,7 +100,7 @@ mod tests {
         let _topic_config = TopicConfig::default();
         let topic_queue_mapping_info = ArcMut::new(TopicQueueMappingInfo::default());
         let topic_queue_mapping_detail = ArcMut::<TopicQueueMappingDetail>::default();
-        //let data_version = DataVersion::default();
+        let data_version = DataVersion::default();
 
         let topic_config_serialize_wrapper = TopicConfigSerializeWrapper::default();
         wrapper.topic_config_serialize_wrapper = topic_config_serialize_wrapper.clone();
@@ -111,10 +111,29 @@ mod tests {
             .topic_queue_mapping_detail_map
             .insert("test".into(), topic_queue_mapping_detail.clone());
 
-        //assert_eq!(wrapper.mapping_data_version(), &data_version);
+        assert_eq!(wrapper.mapping_data_version(), &data_version);
         assert_eq!(
             wrapper.topic_config_serialize_wrapper(),
             &topic_config_serialize_wrapper
         );
+    }
+
+    #[test]
+    fn topic_config_serialize_wrapper_methods() {
+        let mut wrapper = TopicConfigSerializeWrapper::default();
+        let topic_config = TopicConfig::default();
+        wrapper
+            .topic_config_table
+            .insert("test_topic".into(), topic_config.clone());
+        let data_version = DataVersion::default();
+        wrapper.data_version = data_version.clone();
+
+        assert_eq!(
+            wrapper
+                .topic_config_table()
+                .get(&CheetahString::from_static_str("test_topic")),
+            Some(&topic_config)
+        );
+        assert_eq!(wrapper.data_version(), &data_version);
     }
 }
