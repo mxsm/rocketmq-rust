@@ -25,7 +25,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use bytes::BytesMut;
 use cheetah_string::CheetahString;
-use rand::Rng;
+use rand::RngExt;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::consume_init_mode::ConsumeInitMode;
 use rocketmq_common::common::constant::PermName;

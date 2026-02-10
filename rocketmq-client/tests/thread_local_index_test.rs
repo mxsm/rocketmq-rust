@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::RngExt;
 use rocketmq_client_rust::common::thread_local_index::ThreadLocalIndex;
 use std::cell::RefCell;
 use std::time::Instant;

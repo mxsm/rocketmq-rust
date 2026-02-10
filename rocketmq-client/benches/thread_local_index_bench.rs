@@ -18,7 +18,7 @@ use std::hint::black_box;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
-use rand::Rng;
+use rand::RngExt;
 use rocketmq_client_rust::common::thread_local_index::ThreadLocalIndex;
 
 // ============================================================================
