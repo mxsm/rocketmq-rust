@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **test(remoting):** Add comprehensive test coverage for `GetMaxOffsetRequestHeader` including required fields, optional nested headers, trait implementation methods, and edge cases
+- **feat(tools):** Add `SetConsumeModeSubCommand` for setting consumer group consumption mode (PULL/POP) ([#5650](https://github.com/mxsm/rocketmq-rust/issues/5650))
 - **feat(tools):** Add `ListAclSubCommand` for ACL enumeration and subject filtering ([#5663](https://github.com/mxsm/rocketmq-rust/issues/5663))
 - **feat(tools):** Add `UpdateAclSubCommand` ([#5665](https://github.com/mxsm/rocketmq-rust/issues/5665))
 - **feat(tools):** Add `UpdateSubGroupListSubCommand` for batch subscription group updates ([#5652](https://github.com/mxsm/rocketmq-rust/issues/5652))
