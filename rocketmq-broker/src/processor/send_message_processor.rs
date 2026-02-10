@@ -17,7 +17,7 @@ use std::net::SocketAddr;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
-use rand::Rng;
+use rand::RngExt;
 use rocketmq_common::common::attribute::cleanup_policy::CleanupPolicy;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::constant::PermName;

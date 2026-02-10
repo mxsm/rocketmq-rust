@@ -16,7 +16,7 @@
 use std::cell::RefCell;
 use std::fmt;
 
-use rand::Rng;
+use rand::RngExt;
 use rand::SeedableRng;
 
 thread_local! {
