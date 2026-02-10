@@ -11,3 +11,19 @@ impl CommandCustomHeader for EmptyHeader {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_header_init() {
+        let body = EmptyHeader {};
+        assert!(matches!(body, EmptyHeader {}));
+    }
+    #[test]
+    fn empty_header_map() {
+        let body = EmptyHeader {};
+        assert!(body.to_map().is_none());
+    }
+}
