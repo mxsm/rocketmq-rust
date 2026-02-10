@@ -88,7 +88,7 @@ serde_yaml = "0.9"
 serde_json_any_key = "2.0.0"
 anyhow = "1.0.101"
 bytes = "1.11.1"
-rand = "0.9.2"
+rand = "0.10.0"
 num_cpus = "1.17"
 
 config = "0.15.19"
