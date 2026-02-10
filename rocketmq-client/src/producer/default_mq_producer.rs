@@ -1224,7 +1224,11 @@ impl MQProducer for DefaultMQProducer {
         self
     }
 
-    async fn recall_message(&mut self, topic: &str, recall_handle: &str) -> rocketmq_error::RocketMQResult<String> {
+    async fn recall_message(
+        &mut self,
+        topic: impl Into<CheetahString>,
+        recall_handle: impl Into<CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<String> {
         self.default_mqproducer_impl
             .as_mut()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?

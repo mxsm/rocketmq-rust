@@ -2470,23 +2470,29 @@ impl DefaultMQProducerImpl {
         // Tasks will complete naturally when spawned
     }
 
-    pub async fn recall_message(&mut self, topic: &str, recall_handle: &str) -> rocketmq_error::RocketMQResult<String> {
+    pub async fn recall_message(
+        &mut self,
+        topic: impl Into<CheetahString>,
+        recall_handle: impl Into<CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<String> {
+        let topic = topic.into();
+        let recall_handle = recall_handle.into();
+
         self.make_sure_state_ok()?;
-        Validators::check_topic(topic)?;
+        Validators::check_topic(&topic)?;
 
         if recall_handle.is_empty() {
             return Err(mq_client_err!("Recall handle cannot be empty"));
         }
 
-        if NamespaceUtil::is_retry_topic(topic) || NamespaceUtil::is_dlq_topic(topic) {
+        if NamespaceUtil::is_retry_topic(&topic) || NamespaceUtil::is_dlq_topic(&topic) {
             return Err(mq_client_err!("topic is not supported"));
         }
 
-        let handle_entity = RecallMessageHandle::decode_handle(recall_handle)
+        let handle_entity = RecallMessageHandle::decode_handle(&recall_handle)
             .map_err(|e| mq_client_err!(format!("Failed to decode recall handle: {}", e)))?;
 
-        self.try_to_find_topic_publish_info(&CheetahString::from_string(topic.to_string()))
-            .await;
+        self.try_to_find_topic_publish_info(&topic).await;
 
         let broker_name_cs = CheetahString::from_string(handle_entity.broker_name().to_string());
         let mut broker_addr = self
@@ -2501,7 +2507,7 @@ impl DefaultMQProducerImpl {
                 .client_instance
                 .as_ref()
                 .unwrap()
-                .find_broker_addr_by_topic(topic)
+                .find_broker_addr_by_topic(&topic)
                 .await;
         }
 
@@ -2513,8 +2519,11 @@ impl DefaultMQProducerImpl {
             mq_client_err!("The broker service address not found")
         })?;
 
-        let mut request_header =
-            RecallMessageRequestHeader::new(topic, recall_handle, Some(self.producer_config.producer_group()));
+        let mut request_header = RecallMessageRequestHeader::new(
+            topic,
+            recall_handle,
+            Some(self.producer_config.producer_group().clone()),
+        );
 
         request_header.topic_request_header = Some(TopicRequestHeader {
             rpc_request_header: Some(RpcRequestHeader {

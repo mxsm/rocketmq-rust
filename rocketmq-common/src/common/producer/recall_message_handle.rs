@@ -16,6 +16,7 @@ use std::fmt;
 
 use base64::engine::general_purpose::URL_SAFE;
 use base64::Engine;
+use cheetah_string::CheetahString;
 
 use crate::RocketMQError;
 use crate::RocketMQResult;
@@ -78,10 +79,10 @@ impl RecallMessageHandle {
         }
 
         Ok(RecallMessageHandle::V1(HandleV1::new(
-            items[1].to_string(),
-            items[2].to_string(),
-            items[3].to_string(),
-            items[4].to_string(),
+            CheetahString::from_slice(items[1]),
+            CheetahString::from_slice(items[2]),
+            CheetahString::from_slice(items[3]),
+            CheetahString::from_slice(items[4]),
         )))
     }
 
@@ -136,10 +137,10 @@ impl fmt::Display for RecallMessageHandle {
 /// Version 1 of the recall message handle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HandleV1 {
-    topic: String,
-    broker_name: String,
-    timestamp_str: String,
-    message_id: String,
+    topic: CheetahString,
+    broker_name: CheetahString,
+    timestamp_str: CheetahString,
+    message_id: CheetahString,
 }
 
 impl HandleV1 {
@@ -151,12 +152,17 @@ impl HandleV1 {
     /// * `broker_name` - The broker name
     /// * `timestamp_str` - The timestamp as a string
     /// * `message_id` - The message ID (unique key)
-    pub fn new(topic: String, broker_name: String, timestamp_str: String, message_id: String) -> Self {
+    pub fn new(
+        topic: impl Into<CheetahString>,
+        broker_name: impl Into<CheetahString>,
+        timestamp_str: impl Into<CheetahString>,
+        message_id: impl Into<CheetahString>,
+    ) -> Self {
         Self {
-            topic,
-            broker_name,
-            timestamp_str,
-            message_id,
+            topic: topic.into(),
+            broker_name: broker_name.into(),
+            timestamp_str: timestamp_str.into(),
+            message_id: message_id.into(),
         }
     }
 
@@ -181,7 +187,17 @@ impl HandleV1 {
     /// let handle = HandleV1::build_handle("test_topic", "broker-0", "1707111111111", "msgId123");
     /// assert!(!handle.is_empty());
     /// ```
-    pub fn build_handle(topic: &str, broker_name: &str, timestamp_str: &str, message_id: &str) -> String {
+    pub fn build_handle(
+        topic: impl Into<CheetahString>,
+        broker_name: impl Into<CheetahString>,
+        timestamp_str: impl Into<CheetahString>,
+        message_id: impl Into<CheetahString>,
+    ) -> String {
+        let topic = topic.into();
+        let broker_name = broker_name.into();
+        let timestamp_str = timestamp_str.into();
+        let message_id = message_id.into();
+
         let raw_string = format!(
             "{}{}{}{}{}{}{}{}{}",
             VERSION_1, SEPARATOR, topic, SEPARATOR, broker_name, SEPARATOR, timestamp_str, SEPARATOR, message_id
@@ -286,12 +302,7 @@ mod tests {
         let timestamp_str = "1707111111111";
         let message_id = "msgId123";
 
-        let handle = HandleV1::new(
-            topic.to_string(),
-            broker_name.to_string(),
-            timestamp_str.to_string(),
-            message_id.to_string(),
-        );
+        let handle = HandleV1::new(topic, broker_name, timestamp_str, message_id);
 
         assert_eq!(handle.topic(), topic);
         assert_eq!(handle.broker_name(), broker_name);
@@ -318,12 +329,7 @@ mod tests {
 
     #[test]
     fn test_display_format() {
-        let handle = HandleV1::new(
-            "topic".to_string(),
-            "broker".to_string(),
-            "123456".to_string(),
-            "msgId".to_string(),
-        );
+        let handle = HandleV1::new("topic", "broker", "123456", "msgId");
         let recall_handle = RecallMessageHandle::V1(handle);
         let display = format!("{}", recall_handle);
         assert!(display.contains("HandleV1"));
@@ -335,12 +341,7 @@ mod tests {
 
     #[test]
     fn test_clone_and_equality() {
-        let handle1 = HandleV1::new(
-            "topic".to_string(),
-            "broker".to_string(),
-            "123456".to_string(),
-            "msgId".to_string(),
-        );
+        let handle1 = HandleV1::new("topic", "broker", "123456", "msgId");
         let handle2 = handle1.clone();
         assert_eq!(handle1, handle2);
 

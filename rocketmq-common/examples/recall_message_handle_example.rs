@@ -105,12 +105,7 @@ fn main() {
 
     // Example 5: Creating HandleV1 directly
     println!("Example 5: Creating HandleV1 directly");
-    let handle_v1 = RecallMessageHandleV1::new(
-        "direct_topic".to_string(),
-        "direct_broker".to_string(),
-        "1707333333333".to_string(),
-        "direct_msg_789".to_string(),
-    );
+    let handle_v1 = RecallMessageHandleV1::new("direct_topic", "direct_broker", "1707333333333", "direct_msg_789");
 
     println!("  Topic: {}", handle_v1.topic());
     println!("  Broker: {}", handle_v1.broker_name());
