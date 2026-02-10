@@ -101,6 +101,7 @@ use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::query_assignment_processor::QueryAssignmentProcessor;
 use crate::processor::query_message_processor::QueryMessageProcessor;
+use crate::processor::recall_message_processor::RecallMessageProcessor;
 use crate::processor::reply_message_processor::ReplyMessageProcessor;
 use crate::processor::send_message_processor::SendMessageProcessor;
 use crate::processor::BrokerProcessorType;
@@ -708,6 +709,13 @@ impl BrokerRuntime {
         broker_request_processor.register_processor(
             RequestCode::SendReplyMessageV2 as i32,
             BrokerProcessorType::Reply(reply_message_processor),
+        );
+
+        //RecallMessageProcessor
+        let recall_message_processor = ArcMut::new(RecallMessageProcessor::new(self.inner.clone()));
+        broker_request_processor.register_processor(
+            RequestCode::RecallMessage as i32,
+            BrokerProcessorType::Recall(recall_message_processor),
         );
 
         //QueryMessageProcessor

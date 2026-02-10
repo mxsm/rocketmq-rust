@@ -35,6 +35,7 @@ use crate::processor::pop_message_processor::PopMessageProcessor;
 use crate::processor::pull_message_processor::PullMessageProcessor;
 use crate::processor::query_assignment_processor::QueryAssignmentProcessor;
 use crate::processor::query_message_processor::QueryMessageProcessor;
+use crate::processor::recall_message_processor::RecallMessageProcessor;
 use crate::processor::reply_message_processor::ReplyMessageProcessor;
 use crate::processor::send_message_processor::SendMessageProcessor;
 use crate::transaction::transactional_message_service::TransactionalMessageService;
@@ -56,6 +57,7 @@ pub(crate) mod pull_message_processor;
 pub(crate) mod pull_message_result_handler;
 pub(crate) mod query_assignment_processor;
 pub(crate) mod query_message_processor;
+pub(crate) mod recall_message_processor;
 pub(crate) mod reply_message_processor;
 pub(crate) mod send_message_processor;
 
@@ -69,6 +71,7 @@ pub enum BrokerProcessorType<MS: MessageStore, TS> {
     Notification(ArcMut<NotificationProcessor<MS>>),
     PollingInfo(ArcMut<PollingInfoProcessor<MS>>),
     Reply(ArcMut<ReplyMessageProcessor<MS, TS>>),
+    Recall(ArcMut<RecallMessageProcessor<MS>>),
     QueryMessage(ArcMut<QueryMessageProcessor<MS>>),
     ClientManage(ArcMut<ClientManageProcessor<MS>>),
     ConsumerManage(ArcMut<ConsumerManageProcessor<MS>>),
@@ -98,6 +101,7 @@ where
             BrokerProcessorType::Notification(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::PollingInfo(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::Reply(processor) => processor.process_request(channel, ctx, request).await,
+            BrokerProcessorType::Recall(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::QueryMessage(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::ClientManage(processor) => processor.process_request(channel, ctx, request).await,
             BrokerProcessorType::ConsumerManage(processor) => processor.process_request(channel, ctx, request).await,
@@ -118,6 +122,7 @@ where
             BrokerProcessorType::Notification(processor) => processor.reject_request(code),
             BrokerProcessorType::PollingInfo(processor) => processor.reject_request(code),
             BrokerProcessorType::Reply(processor) => processor.reject_request(code),
+            BrokerProcessorType::Recall(processor) => processor.reject_request(code),
             BrokerProcessorType::QueryMessage(processor) => processor.reject_request(code),
             BrokerProcessorType::ClientManage(processor) => processor.reject_request(code),
             BrokerProcessorType::ConsumerManage(processor) => processor.reject_request(code),
