@@ -15,6 +15,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_error::RocketMQError;
@@ -475,7 +476,11 @@ impl MQProducer for TransactionMQProducer {
             .await
     }
 
-    async fn recall_message(&mut self, topic: &str, recall_handle: &str) -> rocketmq_error::RocketMQResult<String> {
+    async fn recall_message(
+        &mut self,
+        topic: impl Into<CheetahString>,
+        recall_handle: impl Into<CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<String> {
         self.default_producer.recall_message(topic, recall_handle).await
     }
 

@@ -14,6 +14,7 @@
 
 use std::any::Any;
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
 
@@ -779,10 +780,9 @@ pub trait MQProducer {
     ///
     /// # Arguments
     ///
-    /// * `topic` - A string slice that holds the name of the topic from which to recall the
-    ///   message.
-    /// * `recall_handle` - A string slice that holds the recall handle identifying the message to
-    ///   recall.
+    /// * `topic` - The topic name. Can be `&str`, `String`, or `CheetahString`.
+    /// * `recall_handle` - The recall handle identifying the message to recall. Can be `&str`,
+    ///   `String`, or `CheetahString`.
     ///
     /// # Returns
     ///
@@ -797,5 +797,24 @@ pub trait MQProducer {
     /// - The recall handle is invalid
     /// - The broker is unavailable
     /// - The message cannot be recalled (e.g., already consumed)
-    async fn recall_message(&mut self, topic: &str, recall_handle: &str) -> rocketmq_error::RocketMQResult<String>;
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// // Using &str
+    /// producer.recall_message("TopicTest", "handle123").await?;
+    ///
+    /// // Using String
+    /// let topic = String::from("TopicTest");
+    /// producer.recall_message(topic, "handle123").await?;
+    ///
+    /// // Using CheetahString
+    /// let topic = CheetahString::from_slice("TopicTest");
+    /// producer.recall_message(topic, "handle123").await?;
+    /// ```
+    async fn recall_message(
+        &mut self,
+        topic: impl Into<CheetahString>,
+        recall_handle: impl Into<CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<String>;
 }
