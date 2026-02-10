@@ -26,14 +26,12 @@ use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrate
 use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
 use crate::consumer::message_queue_listener::MessageQueueListener;
-use crate::consumer::mq_push_consumer::MQPushConsumer;
 use crate::trace::trace_dispatcher::TraceDispatcher;
 
 #[derive(Default)]
 pub struct DefaultMQPushConsumerBuilder {
     client_config: ClientConfig,
     consumer_group: Option<CheetahString>,
-    topic_sub_expression: (Option<CheetahString>, Option<CheetahString>),
     message_model: Option<MessageModel>,
     consume_from_where: Option<ConsumeFromWhere>,
     consume_timestamp: Option<CheetahString>,
@@ -119,13 +117,6 @@ impl DefaultMQPushConsumerBuilder {
         allocate_message_queue_strategy: Arc<dyn AllocateMessageQueueStrategy>,
     ) -> Self {
         self.allocate_message_queue_strategy = Some(allocate_message_queue_strategy);
-        self
-    }
-
-    #[inline]
-    pub fn subscribe(mut self, topic: impl Into<CheetahString>, sub_expression: impl Into<CheetahString>) -> Self {
-        self.topic_sub_expression.0 = Some(topic.into());
-        self.topic_sub_expression.1 = Some(sub_expression.into());
         self
     }
 
@@ -381,10 +372,6 @@ impl DefaultMQPushConsumerBuilder {
         }
         consumer_config.rpc_hook = self.rpc_hook.clone();
 
-        let mut consumer = DefaultMQPushConsumer::new(self.client_config, consumer_config);
-        if let (Some(topic), Some(sub_expression)) = (self.topic_sub_expression.0, self.topic_sub_expression.1) {
-            consumer.subscribe(&topic, &sub_expression).expect("subscribe failed");
-        }
-        consumer
+        DefaultMQPushConsumer::new(self.client_config, consumer_config)
     }
 }

@@ -40,7 +40,7 @@ pub async fn main() -> RocketMQResult<()> {
         .consumer_group(CONSUMER_GROUP.to_string())
         .name_server_addr(DEFAULT_NAMESRVADDR.to_string())
         .build();
-    consumer.subscribe(TOPIC, "*")?;
+    consumer.subscribe(TOPIC, "*").await?;
     consumer.register_message_listener_concurrently(MyMessageListener);
     consumer.start().await?;
     let _ = tokio::signal::ctrl_c().await;

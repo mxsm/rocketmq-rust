@@ -85,7 +85,7 @@ pub trait MQPushConsumer: MQConsumer {
     /// # Returns
     ///
     /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or an error.
-    fn subscribe(&mut self, topic: &str, sub_expression: &str) -> rocketmq_error::RocketMQResult<()>;
+    async fn subscribe(&mut self, topic: &str, sub_expression: &str) -> rocketmq_error::RocketMQResult<()>;
 
     /// Subscribes to a topic with an optional message selector.
     ///
