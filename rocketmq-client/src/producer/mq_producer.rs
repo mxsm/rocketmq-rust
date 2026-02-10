@@ -800,7 +800,7 @@ pub trait MQProducer {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```rust,ignore
     /// // Using &str
     /// producer.recall_message("TopicTest", "handle123").await?;
     ///
