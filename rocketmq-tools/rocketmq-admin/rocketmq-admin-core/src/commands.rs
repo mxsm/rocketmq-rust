@@ -196,6 +196,11 @@ impl CommandExecute for ClassificationTablePrint {
                 remark: "Create or update subscription groups in batch.",
             },
             Command {
+                category: "Consumer",
+                command: "startMonitoring",
+                remark: "Start Monitoring.",
+            },
+            Command {
                 category: "Controller",
                 command: "cleanBrokerMetadata",
                 remark: "Clean metadata of broker on controller.",

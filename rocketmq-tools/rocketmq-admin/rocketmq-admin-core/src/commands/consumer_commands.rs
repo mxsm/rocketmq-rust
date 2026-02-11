@@ -16,6 +16,7 @@ mod consumer_status_sub_command;
 mod consumer_sub_command;
 mod delete_subscription_group_sub_command;
 mod set_consume_mode_sub_command;
+mod start_monitoring_sub_command;
 mod update_sub_group_list_sub_command;
 mod update_sub_group_sub_command;
 use std::sync::Arc;
@@ -64,6 +65,12 @@ pub enum ConsumerCommands {
         long_about = None,
     )]
     SetConsumeMode(set_consume_mode_sub_command::SetConsumeModeSubCommand),
+    #[command(
+        name = "startMonitoring",
+        about = "Start Monitoring.",
+        long_about = None,
+    )]
+    StartMonitoring(start_monitoring_sub_command::StartMonitoringSubCommand),
 }
 
 impl CommandExecute for ConsumerCommands {
@@ -75,6 +82,7 @@ impl CommandExecute for ConsumerCommands {
             ConsumerCommands::UpdateSubGroupSubCommand(value) => value.execute(rpc_hook).await,
             ConsumerCommands::UpdateSubGroupList(cmd) => cmd.execute(rpc_hook).await,
             ConsumerCommands::SetConsumeMode(cmd) => cmd.execute(rpc_hook).await,
+            ConsumerCommands::StartMonitoring(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }
