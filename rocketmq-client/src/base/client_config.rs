@@ -618,7 +618,7 @@ impl ClientConfig {
     /// # Example
     ///
     /// ```rust
-    /// use rocketmq_client::base::client_config::ClientConfig;
+    /// use rocketmq_client_rust::base::client_config::ClientConfig;
     ///
     /// let config = ClientConfig::builder()
     ///     .namesrv_addr("localhost:9876")
