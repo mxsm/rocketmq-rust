@@ -48,3 +48,43 @@ impl std::fmt::Display for RecallMessageResponseHeader {
         write!(f, "RecallMessageResponseHeader {{ msg_id: {} }}", self.msg_id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_with_msg_id() {
+        let mut body = RecallMessageResponseHeader::new("some_message");
+        assert_eq!(body.msg_id(), &CheetahString::from("some_message"));
+
+        body.set_msg_id("some_new_message");
+        assert_eq!(body.msg_id(), &CheetahString::from("some_new_message"));
+
+        let display_output = format!("{}", body);
+        assert_eq!(
+            display_output,
+            "RecallMessageResponseHeader { msg_id: some_new_message }"
+        );
+    }
+    #[test]
+    fn recall_message_serialisation() {
+        let body = RecallMessageResponseHeader::new("some_message");
+
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("\"msgId\":\"some_message\""));
+    }
+    #[test]
+    fn recall_message_deserialisation() {
+        let json = r#"{"msgId": "some_message"}"#;
+
+        let body: RecallMessageResponseHeader = serde_json::from_str(json).unwrap();
+        assert_eq!(body.msg_id(), &CheetahString::from("some_message"));
+    }
+    #[test]
+    fn recall_message_clone() {
+        let body = RecallMessageResponseHeader::new("some_message");
+        let cloned = body.clone();
+        assert_eq!(body.msg_id(), cloned.msg_id());
+    }
+}
