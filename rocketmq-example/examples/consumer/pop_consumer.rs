@@ -50,7 +50,7 @@ pub async fn main() -> RocketMQResult<()> {
         // disable client side load balance, also is pop consumer
         .client_rebalance(false)
         .build();
-    consumer.subscribe(TOPIC, "*")?;
+    consumer.subscribe(TOPIC, "*").await?;
     consumer.register_message_listener_concurrently(MyMessageListener);
     consumer.start().await?;
     let _ = wait_for_signal().await;
