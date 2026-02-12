@@ -66,6 +66,11 @@ pub struct ClientConfig {
     pub trace_topic: Option<CheetahString>,
     pub trace_msg_batch_num: usize,
     pub max_page_size_in_get_metadata: usize,
+    /// Thread pool size for concurrent heartbeat operations.
+    /// Only effective when enable_concurrent_heartbeat is true.
+    /// Default: number of CPU cores (matches Java: Runtime.getRuntime().availableProcessors())
+    // java client has this option, but we keep it for compatibility and future will remove it if it's not needed
+    pub concurrent_heartbeat_thread_pool_size: usize,
 }
 
 impl Default for ClientConfig {
@@ -144,6 +149,7 @@ impl ClientConfig {
             trace_topic: None,
             trace_msg_batch_num: 10,
             max_page_size_in_get_metadata: 2000,
+            concurrent_heartbeat_thread_pool_size: num_cpus::get(),
         }
     }
 }
@@ -542,6 +548,16 @@ impl ClientConfig {
         self.max_page_size_in_get_metadata = size;
     }
 
+    #[inline]
+    pub fn get_concurrent_heartbeat_thread_pool_size(&self) -> usize {
+        self.concurrent_heartbeat_thread_pool_size
+    }
+
+    #[inline]
+    pub fn set_concurrent_heartbeat_thread_pool_size(&mut self, size: usize) {
+        self.concurrent_heartbeat_thread_pool_size = size;
+    }
+
     // ============ Utility Methods ============
 
     /// Clones the configuration
@@ -583,6 +599,7 @@ impl ClientConfig {
         self.trace_topic = other.trace_topic.clone();
         self.trace_msg_batch_num = other.trace_msg_batch_num;
         self.max_page_size_in_get_metadata = other.max_page_size_in_get_metadata;
+        self.concurrent_heartbeat_thread_pool_size = other.concurrent_heartbeat_thread_pool_size;
     }
 
     /// Deprecated: Use with_namespace instead
@@ -594,6 +611,25 @@ impl ClientConfig {
         } else {
             NamespaceUtil::without_namespace(resource).into()
         }
+    }
+
+    /// Creates a new builder for constructing a ClientConfig with a fluent API
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rocketmq_client_rust::base::client_config::ClientConfig;
+    ///
+    /// let config = ClientConfig::builder()
+    ///     .namesrv_addr("localhost:9876")
+    ///     .instance_name("my_producer")
+    ///     .enable_tls(true)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    #[inline]
+    pub fn builder() -> crate::base::client_config_builder::ClientConfigBuilder {
+        crate::base::client_config_builder::ClientConfigBuilder::new()
     }
 }
 
@@ -609,7 +645,8 @@ impl std::fmt::Display for ClientConfig {
              socks_proxy_config: {}, mq_client_api_timeout: {}, detect_timeout: {}, detect_interval: {}, language: \
              {:?}, enable_stream_request_type: {}, send_latency_enable: {}, start_detector_enable: {}, \
              enable_heartbeat_channel_event_listener: {}, enable_trace: {}, trace_topic: {:?}, trace_msg_batch_num: \
-             {}, max_page_size_in_get_metadata: {} }}",
+             {}, max_page_size_in_get_metadata: {}, enable_concurrent_heartbeat: {}, \
+             concurrent_heartbeat_thread_pool_size: {} }}",
             self.namesrv_addr,
             self.client_ip,
             self.instance_name,
@@ -640,7 +677,9 @@ impl std::fmt::Display for ClientConfig {
             self.enable_trace,
             self.trace_topic,
             self.trace_msg_batch_num,
-            self.max_page_size_in_get_metadata
+            self.max_page_size_in_get_metadata,
+            self.enable_concurrent_heartbeat,
+            self.concurrent_heartbeat_thread_pool_size
         )
     }
 }
