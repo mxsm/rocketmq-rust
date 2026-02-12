@@ -65,8 +65,11 @@ pub struct ProducerConfig {
     create_topic_key: CheetahString,
     /// Number of queues to create per default topic.
     default_topic_queue_nums: u32,
-    /// Timeout for sending messages.
+    /// Timeout for sending messages (milliseconds).
     send_msg_timeout: u32,
+    /// Maximum timeout for sending messages per request (milliseconds).
+    /// None means no limit.
+    send_msg_max_timeout_per_request: Option<u32>,
     /// Compress message body threshold, namely, message body
     /// larger than 4k will be compressed on default.
     compress_msg_body_over_howmuch: u32,
@@ -85,6 +88,15 @@ pub struct ProducerConfig {
     trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>,
     /// Switch flag instance for automatic batch message
     auto_batch: bool,
+    /// Maximum hold time of accumulator in milliseconds.
+    /// None means no delay.
+    batch_max_delay_ms: Option<u32>,
+    /// Maximum accumulation message body size for a single messageAccumulation (bytes).
+    /// None means no limit.
+    batch_max_bytes: Option<u64>,
+    /// Maximum message body size for produceAccumulator (bytes).
+    /// None means no limit.
+    total_batch_max_bytes: Option<u64>,
     /// Instance for batching message automatically
     produce_accumulator: Option<ArcMut<ProduceAccumulator>>,
     /// Indicate whether to block message when asynchronous sending traffic is too heavy.
@@ -126,6 +138,10 @@ impl ProducerConfig {
         self.send_msg_timeout
     }
 
+    pub fn send_msg_max_timeout_per_request(&self) -> Option<u32> {
+        self.send_msg_max_timeout_per_request
+    }
+
     pub fn compress_msg_body_over_howmuch(&self) -> u32 {
         self.compress_msg_body_over_howmuch
     }
@@ -153,6 +169,18 @@ impl ProducerConfig {
 
     pub fn auto_batch(&self) -> bool {
         self.auto_batch
+    }
+
+    pub fn batch_max_delay_ms(&self) -> Option<u32> {
+        self.batch_max_delay_ms
+    }
+
+    pub fn batch_max_bytes(&self) -> Option<u64> {
+        self.batch_max_bytes
+    }
+
+    pub fn total_batch_max_bytes(&self) -> Option<u64> {
+        self.total_batch_max_bytes
     }
 
     pub fn produce_accumulator(&self) -> Option<&ArcMut<ProduceAccumulator>> {
@@ -212,6 +240,7 @@ impl Default for ProducerConfig {
             create_topic_key: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
             default_topic_queue_nums: 4,
             send_msg_timeout: 3000,
+            send_msg_max_timeout_per_request: None,
             compress_msg_body_over_howmuch: 1024 * 4,
             retry_times_when_send_failed: 2,
             retry_times_when_send_async_failed: 2,
@@ -219,9 +248,12 @@ impl Default for ProducerConfig {
             max_message_size: 1024 * 1024 * 4,
             trace_dispatcher: None,
             auto_batch: false,
+            batch_max_delay_ms: None,
+            batch_max_bytes: None,
+            total_batch_max_bytes: None,
             produce_accumulator: None,
             enable_backpressure_for_async_mode: false,
-            back_pressure_for_async_send_num: 10000,
+            back_pressure_for_async_send_num: 1024,
             back_pressure_for_async_send_size: 100 * 1024 * 1024,
             rpc_hook: None,
             compress_level: std::env::var(MESSAGE_COMPRESS_LEVEL)
@@ -336,6 +368,26 @@ impl DefaultMQProducer {
         self.producer_config.back_pressure_for_async_send_size
     }
 
+    #[inline]
+    pub fn send_msg_max_timeout_per_request(&self) -> Option<u32> {
+        self.producer_config.send_msg_max_timeout_per_request
+    }
+
+    #[inline]
+    pub fn batch_max_delay_ms(&self) -> Option<u32> {
+        self.producer_config.batch_max_delay_ms
+    }
+
+    #[inline]
+    pub fn batch_max_bytes(&self) -> Option<u64> {
+        self.producer_config.batch_max_bytes
+    }
+
+    #[inline]
+    pub fn total_batch_max_bytes(&self) -> Option<u64> {
+        self.producer_config.total_batch_max_bytes
+    }
+
     pub fn rpc_hook(&self) -> &Option<Arc<dyn RPCHook>> {
         &self.producer_config.rpc_hook
     }
@@ -448,6 +500,46 @@ impl DefaultMQProducer {
 
     pub fn set_compressor(&mut self, compressor: Option<&'static (dyn Compressor + Send + Sync)>) {
         self.producer_config.compressor = compressor;
+    }
+
+    #[inline]
+    pub fn set_send_msg_max_timeout_per_request(&mut self, timeout: u32) {
+        self.producer_config.send_msg_max_timeout_per_request = Some(timeout);
+    }
+
+    #[inline]
+    pub fn set_send_msg_max_timeout_per_request_option(&mut self, timeout: Option<u32>) {
+        self.producer_config.send_msg_max_timeout_per_request = timeout;
+    }
+
+    #[inline]
+    pub fn set_batch_max_delay_ms(&mut self, delay_ms: u32) {
+        self.producer_config.batch_max_delay_ms = Some(delay_ms);
+    }
+
+    #[inline]
+    pub fn set_batch_max_delay_ms_option(&mut self, delay_ms: Option<u32>) {
+        self.producer_config.batch_max_delay_ms = delay_ms;
+    }
+
+    #[inline]
+    pub fn set_batch_max_bytes(&mut self, bytes: u64) {
+        self.producer_config.batch_max_bytes = Some(bytes);
+    }
+
+    #[inline]
+    pub fn set_batch_max_bytes_option(&mut self, bytes: Option<u64>) {
+        self.producer_config.batch_max_bytes = bytes;
+    }
+
+    #[inline]
+    pub fn set_total_batch_max_bytes(&mut self, bytes: u64) {
+        self.producer_config.total_batch_max_bytes = Some(bytes);
+    }
+
+    #[inline]
+    pub fn set_total_batch_max_bytes_option(&mut self, bytes: Option<u64>) {
+        self.producer_config.total_batch_max_bytes = bytes;
     }
 
     pub fn producer_config(&self) -> &ProducerConfig {
@@ -1423,5 +1515,84 @@ mod tests {
             }
             other => panic!("Unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_builder_with_batch_fields() {
+        use crate::producer::default_mq_produce_builder::DefaultMQProducerBuilder;
+
+        let producer = DefaultMQProducerBuilder::new()
+            .producer_group("test_group")
+            .send_msg_max_timeout_per_request(5000)
+            .batch_max_delay_ms(100)
+            .batch_max_bytes(2 * 1024 * 1024)
+            .total_batch_max_bytes(64 * 1024 * 1024)
+            .build();
+
+        assert_eq!(producer.producer_group().to_string(), "test_group");
+        assert_eq!(producer.send_msg_max_timeout_per_request(), Some(5000));
+        assert_eq!(producer.batch_max_delay_ms(), Some(100));
+        assert_eq!(producer.batch_max_bytes(), Some(2 * 1024 * 1024));
+        assert_eq!(producer.total_batch_max_bytes(), Some(64 * 1024 * 1024));
+    }
+
+    #[test]
+    fn test_builder_default_batch_values() {
+        use crate::producer::default_mq_produce_builder::DefaultMQProducerBuilder;
+
+        let producer = DefaultMQProducerBuilder::new().producer_group("test_group").build();
+
+        // Verify default values are None for batch fields
+        assert_eq!(producer.send_msg_max_timeout_per_request(), None);
+        assert_eq!(producer.batch_max_delay_ms(), None);
+        assert_eq!(producer.batch_max_bytes(), None);
+        assert_eq!(producer.total_batch_max_bytes(), None);
+    }
+
+    #[test]
+    fn test_producer_config_getters_setters_batch_fields() {
+        let mut producer = DefaultMQProducer::default();
+
+        // Test send_msg_max_timeout_per_request
+        producer.set_send_msg_max_timeout_per_request(3000);
+        assert_eq!(producer.send_msg_max_timeout_per_request(), Some(3000));
+
+        producer.set_send_msg_max_timeout_per_request_option(None);
+        assert_eq!(producer.send_msg_max_timeout_per_request(), None);
+
+        // Test batch_max_delay_ms
+        producer.set_batch_max_delay_ms(50);
+        assert_eq!(producer.batch_max_delay_ms(), Some(50));
+
+        producer.set_batch_max_delay_ms_option(None);
+        assert_eq!(producer.batch_max_delay_ms(), None);
+
+        // Test batch_max_bytes
+        producer.set_batch_max_bytes(4 * 1024 * 1024);
+        assert_eq!(producer.batch_max_bytes(), Some(4 * 1024 * 1024));
+
+        producer.set_batch_max_bytes_option(None);
+        assert_eq!(producer.batch_max_bytes(), None);
+
+        // Test total_batch_max_bytes
+        producer.set_total_batch_max_bytes(128 * 1024 * 1024);
+        assert_eq!(producer.total_batch_max_bytes(), Some(128 * 1024 * 1024));
+
+        producer.set_total_batch_max_bytes_option(None);
+        assert_eq!(producer.total_batch_max_bytes(), None);
+    }
+
+    #[test]
+    fn test_producer_config_default_values_match_java() {
+        let config = ProducerConfig::default();
+
+        // Verify default values match Java
+        assert_eq!(config.back_pressure_for_async_send_num, 1024); // Java default
+
+        // Verify batch fields default to None
+        assert_eq!(config.send_msg_max_timeout_per_request, None);
+        assert_eq!(config.batch_max_delay_ms, None);
+        assert_eq!(config.batch_max_bytes, None);
+        assert_eq!(config.total_batch_max_bytes, None);
     }
 }
