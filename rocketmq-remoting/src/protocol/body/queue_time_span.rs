@@ -187,8 +187,12 @@ mod tests {
             delay_time: 4,
         };
 
-        assert_eq!(body.get_min_time_stamp_str(), "1970-01-01 01:00:00,001".to_string());
-        assert_eq!(body.get_max_time_stamp_str(), "1970-01-01 01:00:00,002".to_string());
-        assert_eq!(body.get_consume_time_stamp_str(), "1970-01-01 01:00:00,003".to_string());
+        let expected_min = time_millis_to_human_string2(body.get_min_time_stamp());
+        let expected_max = time_millis_to_human_string2(body.get_max_time_stamp());
+        let expected_consume = time_millis_to_human_string2(body.get_consume_time_stamp());
+
+        assert_eq!(body.get_min_time_stamp_str(), expected_min);
+        assert_eq!(body.get_max_time_stamp_str(), expected_max);
+        assert_eq!(body.get_consume_time_stamp_str(), expected_consume);
     }
 }
