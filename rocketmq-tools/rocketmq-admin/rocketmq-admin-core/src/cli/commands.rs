@@ -52,12 +52,16 @@ pub mod update_kv_config_command;
 pub mod update_namesrv_config_command;
 pub mod wipe_write_perm_command;
 
+// Broker commands
+pub mod switch_timer_engine_command;
+
 // Re-export command structs for convenience
 pub use self::add_write_perm_command::AddWritePermCommand;
 pub use self::allocate_mq_command::AllocateMqCommand;
 pub use self::delete_kv_config_command::DeleteKvConfigCommand;
 pub use self::delete_topic_command::DeleteTopicCommand;
 pub use self::get_namesrv_config_command::GetNamesrvConfigCommand;
+pub use self::switch_timer_engine_command::SwitchTimerEngineCommand;
 pub use self::topic_cluster_command::TopicClusterSubCommand;
 pub use self::topic_list_command::TopicListCommand;
 pub use self::topic_route_command::TopicRouteCommand;

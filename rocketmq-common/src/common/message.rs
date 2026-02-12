@@ -628,6 +628,11 @@ impl MessageConst {
     pub const PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX: &'static str = "UNIQ_KEY";
     pub const PROPERTY_WAIT_STORE_MSG_OK: &'static str = "WAIT";
 
+    // Timer engine type constants
+    pub const TIMER_ENGINE_ROCKSDB_TIMELINE: &'static str = "R";
+    pub const TIMER_ENGINE_FILE_TIME_WHEEL: &'static str = "F";
+    pub const TIMER_ENGINE_TYPE: &'static str = "timerEngineType";
+
     // Index type constants
     pub const INDEX_KEY_TYPE: &'static str = "K";
     pub const INDEX_UNIQUE_TYPE: &'static str = "U";

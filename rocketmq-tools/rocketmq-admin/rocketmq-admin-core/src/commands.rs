@@ -15,6 +15,7 @@
 pub mod command_util;
 
 mod auth_commands;
+mod broker_commands;
 mod consumer_commands;
 mod controller_commands;
 mod namesrv_commands;
@@ -76,6 +77,11 @@ pub enum Commands {
     Auth(auth_commands::AuthCommands),
 
     #[command(subcommand)]
+    #[command(about = "Broker commands")]
+    #[command(name = "broker")]
+    Broker(broker_commands::BrokerCommands),
+
+    #[command(subcommand)]
     #[command(about = "Consumer commands")]
     #[command(name = "consumer")]
     Consumer(consumer_commands::ConsumerCommands),
@@ -102,6 +108,7 @@ impl CommandExecute for Commands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
             Commands::Auth(value) => value.execute(rpc_hook).await,
+            Commands::Broker(value) => value.execute(rpc_hook).await,
             Commands::Consumer(value) => value.execute(rpc_hook).await,
             Commands::Controller(value) => value.execute(rpc_hook).await,
             Commands::NameServer(value) => value.execute(rpc_hook).await,
@@ -169,6 +176,11 @@ impl CommandExecute for ClassificationTablePrint {
                 category: "Auth",
                 command: "updateAcl",
                 remark: "Update ACL.",
+            },
+            Command {
+                category: "Broker",
+                command: "switchTimerEngine",
+                remark: "Switch the engine of timer message in broker.",
             },
             Command {
                 category: "Consumer",
