@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod clean_unused_topic_command;
 mod switch_timer_engine_sub_command;
 
 use std::sync::Arc;
@@ -20,11 +21,19 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
+use crate::commands::broker_commands::clean_unused_topic_command::CleanUnusedTopicCommand;
 use crate::commands::broker_commands::switch_timer_engine_sub_command::SwitchTimerEngineSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
 pub enum BrokerCommands {
+    #[command(
+        name = "cleanUnusedTopic",
+        about = "Clean unused topic on broker.",
+        long_about = None,
+    )]
+    CleanUnusedTopic(CleanUnusedTopicCommand),
+
     #[command(
         name = "switchTimerEngine",
         about = "Switch the engine of timer message in broker.",
@@ -36,6 +45,7 @@ pub enum BrokerCommands {
 impl CommandExecute for BrokerCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
+            BrokerCommands::CleanUnusedTopic(value) => value.execute(rpc_hook).await,
             BrokerCommands::SwitchTimerEngine(value) => value.execute(rpc_hook).await,
         }
     }
