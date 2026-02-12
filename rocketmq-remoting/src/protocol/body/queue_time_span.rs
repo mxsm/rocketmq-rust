@@ -178,7 +178,7 @@ mod tests {
     }
 
     #[test]
-    fn qeueu_span_time_str() {
+    fn queue_span_time_str() {
         let body: QueueTimeSpan = QueueTimeSpan {
             message_queue: Some(MessageQueue::new()),
             min_time_stamp: 1,
