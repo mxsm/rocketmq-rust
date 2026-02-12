@@ -34,6 +34,7 @@ pub struct DefaultMQProducerBuilder {
     create_topic_key: Option<CheetahString>,
     default_topic_queue_nums: Option<u32>,
     send_msg_timeout: Option<u32>,
+    send_msg_max_timeout_per_request: Option<u32>,
     compress_msg_body_over_howmuch: Option<u32>,
     retry_times_when_send_failed: Option<u32>,
     retry_times_when_send_async_failed: Option<u32>,
@@ -41,6 +42,9 @@ pub struct DefaultMQProducerBuilder {
     max_message_size: Option<u32>,
     trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>,
     auto_batch: Option<bool>,
+    batch_max_delay_ms: Option<u32>,
+    batch_max_bytes: Option<u64>,
+    total_batch_max_bytes: Option<u64>,
     produce_accumulator: Option<ProduceAccumulator>,
     enable_backpressure_for_async_mode: Option<bool>,
     back_pressure_for_async_send_num: Option<u32>,
@@ -198,6 +202,38 @@ impl DefaultMQProducerBuilder {
         self
     }
 
+    /// Set the maximum timeout per request (milliseconds).
+    /// None means no limit
+    #[inline]
+    pub fn send_msg_max_timeout_per_request(mut self, timeout: u32) -> Self {
+        self.send_msg_max_timeout_per_request = Some(timeout);
+        self
+    }
+
+    /// Set the maximum hold time for message batching (milliseconds).
+    /// None means no delay
+    #[inline]
+    pub fn batch_max_delay_ms(mut self, delay_ms: u32) -> Self {
+        self.batch_max_delay_ms = Some(delay_ms);
+        self
+    }
+
+    /// Set the maximum message body size for a single batch (bytes).
+    /// None means no limit
+    #[inline]
+    pub fn batch_max_bytes(mut self, bytes: u64) -> Self {
+        self.batch_max_bytes = Some(bytes);
+        self
+    }
+
+    /// Set the maximum total message body size for the accumulator (bytes).
+    /// None means no limit
+    #[inline]
+    pub fn total_batch_max_bytes(mut self, bytes: u64) -> Self {
+        self.total_batch_max_bytes = Some(bytes);
+        self
+    }
+
     pub fn build(self) -> DefaultMQProducer {
         let mut mq_producer = DefaultMQProducer::default();
         mq_producer.set_client_config(self.client_config);
@@ -221,6 +257,9 @@ impl DefaultMQProducerBuilder {
         if let Some(value) = self.send_msg_timeout {
             mq_producer.set_send_msg_timeout(value);
         }
+        if let Some(value) = self.send_msg_max_timeout_per_request {
+            mq_producer.set_send_msg_max_timeout_per_request(value);
+        }
         if let Some(value) = self.compress_msg_body_over_howmuch {
             mq_producer.set_compress_msg_body_over_howmuch(value);
         }
@@ -241,6 +280,15 @@ impl DefaultMQProducerBuilder {
         }
         if let Some(value) = self.auto_batch {
             mq_producer.set_auto_batch(value);
+        }
+        if let Some(value) = self.batch_max_delay_ms {
+            mq_producer.set_batch_max_delay_ms(value);
+        }
+        if let Some(value) = self.batch_max_bytes {
+            mq_producer.set_batch_max_bytes(value);
+        }
+        if let Some(value) = self.total_batch_max_bytes {
+            mq_producer.set_total_batch_max_bytes(value);
         }
         if let Some(value) = self.produce_accumulator {
             mq_producer.set_produce_accumulator(value);
