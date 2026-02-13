@@ -180,8 +180,7 @@ mod tests {
             "PopProcessQueueInfo [wait_ack_count: -1, droped: true, last_pop_timestamp: 0]"
         );
 
-        let queue_extreme: PopProcessQueueInfo =
-            PopProcessQueueInfo::new(i32::MAX, false, u64::MAX);
+        let queue_extreme: PopProcessQueueInfo = PopProcessQueueInfo::new(i32::MAX, false, u64::MAX);
         let display_extreme = format!("{}", queue_extreme);
         assert_eq!(
             display_extreme,
