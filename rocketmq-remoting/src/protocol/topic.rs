@@ -73,7 +73,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn offset_moved_event_init() {
+    fn offset_moved_event_field_initialization() {
         let body: OffsetMovedEvent = OffsetMovedEvent {
             consumer_group: "test_group".to_string(),
             message_queue: MessageQueue::new(),
@@ -87,7 +87,7 @@ mod tests {
     }
 
     #[test]
-    fn offest_moved_event_setters() {
+    fn offset_moved_event_setters() {
         let mut body = OffsetMovedEvent {
             consumer_group: "test_group".to_string(),
             message_queue: MessageQueue::new(),
@@ -130,7 +130,7 @@ mod tests {
         assert!(display.contains("offset_new=200"));
     }
     #[test]
-    fn offset_moved_event_serialise() {
+    fn offset_moved_event_serialization() {
         let body = OffsetMovedEvent {
             consumer_group: "test_group".to_string(),
             message_queue: MessageQueue::new(),
@@ -144,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn offset_moved_event_deserialise() {
+    fn offset_moved_event_deserialization() {
         let json = r#"{"consumer_group":"test_group","message_queue":{"topic":"","brokerName":"","queueId":0},"offset_request":100,"offset_new":200}"#;
         let body: OffsetMovedEvent = serde_json::from_str(json).unwrap();
         assert_eq!(body.get_consumer_group(), "test_group");
