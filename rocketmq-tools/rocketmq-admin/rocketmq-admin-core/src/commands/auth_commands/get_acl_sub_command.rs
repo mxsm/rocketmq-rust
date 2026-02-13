@@ -102,21 +102,21 @@ impl CommandExecute for GetAclSubCommand {
                 Target::ClusterName(cluster_name) => {
                     let (acl_infos, failed_broker_addr) =
                         get_acl_from_cluster(&command, &default_mqadmin_ext, &cluster_name).await?;
-                    
+
                     if acl_infos.is_empty() && failed_broker_addr.is_empty() {
                         eprintln!("No ACL with subject {} was found", command.subject);
                     } else {
                         print_header();
                         print_acls(&acl_infos);
                     }
-                    
+
                     if !failed_broker_addr.is_empty() {
                         eprintln!(
                             "Warning: failed to get ACL from brokers: {}",
                             failed_broker_addr.join(", ")
                         );
                     }
-                    
+
                     if !failed_broker_addr.is_empty() && acl_infos.is_empty() {
                         Err(RocketMQError::Internal(format!(
                             "GetAclSubCommand: Failed to get ACL for brokers {}",
@@ -194,17 +194,19 @@ fn print_header() {
 fn print_acl(acl: &AclInfo) {
     let subject = acl.subject.as_ref().map(|s| s.as_str()).unwrap_or("*");
     let policies = acl.policies.as_ref();
-    
+
     if policies.is_none() || policies.unwrap().is_empty() {
-        println!("{:<24}  {:<12}  {:<24}  {:<20}  {:<24}  {:<12}", 
-            subject, "", "", "", "", "");
+        println!(
+            "{:<24}  {:<12}  {:<24}  {:<20}  {:<24}  {:<12}",
+            subject, "", "", "", "", ""
+        );
         return;
     }
 
     for policy in policies.unwrap() {
         let policy_type = policy.policy_type.as_ref().map(|p| p.as_str()).unwrap_or("");
         let entries = policy.entries.as_ref();
-        
+
         if entries.is_none() || entries.unwrap().is_empty() {
             continue;
         }
@@ -212,7 +214,9 @@ fn print_acl(acl: &AclInfo) {
         for entry in entries.unwrap() {
             let resource = entry.resource.as_ref().map(|r| r.as_str()).unwrap_or("");
             let actions = entry.actions.as_ref().map(|a| a.as_str()).unwrap_or("");
-            let source_ips = entry.source_ips.as_ref()
+            let source_ips = entry
+                .source_ips
+                .as_ref()
                 .filter(|ips| !ips.is_empty())
                 .map(|ips| ips.iter().map(|ip| ip.as_str()).collect::<Vec<_>>().join(","))
                 .unwrap_or_else(|| "".to_string());
@@ -227,21 +231,17 @@ fn print_acl(acl: &AclInfo) {
 }
 
 fn print_acls(acls: &[AclInfo]) {
-    acls.iter().for_each(|acl| print_acl(acl));
+    acls.iter().for_each(print_acl);
 }
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
     use crate::commands::auth_commands::get_acl_sub_command::GetAclSubCommand;
+    use clap::Parser;
 
     #[test]
     fn test_get_acl_sub_command_with_broker_addr_using_short_commands() {
-        let args = [
-            vec![""],
-            vec!["-b", "127.0.0.1:3434"],
-            vec!["-s", "user:alice"]
-        ];
+        let args = [vec![""], vec!["-b", "127.0.0.1:3434"], vec!["-s", "user:alice"]];
         let args = args.concat();
         let cmd = GetAclSubCommand::try_parse_from(args).unwrap();
         assert_eq!(Some("127.0.0.1:3434"), cmd.broker_addr.as_deref());
@@ -250,11 +250,7 @@ mod tests {
 
     #[test]
     fn test_get_acl_sub_command_with_cluster_name_using_short_commands() {
-        let args = [
-            vec![""],
-            vec!["-c", "DefaultCluster"],
-            vec!["-s", "user:alice"]
-        ];
+        let args = [vec![""], vec!["-c", "DefaultCluster"], vec!["-s", "user:alice"]];
         let args = args.concat();
         let cmd = GetAclSubCommand::try_parse_from(args).unwrap();
         assert_eq!(Some("DefaultCluster"), cmd.cluster_name.as_deref());
@@ -267,7 +263,7 @@ mod tests {
             vec![""],
             vec!["-b", "127.0.0.1:3434"],
             vec!["-c", "DefaultCluster"],
-            vec!["-s", "user:alice"]
+            vec!["-s", "user:alice"],
         ];
         let args = args.concat();
         let result = GetAclSubCommand::try_parse_from(args);
