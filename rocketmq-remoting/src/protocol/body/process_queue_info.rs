@@ -93,7 +93,7 @@ mod tests {
         assert_eq!(process_queue_info.locked, true);
         assert_eq!(process_queue_info.try_unlock_times, 3);
         assert_eq!(process_queue_info.last_lock_timestamp, 1620000000);
-        assert_eq!(process_queue_info.droped, false);
+        assert!(!process_queue_info.droped);
         assert_eq!(process_queue_info.last_pull_timestamp, 1620000100);
         assert_eq!(process_queue_info.last_consume_timestamp, 1620000200);
 
@@ -118,7 +118,7 @@ mod tests {
             last_pull_timestamp: 1620000100,
             last_consume_timestamp: 1620000200,
         };
-        let cloned_process_queue_info = process_queue_info.clone();
+        let cloned_process_queue_info = process_queue_info;
 
         assert_eq!(
             process_queue_info.commit_offset,
@@ -207,7 +207,5 @@ mod tests {
         assert!(display_output.contains("droped: false"));
         assert!(display_output.contains("last_pull_timestamp: 1620000100"));
         assert!(display_output.contains("last_consume_timestamp: 1620000200"));
-
-        println!("{}", display_output);
     }
 }
