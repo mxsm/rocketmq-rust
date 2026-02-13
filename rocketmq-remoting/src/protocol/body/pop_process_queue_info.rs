@@ -130,14 +130,12 @@ mod tests {
         assert_eq!(queue_negative.last_pop_timestamp(), 0);
 
         // extreme i32 and u64 values
-        let queue_extreme: PopProcessQueueInfo =
-            PopProcessQueueInfo::new(i32::MAX, false, u64::MAX);
+        let queue_extreme: PopProcessQueueInfo = PopProcessQueueInfo::new(i32::MAX, false, u64::MAX);
         assert_eq!(queue_extreme.wait_ack_count(), i32::MAX);
         assert!(!queue_extreme.droped());
         assert_eq!(queue_extreme.last_pop_timestamp(), u64::MAX);
 
-        let queue_extreme_min: PopProcessQueueInfo =
-            PopProcessQueueInfo::new(i32::MIN, true, u64::MAX);
+        let queue_extreme_min: PopProcessQueueInfo = PopProcessQueueInfo::new(i32::MIN, true, u64::MAX);
         assert_eq!(queue_extreme_min.wait_ack_count(), i32::MIN);
         assert!(queue_extreme_min.droped());
         assert_eq!(queue_extreme_min.last_pop_timestamp(), u64::MAX);
