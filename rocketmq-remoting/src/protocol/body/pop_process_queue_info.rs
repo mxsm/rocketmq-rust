@@ -62,3 +62,56 @@ impl std::fmt::Display for PopProcessQueueInfo {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pop_process_queue_init() {
+        let queue: PopProcessQueueInfo = PopProcessQueueInfo::new(10, false, 123456789);
+        assert_eq!(queue.wait_ack_count(), 10);
+        assert!(!queue.droped());
+        assert_eq!(queue.last_pop_timestamp(), 123456789);
+    }
+
+    #[test]
+    fn pop_process_queue_setters() {
+        let mut queue: PopProcessQueueInfo = PopProcessQueueInfo::new(10, false, 123456789);
+        queue.set_wait_ack_count(20);
+        queue.set_droped(true);
+        queue.set_last_pop_timestamp(987654321);
+
+        assert_eq!(queue.wait_ack_count(), 20);
+        assert!(queue.droped());
+        assert_eq!(queue.last_pop_timestamp(), 987654321);
+    }
+
+    #[test]
+    fn pop_process_queue_clone() {
+        let queue: PopProcessQueueInfo = PopProcessQueueInfo::new(10, false, 123456789);
+        let cloned = queue.clone();
+        assert_eq!(cloned.wait_ack_count(), 10);
+        assert!(!cloned.droped());
+        assert_eq!(cloned.last_pop_timestamp(), 123456789);
+    }
+
+    #[test]
+    fn pop_process_queue_display() {
+        let queue: PopProcessQueueInfo = PopProcessQueueInfo::new(10, false, 123456789);
+        let display = format!("{}", queue);
+        assert_eq!(
+            display,
+            "PopProcessQueueInfo [wait_ack_count: 10, droped: false, last_pop_timestamp: 123456789]"
+        );
+    }
+
+    #[test]
+    fn pop_process_queue_copy() {
+        let queue: PopProcessQueueInfo = PopProcessQueueInfo::new(10, false, 123456789);
+        let copied = queue;
+        assert_eq!(copied.wait_ack_count(), 10);
+        assert!(!copied.droped());
+        assert_eq!(copied.last_pop_timestamp(), 123456789);
+    }
+}
