@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn pop_process_queue_clone() {
         let queue: PopProcessQueueInfo = PopProcessQueueInfo::new(10, false, 123456789);
-        let cloned = queue.clone();
+        let cloned = queue;
         assert_eq!(cloned.wait_ack_count(), 10);
         assert!(!cloned.droped());
         assert_eq!(cloned.last_pop_timestamp(), 123456789);
