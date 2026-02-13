@@ -107,14 +107,14 @@ mod tests {
     #[test]
     fn offset_moved_event_getters() {
         let body = OffsetMovedEvent {
-            consumer_group: "test_group".to_string(),
+            consumer_group: "another_group".to_string(),
             message_queue: MessageQueue::new(),
-            offset_request: 100,
-            offset_new: 200,
+            offset_request: 300,
+            offset_new: 400,
         };
-        assert_eq!(body.get_consumer_group(), "test_group");
-        assert_eq!(body.get_offset_request(), 100);
-        assert_eq!(body.get_offset_new(), 200);
+        assert_eq!(body.get_consumer_group(), "another_group");
+        assert_eq!(body.get_offset_request(), 300);
+        assert_eq!(body.get_offset_new(), 400);
     }
 
     #[test]
