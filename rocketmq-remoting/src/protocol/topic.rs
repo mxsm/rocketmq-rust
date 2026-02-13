@@ -95,9 +95,11 @@ mod tests {
             offset_new: 200,
         };
         body.set_consumer_group("new_group".to_string());
+        body.set_message_queue(MessageQueue::new());
         body.set_offset_request(150);
         body.set_offset_new(250);
         assert_eq!(body.get_consumer_group(), "new_group");
+        assert_eq!(body.get_message_queue(), &MessageQueue::new());
         assert_eq!(body.get_offset_request(), 150);
         assert_eq!(body.get_offset_new(), 250);
     }
