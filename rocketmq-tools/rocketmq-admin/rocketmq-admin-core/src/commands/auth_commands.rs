@@ -19,6 +19,7 @@ mod create_user_sub_command;
 mod delete_acl_sub_command;
 mod delete_user_sub_command;
 mod get_user_sub_command;
+mod get_acl_sub_command;
 mod list_acl_sub_command;
 mod list_users_sub_command;
 mod update_acl_sub_command;
@@ -83,6 +84,13 @@ pub enum AuthCommands {
     GetUser(get_user_sub_command::GetUserSubCommand),
 
     #[command(
+        name = "getAcl",
+        about = "Get acl from cluster.",
+        long_about = None,
+    )]
+    GetAcl(get_acl_sub_command::GetAclSubCommand),
+
+    #[command(
         name = "listUsers",
         about = "List users from cluster.",
         long_about = None,
@@ -121,6 +129,7 @@ impl CommandExecute for AuthCommands {
             AuthCommands::DeleteAcl(value) => value.execute(rpc_hook).await,
             AuthCommands::DeleteUser(value) => value.execute(rpc_hook).await,
             AuthCommands::GetUser(value) => value.execute(rpc_hook).await,
+            AuthCommands::GetAcl(value) => value.execute(rpc_hook).await,
             AuthCommands::ListAcl(value) => value.execute(rpc_hook).await,
             AuthCommands::ListUsers(value) => value.execute(rpc_hook).await,
             AuthCommands::UpdateAcl(value) => value.execute(rpc_hook).await,
