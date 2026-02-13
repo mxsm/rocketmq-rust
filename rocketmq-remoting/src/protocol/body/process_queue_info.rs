@@ -58,3 +58,156 @@ impl std::fmt::Display for ProcessQueueInfo {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_queue_init() {
+        let process_queue_info = ProcessQueueInfo {
+            commit_offset: 100,
+            cached_msg_min_offset: 90,
+            cached_msg_max_offset: 110,
+            cached_msg_count: 20,
+            cached_msg_size_in_mib: 5,
+            transaction_msg_min_offset: 80,
+            transaction_msg_max_offset: 120,
+            transaction_msg_count: 40,
+            locked: true,
+            try_unlock_times: 3,
+            last_lock_timestamp: 1620000000,
+            droped: false,
+            last_pull_timestamp: 1620000100,
+            last_consume_timestamp: 1620000200,
+        };
+
+        assert_eq!(process_queue_info.commit_offset, 100);
+        assert_eq!(process_queue_info.cached_msg_min_offset, 90);
+        assert_eq!(process_queue_info.cached_msg_max_offset, 110);
+        assert_eq!(process_queue_info.cached_msg_count, 20);
+        assert_eq!(process_queue_info.cached_msg_size_in_mib, 5);
+        assert_eq!(process_queue_info.transaction_msg_min_offset, 80);
+        assert_eq!(process_queue_info.transaction_msg_max_offset, 120);
+        assert_eq!(process_queue_info.transaction_msg_count, 40);
+        assert_eq!(process_queue_info.locked, true);
+        assert_eq!(process_queue_info.try_unlock_times, 3);
+        assert_eq!(process_queue_info.last_lock_timestamp, 1620000000);
+        assert_eq!(process_queue_info.droped, false);
+        assert_eq!(process_queue_info.last_pull_timestamp, 1620000100);
+        assert_eq!(process_queue_info.last_consume_timestamp, 1620000200);
+
+        println!("{}", process_queue_info);
+    }
+
+    #[test]
+    fn process_queue_clone() {
+        let process_queue_info = ProcessQueueInfo {
+            commit_offset: 100,
+            cached_msg_min_offset: 90,
+            cached_msg_max_offset: 110,
+            cached_msg_count: 20,
+            cached_msg_size_in_mib: 5,
+            transaction_msg_min_offset: 80,
+            transaction_msg_max_offset: 120,
+            transaction_msg_count: 40,
+            locked: true,
+            try_unlock_times: 3,
+            last_lock_timestamp: 1620000000,
+            droped: false,
+            last_pull_timestamp: 1620000100,
+            last_consume_timestamp: 1620000200,
+        };
+        let cloned_process_queue_info = process_queue_info.clone();
+
+        assert_eq!(
+            process_queue_info.commit_offset,
+            cloned_process_queue_info.commit_offset
+        );
+        assert_eq!(
+            process_queue_info.cached_msg_min_offset,
+            cloned_process_queue_info.cached_msg_min_offset
+        );
+        assert_eq!(
+            process_queue_info.cached_msg_max_offset,
+            cloned_process_queue_info.cached_msg_max_offset
+        );
+        assert_eq!(
+            process_queue_info.cached_msg_count,
+            cloned_process_queue_info.cached_msg_count
+        );
+        assert_eq!(
+            process_queue_info.cached_msg_size_in_mib,
+            cloned_process_queue_info.cached_msg_size_in_mib
+        );
+        assert_eq!(
+            process_queue_info.transaction_msg_min_offset,
+            cloned_process_queue_info.transaction_msg_min_offset
+        );
+        assert_eq!(
+            process_queue_info.transaction_msg_max_offset,
+            cloned_process_queue_info.transaction_msg_max_offset
+        );
+        assert_eq!(
+            process_queue_info.transaction_msg_count,
+            cloned_process_queue_info.transaction_msg_count
+        );
+        assert_eq!(process_queue_info.locked, cloned_process_queue_info.locked);
+        assert_eq!(
+            process_queue_info.try_unlock_times,
+            cloned_process_queue_info.try_unlock_times
+        );
+        assert_eq!(
+            process_queue_info.last_lock_timestamp,
+            cloned_process_queue_info.last_lock_timestamp
+        );
+        assert_eq!(process_queue_info.droped, cloned_process_queue_info.droped);
+        assert_eq!(
+            process_queue_info.last_pull_timestamp,
+            cloned_process_queue_info.last_pull_timestamp
+        );
+        assert_eq!(
+            process_queue_info.last_consume_timestamp,
+            cloned_process_queue_info.last_consume_timestamp
+        );
+    }
+
+    #[test]
+    fn process_queue_display() {
+        let process_queue_info = ProcessQueueInfo {
+            commit_offset: 100,
+            cached_msg_min_offset: 90,
+            cached_msg_max_offset: 110,
+            cached_msg_count: 20,
+            cached_msg_size_in_mib: 5,
+            transaction_msg_min_offset: 80,
+            transaction_msg_max_offset: 120,
+            transaction_msg_count: 40,
+            locked: true,
+            try_unlock_times: 3,
+            last_lock_timestamp: 1620000000,
+            droped: false,
+            last_pull_timestamp: 1620000100,
+            last_consume_timestamp: 1620000200,
+        };
+
+        let display_output = format!("{}", process_queue_info);
+        assert!(display_output.contains("ProcessQueueInfo"));
+        assert!(display_output.contains("commit_offset: 100"));
+        assert!(display_output.contains("cached_msg_min_offset: 90"));
+        assert!(display_output.contains("cached_msg_max_offset: 110"));
+        assert!(display_output.contains("cached_msg_count: 20"));
+        assert!(display_output.contains("cached_msg_size_in_mib: 5"));
+        assert!(display_output.contains("transaction_msg_min_offset: 80"));
+        assert!(display_output.contains("transaction_msg_max_offset: 120"));
+        assert!(display_output.contains("transaction_msg_count: 40"));
+        assert!(display_output.contains("locked: true"));
+        assert!(display_output.contains("try_unlock_times: 3"));
+        assert!(display_output.contains("last_lock_timestamp: 1620000000"));
+        assert!(display_output.contains("droped: false"));
+        assert!(display_output.contains("last_pull_timestamp: 1620000100"));
+        assert!(display_output.contains("last_consume_timestamp: 1620000200"));
+
+        println!("{}", display_output);
+    }
+}
