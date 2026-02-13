@@ -1,10 +1,27 @@
+// Copyright 2023 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 use std::sync::Arc;
-use clap::{ArgGroup, Parser};
+
+use clap::ArgGroup;
+use clap::Parser;
+
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::TimeUtils::get_current_millis;
-use rocketmq_error::{RocketMQError, RocketMQResult};
+use rocketmq_error::RocketMQError;
+use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::acl_info::AclInfo;
 use rocketmq_remoting::runtime::RPCHook;
 
@@ -29,11 +46,11 @@ pub struct GetAclSubCommand {
 }
 
 #[derive(Clone)]
-struct ParseGetAclSubCommand {
+struct ParsedGetAclSubCommand {
     subject: CheetahString,
 }
 
-impl ParseGetAclSubCommand {
+impl ParsedGetAclSubCommand {
     fn new(command: &GetAclSubCommand) -> Result<Self, RocketMQError> {
         let subject = command.subject.trim();
         if subject.is_empty() {
@@ -50,7 +67,7 @@ impl ParseGetAclSubCommand {
 
 impl CommandExecute for GetAclSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let command = ParseGetAclSubCommand::new(self)?;
+        let command = ParsedGetAclSubCommand::new(self)?;
         let target = Target::new(&self.cluster_name, &self.broker_addr).map_err(|_| {
             RocketMQError::IllegalArgument(
                 "GetAclSubCommand: Specify exactly one of --brokerAddr (-b) or --clusterName (-c)".into(),
@@ -85,15 +102,28 @@ impl CommandExecute for GetAclSubCommand {
                 Target::ClusterName(cluster_name) => {
                     let (acl_infos, failed_broker_addr) =
                         get_acl_from_cluster(&command, &default_mqadmin_ext, &cluster_name).await?;
-                    print_header();
-                    print_acls(&acl_infos);
-                    if failed_broker_addr.is_empty() || !acl_infos.is_empty() {
-                        Ok(())
+                    
+                    if acl_infos.is_empty() && failed_broker_addr.is_empty() {
+                        eprintln!("No ACL with subject {} was found", command.subject);
                     } else {
+                        print_header();
+                        print_acls(&acl_infos);
+                    }
+                    
+                    if !failed_broker_addr.is_empty() {
+                        eprintln!(
+                            "Warning: failed to get ACL from brokers: {}",
+                            failed_broker_addr.join(", ")
+                        );
+                    }
+                    
+                    if !failed_broker_addr.is_empty() && acl_infos.is_empty() {
                         Err(RocketMQError::Internal(format!(
                             "GetAclSubCommand: Failed to get ACL for brokers {}",
                             failed_broker_addr.join(", ")
                         )))
+                    } else {
+                        Ok(())
                     }
                 }
             }
@@ -105,7 +135,7 @@ impl CommandExecute for GetAclSubCommand {
 }
 
 async fn get_acl_from_broker(
-    parsed_command: &ParseGetAclSubCommand,
+    parsed_command: &ParsedGetAclSubCommand,
     default_mqadmin_ext: &DefaultMQAdminExt,
     broker_addr: &str,
 ) -> Result<Option<AclInfo>, RocketMQError> {
@@ -115,7 +145,7 @@ async fn get_acl_from_broker(
     {
         Ok(acl_info) => {
             println!("Get ACL command was successful for broker {}.", broker_addr);
-            Ok(Some(acl_info))  // ← Wrap in Some()
+            Ok(Some(acl_info))
         }
         Err(e) => Err(RocketMQError::Internal(format!(
             "GetAclSubCommand: Failed to get ACL for broker {}: {}",
@@ -125,7 +155,7 @@ async fn get_acl_from_broker(
 }
 
 async fn get_acl_from_cluster(
-    parsed_command: &ParseGetAclSubCommand,
+    parsed_command: &ParsedGetAclSubCommand,
     default_mqadmin_ext: &DefaultMQAdminExt,
     cluster_name: &str,
 ) -> Result<(Vec<AclInfo>, Vec<CheetahString>), RocketMQError> {
