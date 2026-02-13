@@ -184,6 +184,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Broker",
+                command: "sendMsgStatus",
+                remark: "Send msg to broker.",
+            },
+            Command {
+                category: "Broker",
                 command: "switchTimerEngine",
                 remark: "Switch the engine of timer message in broker.",
             },
