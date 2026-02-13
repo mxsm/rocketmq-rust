@@ -3442,6 +3442,7 @@ dependencies = [
  "dialoguer",
  "futures",
  "indicatif",
+ "regex",
  "rocketmq-client-rust",
  "rocketmq-common",
  "rocketmq-error",
