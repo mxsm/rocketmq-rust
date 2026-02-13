@@ -90,7 +90,7 @@ mod tests {
         assert_eq!(process_queue_info.transaction_msg_min_offset, 80);
         assert_eq!(process_queue_info.transaction_msg_max_offset, 120);
         assert_eq!(process_queue_info.transaction_msg_count, 40);
-        assert_eq!(process_queue_info.locked, true);
+        assert!(process_queue_info.locked);
         assert_eq!(process_queue_info.try_unlock_times, 3);
         assert_eq!(process_queue_info.last_lock_timestamp, 1620000000);
         assert!(!process_queue_info.droped);
