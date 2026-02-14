@@ -67,3 +67,91 @@ impl std::fmt::Display for OffsetMovedEvent {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offset_moved_event_field_initialization() {
+        let body: OffsetMovedEvent = OffsetMovedEvent {
+            consumer_group: "test_group".to_string(),
+            message_queue: MessageQueue::new(),
+            offset_request: 100,
+            offset_new: 200,
+        };
+        assert_eq!(body.get_consumer_group(), "test_group");
+        assert_eq!(body.get_offset_request(), 100);
+        assert_eq!(body.get_offset_new(), 200);
+        assert_eq!(body.get_message_queue(), &MessageQueue::new());
+    }
+
+    #[test]
+    fn offset_moved_event_setters() {
+        let mut body = OffsetMovedEvent {
+            consumer_group: "test_group".to_string(),
+            message_queue: MessageQueue::new(),
+            offset_request: 100,
+            offset_new: 200,
+        };
+        body.set_consumer_group("new_group".to_string());
+        body.set_message_queue(MessageQueue::new());
+        body.set_offset_request(150);
+        body.set_offset_new(250);
+        assert_eq!(body.get_consumer_group(), "new_group");
+        assert_eq!(body.get_message_queue(), &MessageQueue::new());
+        assert_eq!(body.get_offset_request(), 150);
+        assert_eq!(body.get_offset_new(), 250);
+    }
+
+    #[test]
+    fn offset_moved_event_getters() {
+        let body = OffsetMovedEvent {
+            consumer_group: "another_group".to_string(),
+            message_queue: MessageQueue::new(),
+            offset_request: 300,
+            offset_new: 400,
+        };
+        assert_eq!(body.get_consumer_group(), "another_group");
+        assert_eq!(body.get_offset_request(), 300);
+        assert_eq!(body.get_offset_new(), 400);
+    }
+
+    #[test]
+    fn offset_moved_event_display() {
+        let body = OffsetMovedEvent {
+            consumer_group: "test_group".to_string(),
+            message_queue: MessageQueue::new(),
+            offset_request: 100,
+            offset_new: 200,
+        };
+        let display = format!("{}", body);
+        assert!(display.contains("OffsetMovedEvent"));
+        assert!(display.contains("consumer_group=test_group"));
+        assert!(display.contains("offset_request=100"));
+        assert!(display.contains("offset_new=200"));
+    }
+    #[test]
+    fn offset_moved_event_serialization() {
+        let body = OffsetMovedEvent {
+            consumer_group: "test_group".to_string(),
+            message_queue: MessageQueue::new(),
+            offset_request: 100,
+            offset_new: 200,
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("\"consumer_group\":\"test_group\""));
+        assert!(json.contains("\"offset_request\":100"));
+        assert!(json.contains("\"offset_new\":200"));
+    }
+
+    #[test]
+    fn offset_moved_event_deserialization() {
+        let json = r#"{"consumer_group":"test_group","message_queue":{"topic":"","brokerName":"","queueId":0},"offset_request":100,"offset_new":200}"#;
+        let body: OffsetMovedEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(body.get_consumer_group(), "test_group");
+        assert_eq!(body.get_offset_request(), 100);
+        assert_eq!(body.get_offset_new(), 200);
+        assert_eq!(body.get_message_queue(), &MessageQueue::new());
+    }
+}
