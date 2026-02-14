@@ -14,6 +14,7 @@
 
 mod clean_unused_topic_command;
 mod get_broker_config_sub_command;
+mod send_msg_status_command;
 mod switch_timer_engine_sub_command;
 
 use std::sync::Arc;
@@ -23,6 +24,8 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::broker_commands::clean_unused_topic_command::CleanUnusedTopicCommand;
+use crate::commands::broker_commands::get_broker_config_sub_command::GetBrokerConfigSubCommand;
+use crate::commands::broker_commands::send_msg_status_command::SendMsgStatusCommand;
 use crate::commands::broker_commands::switch_timer_engine_sub_command::SwitchTimerEngineSubCommand;
 use crate::commands::CommandExecute;
 
@@ -36,26 +39,34 @@ pub enum BrokerCommands {
     CleanUnusedTopic(CleanUnusedTopicCommand),
 
     #[command(
+        name = "getBrokerConfig",
+        about = "Get broker config by cluster or special broker.",
+        long_about = None,
+    )]
+    GetBrokerConfigSubCommand(GetBrokerConfigSubCommand),
+
+    #[command(
+        name = "sendMsgStatus",
+        about = "Send msg to broker.",
+        long_about = None,
+    )]
+    SendMsgStatus(SendMsgStatusCommand),
+
+    #[command(
         name = "switchTimerEngine",
         about = "Switch the engine of timer message in broker.",
         long_about = None,
     )]
     SwitchTimerEngine(SwitchTimerEngineSubCommand),
-
-    #[command(
-        name = "getBrokerConfig",
-        about = "Get broker config by cluster or special broker.",
-        long_about = None,
-    )]
-    GetBrokerConfigSubCommand(get_broker_config_sub_command::GetBrokerConfigSubCommand),
 }
 
 impl CommandExecute for BrokerCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
             BrokerCommands::CleanUnusedTopic(value) => value.execute(rpc_hook).await,
-            BrokerCommands::SwitchTimerEngine(value) => value.execute(rpc_hook).await,
             BrokerCommands::GetBrokerConfigSubCommand(cmd) => cmd.execute(rpc_hook).await,
+            BrokerCommands::SendMsgStatus(value) => value.execute(rpc_hook).await,
+            BrokerCommands::SwitchTimerEngine(value) => value.execute(rpc_hook).await,
         }
     }
 }
