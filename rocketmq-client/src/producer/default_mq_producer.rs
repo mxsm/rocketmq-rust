@@ -692,7 +692,8 @@ impl DefaultMQProducer {
 
 impl MQProducer for DefaultMQProducer {
     async fn start(&mut self) -> rocketmq_error::RocketMQResult<()> {
-        let producer_group = self.with_namespace(self.producer_config.producer_group.clone().as_str());
+        let producer_group_clone = self.producer_config.producer_group.clone();
+        let producer_group = self.with_namespace(&producer_group_clone);
         self.set_producer_group(producer_group);
         let default_mqproducer_impl = self
             .default_mqproducer_impl
