@@ -53,6 +53,32 @@ pub struct UpdateColdDataFlowCtrGroupConfigSubCommand {
     threshold: String,
 }
 
+struct ParsedCommand {
+    consumer_group: String,
+    threshold: String,
+}
+
+impl ParsedCommand {
+    fn new(command: &UpdateColdDataFlowCtrGroupConfigSubCommand) -> Result<Self, RocketMQError> {
+        let consumer_group = command.consumer_group.trim();
+        if consumer_group.is_empty() {
+            return Err(RocketMQError::IllegalArgument(
+                "UpdateColdDataFlowCtrGroupConfigSubCommand: consumer_group is empty".into(),
+            ));
+        }
+        let threshold = command.threshold.trim();
+        if threshold.is_empty() {
+            return Err(RocketMQError::IllegalArgument(
+                "UpdateColdDataFlowCtrGroupConfigSubCommand: threshold is empty".into(),
+            ));
+        }
+        Ok(Self {
+            consumer_group: consumer_group.into(),
+            threshold: threshold.into(),
+        })
+    }
+}
+
 impl CommandExecute for UpdateColdDataFlowCtrGroupConfigSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         let target = Target::new(&self.cluster_name, &self.broker_addr).map_err(|_| {
@@ -62,8 +88,9 @@ impl CommandExecute for UpdateColdDataFlowCtrGroupConfigSubCommand {
                     .into(),
             )
         })?;
+        let command = ParsedCommand::new(self)?;
         let mut properties = HashMap::<CheetahString, CheetahString>::new();
-        properties.insert(self.consumer_group.clone().into(), self.threshold.clone().into());
+        properties.insert(command.consumer_group.clone().into(), command.threshold.clone().into());
 
         let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
             DefaultMQAdminExt::with_rpc_hook(rpc_hook)
@@ -93,7 +120,7 @@ impl CommandExecute for UpdateColdDataFlowCtrGroupConfigSubCommand {
                         Ok(())
                     } else {
                         Err(RocketMQError::Internal(format!(
-                            "UpdateColdDataFlowCtrGroupConfigSubCommand: Failed to get user for brokers {}",
+                            "UpdateColdDataFlowCtrGroupConfigSubCommand: Failed to update for brokers {}",
                             failed_broker_addr.join(", ")
                         )))
                     }
