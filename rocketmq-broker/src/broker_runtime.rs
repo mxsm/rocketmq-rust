@@ -1375,13 +1375,10 @@ impl<MS: MessageStore> StateGetter for ConsumerStateGetter<MS> {
             .topic_config_table()
             .contains_key(topic)
         {
-            let topic_full_name = CheetahString::from_string(NamespaceUtil::wrap_namespace(instance_id, topic));
+            let topic_full_name = NamespaceUtil::wrap_namespace(instance_id, topic);
             self.broker_runtime_inner
                 .consumer_manager
-                .find_subscription_data(
-                    CheetahString::from_string(NamespaceUtil::wrap_namespace(instance_id, group)).as_ref(),
-                    topic_full_name.as_ref(),
-                )
+                .find_subscription_data(&NamespaceUtil::wrap_namespace(instance_id, group), &topic_full_name)
                 .is_some()
         } else {
             self.broker_runtime_inner

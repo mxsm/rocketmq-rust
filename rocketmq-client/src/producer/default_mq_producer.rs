@@ -685,7 +685,7 @@ impl DefaultMQProducer {
 
 impl DefaultMQProducer {
     #[inline]
-    pub fn with_namespace(&mut self, resource: &str) -> CheetahString {
+    pub fn with_namespace(&mut self, resource: impl Into<CheetahString>) -> CheetahString {
         self.client_config.with_namespace(resource)
     }
 }
