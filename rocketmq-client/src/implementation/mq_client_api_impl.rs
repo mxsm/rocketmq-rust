@@ -2391,6 +2391,35 @@ impl MQClientAPIImpl {
             )),
         }
     }
+
+    pub async fn update_cold_data_flow_ctr_group_config(
+        &self,
+        broker_addr: CheetahString,
+        properties: HashMap<CheetahString, CheetahString>,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let body = mix_all::properties_to_string(&properties);
+        if body.is_empty() {
+            return Ok(());
+        }
+
+        let request = RemotingCommand::create_remoting_command(RequestCode::UpdateColdDataFlowCtrConfig);
+        let request = request.set_body(body.to_string());
+        let broker_addr =
+            mix_all::broker_vip_channel(self.client_config.is_vip_channel_enabled(), broker_addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(broker_addr).as_ref(), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => Ok(()),
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map(|s| s.to_string()).unwrap_or_default()
+            )),
+        }
+    }
 }
 
 fn build_queue_offset_sorted_map(

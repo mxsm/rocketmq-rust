@@ -812,7 +812,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         broker_addr: CheetahString,
         properties: HashMap<CheetahString, CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .update_cold_data_flow_ctr_group_config(broker_addr, properties)
+            .await
     }
 
     async fn remove_cold_data_flow_ctr_group_config(

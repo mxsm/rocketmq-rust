@@ -16,6 +16,7 @@ mod clean_unused_topic_command;
 mod get_broker_config_sub_command;
 mod send_msg_status_command;
 mod switch_timer_engine_sub_command;
+mod update_cold_data_flow_ctr_group_config_sub_command;
 
 use std::sync::Arc;
 
@@ -27,6 +28,7 @@ use crate::commands::broker_commands::clean_unused_topic_command::CleanUnusedTop
 use crate::commands::broker_commands::get_broker_config_sub_command::GetBrokerConfigSubCommand;
 use crate::commands::broker_commands::send_msg_status_command::SendMsgStatusCommand;
 use crate::commands::broker_commands::switch_timer_engine_sub_command::SwitchTimerEngineSubCommand;
+use crate::commands::broker_commands::update_cold_data_flow_ctr_group_config_sub_command::UpdateColdDataFlowCtrGroupConfigSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
@@ -58,6 +60,13 @@ pub enum BrokerCommands {
         long_about = None,
     )]
     SwitchTimerEngine(SwitchTimerEngineSubCommand),
+
+    #[command(
+        name = "updateColdDataFlowCtrGroupConfig",
+        about = "Add or update cold data flow ctr group config.",
+        long_about = None,
+    )]
+    UpdateColdDataFlowCtrGroupConfig(UpdateColdDataFlowCtrGroupConfigSubCommand),
 }
 
 impl CommandExecute for BrokerCommands {
@@ -67,6 +76,7 @@ impl CommandExecute for BrokerCommands {
             BrokerCommands::GetBrokerConfigSubCommand(cmd) => cmd.execute(rpc_hook).await,
             BrokerCommands::SendMsgStatus(value) => value.execute(rpc_hook).await,
             BrokerCommands::SwitchTimerEngine(value) => value.execute(rpc_hook).await,
+            BrokerCommands::UpdateColdDataFlowCtrGroupConfig(value) => value.execute(rpc_hook).await,
         }
     }
 }
