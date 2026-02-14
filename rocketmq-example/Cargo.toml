@@ -49,3 +49,7 @@ path = "examples/consumer/pop_consumer.rs"
 [[example]]
 name = "producer-simple"
 path = "examples/producer/producer_simple.rs"
+
+[[example]]
+name = "producer-with-timeout"
+path = "examples/producer/producer_with_timeout.rs"
