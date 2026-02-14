@@ -934,10 +934,7 @@ impl DefaultMQProducerImpl {
     /// Prepare message for retry (reset topic with namespace)
     fn prepare_message_for_retry<T: MessageTrait>(&self, msg: &mut T, topic: &CheetahString) {
         let namespace = self.client_config.namespace.as_ref().map(|s| s.as_str()).unwrap_or("");
-        msg.set_topic(CheetahString::from_string(NamespaceUtil::wrap_namespace(
-            namespace,
-            topic.as_str(),
-        )));
+        msg.set_topic(NamespaceUtil::wrap_namespace(namespace, topic.as_str()));
     }
 
     /// Handle send error - update fault item and log
@@ -2421,10 +2418,8 @@ impl DefaultMQProducerImpl {
 
     async fn init_topic_route(&mut self) {
         for topic in self.producer_config.topics() {
-            let new_topic = CheetahString::from_string(NamespaceUtil::wrap_namespace(
-                self.client_config.get_namespace().unwrap_or_default().as_str(),
-                topic,
-            ));
+            let new_topic =
+                NamespaceUtil::wrap_namespace(self.client_config.get_namespace().unwrap_or_default().as_str(), topic);
             let topic_publish_info = self.try_to_find_topic_publish_info(&new_topic).await;
             if topic_publish_info.is_none() || !topic_publish_info.unwrap().ok() {
                 warn!(

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use cheetah_string::CheetahString;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::topic::TopicValidator;
 
@@ -60,28 +61,39 @@ impl NamespaceUtil {
         resource_with_namespace.to_string()
     }
 
-    pub fn wrap_namespace(namespace: &str, resource_without_namespace: &str) -> String {
+    pub fn wrap_namespace(
+        namespace: impl Into<CheetahString>,
+        resource_without_namespace: impl Into<CheetahString>,
+    ) -> CheetahString {
+        let namespace = namespace.into();
+        let resource_without_namespace = resource_without_namespace.into();
+
         if namespace.is_empty() || resource_without_namespace.is_empty() {
-            return resource_without_namespace.to_string();
+            return resource_without_namespace;
         }
 
-        if NamespaceUtil::is_system_resource(resource_without_namespace)
-            || NamespaceUtil::is_already_with_namespace(resource_without_namespace, namespace)
+        if NamespaceUtil::is_system_resource(resource_without_namespace.as_str())
+            || NamespaceUtil::is_already_with_namespace(resource_without_namespace.as_str(), namespace.as_str())
         {
-            return resource_without_namespace.to_string();
+            return resource_without_namespace;
         }
 
         let mut string_builder = String::new();
 
-        if NamespaceUtil::is_retry_topic(resource_without_namespace) {
+        if NamespaceUtil::is_retry_topic(resource_without_namespace.as_str()) {
             string_builder.push_str(mix_all::RETRY_GROUP_TOPIC_PREFIX);
         }
 
-        if NamespaceUtil::is_dlq_topic(resource_without_namespace) {
+        if NamespaceUtil::is_dlq_topic(resource_without_namespace.as_str()) {
             string_builder.push_str(mix_all::DLQ_GROUP_TOPIC_PREFIX);
         }
-        let resource_without_retry_and_dlq = NamespaceUtil::without_retry_and_dlq(resource_without_namespace);
-        string_builder + namespace + &NamespaceUtil::NAMESPACE_SEPARATOR.to_string() + resource_without_retry_and_dlq
+        let resource_without_retry_and_dlq = NamespaceUtil::without_retry_and_dlq(resource_without_namespace.as_str());
+        CheetahString::from_string(
+            string_builder
+                + namespace.as_str()
+                + &NamespaceUtil::NAMESPACE_SEPARATOR.to_string()
+                + resource_without_retry_and_dlq,
+        )
     }
 
     pub fn is_already_with_namespace(resource: &str, namespace: &str) -> bool {
@@ -94,12 +106,20 @@ impl NamespaceUtil {
         resource_without_retry_and_dlq.starts_with(&format!("{}{}", namespace, NamespaceUtil::NAMESPACE_SEPARATOR))
     }
 
-    pub fn wrap_namespace_and_retry(namespace: &str, consumer_group: &str) -> Option<String> {
+    pub fn wrap_namespace_and_retry(
+        namespace: impl Into<CheetahString>,
+        consumer_group: impl Into<CheetahString>,
+    ) -> Option<CheetahString> {
+        let consumer_group = consumer_group.into();
         if consumer_group.is_empty() {
             return None;
         }
 
-        Some(mix_all::RETRY_GROUP_TOPIC_PREFIX.to_string() + &NamespaceUtil::wrap_namespace(namespace, consumer_group))
+        let namespace = namespace.into();
+        let wrapped = NamespaceUtil::wrap_namespace(namespace, consumer_group);
+        Some(CheetahString::from_string(
+            mix_all::RETRY_GROUP_TOPIC_PREFIX.to_string() + wrapped.as_str(),
+        ))
     }
 
     pub fn get_namespace_from_resource(resource: &str) -> String {
@@ -216,7 +236,7 @@ mod tests {
     #[test]
     fn wrap_namespace_and_retry_adds_namespace_and_retry() {
         assert_eq!(
-            NamespaceUtil::wrap_namespace_and_retry("my_namespace", "my_group"),
+            NamespaceUtil::wrap_namespace_and_retry("my_namespace", "my_group").map(|s| s.as_str().to_string()),
             Some("%RETRY%my_namespace%my_group".to_string())
         );
     }

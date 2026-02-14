@@ -156,16 +156,28 @@ impl ClientConfig {
 
 impl ClientConfig {
     #[inline]
-    pub fn with_namespace(&mut self, resource: &str) -> CheetahString {
-        NamespaceUtil::wrap_namespace(self.get_namespace().unwrap_or_default().as_str(), resource).into()
+    pub fn with_namespace(&mut self, resource: impl Into<CheetahString>) -> CheetahString {
+        let resource = resource.into();
+        let namespace = self.get_namespace().unwrap_or_default();
+
+        // Fast path: no namespace needed, return resource directly
+        if namespace.is_empty() {
+            return resource;
+        }
+
+        // Fast path: resource already has namespace, return directly
+        if NamespaceUtil::is_already_with_namespace(resource.as_str(), namespace.as_str()) {
+            return resource;
+        }
+
+        NamespaceUtil::wrap_namespace(namespace, resource)
     }
 
     #[inline]
     pub fn queue_with_namespace(&mut self, mut queue: MessageQueue) -> MessageQueue {
         if let Some(namespace) = self.get_namespace() {
             if !namespace.is_empty() {
-                let topic =
-                    CheetahString::from_string(NamespaceUtil::wrap_namespace(namespace.as_str(), queue.get_topic()));
+                let topic = NamespaceUtil::wrap_namespace(namespace.as_str(), queue.get_topic());
                 queue.set_topic(topic);
                 return queue;
             }
