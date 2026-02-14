@@ -32,10 +32,6 @@ resolver = "3"
 
 [dependencies]
 
-[[example]]
-name = "pop-consumer"
-path = "examples/consumer/pop_consumer.rs"
-
 [dev-dependencies]
 cheetah-string       = { version = "1.0.1", features = ["serde", "bytes", "simd"] }
 rocketmq-client-rust = { path = "../rocketmq-client" }
@@ -45,3 +41,11 @@ rocketmq-rust        = { path = "../rocketmq" }
 rocketmq-tools       = { path = "../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", package = "rocketmq-admin-core" }
 tokio                = { version = "1.49", features = ["full"] }
 tracing              = "0.1.44"
+
+[[example]]
+name = "pop-consumer"
+path = "examples/consumer/pop_consumer.rs"
+
+[[example]]
+name = "producer-simple"
+path = "examples/producer/producer_simple.rs"
