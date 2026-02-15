@@ -53,3 +53,7 @@ path = "examples/producer/producer_simple.rs"
 [[example]]
 name = "producer-with-timeout"
 path = "examples/producer/producer_with_timeout.rs"
+
+[[example]]
+name = "producer-basic-send"
+path = "examples/producer/basic_send.rs"
