@@ -15,6 +15,7 @@
 mod clean_expired_cq_sub_command;
 mod clean_unused_topic_command;
 mod get_broker_config_sub_command;
+mod reset_master_flush_offset_sub_command;
 mod send_msg_status_command;
 mod switch_timer_engine_sub_command;
 
@@ -27,6 +28,7 @@ use rocketmq_remoting::runtime::RPCHook;
 use crate::commands::broker_commands::clean_expired_cq_sub_command::CleanExpiredCQSubCommand;
 use crate::commands::broker_commands::clean_unused_topic_command::CleanUnusedTopicCommand;
 use crate::commands::broker_commands::get_broker_config_sub_command::GetBrokerConfigSubCommand;
+use crate::commands::broker_commands::reset_master_flush_offset_sub_command::ResetMasterFlushOffsetSubCommand;
 use crate::commands::broker_commands::send_msg_status_command::SendMsgStatusCommand;
 use crate::commands::broker_commands::switch_timer_engine_sub_command::SwitchTimerEngineSubCommand;
 use crate::commands::CommandExecute;
@@ -55,6 +57,13 @@ pub enum BrokerCommands {
     GetBrokerConfigSubCommand(GetBrokerConfigSubCommand),
 
     #[command(
+        name = "resetMasterFlushOffset",
+        about = "Reset master flush offset in slave.",
+        long_about = None,
+    )]
+    ResetMasterFlushOffset(ResetMasterFlushOffsetSubCommand),
+
+    #[command(
         name = "sendMsgStatus",
         about = "Send msg to broker.",
         long_about = None,
@@ -75,6 +84,7 @@ impl CommandExecute for BrokerCommands {
             BrokerCommands::CleanExpiredCQ(value) => value.execute(rpc_hook).await,
             BrokerCommands::CleanUnusedTopic(value) => value.execute(rpc_hook).await,
             BrokerCommands::GetBrokerConfigSubCommand(cmd) => cmd.execute(rpc_hook).await,
+            BrokerCommands::ResetMasterFlushOffset(value) => value.execute(rpc_hook).await,
             BrokerCommands::SendMsgStatus(value) => value.execute(rpc_hook).await,
             BrokerCommands::SwitchTimerEngine(value) => value.execute(rpc_hook).await,
         }

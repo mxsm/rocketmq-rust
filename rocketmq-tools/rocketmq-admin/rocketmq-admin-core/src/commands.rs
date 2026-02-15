@@ -189,6 +189,16 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Broker",
+                command: "getBrokerConfig",
+                remark: "Get broker config by cluster or special broker.",
+            },
+            Command {
+                category: "Broker",
+                command: "resetMasterFlushOffset",
+                remark: "Reset master flush offset in slave.",
+            },
+            Command {
+                category: "Broker",
                 command: "sendMsgStatus",
                 remark: "Send msg to broker.",
             },

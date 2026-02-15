@@ -116,6 +116,7 @@ use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::Q
 use rocketmq_remoting::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
 use rocketmq_remoting::protocol::header::recall_message_request_header::RecallMessageRequestHeader;
 use rocketmq_remoting::protocol::header::recall_message_response_header::RecallMessageResponseHeader;
+use rocketmq_remoting::protocol::header::reset_master_flush_offset_header::ResetMasterFlushOffsetHeader;
 use rocketmq_remoting::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
@@ -567,6 +568,32 @@ impl MQClientAPIImpl {
         let response = self
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            return Ok(());
+        }
+
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub async fn reset_master_flush_offset(
+        &self,
+        broker_addr: &CheetahString,
+        master_flush_offset: i64,
+    ) -> RocketMQResult<()> {
+        let request_header = ResetMasterFlushOffsetHeader {
+            master_flush_offset: Some(master_flush_offset),
+        };
+
+        let request = RemotingCommand::create_request_command(RequestCode::ResetMasterFlushOffset, request_header);
+
+        let response = self
+            .remoting_client
+            .invoke_request(Some(broker_addr), request, 3000)
             .await?;
 
         if ResponseCode::from(response.code()) == ResponseCode::Success {

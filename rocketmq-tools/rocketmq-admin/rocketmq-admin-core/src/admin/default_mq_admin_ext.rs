@@ -776,7 +776,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         broker_addr: CheetahString,
         master_flush_offset: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .reset_master_flush_offset(broker_addr, master_flush_offset)
+            .await
     }
 
     async fn get_controller_config(
