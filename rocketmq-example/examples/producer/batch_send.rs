@@ -22,7 +22,8 @@
 //! - `send_batch_with_callback`: Send multiple messages with callback
 //! - `send_batch_with_callback_timeout`: Send multiple messages with callback and timeout
 //! - `send_batch_to_queue_with_callback`: Send multiple messages to a specific queue with callback
-//! - `send_batch_to_queue_with_callback_timeout`: Send multiple messages to a specific queue with callback and timeout
+//! - `send_batch_to_queue_with_callback_timeout`: Send multiple messages to a specific queue with
+//!   callback and timeout
 
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::mq_producer::MQProducer;
@@ -202,7 +203,9 @@ async fn batch_send_to_queue_with_timeout(producer: &mut DefaultMQProducer, queu
             .build()?,
     ];
 
-    let result = producer.send_batch_to_queue_with_timeout(messages, queue, TIMEOUT_MS).await?;
+    let result = producer
+        .send_batch_to_queue_with_timeout(messages, queue, TIMEOUT_MS)
+        .await?;
     println!("   Result: {:?}", result);
 
     println!("   Status: Completed\n");
@@ -229,14 +232,16 @@ async fn batch_send_with_callback(producer: &mut DefaultMQProducer) -> RocketMQR
             .build()?,
     ];
 
-    producer.send_batch_with_callback(messages,
-            |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
-                match (result, error) {
-                    (Some(r), None) => println!("   Callback: Success - {:?}", r),
-                    (None, Some(e)) => println!("   Callback: Error - {}", e),
-                    _ => println!("   Callback: Unknown state"),
-                }
-            }).await?;
+    producer
+        .send_batch_with_callback(
+            messages,
+            |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| match (result, error) {
+                (Some(r), None) => println!("   Callback: Success - {:?}", r),
+                (None, Some(e)) => println!("   Callback: Error - {}", e),
+                _ => println!("   Callback: Unknown state"),
+            },
+        )
+        .await?;
 
     println!("   Status: Completed\n");
     Ok(())
@@ -263,14 +268,17 @@ async fn batch_send_with_callback_timeout(producer: &mut DefaultMQProducer) -> R
             .build()?,
     ];
 
-    producer.send_batch_with_callback_timeout(messages,
-            |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
-                match (result, error) {
-                    (Some(r), None) => println!("   Callback: Success - {:?}", r),
-                    (None, Some(e)) => println!("   Callback: Error - {}", e),
-                    _ => println!("   Callback: Unknown state"),
-                }
-            }, TIMEOUT_MS).await?;
+    producer
+        .send_batch_with_callback_timeout(
+            messages,
+            |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| match (result, error) {
+                (Some(r), None) => println!("   Callback: Success - {:?}", r),
+                (None, Some(e)) => println!("   Callback: Error - {}", e),
+                _ => println!("   Callback: Unknown state"),
+            },
+            TIMEOUT_MS,
+        )
+        .await?;
 
     println!("   Status: Completed\n");
     Ok(())
@@ -279,7 +287,10 @@ async fn batch_send_with_callback_timeout(producer: &mut DefaultMQProducer) -> R
 /// 7. Batch send to queue with callback
 ///
 /// Sends multiple messages to a specific queue with callback delivery.
-async fn batch_send_to_queue_with_callback(producer: &mut DefaultMQProducer, queue: MessageQueue) -> RocketMQResult<()> {
+async fn batch_send_to_queue_with_callback(
+    producer: &mut DefaultMQProducer,
+    queue: MessageQueue,
+) -> RocketMQResult<()> {
     println!("7. Batch Send to Queue with Callback");
     println!("   Method: producer.send_batch_to_queue_with_callback(messages_vec, queue, callback_fn).await");
     println!("   Target Queue: {:?}", queue);
@@ -297,14 +308,17 @@ async fn batch_send_to_queue_with_callback(producer: &mut DefaultMQProducer, que
             .build()?,
     ];
 
-    producer.send_batch_to_queue_with_callback(messages, queue,
-            |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
-                match (result, error) {
-                    (Some(r), None) => println!("   Callback: Success - {:?}", r),
-                    (None, Some(e)) => println!("   Callback: Error - {}", e),
-                    _ => println!("   Callback: Unknown state"),
-                }
-            }).await?;
+    producer
+        .send_batch_to_queue_with_callback(
+            messages,
+            queue,
+            |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| match (result, error) {
+                (Some(r), None) => println!("   Callback: Success - {:?}", r),
+                (None, Some(e)) => println!("   Callback: Error - {}", e),
+                _ => println!("   Callback: Unknown state"),
+            },
+        )
+        .await?;
 
     println!("   Status: Completed\n");
     Ok(())
@@ -313,9 +327,15 @@ async fn batch_send_to_queue_with_callback(producer: &mut DefaultMQProducer, que
 /// 8. Batch send to queue with callback and timeout
 ///
 /// Full featured batch send with queue targeting, callback delivery, and timeout.
-async fn batch_send_to_queue_with_callback_timeout(producer: &mut DefaultMQProducer, queue: MessageQueue) -> RocketMQResult<()> {
+async fn batch_send_to_queue_with_callback_timeout(
+    producer: &mut DefaultMQProducer,
+    queue: MessageQueue,
+) -> RocketMQResult<()> {
     println!("8. Batch Send to Queue with Callback and Timeout");
-    println!("   Method: producer.send_batch_to_queue_with_callback_timeout(messages_vec, queue, callback_fn, timeout_ms).await");
+    println!(
+        "   Method: producer.send_batch_to_queue_with_callback_timeout(messages_vec, queue, callback_fn, \
+         timeout_ms).await"
+    );
     println!("   Target Queue: {:?}, Timeout: {}ms", queue, TIMEOUT_MS);
 
     let messages = vec![
@@ -331,14 +351,18 @@ async fn batch_send_to_queue_with_callback_timeout(producer: &mut DefaultMQProdu
             .build()?,
     ];
 
-    producer.send_batch_to_queue_with_callback_timeout(messages, queue,
-            |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
-                match (result, error) {
-                    (Some(r), None) => println!("   Callback: Success - {:?}", r),
-                    (None, Some(e)) => println!("   Callback: Error - {}", e),
-                    _ => println!("   Callback: Unknown state"),
-                }
-            }, TIMEOUT_MS).await?;
+    producer
+        .send_batch_to_queue_with_callback_timeout(
+            messages,
+            queue,
+            |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| match (result, error) {
+                (Some(r), None) => println!("   Callback: Success - {:?}", r),
+                (None, Some(e)) => println!("   Callback: Error - {}", e),
+                _ => println!("   Callback: Unknown state"),
+            },
+            TIMEOUT_MS,
+        )
+        .await?;
 
     println!("   Status: Completed\n");
     Ok(())
