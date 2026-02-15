@@ -242,8 +242,6 @@ impl BrokerOuterAPI {
                         .register_broker(&addr, oneway, timeout_mills, cloned_header, cloned_body)
                         .await
                 });
-                /*let handle =
-                self.register_broker(addr, oneway, timeout_mills, cloned_header, cloned_body);*/
                 handle_vec.push(join_handle);
             }
             while let Some(handle) = handle_vec.pop() {
