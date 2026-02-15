@@ -65,3 +65,7 @@ path = "examples/producer/batch_send.rs"
 [[example]]
 name = "producer-send-to-queue"
 path = "examples/producer/send_to_queue.rs"
+
+[[example]]
+name = "producer-send-with-selector"
+path = "examples/producer/send_with_selector.rs"
