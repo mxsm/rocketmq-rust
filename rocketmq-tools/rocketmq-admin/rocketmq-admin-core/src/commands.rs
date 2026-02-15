@@ -179,6 +179,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Broker",
+                command: "cleanExpiredCQ",
+                remark: "Clean expired ConsumeQueue on broker.",
+            },
+            Command {
+                category: "Broker",
                 command: "cleanUnusedTopic",
                 remark: "Clean unused topic on broker.",
             },
