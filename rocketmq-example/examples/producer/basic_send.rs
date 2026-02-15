@@ -130,14 +130,16 @@ async fn send_with_callback(producer: &mut DefaultMQProducer) -> RocketMQResult<
         .body("Send with callback message")
         .build()?;
 
-    producer.send_with_callback(message,
-            |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
-                match (result, error) {
-                    (Some(r), None) => println!("   Callback: Success - {:?}", r),
-                    (None, Some(e)) => println!("   Callback: Error - {}", e),
-                    _ => println!("   Callback: Unknown state"),
-                }
-            }).await?;
+    producer
+        .send_with_callback(
+            message,
+            |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| match (result, error) {
+                (Some(r), None) => println!("   Callback: Success - {:?}", r),
+                (None, Some(e)) => println!("   Callback: Error - {}", e),
+                _ => println!("   Callback: Unknown state"),
+            },
+        )
+        .await?;
 
     println!("   Status: Completed\n");
     Ok(())
@@ -158,14 +160,17 @@ async fn send_with_callback_timeout(producer: &mut DefaultMQProducer) -> RocketM
         .body("Send with callback and timeout message")
         .build()?;
 
-    producer.send_with_callback_timeout(message,
-            |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
-                match (result, error) {
-                    (Some(r), None) => println!("   Callback: Success - {:?}", r),
-                    (None, Some(e)) => println!("   Callback: Error - {}", e),
-                    _ => println!("   Callback: Unknown state"),
-                }
-            }, TIMEOUT_MS).await?;
+    producer
+        .send_with_callback_timeout(
+            message,
+            |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| match (result, error) {
+                (Some(r), None) => println!("   Callback: Success - {:?}", r),
+                (None, Some(e)) => println!("   Callback: Error - {}", e),
+                _ => println!("   Callback: Unknown state"),
+            },
+            TIMEOUT_MS,
+        )
+        .await?;
 
     println!("   Status: Completed\n");
     Ok(())
