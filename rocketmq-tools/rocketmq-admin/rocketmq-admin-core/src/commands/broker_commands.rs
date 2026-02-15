@@ -14,6 +14,7 @@
 
 mod clean_expired_cq_sub_command;
 mod clean_unused_topic_command;
+mod delete_expired_commit_log_command;
 mod get_broker_config_sub_command;
 mod reset_master_flush_offset_sub_command;
 mod send_msg_status_command;
@@ -28,6 +29,7 @@ use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::broker_commands::clean_expired_cq_sub_command::CleanExpiredCQSubCommand;
 use crate::commands::broker_commands::clean_unused_topic_command::CleanUnusedTopicCommand;
+use crate::commands::broker_commands::delete_expired_commit_log_command::DeleteExpiredCommitLogCommand;
 use crate::commands::broker_commands::get_broker_config_sub_command::GetBrokerConfigSubCommand;
 use crate::commands::broker_commands::reset_master_flush_offset_sub_command::ResetMasterFlushOffsetSubCommand;
 use crate::commands::broker_commands::send_msg_status_command::SendMsgStatusCommand;
@@ -50,6 +52,13 @@ pub enum BrokerCommands {
         long_about = None,
     )]
     CleanUnusedTopic(CleanUnusedTopicCommand),
+
+    #[command(
+        name = "deleteExpiredCommitLog",
+        about = "Delete expired CommitLog files.",
+        long_about = None,
+    )]
+    DeleteExpiredCommitLog(DeleteExpiredCommitLogCommand),
 
     #[command(
         name = "getBrokerConfig",
@@ -92,6 +101,7 @@ impl CommandExecute for BrokerCommands {
         match self {
             BrokerCommands::CleanExpiredCQ(value) => value.execute(rpc_hook).await,
             BrokerCommands::CleanUnusedTopic(value) => value.execute(rpc_hook).await,
+            BrokerCommands::DeleteExpiredCommitLog(value) => value.execute(rpc_hook).await,
             BrokerCommands::GetBrokerConfigSubCommand(cmd) => cmd.execute(rpc_hook).await,
             BrokerCommands::ResetMasterFlushOffset(value) => value.execute(rpc_hook).await,
             BrokerCommands::SendMsgStatus(value) => value.execute(rpc_hook).await,

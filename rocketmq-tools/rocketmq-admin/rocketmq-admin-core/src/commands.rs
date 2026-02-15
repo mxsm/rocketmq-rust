@@ -189,6 +189,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Broker",
+                command: "deleteExpiredCommitLog",
+                remark: "Delete expired CommitLog files.",
+            },
+            Command {
+                category: "Broker",
                 command: "getBrokerConfig",
                 remark: "Get broker config by cluster or special broker.",
             },
