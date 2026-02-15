@@ -198,6 +198,11 @@ impl CommandExecute for ClassificationTablePrint {
                 remark: "Switch the engine of timer message in broker.",
             },
             Command {
+                category: "Broker",
+                command: "updateBrokerConfig",
+                remark: "Update broker config by broker or cluster.",
+            },
+            Command {
                 category: "Consumer",
                 command: "consumerStatus",
                 remark: "Query and display consumer's internal data structures.",
