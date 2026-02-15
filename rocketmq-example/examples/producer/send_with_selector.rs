@@ -28,9 +28,9 @@ use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_client_rust::producer::send_callback::SendMessageCallback;
 use rocketmq_client_rust::producer::send_result::SendResult;
+use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
-use rocketmq_common::common::message::MessageTrait;
 use rocketmq_error::RocketMQResult;
 use rocketmq_rust::rocketmq;
 
@@ -130,7 +130,10 @@ async fn send_with_selector_timeout(producer: &mut DefaultMQProducer) -> RocketM
 
     let arg = "selector-arg";
 
-    match producer.send_with_selector_timeout(message, selector, arg, TIMEOUT_MS).await? {
+    match producer
+        .send_with_selector_timeout(message, selector, arg, TIMEOUT_MS)
+        .await?
+    {
         Some(result) => println!("   Result: {:?}", result),
         None => println!("   Result: None (async delivery)"),
     }
@@ -159,16 +162,16 @@ async fn send_with_selector_callback(producer: &mut DefaultMQProducer) -> Rocket
     let arg = "selector-arg";
 
     let callback: SendMessageCallback = Arc::new(
-            |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
-                match (result, error) {
-                    (Some(r), None) => println!("   Callback: Success - {:?}", r),
-                    (None, Some(e)) => println!("   Callback: Error - {}", e),
-                    _ => println!("   Callback: Unknown state"),
-                }
-            }
-        );
+        |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| match (result, error) {
+            (Some(r), None) => println!("   Callback: Success - {:?}", r),
+            (None, Some(e)) => println!("   Callback: Error - {}", e),
+            _ => println!("   Callback: Unknown state"),
+        },
+    );
 
-    producer.send_with_selector_callback(message, selector, arg, Some(callback)).await?;
+    producer
+        .send_with_selector_callback(message, selector, arg, Some(callback))
+        .await?;
 
     println!("   Status: Completed\n");
     Ok(())
@@ -179,7 +182,10 @@ async fn send_with_selector_callback(producer: &mut DefaultMQProducer) -> Rocket
 /// Full featured send with custom queue selection, callback delivery, and timeout protection.
 async fn send_with_selector_callback_timeout(producer: &mut DefaultMQProducer) -> RocketMQResult<()> {
     println!("4. Send with Selector, Callback, and Timeout");
-    println!("   Method: producer.send_with_selector_callback_timeout(message, selector_fn, arg, callback_fn, timeout_ms).await");
+    println!(
+        "   Method: producer.send_with_selector_callback_timeout(message, selector_fn, arg, callback_fn, \
+         timeout_ms).await"
+    );
     println!("   Timeout: {}ms", TIMEOUT_MS);
 
     let selector = |queues: &[MessageQueue], _msg: &dyn MessageTrait, _arg: &dyn Any| -> Option<MessageQueue> {
@@ -195,16 +201,16 @@ async fn send_with_selector_callback_timeout(producer: &mut DefaultMQProducer) -
     let arg = "selector-arg";
 
     let callback: SendMessageCallback = Arc::new(
-            |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
-                match (result, error) {
-                    (Some(r), None) => println!("   Callback: Success - {:?}", r),
-                    (None, Some(e)) => println!("   Callback: Error - {}", e),
-                    _ => println!("   Callback: Unknown state"),
-                }
-            }
-        );
+        |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| match (result, error) {
+            (Some(r), None) => println!("   Callback: Success - {:?}", r),
+            (None, Some(e)) => println!("   Callback: Error - {}", e),
+            _ => println!("   Callback: Unknown state"),
+        },
+    );
 
-    producer.send_with_selector_callback_timeout(message, selector, arg, Some(callback), TIMEOUT_MS).await?;
+    producer
+        .send_with_selector_callback_timeout(message, selector, arg, Some(callback), TIMEOUT_MS)
+        .await?;
 
     println!("   Status: Completed\n");
     Ok(())
