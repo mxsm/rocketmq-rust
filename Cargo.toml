@@ -100,7 +100,7 @@ trait-variant = "0.1.2"
 mockall = "0.14.0"
 cfg-if = "1.0.4"
 
-sysinfo = "0.38.1"
+sysinfo = "0.38.2"
 uuid = { version = "1.20.0", features = [
     "v4", # Lets you generate random UUIDs
     "fast-rng", # Use a faster (but still sufficiently random) RNG
