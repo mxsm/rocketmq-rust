@@ -1015,6 +1015,37 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         }
     }
 
+    fn invoke_oneway_unbounded(&self, addr: CheetahString, request: RemotingCommand) {
+        // True fire-and-forget: spawn immediately and return
+        // No waiting, no timeout enforcement, errors are dropped silently
+        // Clone necessary data for the spawned task
+        let connection_tables = self.connection_tables.clone();
+        let namesrv_addr_list = self.namesrv_addr_list.clone();
+        let tokio_client_config = self.tokio_client_config.clone();
+        let latency_tracker = self.latency_tracker.clone();
+
+        tokio::spawn(async move {
+            // Get client in background task using connection tables directly
+            let client_result = connection_tables.get(&addr);
+
+            if let Some(client_ref) = client_result {
+                let mut client = client_ref.value().clone();
+                // Mark as oneway and send
+                let mut request = request;
+                request.mark_oneway_rpc_ref();
+
+                let _ = client.send(request).await;
+            } else {
+                tracing::debug!(
+                    "No cached client for oneway send to {}, will be skipped in fire-and-forget mode",
+                    addr
+                );
+            }
+        });
+
+        // Return immediately - task is running in background
+    }
+
     fn is_address_reachable(&mut self, addr: &CheetahString) {
         todo!()
     }
