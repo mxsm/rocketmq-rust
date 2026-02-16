@@ -19,6 +19,7 @@ mod get_broker_config_sub_command;
 mod reset_master_flush_offset_sub_command;
 mod send_msg_status_sub_command;
 mod switch_timer_engine_sub_command;
+mod update_broker_config_sub_command;
 mod update_cold_data_flow_ctr_group_config_sub_command;
 
 use std::sync::Arc;
@@ -34,6 +35,7 @@ use crate::commands::broker_commands::get_broker_config_sub_command::GetBrokerCo
 use crate::commands::broker_commands::reset_master_flush_offset_sub_command::ResetMasterFlushOffsetSubCommand;
 use crate::commands::broker_commands::send_msg_status_sub_command::SendMsgStatusSubCommand;
 use crate::commands::broker_commands::switch_timer_engine_sub_command::SwitchTimerEngineSubCommand;
+use crate::commands::broker_commands::update_broker_config_sub_command::UpdateBrokerConfigSubCommand;
 use crate::commands::broker_commands::update_cold_data_flow_ctr_group_config_sub_command::UpdateColdDataFlowCtrGroupConfigSubCommand;
 use crate::commands::CommandExecute;
 
@@ -94,6 +96,13 @@ pub enum BrokerCommands {
         long_about = None,
     )]
     UpdateColdDataFlowCtrGroupConfig(UpdateColdDataFlowCtrGroupConfigSubCommand),
+
+    #[command(
+        name = "updateBrokerConfig",
+        about = "Update broker config by special broker or all brokers in cluster.",
+        long_about = None,
+    )]
+    UpdateBrokerConfigSubCommand(UpdateBrokerConfigSubCommand),
 }
 
 impl CommandExecute for BrokerCommands {
@@ -107,6 +116,7 @@ impl CommandExecute for BrokerCommands {
             BrokerCommands::SendMsgStatus(value) => value.execute(rpc_hook).await,
             BrokerCommands::SwitchTimerEngine(value) => value.execute(rpc_hook).await,
             BrokerCommands::UpdateColdDataFlowCtrGroupConfig(value) => value.execute(rpc_hook).await,
+            BrokerCommands::UpdateBrokerConfigSubCommand(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }
