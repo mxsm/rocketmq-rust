@@ -78,7 +78,7 @@ sysinfo                 = "0.38.1"
 cheetah-string          = { workspace = true }
 thiserror               = { workspace = true }
 
-futures-util = "0.3.31"
+futures-util = "0.3.32"
 rand         = { workspace = true }
 uuid         = { workspace = true }
 anyhow       = { workspace = true }
