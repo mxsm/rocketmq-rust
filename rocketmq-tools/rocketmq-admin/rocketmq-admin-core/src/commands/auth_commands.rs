@@ -27,6 +27,18 @@ mod update_user_sub_command;
 
 use std::sync::Arc;
 
+use crate::commands::auth_commands::copy_acl_sub_command::CopyAclSubCommand;
+use crate::commands::auth_commands::copy_users_sub_command::CopyUsersSubCommand;
+use crate::commands::auth_commands::create_acl_sub_command::CreateAclSubCommand;
+use crate::commands::auth_commands::create_user_sub_command::CreateUserSubCommand;
+use crate::commands::auth_commands::delete_acl_sub_command::DeleteAclSubCommand;
+use crate::commands::auth_commands::delete_user_sub_command::DeleteUserSubCommand;
+use crate::commands::auth_commands::get_acl_sub_command::GetAclSubCommand;
+use crate::commands::auth_commands::get_user_sub_command::GetUserSubCommand;
+use crate::commands::auth_commands::list_acl_sub_command::ListAclSubCommand;
+use crate::commands::auth_commands::list_users_sub_command::ListUsersSubCommand;
+use crate::commands::auth_commands::update_acl_sub_command::UpdateAclSubCommand;
+use crate::commands::auth_commands::update_user_sub_command::UpdateUserSubCommand;
 use crate::commands::CommandExecute;
 use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
@@ -39,84 +51,84 @@ pub enum AuthCommands {
         about = "Copy acl to cluster",
         long_about = None,
     )]
-    CopyAcl(copy_acl_sub_command::CopyAclSubCommand),
+    CopyAcl(CopyAclSubCommand),
 
     #[command(
         name = "copyUser",
         about = "Copy user to cluster",
         long_about = None,
     )]
-    CopyUsers(copy_users_sub_command::CopyUsersSubCommand),
+    CopyUsers(CopyUsersSubCommand),
 
     #[command(
         name = "createAcl",
         about = "Create acl to cluster",
         long_about = None,
     )]
-    CreateAcl(create_acl_sub_command::CreateAclSubCommand),
+    CreateAcl(CreateAclSubCommand),
 
     #[command(
         name = "createUser",
         about = "Create user to cluster.",
         long_about = None,
     )]
-    CreateUser(create_user_sub_command::CreateUserSubCommand),
+    CreateUser(CreateUserSubCommand),
 
     #[command(
         name = "deleteAcl",
         about = "Delete acl from cluster.",
         long_about = None,
     )]
-    DeleteAcl(delete_acl_sub_command::DeleteAclSubCommand),
+    DeleteAcl(DeleteAclSubCommand),
 
     #[command(
         name = "deleteUser",
         about = "Delete user from cluster.",
         long_about = None,
     )]
-    DeleteUser(delete_user_sub_command::DeleteUserSubCommand),
-
-    #[command(
-        name = "getUser",
-        about = "Get user from cluster.",
-        long_about = None,
-    )]
-    GetUser(get_user_sub_command::GetUserSubCommand),
+    DeleteUser(DeleteUserSubCommand),
 
     #[command(
         name = "getAcl",
         about = "Get acl from cluster.",
         long_about = None,
     )]
-    GetAcl(get_acl_sub_command::GetAclSubCommand),
+    GetAcl(GetAclSubCommand),
 
     #[command(
-        name = "listUsers",
-        about = "List users from cluster.",
+        name = "getUser",
+        about = "Get user from cluster.",
         long_about = None,
     )]
-    ListUsers(list_users_sub_command::ListUsersSubCommand),
+    GetUser(GetUserSubCommand),
 
     #[command(
         name = "listAcl",
         about = "List acl from cluster",
         long_about = None,
     )]
-    ListAcl(list_acl_sub_command::ListAclSubCommand),
+    ListAcl(ListAclSubCommand),
+
+    #[command(
+        name = "listUsers",
+        about = "List users from cluster.",
+        long_about = None,
+    )]
+    ListUsers(ListUsersSubCommand),
 
     #[command(
         name = "updateAcl",
         about = "Update Access Control List (ACL)",
         long_about = None,
     )]
-    UpdateAcl(update_acl_sub_command::UpdateAclSubCommand),
+    UpdateAcl(UpdateAclSubCommand),
 
     #[command(
         name = "updateUser",
         about = "Update user to cluster.",
         long_about = None,
     )]
-    UpdateUser(update_user_sub_command::UpdateUserSubCommand),
+    UpdateUser(UpdateUserSubCommand),
 }
 
 impl CommandExecute for AuthCommands {
@@ -128,8 +140,8 @@ impl CommandExecute for AuthCommands {
             AuthCommands::CreateUser(value) => value.execute(rpc_hook).await,
             AuthCommands::DeleteAcl(value) => value.execute(rpc_hook).await,
             AuthCommands::DeleteUser(value) => value.execute(rpc_hook).await,
-            AuthCommands::GetUser(value) => value.execute(rpc_hook).await,
             AuthCommands::GetAcl(value) => value.execute(rpc_hook).await,
+            AuthCommands::GetUser(value) => value.execute(rpc_hook).await,
             AuthCommands::ListAcl(value) => value.execute(rpc_hook).await,
             AuthCommands::ListUsers(value) => value.execute(rpc_hook).await,
             AuthCommands::UpdateAcl(value) => value.execute(rpc_hook).await,

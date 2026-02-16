@@ -31,7 +31,7 @@ use crate::commands::CommandExecute;
     .required(false)
     .args(&["broker_addr", "cluster_name"]))
 )]
-pub struct DeleteExpiredCommitLogCommand {
+pub struct CleanUnusedTopicSubCommand {
     #[arg(short = 'b', long = "brokerAddr", required = false, help = "Broker address")]
     broker_addr: Option<String>,
 
@@ -39,7 +39,7 @@ pub struct DeleteExpiredCommitLogCommand {
     cluster_name: Option<String>,
 }
 
-impl CommandExecute for DeleteExpiredCommitLogCommand {
+impl CommandExecute for CleanUnusedTopicSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
             DefaultMQAdminExt::with_rpc_hook(rpc_hook)
@@ -51,22 +51,19 @@ impl CommandExecute for DeleteExpiredCommitLogCommand {
             .set_instance_name(get_current_millis().to_string().into());
 
         MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-            RocketMQError::Internal(format!(
-                "DeleteExpiredCommitLogCommand: Failed to start MQAdminExt: {}",
-                e
-            ))
+            RocketMQError::Internal(format!("CleanUnusedTopicSubCommand: Failed to start MQAdminExt: {}", e))
         })?;
 
-        let operation_result = delete_expired_commit_log(&default_mqadmin_ext, self).await;
+        let operation_result = clean_unused_topic(&default_mqadmin_ext, self).await;
 
         MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
         operation_result
     }
 }
 
-async fn delete_expired_commit_log(
+async fn clean_unused_topic(
     default_mqadmin_ext: &DefaultMQAdminExt,
-    command: &DeleteExpiredCommitLogCommand,
+    command: &CleanUnusedTopicSubCommand,
 ) -> RocketMQResult<()> {
     let addr = command
         .broker_addr
@@ -77,7 +74,7 @@ async fn delete_expired_commit_log(
         .as_ref()
         .map(|s| CheetahString::from(s.trim().to_string()));
 
-    let result = default_mqadmin_ext.delete_expired_commit_log(cluster, addr).await?;
+    let result = default_mqadmin_ext.clean_unused_topic(cluster, addr).await?;
 
     if result {
         println!("success");

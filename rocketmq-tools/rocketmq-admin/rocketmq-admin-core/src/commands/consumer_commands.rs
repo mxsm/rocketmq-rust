@@ -25,6 +25,13 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
+use crate::commands::consumer_commands::consumer_status_sub_command::ConsumerStatusSubCommand;
+use crate::commands::consumer_commands::consumer_sub_command::ConsumerSubCommand;
+use crate::commands::consumer_commands::delete_subscription_group_sub_command::DeleteSubscriptionGroupSubCommand;
+use crate::commands::consumer_commands::set_consume_mode_sub_command::SetConsumeModeSubCommand;
+use crate::commands::consumer_commands::start_monitoring_sub_command::StartMonitoringSubCommand;
+use crate::commands::consumer_commands::update_sub_group_list_sub_command::UpdateSubGroupListSubCommand;
+use crate::commands::consumer_commands::update_sub_group_sub_command::UpdateSubGroupSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
@@ -34,55 +41,61 @@ pub enum ConsumerCommands {
         about = "Query and display consumer's internal data structures, including subscription information, queue allocation, consumption mode, and runtime information.",
         long_about = None,
     )]
-    ConsumerStatusSubCommand(consumer_status_sub_command::ConsumerStatusSubCommand),
+    ConsumerStatus(ConsumerStatusSubCommand),
+
     #[command(
         name = "consumer",
         about = "Query consumer's connection, status, etc.",
         long_about = None,
     )]
-    ConsumerSubCommand(consumer_sub_command::ConsumerSubCommand),
+    Consumer(ConsumerSubCommand),
+
     #[command(
         name = "deleteSubGroup",
         about = "Delete subscription group",
         long_about = r#"Delete subscription group from broker."#
     )]
-    DeleteSubGroup(delete_subscription_group_sub_command::DeleteSubscriptionGroupSubCommand),
-    #[command(
-        name = "updateSubGroup",
-        about = "Update or create subscription group.",
-        long_about = None,
-    )]
-    UpdateSubGroupSubCommand(update_sub_group_sub_command::UpdateSubGroupSubCommand),
-    #[command(
-        name = "updateSubGroupList",
-        about = "Create or update subscription groups in batch.",
-        long_about = None,
-    )]
-    UpdateSubGroupList(update_sub_group_list_sub_command::UpdateSubGroupListSubCommand),
+    DeleteSubscriptionGroup(DeleteSubscriptionGroupSubCommand),
+
     #[command(
         name = "setConsumeMode",
         about = "Set consume message mode. pull/pop etc.",
         long_about = None,
     )]
-    SetConsumeMode(set_consume_mode_sub_command::SetConsumeModeSubCommand),
+    SetConsumeMode(SetConsumeModeSubCommand),
+
     #[command(
         name = "startMonitoring",
         about = "Start Monitoring.",
         long_about = None,
     )]
-    StartMonitoring(start_monitoring_sub_command::StartMonitoringSubCommand),
+    StartMonitoring(StartMonitoringSubCommand),
+
+    #[command(
+        name = "updateSubGroupList",
+        about = "Create or update subscription groups in batch.",
+        long_about = None,
+    )]
+    UpdateSubGroupList(UpdateSubGroupListSubCommand),
+
+    #[command(
+        name = "updateSubGroup",
+        about = "Update or create subscription group.",
+        long_about = None,
+    )]
+    UpdateSubGroup(UpdateSubGroupSubCommand),
 }
 
 impl CommandExecute for ConsumerCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
-            ConsumerCommands::ConsumerStatusSubCommand(cmd) => cmd.execute(rpc_hook).await,
-            ConsumerCommands::ConsumerSubCommand(cmd) => cmd.execute(rpc_hook).await,
-            ConsumerCommands::DeleteSubGroup(cmd) => cmd.execute(rpc_hook).await,
-            ConsumerCommands::UpdateSubGroupSubCommand(value) => value.execute(rpc_hook).await,
-            ConsumerCommands::UpdateSubGroupList(cmd) => cmd.execute(rpc_hook).await,
+            ConsumerCommands::ConsumerStatus(cmd) => cmd.execute(rpc_hook).await,
+            ConsumerCommands::Consumer(cmd) => cmd.execute(rpc_hook).await,
+            ConsumerCommands::DeleteSubscriptionGroup(cmd) => cmd.execute(rpc_hook).await,
             ConsumerCommands::SetConsumeMode(cmd) => cmd.execute(rpc_hook).await,
             ConsumerCommands::StartMonitoring(cmd) => cmd.execute(rpc_hook).await,
+            ConsumerCommands::UpdateSubGroupList(cmd) => cmd.execute(rpc_hook).await,
+            ConsumerCommands::UpdateSubGroup(value) => value.execute(rpc_hook).await,
         }
     }
 }

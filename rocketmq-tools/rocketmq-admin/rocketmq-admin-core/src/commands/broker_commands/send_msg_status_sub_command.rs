@@ -43,7 +43,7 @@ fn build_message(topic: &str, message_size: usize) -> Message {
 }
 
 #[derive(Debug, Clone, Parser)]
-pub struct SendMsgStatusCommand {
+pub struct SendMsgStatusSubCommand {
     #[arg(
         short = 'b',
         long = "brokerName",
@@ -71,7 +71,7 @@ pub struct SendMsgStatusCommand {
     count: u32,
 }
 
-impl CommandExecute for SendMsgStatusCommand {
+impl CommandExecute for SendMsgStatusSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         let instance_name = format!("PID_SMSC_{}", get_current_millis());
         let mut client_config = ClientConfig::default();
@@ -96,7 +96,7 @@ impl CommandExecute for SendMsgStatusCommand {
         if let Err(e) = warmup_result {
             producer.shutdown().await;
             return Err(RocketMQError::Internal(format!(
-                "SendMsgStatusCommand command failed: {}",
+                "SendMsgStatusSubCommand command failed: {}",
                 e
             )));
         }
@@ -115,7 +115,7 @@ impl CommandExecute for SendMsgStatusCommand {
                 Err(e) => {
                     producer.shutdown().await;
                     return Err(RocketMQError::Internal(format!(
-                        "SendMsgStatusCommand command failed: {}",
+                        "SendMsgStatusSubCommand command failed: {}",
                         e
                     )));
                 }

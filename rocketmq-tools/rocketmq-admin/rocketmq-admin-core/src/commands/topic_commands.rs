@@ -19,7 +19,7 @@ mod topic_cluster_sub_command;
 mod topic_list_sub_command;
 mod topic_route_sub_command;
 mod topic_status_sub_command;
-mod update_order_conf_command;
+mod update_order_conf_sub_command;
 mod update_static_topic_sub_command;
 mod update_topic_list_sub_command;
 mod update_topic_perm_sub_command;
@@ -30,6 +30,18 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
+use crate::commands::topic_commands::allocate_mq_sub_command::AllocateMQSubCommand;
+use crate::commands::topic_commands::delete_topic_sub_command::DeleteTopicSubCommand;
+use crate::commands::topic_commands::remapping_static_topic_sub_command::RemappingStaticTopicSubCommand;
+use crate::commands::topic_commands::topic_cluster_sub_command::TopicClusterSubCommand;
+use crate::commands::topic_commands::topic_list_sub_command::TopicListSubCommand;
+use crate::commands::topic_commands::topic_route_sub_command::TopicRouteSubCommand;
+use crate::commands::topic_commands::topic_status_sub_command::TopicStatusSubCommand;
+use crate::commands::topic_commands::update_order_conf_sub_command::UpdateOrderConfSubCommand;
+use crate::commands::topic_commands::update_static_topic_sub_command::UpdateStaticTopicSubCommand;
+use crate::commands::topic_commands::update_topic_list_sub_command::UpdateTopicListSubCommand;
+use crate::commands::topic_commands::update_topic_perm_sub_command::UpdateTopicPermSubCommand;
+use crate::commands::topic_commands::update_topic_sub_command::UpdateTopicSubCommand;
 use crate::commands::CommandExecute;
 const NAMESPACE_ORDER_TOPIC_CONFIG: &str = "ORDER_TOPIC_CONFIG";
 #[derive(Subcommand)]
@@ -41,83 +53,84 @@ pub enum TopicCommands {
 space of the topic when the topic is created. The default value is 1. If you want to allocate
 more memory space, you can use this command to allocate it."#
     )]
-    AllocateMQ(allocate_mq_sub_command::AllocateMQSubCommand),
+    AllocateMQ(AllocateMQSubCommand),
 
     #[command(
         name = "deleteTopic",
         about = "Delete topic",
         long_about = r#"Delete topic from broker and NameServer."#
     )]
-    DeleteTopic(delete_topic_sub_command::DeleteTopicSubCommand),
+    DeleteTopic(DeleteTopicSubCommand),
 
     #[command(
         name = "remappingStaticTopic",
         about = "Remapping static topic",
         long_about = r#"Remapping static topic to different brokers or clusters."#
     )]
-    RemappingStaticTopic(remapping_static_topic_sub_command::RemappingStaticTopicSubCommand),
+    RemappingStaticTopic(RemappingStaticTopicSubCommand),
 
     #[command(
         name = "topicClusterList",
         about = "Get cluster info for topic",
         long_about = r#"Get cluster info for a given topic. This command queries which clusters contain the specified topic."#
     )]
-    TopicClusterList(topic_cluster_sub_command::TopicClusterSubCommand),
+    TopicCluster(TopicClusterSubCommand),
 
     #[command(
         name = "topicList",
         about = "Get topic list",
         long_about = r#"Fetch all topic list from name server."#
     )]
-    TopicList(topic_list_sub_command::TopicListSubCommand),
+    TopicList(TopicListSubCommand),
 
     #[command(
         name = "topicRoute",
         about = "Examine topic route info",
         long_about = r#"Examine topic route info."#
     )]
-    TopicRoute(topic_route_sub_command::TopicRouteSubCommand),
+    TopicRoute(TopicRouteSubCommand),
 
     #[command(
         name = "topicStatus",
         about = "Examine topic status info",
         long_about = r#"Examine topic status info."#
     )]
-    TopicStatus(topic_status_sub_command::TopicStatusSubCommand),
+    TopicStatus(TopicStatusSubCommand),
 
     #[command(
         name = "updateOrderConf",
         about = "Create or update order conf",
         long_about = r#"Create, update, or delete order topic configuration."#
     )]
-    UpdateOrderConf(update_order_conf_command::UpdateOrderConfCommand),
+    UpdateOrderConf(UpdateOrderConfSubCommand),
 
     #[command(
         name = "updateStaticTopic",
         about = "Update static topic",
         long_about = r#"Update or create static topic with queue mapping."#
     )]
-    UpdateStaticTopic(update_static_topic_sub_command::UpdateStaticTopicSubCommand),
+    UpdateStaticTopic(UpdateStaticTopicSubCommand),
+
+    #[command(
+        name = "updateTopicList",
+        about = "Update topic list",
+        long_about = "Update topic list with specified configuration."
+    )]
+    UpdateTopicList(UpdateTopicListSubCommand),
 
     #[command(
         name = "updateTopicPerm",
         about = "Update topic perm.",
         long_about = r#"Update topic perm."#
     )]
-    UpdateTopicPerm(update_topic_perm_sub_command::UpdateTopicPermSubCommand),
+    UpdateTopicPerm(UpdateTopicPermSubCommand),
 
     #[command(
         name = "updateTopic",
         about = "Update or create topic",
         long_about = r#"Update or create topic with specified configuration."#
     )]
-    UpdateTopic(update_topic_sub_command::UpdateTopicSubCommand),
-    #[command(
-        name = "updateTopicList",
-        about = "Update topic list",
-        long_about = "Update topic list with specified configuration."
-    )]
-    UpdateTopicList(update_topic_list_sub_command::UpdateTopicListSubCommand),
+    UpdateTopic(UpdateTopicSubCommand),
 }
 
 impl CommandExecute for TopicCommands {
@@ -126,15 +139,15 @@ impl CommandExecute for TopicCommands {
             TopicCommands::AllocateMQ(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::DeleteTopic(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::RemappingStaticTopic(cmd) => cmd.execute(rpc_hook).await,
-            TopicCommands::TopicClusterList(cmd) => cmd.execute(rpc_hook).await,
+            TopicCommands::TopicCluster(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::TopicList(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::TopicRoute(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::TopicStatus(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::UpdateOrderConf(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::UpdateStaticTopic(cmd) => cmd.execute(rpc_hook).await,
+            TopicCommands::UpdateTopicList(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::UpdateTopicPerm(cmd) => cmd.execute(rpc_hook).await,
             TopicCommands::UpdateTopic(cmd) => cmd.execute(rpc_hook).await,
-            TopicCommands::UpdateTopicList(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }

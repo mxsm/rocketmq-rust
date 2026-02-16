@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod clean_broker_metadata_command;
+mod clean_broker_metadata_sub_command;
 mod get_controller_config_sub_command;
 mod get_controller_metadata_sub_command;
 mod update_controller_config_sub_command;
@@ -23,6 +23,8 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
+use crate::commands::controller_commands::clean_broker_metadata_sub_command::CleanBrokerMetadataSubCommand;
+use crate::commands::controller_commands::get_controller_config_sub_command::GetControllerConfigSubCommand;
 use crate::commands::controller_commands::get_controller_metadata_sub_command::GetControllerMetadataSubCommand;
 use crate::commands::controller_commands::update_controller_config_sub_command::UpdateControllerConfigSubCommand;
 use crate::commands::CommandExecute;
@@ -34,37 +36,37 @@ pub enum ControllerCommands {
         about = "Clean metadata of broker on controller.",
         long_about = None,
     )]
-    CleanBrokerMetadata(clean_broker_metadata_command::CleanBrokerMetadataCommand),
+    CleanBrokerMetadata(CleanBrokerMetadataSubCommand),
 
     #[command(
         name = "getControllerConfig",
         about = "Get configuration of controller(s)",
         long_about = None,
     )]
-    GetControllerConfigSubCommand(get_controller_config_sub_command::GetControllerConfigSubCommand),
+    GetControllerConfig(GetControllerConfigSubCommand),
 
     #[command(
         name = "getControllerMetadata",
         about = "Get meta data of controller",
         long_about = None,
     )]
-    GetControllerMetadataSubCommand(GetControllerMetadataSubCommand),
+    GetControllerMetadata(GetControllerMetadataSubCommand),
 
     #[command(
         name = "updateControllerConfig",
         about = "update controller config",
         long_about = None,
     )]
-    UpdateControllerConfigSubCommand(UpdateControllerConfigSubCommand),
+    UpdateControllerConfig(UpdateControllerConfigSubCommand),
 }
 
 impl CommandExecute for ControllerCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
             ControllerCommands::CleanBrokerMetadata(cmd) => cmd.execute(rpc_hook).await,
-            ControllerCommands::GetControllerConfigSubCommand(value) => value.execute(rpc_hook).await,
-            ControllerCommands::GetControllerMetadataSubCommand(value) => value.execute(rpc_hook).await,
-            ControllerCommands::UpdateControllerConfigSubCommand(value) => value.execute(rpc_hook).await,
+            ControllerCommands::GetControllerConfig(value) => value.execute(rpc_hook).await,
+            ControllerCommands::GetControllerMetadata(value) => value.execute(rpc_hook).await,
+            ControllerCommands::UpdateControllerConfig(value) => value.execute(rpc_hook).await,
         }
     }
 }

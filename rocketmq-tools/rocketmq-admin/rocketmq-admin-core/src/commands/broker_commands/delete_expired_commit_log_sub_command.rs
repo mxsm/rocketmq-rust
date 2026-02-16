@@ -31,7 +31,7 @@ use crate::commands::CommandExecute;
     .required(false)
     .args(&["broker_addr", "cluster_name"]))
 )]
-pub struct CleanUnusedTopicCommand {
+pub struct DeleteExpiredCommitLogSubCommand {
     #[arg(short = 'b', long = "brokerAddr", required = false, help = "Broker address")]
     broker_addr: Option<String>,
 
@@ -39,7 +39,7 @@ pub struct CleanUnusedTopicCommand {
     cluster_name: Option<String>,
 }
 
-impl CommandExecute for CleanUnusedTopicCommand {
+impl CommandExecute for DeleteExpiredCommitLogSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
             DefaultMQAdminExt::with_rpc_hook(rpc_hook)
@@ -51,19 +51,22 @@ impl CommandExecute for CleanUnusedTopicCommand {
             .set_instance_name(get_current_millis().to_string().into());
 
         MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-            RocketMQError::Internal(format!("CleanUnusedTopicCommand: Failed to start MQAdminExt: {}", e))
+            RocketMQError::Internal(format!(
+                "DeleteExpiredCommitLogSubCommand: Failed to start MQAdminExt: {}",
+                e
+            ))
         })?;
 
-        let operation_result = clean_unused_topic(&default_mqadmin_ext, self).await;
+        let operation_result = delete_expired_commit_log(&default_mqadmin_ext, self).await;
 
         MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
         operation_result
     }
 }
 
-async fn clean_unused_topic(
+async fn delete_expired_commit_log(
     default_mqadmin_ext: &DefaultMQAdminExt,
-    command: &CleanUnusedTopicCommand,
+    command: &DeleteExpiredCommitLogSubCommand,
 ) -> RocketMQResult<()> {
     let addr = command
         .broker_addr
@@ -74,7 +77,7 @@ async fn clean_unused_topic(
         .as_ref()
         .map(|s| CheetahString::from(s.trim().to_string()));
 
-    let result = default_mqadmin_ext.clean_unused_topic(cluster, addr).await?;
+    let result = default_mqadmin_ext.delete_expired_commit_log(cluster, addr).await?;
 
     if result {
         println!("success");
