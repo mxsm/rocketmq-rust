@@ -472,4 +472,14 @@ mod tests {
 
         assert!(map.is_empty());
     }
+
+    #[test]
+    fn response_header_deserializes_from_empty_map() {
+        let map = std::collections::HashMap::new();
+
+        let header = UpdateConsumerOffsetResponseHeader::from_map(map).unwrap();
+        let default = UpdateConsumerOffsetResponseHeader::default();
+
+        assert_eq!(format!("{:?}", header), format!("{:?}", default));
+    }
 }
