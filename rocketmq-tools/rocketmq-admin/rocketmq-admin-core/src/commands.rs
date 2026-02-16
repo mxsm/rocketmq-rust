@@ -199,6 +199,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Broker",
+                command: "removeColdDataFlowCtrGroupConfig",
+                remark: "Remove consumer from cold ctr config.",
+            },
+            Command {
+                category: "Broker",
                 command: "resetMasterFlushOffset",
                 remark: "Reset master flush offset in slave.",
             },
