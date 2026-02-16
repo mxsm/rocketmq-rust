@@ -33,12 +33,12 @@ use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
 
 #[derive(Debug, Clone, Parser)]
-pub struct GetNamesrvConfigCommand {
+pub struct GetNamesrvConfigSubCommand {
     #[command(flatten)]
     common: CommonArgs,
 }
 
-impl GetNamesrvConfigCommand {
+impl GetNamesrvConfigSubCommand {
     fn parse_server_list(&self) -> Option<Vec<CheetahString>> {
         self.common.namesrv_addr.as_ref().and_then(|servers| {
             if servers.trim().is_empty() {
@@ -61,7 +61,7 @@ impl GetNamesrvConfigCommand {
     }
 }
 
-impl CommandExecute for GetNamesrvConfigCommand {
+impl CommandExecute for GetNamesrvConfigSubCommand {
     async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         if self.common.namesrv_addr.is_none() {
             eprintln!("Please set the namesrvAddr parameter");
