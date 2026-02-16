@@ -74,7 +74,7 @@ dashmap        = { workspace = true }
 
 crossbeam-skiplist = "0.1"
 
-futures = "0.3.31"
+futures = "0.3.32"
 
 opentelemetry     = { workspace = true }
 opentelemetry_sdk = { workspace = true }
