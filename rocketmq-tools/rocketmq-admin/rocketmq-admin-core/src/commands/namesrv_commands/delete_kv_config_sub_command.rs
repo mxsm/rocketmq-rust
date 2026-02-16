@@ -23,24 +23,17 @@ use rocketmq_remoting::runtime::RPCHook;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::commands::CommandExecute;
-use crate::commands::CommonArgs;
 
 #[derive(Debug, Clone, Parser)]
-pub struct UpdateKvConfigCommand {
-    #[command(flatten)]
-    common_args: CommonArgs,
-
-    #[arg(short = 's', long = "namespace", required = true, help = "set the namespace")]
+pub struct DeleteKvConfigSubCommand {
+    #[arg(short = 's', long = "namespace", required = true)]
     namespace: String,
 
-    #[arg(short = 'k', long = "key", required = true, help = "set the key name")]
+    #[arg(short = 'k', long = "key", required = true)]
     key: String,
-
-    #[arg(short = 'v', long = "value", required = true, help = "set the key value")]
-    value: String,
 }
 
-impl CommandExecute for UpdateKvConfigCommand {
+impl CommandExecute for DeleteKvConfigSubCommand {
     async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         let mut default_mqadmin_ext = DefaultMQAdminExt::new();
         default_mqadmin_ext
@@ -48,26 +41,21 @@ impl CommandExecute for UpdateKvConfigCommand {
             .set_instance_name(get_current_millis().to_string().into());
 
         let operation_result = async {
-            if let Some(addr) = &self.common_args.namesrv_addr {
-                default_mqadmin_ext.set_namesrv_addr(addr.trim());
-            }
-
             MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!("UpdateKvConfigCommand: Failed to start MQAdminExt: {}", e))
+                RocketMQError::Internal(format!("DeleteKvConfigSubCommand: Failed to start MQAdminExt: {}", e))
             })?;
 
-            default_mqadmin_ext
-                .create_and_update_kv_config(
-                    self.namespace.parse().unwrap(),
-                    self.key.parse().unwrap(),
-                    self.value.parse().unwrap(),
-                )
-                .await
-                .map_err(|e| {
-                    RocketMQError::Internal(format!("UpdateKvConfigCommand: Failed to update kv config: {}", e))
-                })?;
+            MQAdminExt::delete_kv_config(
+                &default_mqadmin_ext,
+                self.namespace.parse().unwrap(),
+                self.key.parse().unwrap(),
+            )
+            .await
+            .map_err(|e| {
+                RocketMQError::Internal(format!("DeleteKvConfigSubCommand: Failed to delete kv config: {}", e))
+            })?;
 
-            println!("update kv config in namespace success.");
+            println!("delete kv config from namespace success.");
             Ok(())
         }
         .await;

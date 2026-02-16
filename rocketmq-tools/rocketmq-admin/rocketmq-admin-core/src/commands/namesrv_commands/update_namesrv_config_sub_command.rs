@@ -28,7 +28,7 @@ use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
 
 #[derive(Debug, Clone, Parser)]
-pub struct UpdateNamesrvConfig {
+pub struct UpdateNamesrvConfigSubCommand {
     #[command(flatten)]
     common_args: CommonArgs,
 
@@ -39,7 +39,7 @@ pub struct UpdateNamesrvConfig {
     value: String,
 }
 
-impl CommandExecute for UpdateNamesrvConfig {
+impl CommandExecute for UpdateNamesrvConfigSubCommand {
     async fn execute(&self, _rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         let mut default_mqadmin_ext = DefaultMQAdminExt::new();
         default_mqadmin_ext
@@ -70,13 +70,18 @@ impl CommandExecute for UpdateNamesrvConfig {
             }
 
             MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-                RocketMQError::Internal(format!("UpdateNamesrvConfig: Failed to start MQAdminExt: {}", e))
+                RocketMQError::Internal(format!(
+                    "UpdateNamesrvConfigSubCommand: Failed to start MQAdminExt: {}",
+                    e
+                ))
             })?;
 
             default_mqadmin_ext
                 .update_name_server_config(properties, server_list.clone())
                 .await
-                .map_err(|e| RocketMQError::Internal(format!("UpdateNamesrvConfig: Failed to update config: {}", e)))?;
+                .map_err(|e| {
+                    RocketMQError::Internal(format!("UpdateNamesrvConfigSubCommand: Failed to update config: {}", e))
+                })?;
 
             println!(
                 "update name server config success!{}\n{} : {}\n",

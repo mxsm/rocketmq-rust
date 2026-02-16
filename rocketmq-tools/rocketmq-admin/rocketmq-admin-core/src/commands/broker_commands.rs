@@ -13,11 +13,11 @@
 // limitations under the License.
 
 mod clean_expired_cq_sub_command;
-mod clean_unused_topic_command;
-mod delete_expired_commit_log_command;
+mod clean_unused_topic_sub_command;
+mod delete_expired_commit_log_sub_command;
 mod get_broker_config_sub_command;
 mod reset_master_flush_offset_sub_command;
-mod send_msg_status_command;
+mod send_msg_status_sub_command;
 mod switch_timer_engine_sub_command;
 mod update_cold_data_flow_ctr_group_config_sub_command;
 
@@ -28,11 +28,11 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::broker_commands::clean_expired_cq_sub_command::CleanExpiredCQSubCommand;
-use crate::commands::broker_commands::clean_unused_topic_command::CleanUnusedTopicCommand;
-use crate::commands::broker_commands::delete_expired_commit_log_command::DeleteExpiredCommitLogCommand;
+use crate::commands::broker_commands::clean_unused_topic_sub_command::CleanUnusedTopicSubCommand;
+use crate::commands::broker_commands::delete_expired_commit_log_sub_command::DeleteExpiredCommitLogSubCommand;
 use crate::commands::broker_commands::get_broker_config_sub_command::GetBrokerConfigSubCommand;
 use crate::commands::broker_commands::reset_master_flush_offset_sub_command::ResetMasterFlushOffsetSubCommand;
-use crate::commands::broker_commands::send_msg_status_command::SendMsgStatusCommand;
+use crate::commands::broker_commands::send_msg_status_sub_command::SendMsgStatusSubCommand;
 use crate::commands::broker_commands::switch_timer_engine_sub_command::SwitchTimerEngineSubCommand;
 use crate::commands::broker_commands::update_cold_data_flow_ctr_group_config_sub_command::UpdateColdDataFlowCtrGroupConfigSubCommand;
 use crate::commands::CommandExecute;
@@ -51,21 +51,21 @@ pub enum BrokerCommands {
         about = "Clean unused topic on broker.",
         long_about = None,
     )]
-    CleanUnusedTopic(CleanUnusedTopicCommand),
+    CleanUnusedTopic(CleanUnusedTopicSubCommand),
 
     #[command(
         name = "deleteExpiredCommitLog",
         about = "Delete expired CommitLog files.",
         long_about = None,
     )]
-    DeleteExpiredCommitLog(DeleteExpiredCommitLogCommand),
+    DeleteExpiredCommitLog(DeleteExpiredCommitLogSubCommand),
 
     #[command(
         name = "getBrokerConfig",
         about = "Get broker config by cluster or special broker.",
         long_about = None,
     )]
-    GetBrokerConfigSubCommand(GetBrokerConfigSubCommand),
+    GetBrokerConfig(GetBrokerConfigSubCommand),
 
     #[command(
         name = "resetMasterFlushOffset",
@@ -79,7 +79,7 @@ pub enum BrokerCommands {
         about = "Send msg to broker.",
         long_about = None,
     )]
-    SendMsgStatus(SendMsgStatusCommand),
+    SendMsgStatus(SendMsgStatusSubCommand),
 
     #[command(
         name = "switchTimerEngine",
@@ -102,7 +102,7 @@ impl CommandExecute for BrokerCommands {
             BrokerCommands::CleanExpiredCQ(value) => value.execute(rpc_hook).await,
             BrokerCommands::CleanUnusedTopic(value) => value.execute(rpc_hook).await,
             BrokerCommands::DeleteExpiredCommitLog(value) => value.execute(rpc_hook).await,
-            BrokerCommands::GetBrokerConfigSubCommand(cmd) => cmd.execute(rpc_hook).await,
+            BrokerCommands::GetBrokerConfig(cmd) => cmd.execute(rpc_hook).await,
             BrokerCommands::ResetMasterFlushOffset(value) => value.execute(rpc_hook).await,
             BrokerCommands::SendMsgStatus(value) => value.execute(rpc_hook).await,
             BrokerCommands::SwitchTimerEngine(value) => value.execute(rpc_hook).await,
