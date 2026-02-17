@@ -72,7 +72,7 @@ serde_json.workspace = true
 
 tempfile = "3.25.0"
 
-memmap2                 = "0.9.9"
+memmap2                 = "0.9.10"
 trait-variant.workspace = true
 sysinfo                 = "0.38.2"
 cheetah-string          = { workspace = true }
