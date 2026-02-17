@@ -199,6 +199,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Broker",
+                command: "getColdDataFlowCtrInfo",
+                remark: "Get cold data flow ctr info.",
+            },
+            Command {
+                category: "Broker",
                 command: "removeColdDataFlowCtrGroupConfig",
                 remark: "Remove consumer from cold ctr config.",
             },
