@@ -50,7 +50,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn get_consume_stats_request_header() {
+    fn getters_and_setters() {
         let mut header = GetConsumeStatsRequestHeader {
             consumer_group: CheetahString::from("testGroup"),
             topic: CheetahString::from("testTopic"),
