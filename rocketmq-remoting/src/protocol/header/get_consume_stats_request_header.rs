@@ -99,8 +99,6 @@ mod tests {
 
     #[test]
     fn get_consume_stats_request_header_with_topic_request_header_some() {
-        // Construct a header with a populated TopicRequestHeader to exercise the
-        // #[serde(flatten)] behavior when the option is Some(...)
         let topic_header = TopicRequestHeader::default();
 
         let header = GetConsumeStatsRequestHeader {
