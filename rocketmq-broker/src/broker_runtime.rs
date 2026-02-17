@@ -1755,7 +1755,7 @@ impl<MS: MessageStore> BrokerRuntimeInner<MS> {
 
     #[inline]
     pub fn timer_message_store_unchecked(&self) -> &TimerMessageStore {
-        unsafe { self.timer_message_store.as_ref().unwrap_unchecked() }
+        unimplemented!("timer_message_store_unchecked is not implemented yet")
     }
 
     #[inline]
