@@ -97,4 +97,25 @@ mod tests {
         assert_eq!(deserialized.get_consumer_group(), "testGroup");
         assert_eq!(deserialized.get_topic(), "testTopic");
     }
+
+    #[test]
+    fn get_consume_stats_request_header_with_topic_request_header_some() {
+        // Construct a header with a populated TopicRequestHeader to exercise the
+        // #[serde(flatten)] behavior when the option is Some(...)
+        let topic_header = TopicRequestHeader::default();
+
+        let header = GetConsumeStatsRequestHeader {
+            consumer_group: CheetahString::from("testGroup"),
+            topic: CheetahString::from("testTopic"),
+            topic_request_header: Some(topic_header),
+        };
+
+        let json = serde_json::to_string(&header).unwrap();
+        println!("Serialized JSON with topic_request_header: {}", json);
+
+        let deserialized: GetConsumeStatsRequestHeader = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.get_consumer_group(), "testGroup");
+        assert_eq!(deserialized.get_topic(), "testTopic");
+        assert!(deserialized.topic_request_header.is_some());
+    }
 }
