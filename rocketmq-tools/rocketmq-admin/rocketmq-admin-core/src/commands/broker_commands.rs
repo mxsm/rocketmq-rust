@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod broker_status_sub_command;
 mod clean_expired_cq_sub_command;
 mod clean_unused_topic_sub_command;
 mod delete_expired_commit_log_sub_command;
@@ -30,6 +31,7 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
+use crate::commands::broker_commands::broker_status_sub_command::BrokerStatusSubCommand;
 use crate::commands::broker_commands::clean_expired_cq_sub_command::CleanExpiredCQSubCommand;
 use crate::commands::broker_commands::clean_unused_topic_sub_command::CleanUnusedTopicSubCommand;
 use crate::commands::broker_commands::delete_expired_commit_log_sub_command::DeleteExpiredCommitLogSubCommand;
@@ -45,6 +47,13 @@ use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
 pub enum BrokerCommands {
+    #[command(
+        name = "brokerStatus",
+        about = "Fetch broker runtime status data.",
+        long_about = None,
+    )]
+    BrokerStatus(BrokerStatusSubCommand),
+
     #[command(
         name = "cleanExpiredCQ",
         about = "Clean expired ConsumeQueue on broker.",
@@ -126,6 +135,7 @@ pub enum BrokerCommands {
 impl CommandExecute for BrokerCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
+            BrokerCommands::BrokerStatus(cmd) => cmd.execute(rpc_hook).await,
             BrokerCommands::CleanExpiredCQ(value) => value.execute(rpc_hook).await,
             BrokerCommands::CleanUnusedTopic(value) => value.execute(rpc_hook).await,
             BrokerCommands::DeleteExpiredCommitLog(value) => value.execute(rpc_hook).await,
