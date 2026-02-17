@@ -16,6 +16,7 @@ mod clean_expired_cq_sub_command;
 mod clean_unused_topic_sub_command;
 mod delete_expired_commit_log_sub_command;
 mod get_broker_config_sub_command;
+mod get_cold_data_flow_ctr_info_sub_command;
 mod remove_cold_data_flow_ctr_group_config_sub_command;
 mod reset_master_flush_offset_sub_command;
 mod send_msg_status_sub_command;
@@ -33,6 +34,7 @@ use crate::commands::broker_commands::clean_expired_cq_sub_command::CleanExpired
 use crate::commands::broker_commands::clean_unused_topic_sub_command::CleanUnusedTopicSubCommand;
 use crate::commands::broker_commands::delete_expired_commit_log_sub_command::DeleteExpiredCommitLogSubCommand;
 use crate::commands::broker_commands::get_broker_config_sub_command::GetBrokerConfigSubCommand;
+use crate::commands::broker_commands::get_cold_data_flow_ctr_info_sub_command::GetColdDataFlowCtrInfoSubCommand;
 use crate::commands::broker_commands::remove_cold_data_flow_ctr_group_config_sub_command::RemoveColdDataFlowCtrGroupConfigSubCommand;
 use crate::commands::broker_commands::reset_master_flush_offset_sub_command::ResetMasterFlushOffsetSubCommand;
 use crate::commands::broker_commands::send_msg_status_sub_command::SendMsgStatusSubCommand;
@@ -70,6 +72,13 @@ pub enum BrokerCommands {
         long_about = None,
     )]
     GetBrokerConfig(GetBrokerConfigSubCommand),
+
+    #[command(
+        name = "getColdDataFlowCtrInfo",
+        about = "Get cold data flow ctr info.",
+        long_about = None,
+    )]
+    GetColdDataFlowCtrInfo(GetColdDataFlowCtrInfoSubCommand),
 
     #[command(
         name = "removeColdDataFlowCtrGroupConfig",
@@ -121,6 +130,7 @@ impl CommandExecute for BrokerCommands {
             BrokerCommands::CleanUnusedTopic(value) => value.execute(rpc_hook).await,
             BrokerCommands::DeleteExpiredCommitLog(value) => value.execute(rpc_hook).await,
             BrokerCommands::GetBrokerConfig(cmd) => cmd.execute(rpc_hook).await,
+            BrokerCommands::GetColdDataFlowCtrInfo(value) => value.execute(rpc_hook).await,
             BrokerCommands::RemoveColdDataFlowCtrGroupConfig(value) => value.execute(rpc_hook).await,
             BrokerCommands::ResetMasterFlushOffset(value) => value.execute(rpc_hook).await,
             BrokerCommands::SendMsgStatus(value) => value.execute(rpc_hook).await,
