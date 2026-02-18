@@ -214,7 +214,7 @@ mod tests {
         let header2: QueryTopicsByConsumerRequestHeader = serde_json::from_str(&json).unwrap();
         assert_eq!(header2.group, special);
 
-        let long: String = std::iter::repeat('a').take(5000).collect();
+        let long = "a".repeat(5000);
         let header_long = QueryTopicsByConsumerRequestHeader::new(long.clone());
         let json_long = serde_json::to_string(&header_long).unwrap();
         let header_long2: QueryTopicsByConsumerRequestHeader = serde_json::from_str(&json_long).unwrap();
