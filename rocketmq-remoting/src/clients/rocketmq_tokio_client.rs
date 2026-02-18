@@ -764,8 +764,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for Rocketmq
                 }
             });
 
-            let channel_not_active_interval =
-                self.tokio_client_config.channel_not_active_interval as u64;
+            let channel_not_active_interval = self.tokio_client_config.channel_not_active_interval as u64;
             if channel_not_active_interval > 0 {
                 let idle_token = token.clone();
                 tokio::spawn(async move {
@@ -1006,10 +1005,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                     {
                         Ok(Ok(())) => {}
                         Ok(Err(e)) => {
-                            warn!(
-                                "invokeOneway: send request to {} failed: {:?}",
-                                addr_clone, e
-                            );
+                            warn!("invokeOneway: send request to {} failed: {:?}", addr_clone, e);
                         }
                         Err(_) => {
                             warn!(
@@ -1035,10 +1031,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                 request.mark_oneway_rpc_ref();
                 let _ = client.send(request).await;
             } else {
-                tracing::debug!(
-                    "No cached client for oneway send to {}, skipping fire-and-forget",
-                    addr
-                );
+                tracing::debug!("No cached client for oneway send to {}, skipping fire-and-forget", addr);
             }
         });
     }
@@ -1070,5 +1063,3 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         todo!()
     }
 }
-
-
