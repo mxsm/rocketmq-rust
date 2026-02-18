@@ -199,6 +199,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Broker",
+                command: "getBrokerEpoch",
+                remark: "Fetch broker epoch entries.",
+            },
+            Command {
+                category: "Broker",
                 command: "getColdDataFlowCtrInfo",
                 remark: "Get cold data flow ctr info.",
             },

@@ -1263,9 +1263,9 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn get_broker_epoch_cache(
         &self,
-        _broker_addr: CheetahString,
+        broker_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<EpochEntryCache> {
-        unimplemented!("get_broker_epoch_cache not implemented yet")
+        self.default_mqadmin_ext_impl.get_broker_epoch_cache(broker_addr).await
     }
 
     async fn elect_master(
