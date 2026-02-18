@@ -776,7 +776,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         broker_addr: CheetahString,
         master_flush_offset: u64,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .reset_master_flush_offset(broker_addr, master_flush_offset)
+            .await
     }
 
     async fn get_controller_config(
@@ -812,7 +814,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         broker_addr: CheetahString,
         properties: HashMap<CheetahString, CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .update_cold_data_flow_ctr_group_config(broker_addr, properties)
+            .await
     }
 
     async fn remove_cold_data_flow_ctr_group_config(

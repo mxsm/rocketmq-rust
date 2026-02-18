@@ -50,7 +50,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn get_consume_stats_request_header() {
+    fn getters_and_setters() {
         let mut header = GetConsumeStatsRequestHeader {
             consumer_group: CheetahString::from("testGroup"),
             topic: CheetahString::from("testTopic"),
@@ -75,7 +75,6 @@ mod tests {
         };
 
         let json = serde_json::to_string(&header).unwrap();
-        println!("Serialized JSON: {}", json);
 
         let deserialized: GetConsumeStatsRequestHeader = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.get_consumer_group(), "testGroup");
@@ -96,5 +95,24 @@ mod tests {
         let deserialized: GetConsumeStatsRequestHeader = serde_json::from_str(json).unwrap();
         assert_eq!(deserialized.get_consumer_group(), "testGroup");
         assert_eq!(deserialized.get_topic(), "testTopic");
+    }
+
+    #[test]
+    fn get_consume_stats_request_header_with_topic_request_header_some() {
+        let topic_header = TopicRequestHeader::default();
+
+        let header = GetConsumeStatsRequestHeader {
+            consumer_group: CheetahString::from("testGroup"),
+            topic: CheetahString::from("testTopic"),
+            topic_request_header: Some(topic_header),
+        };
+
+        let json = serde_json::to_string(&header).unwrap();
+        println!("Serialized JSON with topic_request_header: {}", json);
+
+        let deserialized: GetConsumeStatsRequestHeader = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.get_consumer_group(), "testGroup");
+        assert_eq!(deserialized.get_topic(), "testTopic");
+        assert!(deserialized.topic_request_header.is_some());
     }
 }

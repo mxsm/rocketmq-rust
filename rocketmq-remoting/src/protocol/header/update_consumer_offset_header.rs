@@ -405,4 +405,71 @@ mod tests {
         header.set_queue_id(-1);
         assert_eq!(header.queue_id(), -1);
     }
+
+    #[test]
+    fn response_header_can_be_created() {
+        let header: UpdateConsumerOffsetResponseHeader = UpdateConsumerOffsetResponseHeader {};
+        let default: UpdateConsumerOffsetResponseHeader = UpdateConsumerOffsetResponseHeader::default();
+        assert_eq!(format!("{:?}", header), format!("{:?}", default));
+    }
+
+    #[test]
+    fn response_header_is_zero_sized() {
+        assert_eq!(std::mem::size_of::<UpdateConsumerOffsetResponseHeader>(), 0);
+    }
+
+    #[test]
+    fn response_header_serializes_to_empty_json() {
+        let header = UpdateConsumerOffsetResponseHeader::default();
+        let json = serde_json::to_string(&header).unwrap();
+
+        assert_eq!(json, "{}");
+    }
+
+    #[test]
+    fn response_header_deserializes_from_empty_json() {
+        let json = "{}";
+        let header: UpdateConsumerOffsetResponseHeader = serde_json::from_str(json).unwrap();
+
+        let default = UpdateConsumerOffsetResponseHeader::default();
+
+        assert_eq!(format!("{:?}", header), format!("{:?}", default));
+    }
+
+    #[test]
+    fn response_header_round_trip() {
+        let original = UpdateConsumerOffsetResponseHeader::default();
+
+        let json = serde_json::to_string(&original).unwrap();
+        let decoded: UpdateConsumerOffsetResponseHeader = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(format!("{:?}", original), format!("{:?}", decoded));
+    }
+
+    #[test]
+    fn response_header_ignores_extra_fields() {
+        let json = r#"{"unexpected":"field"}"#;
+
+        let header: UpdateConsumerOffsetResponseHeader = serde_json::from_str(json).unwrap();
+
+        let default = UpdateConsumerOffsetResponseHeader::default();
+
+        assert_eq!(format!("{:?}", header), format!("{:?}", default));
+    }
+
+    #[test]
+    fn all_instances_are_equivalent() {
+        let a = UpdateConsumerOffsetResponseHeader {};
+        let b = UpdateConsumerOffsetResponseHeader::default();
+
+        assert_eq!(format!("{:?}", a), format!("{:?}", b));
+    }
+
+    #[test]
+    fn response_header_encodes_to_empty_map() {
+        let header = UpdateConsumerOffsetResponseHeader::default();
+        let map = header.to_map().unwrap();
+
+        assert!(map.is_empty());
+    }
 }

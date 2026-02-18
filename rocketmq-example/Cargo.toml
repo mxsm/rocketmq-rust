@@ -53,3 +53,19 @@ path = "examples/producer/producer_simple.rs"
 [[example]]
 name = "producer-with-timeout"
 path = "examples/producer/producer_with_timeout.rs"
+
+[[example]]
+name = "producer-basic-send"
+path = "examples/producer/basic_send.rs"
+
+[[example]]
+name = "producer-batch-send"
+path = "examples/producer/batch_send.rs"
+
+[[example]]
+name = "producer-send-to-queue"
+path = "examples/producer/send_to_queue.rs"
+
+[[example]]
+name = "producer-send-with-selector"
+path = "examples/producer/send_with_selector.rs"

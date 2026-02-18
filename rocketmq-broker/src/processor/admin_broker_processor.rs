@@ -28,6 +28,7 @@ use crate::processor::admin_broker_processor::reset_master_flusg_offset_handler:
 use crate::processor::admin_broker_processor::subscription_group_handler::SubscriptionGroupHandler;
 use crate::processor::admin_broker_processor::topic_request_handler::TopicRequestHandler;
 use crate::processor::admin_broker_processor::update_broker_ha_handler::UpdateBrokerHaHandler;
+use crate::processor::admin_broker_processor::update_cold_data_flow_ctr_group_config::UpdateColdDataFlowCtrGroupConfigRequestHandler;
 use crate::processor::admin_broker_processor::update_user_request_handler::UpdateUserRequestHandler;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -54,6 +55,7 @@ mod reset_master_flusg_offset_handler;
 mod subscription_group_handler;
 mod topic_request_handler;
 mod update_broker_ha_handler;
+mod update_cold_data_flow_ctr_group_config;
 mod update_user_request_handler;
 
 pub struct AdminBrokerProcessor<MS: MessageStore> {
@@ -76,6 +78,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     update_user_request_handler: UpdateUserRequestHandler<MS>,
     list_users_request_handler: ListUsersRequestHandler<MS>,
     get_user_request_handler: GetUserRequestHandler<MS>,
+    update_cold_data_flow_ctr_group_config_request_handler: UpdateColdDataFlowCtrGroupConfigRequestHandler<MS>,
 }
 
 impl<MS> RequestProcessor for AdminBrokerProcessor<MS>
@@ -117,6 +120,8 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
         let update_user_request_handler = UpdateUserRequestHandler::new(broker_runtime_inner.clone());
         let list_users_request_handler = ListUsersRequestHandler::new(broker_runtime_inner.clone());
         let get_user_request_handler = GetUserRequestHandler::new(broker_runtime_inner.clone());
+        let update_cold_data_flow_ctr_group_config_request_handler =
+            UpdateColdDataFlowCtrGroupConfigRequestHandler::new(broker_runtime_inner.clone());
 
         AdminBrokerProcessor {
             topic_request_handler,
@@ -136,6 +141,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             update_user_request_handler,
             list_users_request_handler,
             get_user_request_handler,
+            update_cold_data_flow_ctr_group_config_request_handler,
         }
     }
 }
@@ -181,7 +187,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .get_broker_config(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::UpdateColdDataFlowCtrConfig => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::UpdateColdDataFlowCtrConfig => {
+                self.update_cold_data_flow_ctr_group_config_request_handler
+                    .update_cold_data_flow_ctr_group_config(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::RemoveColdDataFlowCtrConfig => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::GetColdDataFlowCtrInfo => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::SetCommitlogReadMode => Ok(get_unknown_cmd_response(request_code)),
