@@ -179,6 +179,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Broker",
+                command: "brokerStatus",
+                remark: "Fetch broker runtime status data.",
+            },
+            Command {
+                category: "Broker",
                 command: "cleanExpiredCQ",
                 remark: "Clean expired ConsumeQueue on broker.",
             },
