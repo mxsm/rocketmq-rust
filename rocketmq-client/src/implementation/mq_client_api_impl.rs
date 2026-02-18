@@ -70,6 +70,7 @@ use rocketmq_remoting::protocol::body::acl_info::AclInfo;
 use rocketmq_remoting::protocol::body::batch_ack_message_request_body::BatchAckMessageRequestBody;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_remoting::protocol::body::check_client_request_body::CheckClientRequestBody;
+use rocketmq_remoting::protocol::body::epoch_entry_cache::EpochEntryCache;
 use rocketmq_remoting::protocol::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody;
 use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
 use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
@@ -2409,6 +2410,36 @@ impl MQClientAPIImpl {
                 Ok(header) => Ok(header),
                 Err(_) => Err(mq_client_err!("Could not decode GetMetaDataResponseHeader".to_string())),
             },
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string())
+            )),
+        }
+    }
+
+    pub async fn get_broker_epoch_cache(
+        &self,
+        broker_addr: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<EpochEntryCache> {
+        let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerEpochCache);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                if let Some(body) = response.body() {
+                    match EpochEntryCache::decode(body) {
+                        Ok(value) => Ok(value),
+                        Err(e) => Err(mq_client_err!(format!("decode EpochEntryCache failed: {}", e))),
+                    }
+                } else {
+                    Err(mq_client_err!(
+                        "get_broker_epoch_cache response body is empty".to_string()
+                    ))
+                }
+            }
             _ => Err(mq_client_err!(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string())

@@ -1453,9 +1453,16 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
 
     async fn get_broker_epoch_cache(
         &self,
-        _broker_addr: CheetahString,
+        broker_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<EpochEntryCache> {
-        unimplemented!("get_broker_epoch_cache not implemented yet")
+        if let Some(ref mq_client_instance) = self.client_instance {
+            Ok(mq_client_instance
+                .get_mq_client_api_impl()
+                .get_broker_epoch_cache(broker_addr, self.timeout_millis.as_millis() as u64)
+                .await?)
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn elect_master(
