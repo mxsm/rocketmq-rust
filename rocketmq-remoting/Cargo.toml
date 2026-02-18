@@ -31,7 +31,6 @@ rust-version.workspace = true
 [dependencies]
 rocketmq-common  = { workspace = true }
 rocketmq-macros  = { workspace = true }
-rocketmq-runtime = { workspace = true }
 rocketmq-rust    = { workspace = true }
 rocketmq-error   = { workspace = true }
 

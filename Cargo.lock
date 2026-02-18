@@ -3739,7 +3739,6 @@ dependencies = [
  "rocketmq-common",
  "rocketmq-error",
  "rocketmq-macros",
- "rocketmq-runtime",
  "rocketmq-rust",
  "serde",
  "serde_json",
