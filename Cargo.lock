@@ -3424,16 +3424,13 @@ dependencies = [
 [[package]]
 name = "rocketmq-admin-cli"
 version = "0.8.0"
-dependencies = [
- "rocketmq-admin-core",
- "tokio",
-]
 
 [[package]]
 name = "rocketmq-admin-core"
 version = "0.8.0"
 dependencies = [
  "cheetah-string",
+ "chrono",
  "clap",
  "clap_complete",
  "colored",
@@ -3651,13 +3648,7 @@ version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "rocketmq-client-rust",
- "rocketmq-common",
- "rocketmq-remoting",
  "serde",
- "serde_json",
- "tokio",
- "tracing",
 ]
 
 [[package]]

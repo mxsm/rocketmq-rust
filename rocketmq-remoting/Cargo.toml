@@ -29,10 +29,10 @@ rust-version.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rocketmq-common  = { workspace = true }
-rocketmq-macros  = { workspace = true }
-rocketmq-rust    = { workspace = true }
-rocketmq-error   = { workspace = true }
+rocketmq-common = { workspace = true }
+rocketmq-macros = { workspace = true }
+rocketmq-rust   = { workspace = true }
+rocketmq-error  = { workspace = true }
 
 anyhow.workspace = true
 bytes.workspace  = true

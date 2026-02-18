@@ -179,6 +179,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Broker",
+                command: "brokerConsumeStats",
+                remark: "Fetch broker consume stats data.",
+            },
+            Command {
+                category: "Broker",
                 command: "brokerStatus",
                 remark: "Fetch broker runtime status data.",
             },

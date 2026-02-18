@@ -28,22 +28,12 @@ description            = "Common shared code for RocketMQ Dashboard implementati
 rust-version.workspace = true
 
 [dependencies]
-rocketmq-common = { workspace = true }
-rocketmq-client-rust = { workspace = true }
-rocketmq-remoting = { workspace = true }
-
-# Async runtime
-tokio = { workspace = true }
 
 # Async trait support
 async-trait = "0.1"
 
 # Serialization
 serde = { workspace = true }
-serde_json = { workspace = true }
-
-# Logging
-tracing = { workspace = true }
 
 # Error handling
 anyhow = { workspace = true }

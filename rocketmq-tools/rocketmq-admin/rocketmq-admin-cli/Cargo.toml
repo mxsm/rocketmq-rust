@@ -14,23 +14,20 @@
 
 
 [package]
-name = "rocketmq-admin-cli"
-version.workspace = true
-authors.workspace = true
-edition = "2024"
-homepage.workspace = true
-repository.workspace = true
-license.workspace = true
-keywords = ["rocketmq", "cli", "admin", "messaging", "rocketmq-rust"]
-categories = ["command-line-utilities", "development-tools"]
-readme = "README.md"
-description = "Command-line interface for managing RocketMQ-Rust and Apache RocketMQ clusters"
+name                   = "rocketmq-admin-cli"
+version.workspace      = true
+authors.workspace      = true
+edition                = "2024"
+homepage.workspace     = true
+repository.workspace   = true
+license.workspace      = true
+keywords               = ["rocketmq", "cli", "admin", "messaging", "rocketmq-rust"]
+categories             = ["command-line-utilities", "development-tools"]
+readme                 = "README.md"
+description            = "Command-line interface for managing RocketMQ-Rust and Apache RocketMQ clusters"
 rust-version.workspace = true
 
 [dependencies]
-rocketmq-tools = { workspace = true }
-
-tokio = { workspace = true, features = ["full"] }
 
 [[bin]]
 name = "rocketmq-admin-cli"
