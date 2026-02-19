@@ -53,7 +53,7 @@ slog = { version = "2.7", features = [
 ] }
 
 # gRPC networking
-tonic       = { version = "0.14.4", features = ["transport", "codegen"] }
+tonic       = { version = "0.14.5", features = ["transport", "codegen"] }
 tonic-prost = "0.14"
 
 # Serialization
