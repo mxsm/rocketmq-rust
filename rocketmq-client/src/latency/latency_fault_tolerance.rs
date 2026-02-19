@@ -12,24 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
-
 use rocketmq_rust::ArcMut;
 
+/// Broker-level fault tolerance abstraction for latency-based routing decisions.
+///
+/// Tracks broker availability and reachability status, enabling intelligent
+/// broker selection that avoids unhealthy brokers during message sending.
 #[allow(async_fn_in_trait)]
-pub trait LatencyFaultTolerance<T, R, S>: Send + Sync + 'static {
-    /// Update brokers' states, to decide if they are good or not.
+pub trait LatencyFaultTolerance<T>: Send + Sync + 'static {
+    /// Updates a broker's fault status.
     ///
     /// # Arguments
     ///
     /// * `name` - Broker's name.
     /// * `current_latency` - Current message sending process's latency.
     /// * `not_available_duration` - Corresponding not available time, ms. The broker will be not
-    ///   available until it
+    ///   available until it spends such time.
     /// * `reachable` - To decide if this broker is reachable or not.
-    async fn update_fault_item(&mut self, name: T, current_latency: u64, not_available_duration: u64, reachable: bool);
+    async fn update_fault_item(
+        &self,
+        name: T,
+        current_latency: u64,
+        not_available_duration: u64,
+        reachable: bool,
+    );
 
-    /// To check if this broker is available.
+    /// Checks if this broker is available.
     ///
     /// # Arguments
     ///
@@ -37,10 +45,10 @@ pub trait LatencyFaultTolerance<T, R, S>: Send + Sync + 'static {
     ///
     /// # Returns
     ///
-    /// * `true` if the broker is available, `false` otherwise.
+    /// `true` if the broker is available, `false` otherwise.
     fn is_available(&self, name: &T) -> bool;
 
-    /// To check if this broker is reachable.
+    /// Checks if this broker is reachable.
     ///
     /// # Arguments
     ///
@@ -48,66 +56,41 @@ pub trait LatencyFaultTolerance<T, R, S>: Send + Sync + 'static {
     ///
     /// # Returns
     ///
-    /// * `true` if the broker is reachable, `false` otherwise.
+    /// `true` if the broker is reachable, `false` otherwise.
     fn is_reachable(&self, name: &T) -> bool;
 
-    /// Remove the broker in this fault item table.
+    /// Removes the broker from this fault item table.
     ///
     /// # Arguments
     ///
     /// * `name` - Broker's name.
-    async fn remove(&mut self, name: &T);
+    async fn remove(&self, name: &T);
 
-    /// The worst situation, no broker can be available. Then choose a random one.
+    /// When no broker is available, picks a random reachable one as fallback.
     ///
     /// # Returns
     ///
-    /// * A random broker will be returned.
+    /// A random broker name, or `None` if no reachable broker exists.
     async fn pick_one_at_least(&self) -> Option<T>;
 
-    /// Start a new thread, to detect the broker's reachable tag.
+    /// Starts a background task to periodically detect broker reachability.
     fn start_detector(this: ArcMut<Self>);
 
-    /// Shutdown threads that started by `LatencyFaultTolerance`.
+    /// Shuts down the background detector task.
     fn shutdown(&self);
 
-    /// A function reserved, just detect by once, won't create a new thread.
+    /// Runs a single round of broker reachability detection.
     async fn detect_by_one_round(&self);
 
-    /// Use it to set the detect timeout bound.
-    ///
-    /// # Arguments
-    ///
-    /// * `detect_timeout` - Timeout bound.
+    /// Sets the detect timeout bound in milliseconds.
     fn set_detect_timeout(&mut self, detect_timeout: u32);
 
-    /// Use it to set the detector's interval for each broker (each broker will be detected once
-    /// during this time).
-    ///
-    /// # Arguments
-    ///
-    /// * `detect_interval` - Each broker's detecting interval.
+    /// Sets the detector's interval for each broker in milliseconds.
     fn set_detect_interval(&mut self, detect_interval: u32);
 
-    /// Use it to set the detector work or not.
-    ///
-    /// # Arguments
-    ///
-    /// * `start_detector_enable` - Set the detector's work status.
+    /// Enables or disables the background detector.
     fn set_start_detector_enable(&mut self, start_detector_enable: bool);
 
-    /// Use it to judge if the detector is enabled.
-    ///
-    /// # Returns
-    ///
-    /// * `true` if the detector should be started, `false` otherwise.
+    /// Returns whether the background detector is enabled.
     fn is_start_detector_enable(&self) -> bool;
-
-    fn set_resolver(&mut self, resolver: R);
-
-    fn set_service_detector(&mut self, service_detector: S);
-
-    fn as_any(&self) -> &dyn Any;
-
-    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
