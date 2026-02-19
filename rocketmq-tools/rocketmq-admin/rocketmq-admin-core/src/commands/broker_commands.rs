@@ -14,6 +14,7 @@
 
 mod clean_expired_cq_sub_command;
 mod clean_unused_topic_sub_command;
+mod commit_log_set_read_ahead_sub_command;
 mod delete_expired_commit_log_sub_command;
 mod get_broker_config_sub_command;
 mod get_cold_data_flow_ctr_info_sub_command;
@@ -32,6 +33,7 @@ use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::broker_commands::clean_expired_cq_sub_command::CleanExpiredCQSubCommand;
 use crate::commands::broker_commands::clean_unused_topic_sub_command::CleanUnusedTopicSubCommand;
+use crate::commands::broker_commands::commit_log_set_read_ahead_sub_command::CommitLogSetReadAheadSubCommand;
 use crate::commands::broker_commands::delete_expired_commit_log_sub_command::DeleteExpiredCommitLogSubCommand;
 use crate::commands::broker_commands::get_broker_config_sub_command::GetBrokerConfigSubCommand;
 use crate::commands::broker_commands::get_cold_data_flow_ctr_info_sub_command::GetColdDataFlowCtrInfoSubCommand;
@@ -121,6 +123,13 @@ pub enum BrokerCommands {
         long_about = None,
     )]
     UpdateBrokerConfigSubCommand(UpdateBrokerConfigSubCommand),
+
+    #[command(
+        name = "setCommitLogReadAheadMode",
+        about = "Set read ahead mode for all commitlog files.",
+        long_about = None,
+    )]
+    CommitLogSetReadAheadSubCommand(CommitLogSetReadAheadSubCommand),
 }
 
 impl CommandExecute for BrokerCommands {
@@ -137,6 +146,7 @@ impl CommandExecute for BrokerCommands {
             BrokerCommands::SwitchTimerEngine(value) => value.execute(rpc_hook).await,
             BrokerCommands::UpdateColdDataFlowCtrGroupConfig(value) => value.execute(rpc_hook).await,
             BrokerCommands::UpdateBrokerConfigSubCommand(cmd) => cmd.execute(rpc_hook).await,
+            BrokerCommands::CommitLogSetReadAheadSubCommand(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }
