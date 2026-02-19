@@ -1118,7 +1118,6 @@ impl DefaultMQProducerImpl {
         reachable: bool,
     ) {
         self.mq_fault_strategy
-            .mut_from_ref()
             .update_fault_item(broker_name.clone(), current_latency, isolation, reachable)
             .await;
     }
@@ -2667,45 +2666,29 @@ pub(crate) struct DefaultServiceDetector {
 }
 
 impl ServiceDetector for DefaultServiceDetector {
-    type Fut<'a>
-        = impl std::future::Future<Output = bool> + Send + 'a
-    where
-        Self: 'a;
+    async fn detect(&self, endpoint: &str, timeout_millis: u64) -> bool {
+        let topic = match self
+            .topic_publish_info_table
+            .iter()
+            .next()
+            .map(|entry| entry.key().clone())
+        {
+            Some(t) => t,
+            None => return false,
+        };
 
-    fn detect<'a>(&'a self, endpoint: &'a str, timeout_millis: u64) -> Self::Fut<'a> {
-        async move {
-            // Pick a topic to use for detection
-            let topic = match self
-                .topic_publish_info_table
-                .iter()
-                .next()
-                .map(|entry| entry.key().clone())
-            {
-                Some(t) => t,
-                None => return false,
-            };
+        let mq = MessageQueue::from_parts(topic.as_str(), endpoint, 0);
+        let mut client_instance = self.client_instance.clone();
 
-            // Create a message queue for the detection request
-            let mq = MessageQueue::from_parts(topic.as_str(), endpoint, 0);
+        let result = tokio::time::timeout(Duration::from_millis(timeout_millis), async move {
+            match client_instance.mq_client_api_impl.as_mut() {
+                Some(api) => api.get_max_offset(endpoint, &mq, timeout_millis).await.is_ok(),
+                None => false,
+            }
+        })
+        .await;
 
-            // Clone the client instance to get mutable access
-            let mut client_instance = self.client_instance.clone();
-
-            // Try to get max offset from the broker with timeout
-            // This is a lightweight operation that verifies broker connectivity
-            let result = tokio::time::timeout(Duration::from_millis(timeout_millis), async move {
-                match client_instance.mq_client_api_impl.as_mut() {
-                    Some(api) => {
-                        // Attempt to get max offset - if this succeeds, broker is healthy
-                        api.get_max_offset(endpoint, &mq, timeout_millis).await.is_ok()
-                    }
-                    None => false,
-                }
-            })
-            .await;
-
-            matches!(result, Ok(true))
-        }
+        matches!(result, Ok(true))
     }
 }
 
