@@ -65,7 +65,7 @@ mod tests {
         assert_eq!(header.tran_state_table_offset, 0);
         assert_eq!(header.commit_log_offset, 0);
         assert_eq!(header.commit_or_rollback, 0);
-        assert_eq!(header.from_transaction_check, false);
+        assert!(!header.from_transaction_check);
         assert_eq!(header.msg_id, "");
         assert!(header.transaction_id.is_none());
     }
@@ -89,7 +89,7 @@ mod tests {
         assert_eq!(cloned_header.tran_state_table_offset, 123);
         assert_eq!(cloned_header.commit_log_offset, 456);
         assert_eq!(cloned_header.commit_or_rollback, 1);
-        assert_eq!(cloned_header.from_transaction_check, true);
+        assert!(cloned_header.from_transaction_check);
         assert_eq!(cloned_header.msg_id, "msg1");
         assert_eq!(cloned_header.transaction_id.as_ref().unwrap(), "tran1");
     }
@@ -131,7 +131,7 @@ mod tests {
         assert_eq!(header.tran_state_table_offset, 123);
         assert_eq!(header.commit_log_offset, 456);
         assert_eq!(header.commit_or_rollback, 1);
-        assert_eq!(header.from_transaction_check, true);
+        assert!(header.from_transaction_check);
         assert_eq!(header.msg_id, "msg1");
         assert_eq!(header.transaction_id.as_ref().unwrap(), "tran1");
         assert_eq!(header.rpc_request_header.broker_name.as_ref().unwrap(), "broker1");
@@ -145,7 +145,7 @@ mod tests {
         assert_eq!(header.tran_state_table_offset, 123);
         assert_eq!(header.commit_log_offset, 456);
         assert_eq!(header.commit_or_rollback, 1);
-        assert_eq!(header.from_transaction_check, true);
+        assert!(header.from_transaction_check);
         assert_eq!(header.msg_id, "msg1");
         assert!(header.transaction_id.is_none());
     }
@@ -169,8 +169,8 @@ mod tests {
             },
         };
         assert_eq!(header.rpc_request_header.namespace.as_ref().unwrap(), "namespace1");
-        assert_eq!(header.rpc_request_header.namespaced.unwrap(), true);
+        assert!(header.rpc_request_header.namespaced.unwrap());
         assert_eq!(header.rpc_request_header.broker_name.as_ref().unwrap(), "broker1");
-        assert_eq!(header.rpc_request_header.oneway.unwrap(), false);
+        assert!(!header.rpc_request_header.oneway.unwrap());
     }
 }
