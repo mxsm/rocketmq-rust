@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **feat(tools):** Add `broker` command group with `GetBrokerConfigSubCommand` for querying broker configuration by broker address or cluster, with optional `--keyPattern` regex filtering
 - **feat(tools):** Add `CleanExpiredCQSubCommand` under broker commands with broker/cluster/topic target scan, dry-run preview, and cleanup summary reporting
 - **feat(tools):** Add `UpdateBrokerConfigSubCommand` under broker commands with single/multi key updates, value validation, broker or cluster targeting, old/new diff display, and rollback on partial failures
+- **feat(tools):** Add `CommitLogSetReadAheadSubCommand` under broker commands with Java-compatible mode (`0/1`) plus `--enable/--disable`, optional `--readAheadSize`, broker or cluster targeting, and current/updated read-ahead config display
 - **test(remoting):** Add comprehensive test coverage for `GetMaxOffsetRequestHeader` including required fields, optional nested headers, trait implementation methods, and edge cases
 - **feat(tools):** Add `SetConsumeModeSubCommand` for setting consumer group consumption mode (PULL/POP) ([#5650](https://github.com/mxsm/rocketmq-rust/issues/5650))
 - **feat(tools):** Add `ListAclSubCommand` for ACL enumeration and subject filtering ([#5663](https://github.com/mxsm/rocketmq-rust/issues/5663))

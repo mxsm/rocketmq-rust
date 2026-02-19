@@ -238,6 +238,11 @@ impl CommandExecute for ClassificationTablePrint {
                 remark: "Update broker config by broker or cluster.",
             },
             Command {
+                category: "Broker",
+                command: "setCommitLogReadAheadMode",
+                remark: "Set read ahead mode for all commitlog files.",
+            },
+            Command {
                 category: "Consumer",
                 command: "consumerStatus",
                 remark: "Query and display consumer's internal data structures.",
