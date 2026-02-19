@@ -85,8 +85,8 @@ impl MessageTrait for MessageClientExt {
     }
 
     #[inline]
-    fn get_topic(&self) -> &CheetahString {
-        self.message_ext_inner.get_topic()
+    fn topic(&self) -> &CheetahString {
+        self.message_ext_inner.topic()
     }
 
     #[inline]

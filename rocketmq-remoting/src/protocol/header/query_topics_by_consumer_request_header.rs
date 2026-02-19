@@ -107,4 +107,141 @@ mod tests {
             Some(CheetahString::from("broker1"))
         );
     }
+
+    #[test]
+    fn debug_impl_contains_group() {
+        let header = QueryTopicsByConsumerRequestHeader::new("dbg_group");
+        let s = format!("{:?}", header);
+        assert!(s.contains("group"));
+        assert!(s.contains("dbg_group"));
+    }
+
+    #[test]
+    fn getter_setter_multiple_calls() {
+        let mut header = QueryTopicsByConsumerRequestHeader::new("g1");
+        assert_eq!(header.get_group(), "g1");
+        header.set_group(CheetahString::from("g2"));
+        assert_eq!(header.get_group(), "g2");
+        header.set_group(CheetahString::from("g3"));
+        assert_eq!(header.get_group(), "g3");
+    }
+
+    #[test]
+    fn serde_deserialize_missing_required_field_errors() {
+        let json = r#"{}"#;
+        let res: Result<QueryTopicsByConsumerRequestHeader, _> = serde_json::from_str(json);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn serialization_includes_group_and_flattened_none() {
+        let header = QueryTopicsByConsumerRequestHeader::new("");
+        let json = serde_json::to_string(&header).unwrap();
+        assert!(json.contains("\"group\":"));
+        // rpc_request_header is None so brokerName should not appear
+        assert!(!json.contains("brokerName"));
+    }
+
+    #[test]
+    fn serialization_with_rpc_request_header_some() {
+        let header = QueryTopicsByConsumerRequestHeader {
+            group: CheetahString::from("g_with_rpc"),
+            rpc_request_header: Some(RpcRequestHeader {
+                broker_name: Some(CheetahString::from("brokerX")),
+                ..Default::default()
+            }),
+        };
+        let json = serde_json::to_string(&header).unwrap();
+        assert!(json.contains("\"group\":\"g_with_rpc\""));
+        assert!(json.contains("\"brokerName\":\"brokerX\""));
+    }
+
+    #[test]
+    fn deserialization_with_extra_fields_ignored() {
+        let json = r#"{"group":"gextra","unknownField":"x"}"#;
+        let header: QueryTopicsByConsumerRequestHeader = serde_json::from_str(json).unwrap();
+        assert_eq!(header.group, "gextra");
+    }
+
+    #[test]
+    fn round_trip_serialization_deserialization() {
+        let header = QueryTopicsByConsumerRequestHeader {
+            group: CheetahString::from("round"),
+            rpc_request_header: Some(RpcRequestHeader {
+                broker_name: Some(CheetahString::from("rb")),
+                ..Default::default()
+            }),
+        };
+        let json = serde_json::to_string(&header).unwrap();
+        let header2: QueryTopicsByConsumerRequestHeader = serde_json::from_str(&json).unwrap();
+        assert_eq!(header2.group, "round");
+        assert_eq!(
+            header2.rpc_request_header.unwrap().broker_name,
+            Some(CheetahString::from("rb"))
+        );
+    }
+
+    #[test]
+    fn nested_rpc_request_header_access_none_and_some() {
+        let header_none = QueryTopicsByConsumerRequestHeader::new("g_none");
+        assert!(header_none
+            .rpc_request_header
+            .as_ref()
+            .and_then(|h| h.broker_name.clone())
+            .is_none());
+
+        let header_some = QueryTopicsByConsumerRequestHeader {
+            group: CheetahString::from("g_some"),
+            rpc_request_header: Some(RpcRequestHeader {
+                broker_name: Some(CheetahString::from("bk1")),
+                ..Default::default()
+            }),
+        };
+        assert_eq!(
+            header_some
+                .rpc_request_header
+                .as_ref()
+                .and_then(|h| h.broker_name.clone()),
+            Some(CheetahString::from("bk1"))
+        );
+    }
+
+    #[test]
+    fn special_characters_and_long_group_names() {
+        let special = "g-💖-\n-\u{2764}";
+        let header = QueryTopicsByConsumerRequestHeader::new(special);
+        let json = serde_json::to_string(&header).unwrap();
+        let header2: QueryTopicsByConsumerRequestHeader = serde_json::from_str(&json).unwrap();
+        assert_eq!(header2.group, special);
+
+        let long = "a".repeat(5000);
+        let header_long = QueryTopicsByConsumerRequestHeader::new(long.clone());
+        let json_long = serde_json::to_string(&header_long).unwrap();
+        let header_long2: QueryTopicsByConsumerRequestHeader = serde_json::from_str(&json_long).unwrap();
+        assert_eq!(header_long2.group, long.as_str());
+    }
+
+    #[test]
+    fn malformed_json_and_wrong_field_types_error() {
+        let bad = "{";
+        let res: Result<QueryTopicsByConsumerRequestHeader, _> = serde_json::from_str(bad);
+        assert!(res.is_err());
+
+        let wrong_type = r#"{"group":123}"#;
+        let res2: Result<QueryTopicsByConsumerRequestHeader, _> = serde_json::from_str(wrong_type);
+        assert!(res2.is_err());
+    }
+
+    #[test]
+    fn struct_size_check_and_empty_group_behavior() {
+        use std::mem;
+        let _sz = mem::size_of::<QueryTopicsByConsumerRequestHeader>();
+        assert!(_sz > 0);
+
+        let header_empty = QueryTopicsByConsumerRequestHeader::new("");
+        let json = serde_json::to_string(&header_empty).unwrap();
+        assert!(json.contains("\"group\":\"\""));
+        let header2: QueryTopicsByConsumerRequestHeader = serde_json::from_str(&json).unwrap();
+        assert_eq!(header2.group, "");
+    }
 }

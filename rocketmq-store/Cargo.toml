@@ -72,13 +72,13 @@ serde_json.workspace = true
 
 tempfile = "3.25.0"
 
-memmap2                 = "0.9.9"
+memmap2                 = "0.9.10"
 trait-variant.workspace = true
-sysinfo                 = "0.38.1"
+sysinfo                 = "0.38.2"
 cheetah-string          = { workspace = true }
 thiserror               = { workspace = true }
 
-futures-util = "0.3.31"
+futures-util = "0.3.32"
 rand         = { workspace = true }
 uuid         = { workspace = true }
 anyhow       = { workspace = true }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::hash::Hash;
 use std::hash::Hasher;
 
@@ -22,14 +22,14 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscriptionData {
     pub class_filter_mode: bool,
     pub topic: CheetahString,
     pub sub_string: CheetahString,
-    pub tags_set: HashSet<CheetahString>,
-    pub code_set: HashSet<i32>,
+    pub tags_set: BTreeSet<CheetahString>,
+    pub code_set: BTreeSet<i32>,
     pub sub_version: i64,
     pub expression_type: CheetahString,
     // In Rust, attributes like `@JSONField(serialize = false)` are typically handled through
@@ -44,8 +44,8 @@ impl Default for SubscriptionData {
             class_filter_mode: false,
             topic: CheetahString::new(),
             sub_string: CheetahString::new(),
-            tags_set: HashSet::new(),
-            code_set: HashSet::new(),
+            tags_set: BTreeSet::new(),
+            code_set: BTreeSet::new(),
             sub_version: get_current_millis() as i64,
             expression_type: CheetahString::from_static_str(ExpressionType::TAG),
             filter_class_source: CheetahString::new(),

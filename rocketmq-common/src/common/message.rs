@@ -164,7 +164,7 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Returns
     ///
     /// A reference to the topic as a `&str`.
-    fn get_topic(&self) -> &CheetahString;
+    fn topic(&self) -> &CheetahString;
 
     /// Sets the topic for the message.
     ///

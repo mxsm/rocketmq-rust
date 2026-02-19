@@ -53,7 +53,7 @@ slog = { version = "2.7", features = [
 ] }
 
 # gRPC networking
-tonic       = { version = "0.14.3", features = ["transport", "codegen"] }
+tonic       = { version = "0.14.4", features = ["transport", "codegen"] }
 tonic-prost = "0.14"
 
 # Serialization
@@ -68,7 +68,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 
 cheetah-string = { workspace = true }
 
-clap   = { version = "4.5.58", features = ["derive"] }
+clap   = { version = "4.5.59", features = ["derive"] }
 config = { workspace = true }
 
 
@@ -98,7 +98,7 @@ async-trait = "0.1"
 rocksdb = { version = "0.24", optional = true }
 
 [build-dependencies]
-tonic-prost-build = "0.14.3"
+tonic-prost-build = "0.14.4"
 
 [dev-dependencies]
 criterion          = { version = "0.8", features = ["async_tokio"] }

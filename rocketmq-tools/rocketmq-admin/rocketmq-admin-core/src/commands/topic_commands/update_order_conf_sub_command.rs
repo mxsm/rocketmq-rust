@@ -23,7 +23,7 @@ use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
 
 #[derive(Debug, Clone, Parser)]
-pub struct UpdateOrderConfCommand {
+pub struct UpdateOrderConfSubCommand {
     #[command(flatten)]
     common_args: CommonArgs,
 
@@ -46,7 +46,7 @@ pub struct UpdateOrderConfCommand {
     )]
     order_conf: Option<String>,
 }
-impl CommandExecute for UpdateOrderConfCommand {
+impl CommandExecute for UpdateOrderConfSubCommand {
     async fn execute(
         &self,
         _rpc_hook: Option<std::sync::Arc<dyn rocketmq_remoting::runtime::RPCHook>>,

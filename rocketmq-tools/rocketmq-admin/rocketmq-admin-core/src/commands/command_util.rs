@@ -70,6 +70,25 @@ impl CommandUtil {
         )))
     }
 
+    pub fn fetch_master_and_slave_addr_by_broker_name(
+        cluster_info: &ClusterInfo,
+        broker_name: &str,
+    ) -> RocketMQResult<Vec<CheetahString>> {
+        let broker_addr_table = cluster_info.broker_addr_table.as_ref().ok_or_else(|| {
+            RocketMQError::Internal("CommandUtil: No broker address table available from nameserver.".into())
+        })?;
+        let broker_data = broker_addr_table.get(broker_name).ok_or_else(|| {
+            RocketMQError::Internal(format!(
+                "CommandUtil: No broker data found for broker name: {}",
+                broker_name
+            ))
+        })?;
+        let mut addrs: Vec<CheetahString> = broker_data.broker_addrs().values().cloned().collect();
+        addrs.sort();
+        addrs.dedup();
+        Ok(addrs)
+    }
+
     #[allow(unused)]
     pub fn fetch_broker_name_by_cluster_name(
         cluster_info: &ClusterInfo,

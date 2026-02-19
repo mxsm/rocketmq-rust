@@ -274,7 +274,7 @@ impl MessageTrait for BrokerMessage {
         self.envelope.properties().get(name)
     }
 
-    fn get_topic(&self) -> &CheetahString {
+    fn topic(&self) -> &CheetahString {
         self.envelope.topic()
     }
 

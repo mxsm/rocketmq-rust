@@ -179,8 +179,53 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Broker",
+                command: "brokerConsumeStats",
+                remark: "Fetch broker consume stats data.",
+            },
+            Command {
+                category: "Broker",
+                command: "brokerStatus",
+                remark: "Fetch broker runtime status data.",
+            },
+            Command {
+                category: "Broker",
+                command: "cleanExpiredCQ",
+                remark: "Clean expired ConsumeQueue on broker.",
+            },
+            Command {
+                category: "Broker",
                 command: "cleanUnusedTopic",
                 remark: "Clean unused topic on broker.",
+            },
+            Command {
+                category: "Broker",
+                command: "deleteExpiredCommitLog",
+                remark: "Delete expired CommitLog files.",
+            },
+            Command {
+                category: "Broker",
+                command: "getBrokerConfig",
+                remark: "Get broker config by cluster or special broker.",
+            },
+            Command {
+                category: "Broker",
+                command: "getBrokerEpoch",
+                remark: "Fetch broker epoch entries.",
+            },
+            Command {
+                category: "Broker",
+                command: "getColdDataFlowCtrInfo",
+                remark: "Get cold data flow ctr info.",
+            },
+            Command {
+                category: "Broker",
+                command: "removeColdDataFlowCtrGroupConfig",
+                remark: "Remove consumer from cold ctr config.",
+            },
+            Command {
+                category: "Broker",
+                command: "resetMasterFlushOffset",
+                remark: "Reset master flush offset in slave.",
             },
             Command {
                 category: "Broker",
@@ -191,6 +236,16 @@ impl CommandExecute for ClassificationTablePrint {
                 category: "Broker",
                 command: "switchTimerEngine",
                 remark: "Switch the engine of timer message in broker.",
+            },
+            Command {
+                category: "Broker",
+                command: "updateBrokerConfig",
+                remark: "Update broker config by broker or cluster.",
+            },
+            Command {
+                category: "Broker",
+                command: "setCommitLogReadAheadMode",
+                remark: "Set read ahead mode for all commitlog files.",
             },
             Command {
                 category: "Consumer",
