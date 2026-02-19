@@ -72,7 +72,7 @@ impl MessageExtBrokerInner {
 
     #[inline]
     pub fn get_topic(&self) -> &CheetahString {
-        self.message_ext_inner.get_topic()
+        self.message_ext_inner.topic()
     }
 
     #[inline]
@@ -268,8 +268,8 @@ impl MessageTrait for MessageExtBrokerInner {
     }
 
     #[inline]
-    fn get_topic(&self) -> &CheetahString {
-        self.message_ext_inner.get_topic()
+    fn topic(&self) -> &CheetahString {
+        self.message_ext_inner.topic()
     }
 
     #[inline]

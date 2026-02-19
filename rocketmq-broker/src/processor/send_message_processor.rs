@@ -1195,7 +1195,7 @@ where
         };
         let retry_topic = msg_ext.property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC));
         if retry_topic.is_none() {
-            let topic = msg_ext.get_topic().clone();
+            let topic = msg_ext.topic().clone();
             MessageAccessor::put_property(
                 &mut msg_ext,
                 CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC),
@@ -1278,7 +1278,7 @@ where
             .and_then(|value| value.get(BrokerStatsManager::COMMERCIAL_OWNER).cloned());
         let (response, succeeded) = match put_message_result.put_message_status() {
             PutMessageStatus::PutOk => {
-                let mut _back_topic = msg_ext.get_topic().clone();
+                let mut _back_topic = msg_ext.topic().clone();
                 let correct_topic =
                     msg_ext.property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC));
                 if let Some(topic) = correct_topic {

@@ -265,7 +265,7 @@ impl MessageAccessor {
         M: MessageTrait,
     {
         let mut new_message = Message::default();
-        new_message.set_topic(message.get_topic().clone());
+        new_message.set_topic(message.topic().clone());
         if let Some(body) = message.get_body() {
             new_message.set_body(Some(body.clone()));
         }

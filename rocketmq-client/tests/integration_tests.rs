@@ -27,7 +27,6 @@ use cheetah_string::CheetahString;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::common::message::MessageTrait;
 
 #[test]
 fn test_producer_creation() {
@@ -109,7 +108,7 @@ fn test_message_creation() {
         .topic("test_topic")
         .body_slice(b"test_body")
         .build_unchecked();
-    assert_eq!(msg.get_topic(), "test_topic");
+    assert_eq!(msg.topic(), "test_topic");
 }
 
 #[tokio::test]

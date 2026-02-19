@@ -1058,8 +1058,8 @@ impl DefaultMQPushConsumerImpl {
     pub fn try_reset_pop_retry_topic(msgs: &mut [ArcMut<MessageExt>], consumer_group: &str) {
         let pop_retry_prefix = format!("{}{}_{}", mix_all::RETRY_GROUP_TOPIC_PREFIX, consumer_group, "_");
         for msg in msgs.iter_mut() {
-            if msg.get_topic().starts_with(&pop_retry_prefix) {
-                let normal_topic = KeyBuilder::parse_normal_topic(msg.get_topic(), consumer_group);
+            if msg.topic().starts_with(&pop_retry_prefix) {
+                let normal_topic = KeyBuilder::parse_normal_topic(msg.topic(), consumer_group);
 
                 if !normal_topic.is_empty() {
                     msg.set_topic(CheetahString::from_string(normal_topic));
@@ -1074,13 +1074,13 @@ impl DefaultMQPushConsumerImpl {
         for msg in msgs.iter_mut() {
             if let Some(retry_topic) = msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC))
             {
-                if group_topic == msg.get_topic().as_str() {
+                if group_topic == msg.topic().as_str() {
                     msg.set_topic(retry_topic);
                 }
             }
 
             if !namespace.is_empty() {
-                let topic = msg.get_topic().to_string();
+                let topic = msg.topic().to_string();
                 msg.set_topic(CheetahString::from_string(
                     NamespaceUtil::without_namespace_with_namespace(topic.as_str(), namespace.as_str()),
                 ));
@@ -1171,7 +1171,7 @@ impl DefaultMQPushConsumerImpl {
         }
         msg.set_topic(CheetahString::from_string(
             NamespaceUtil::without_namespace_with_namespace(
-                msg.get_topic().as_str(),
+                msg.topic().as_str(),
                 self.client_config.get_namespace().unwrap_or_default().as_str(),
             ),
         ));
@@ -1193,7 +1193,7 @@ impl DefaultMQPushConsumerImpl {
         MessageAccessor::put_property(
             &mut new_msg,
             CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC),
-            msg.get_topic().to_owned(),
+            msg.topic().to_owned(),
         );
         MessageAccessor::set_reconsume_time(
             &mut new_msg,
@@ -1246,7 +1246,7 @@ impl DefaultMQPushConsumerImpl {
         let queue_offset = queue_offset.unwrap();
         let broker_name =
             CheetahString::from(ExtraInfoUtil::get_broker_name(extra_info_strs.as_slice()).unwrap_or_default());
-        let topic = message.get_topic();
+        let topic = message.topic();
 
         let client_instance = self.client_instance.as_mut().unwrap();
         let des_broker_name = if !broker_name.is_empty()
