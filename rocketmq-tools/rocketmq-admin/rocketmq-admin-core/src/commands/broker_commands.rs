@@ -1,4 +1,4 @@
-// Copyright 2026 The RocketMQ Rust Authors
+// Copyright 2023 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod broker_consume_stats_sub_command;
 mod broker_status_sub_command;
 mod clean_expired_cq_sub_command;
 mod clean_unused_topic_sub_command;
@@ -33,6 +34,7 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
+use crate::commands::broker_commands::broker_consume_stats_sub_command::BrokerConsumeStatsSubCommand;
 use crate::commands::broker_commands::broker_status_sub_command::BrokerStatusSubCommand;
 use crate::commands::broker_commands::clean_expired_cq_sub_command::CleanExpiredCQSubCommand;
 use crate::commands::broker_commands::clean_unused_topic_sub_command::CleanUnusedTopicSubCommand;
@@ -51,6 +53,13 @@ use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
 pub enum BrokerCommands {
+    #[command(
+        name = "brokerConsumeStats",
+        about = "Fetch broker consume stats data.",
+        long_about = None,
+    )]
+    BrokerConsumeStats(BrokerConsumeStatsSubCommand),
+
     #[command(
         name = "brokerStatus",
         about = "Fetch broker runtime status data.",
@@ -153,6 +162,7 @@ pub enum BrokerCommands {
 impl CommandExecute for BrokerCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
+            BrokerCommands::BrokerConsumeStats(value) => value.execute(rpc_hook).await,
             BrokerCommands::BrokerStatus(cmd) => cmd.execute(rpc_hook).await,
             BrokerCommands::CleanExpiredCQ(value) => value.execute(rpc_hook).await,
             BrokerCommands::CleanUnusedTopic(value) => value.execute(rpc_hook).await,

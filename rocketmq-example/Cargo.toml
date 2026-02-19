@@ -17,17 +17,23 @@
 # This is a standalone project, not part of the parent workspace
 
 [package]
-name           = "rocketmq-example"
-version        = "0.8.0"
-authors        = ["mxsm <mxsm@apache.org>"]
-edition        = "2024"
-homepage       = "https://github.com/mxsm/rocketmq-rust"
-repository     = "https://github.com/mxsm/rocketmq-rust"
-license        = "MIT OR Apache-2.0"
-keywords       = ["apache-rocketmq", "rocketmq-rust", "rocketmq-rs", "rust", "rocketmq-client"]
-readme         = "README.md"
-description    = "Examples for RocketMQ Rust implementation"
-rust-version   = "1.85.0"
+name = "rocketmq-example"
+version = "0.8.0"
+authors = ["mxsm <mxsm@apache.org>"]
+edition = "2024"
+homepage = "https://github.com/mxsm/rocketmq-rust"
+repository = "https://github.com/mxsm/rocketmq-rust"
+license = "MIT OR Apache-2.0"
+keywords = [
+  "apache-rocketmq",
+  "rocketmq-rust",
+  "rocketmq-rs",
+  "rust",
+  "rocketmq-client",
+]
+readme = "README.md"
+description = "Examples for RocketMQ Rust implementation"
+rust-version = "1.85.0"
 resolver = "3"
 
 [dependencies]
