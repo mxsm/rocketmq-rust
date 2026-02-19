@@ -1108,7 +1108,7 @@ impl MQClientAPIImpl {
                                         warn!(
                                             "async send msg by retry {} times. topic={}, brokerAddr={}, brokerName={}",
                                             current_times + 1,
-                                            msg.get_topic(),
+                                            msg.topic(),
                                             current_addr,
                                             current_broker_name
                                         );
@@ -1200,7 +1200,7 @@ impl MQClientAPIImpl {
         let response_header = response
             .decode_command_custom_header_fast::<SendMessageResponseHeader>()
             .unwrap();
-        let mut topic = msg.get_topic().to_string();
+        let mut topic = msg.topic().to_string();
         let namespace = self.client_config.get_namespace();
         if let Some(ns) = namespace.as_ref() {
             if !ns.is_empty() {
@@ -1686,7 +1686,7 @@ impl MQClientAPIImpl {
             group: CheetahString::from_slice(consumer_group),
             delay_level,
             origin_msg_id: Some(CheetahString::from_slice(msg.msg_id.as_str())),
-            origin_topic: Some(CheetahString::from_slice(msg.get_topic())),
+            origin_topic: Some(CheetahString::from_slice(msg.topic())),
             unit_mode: false,
             max_reconsume_times: Some(max_consume_retry_times),
             rpc_request_header: Some(RpcRequestHeader {
@@ -2132,14 +2132,14 @@ impl MQClientAPIImpl {
         let mut map = HashMap::with_capacity(5);
         for message in pop_result.msg_found_list.as_mut().map_or(&mut vec![], |v| v) {
             if start_offset_info.is_empty() {
-                let key = CheetahString::from_string(format!("{}{}", message.get_topic(), message.queue_id() as i64));
+                let key = CheetahString::from_string(format!("{}{}", message.topic(), message.queue_id() as i64));
                 if !map.contains_key(&key) {
                     let extra_info = ExtraInfoUtil::build_extra_info(
                         message.queue_offset(),
                         response_header.pop_time as i64,
                         response_header.invisible_time as i64,
                         response_header.revive_qid as i32,
-                        message.get_topic(),
+                        message.topic(),
                         broker_name,
                         message.queue_id(),
                     );
@@ -2206,7 +2206,7 @@ impl MQClientAPIImpl {
                             response_header.pop_time as i64,
                             response_header.invisible_time as i64,
                             response_header.revive_qid as i32,
-                            message.get_topic(),
+                            message.topic(),
                             broker_name,
                             msg_queue_offset as i32,
                         );
@@ -2216,12 +2216,10 @@ impl MQClientAPIImpl {
                         );
                         (queue_offset_key, queue_id_key)
                     } else {
-                        let queue_id_key = ExtraInfoUtil::get_start_offset_info_map_key(
-                            message.get_topic(),
-                            message.queue_id() as i64,
-                        );
+                        let queue_id_key =
+                            ExtraInfoUtil::get_start_offset_info_map_key(message.topic(), message.queue_id() as i64);
                         let queue_offset_key = ExtraInfoUtil::get_queue_offset_map_key(
-                            message.get_topic(),
+                            message.topic(),
                             message.queue_id() as i64,
                             message.queue_offset(),
                         );
@@ -2250,7 +2248,7 @@ impl MQClientAPIImpl {
                             response_header.pop_time as i64,
                             response_header.invisible_time as i64,
                             response_header.revive_qid as i32,
-                            message.get_topic(),
+                            message.topic(),
                             broker_name,
                             msg_queue_offset as i32,
                         );
@@ -2547,7 +2545,7 @@ fn build_queue_offset_sorted_map(
         // Value of POP_CK is used to determine whether it is a pop retry,
         // cause topic could be rewritten by broker.
         key = ExtraInfoUtil::get_start_offset_info_map_key_with_pop_ck(
-            message_ext.get_topic(),
+            message_ext.topic(),
             message_ext
                 .property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK))
                 .clone()

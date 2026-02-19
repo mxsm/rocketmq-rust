@@ -83,12 +83,12 @@ impl HookUtils {
             PRINT_TIMES.store(0, Ordering::SeqCst);
         }
 
-        let topic_data = msg.get_topic().as_bytes();
-        let retry_topic = msg.get_topic().starts_with(RETRY_GROUP_TOPIC_PREFIX);
+        let topic_data = msg.topic().as_bytes();
+        let retry_topic = msg.topic().starts_with(RETRY_GROUP_TOPIC_PREFIX);
         if !retry_topic && topic_data.len() > i8::MAX as usize {
             warn!(
                 "putMessage message topic[{}] length too long {}, but it is not supported by broker",
-                msg.get_topic(),
+                msg.topic(),
                 topic_data.len()
             );
             return Some(PutMessageResult::new_default(PutMessageStatus::MessageIllegal));
@@ -96,17 +96,14 @@ impl HookUtils {
         if topic_data.len() > MAX_TOPIC_LENGTH {
             warn!(
                 "putMessage message topic[{}] length too long {}, but it is not supported by broker",
-                msg.get_topic(),
+                msg.topic(),
                 topic_data.len()
             );
             return Some(PutMessageResult::new_default(PutMessageStatus::MessageIllegal));
         }
 
         if msg.get_body().is_none() {
-            warn!(
-                "putMessage message topic[{}], but message body is null",
-                msg.get_topic()
-            );
+            warn!("putMessage message topic[{}], but message body is null", msg.topic());
             return Some(PutMessageResult::new_default(PutMessageStatus::MessageIllegal));
         }
         if message_store.is_os_page_cache_busy() {

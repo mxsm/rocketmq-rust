@@ -761,7 +761,7 @@ impl BrokerOuterAPI {
     ) -> rocketmq_error::RocketMQResult<SendResult> {
         let uniq_msg_id = MessageClientIDSetter::get_uniq_id(&msg);
         let queue_id = msg.queue_id;
-        let topic = msg.get_topic().clone();
+        let topic = msg.topic().clone();
         let request = build_send_message_request(msg, group);
         let response = self
             .remoting_client
@@ -1521,7 +1521,7 @@ fn build_send_message_request(msg: MessageExt, group: CheetahString) -> Remoting
 fn build_send_message_request_header_v2(msg: MessageExt, group: CheetahString) -> SendMessageRequestHeaderV2 {
     let header = SendMessageRequestHeader {
         producer_group: group,
-        topic: msg.get_topic().clone(),
+        topic: msg.topic().clone(),
         default_topic: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
         default_topic_queue_nums: 8,
         queue_id: msg.queue_id,

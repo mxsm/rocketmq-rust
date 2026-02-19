@@ -562,11 +562,11 @@ impl DefaultMQProducer {
                 for message in &mut msg_batch.messages {
                     Validators::check_message::<Message>(Some(message), &self.producer_config)?;
                     MessageClientIDSetter::set_uniq_id(message);
-                    message.set_topic(self.with_namespace(message.get_topic()));
+                    message.set_topic(self.with_namespace(message.topic()));
                 }
                 MessageClientIDSetter::set_uniq_id(&mut msg_batch.final_message);
                 msg_batch.set_body(msg_batch.encode());
-                msg_batch.set_topic(self.with_namespace(msg_batch.get_topic()));
+                msg_batch.set_topic(self.with_namespace(msg_batch.topic()));
                 Ok(msg_batch)
             }
             Err(err) => {
@@ -672,7 +672,7 @@ impl DefaultMQProducer {
             return false;
         }
         // retry message do not support batch processing
-        if msg.get_topic().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
+        if msg.topic().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
             return false;
         }
         // message which have been assigned to producer group do not support batch processing
@@ -755,7 +755,7 @@ impl MQProducer for DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()));
+        msg.set_topic(self.with_namespace(msg.topic()));
         if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
             self.send_by_accumulator(msg, None, None).await
         } else {
@@ -771,7 +771,7 @@ impl MQProducer for DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
-        let topic_build = self.with_namespace(msg.get_topic().as_str());
+        let topic_build = self.with_namespace(msg.topic().as_str());
         msg.set_topic(topic_build);
         self.default_mqproducer_impl
             .as_mut()
@@ -785,7 +785,7 @@ impl MQProducer for DefaultMQProducer {
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()));
+        msg.set_topic(self.with_namespace(msg.topic()));
         let send_callback_inner = Arc::new(send_callback);
         let result = if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
             self.send_by_accumulator(msg, None, Some(send_callback_inner.clone()))
@@ -809,7 +809,7 @@ impl MQProducer for DefaultMQProducer {
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic().as_str()));
+        msg.set_topic(self.with_namespace(msg.topic().as_str()));
         self.default_mqproducer_impl
             .as_mut()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
@@ -822,7 +822,7 @@ impl MQProducer for DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()));
+        msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
             .as_mut()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
@@ -839,7 +839,7 @@ impl MQProducer for DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()));
+        msg.set_topic(self.with_namespace(msg.topic()));
         let mq = self.client_config.queue_with_namespace(mq);
         if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
             self.send_by_accumulator(msg, Some(mq), None).await
@@ -857,7 +857,7 @@ impl MQProducer for DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()));
+        msg.set_topic(self.with_namespace(msg.topic()));
         let mq = self.client_config.queue_with_namespace(mq);
         self.default_mqproducer_impl
             .as_mut()
@@ -876,7 +876,7 @@ impl MQProducer for DefaultMQProducer {
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()));
+        msg.set_topic(self.with_namespace(msg.topic()));
         let mq = self.client_config.queue_with_namespace(mq);
 
         if self.get_auto_batch() && msg.as_any().downcast_ref::<MessageBatch>().is_none() {
@@ -900,7 +900,7 @@ impl MQProducer for DefaultMQProducer {
         M: MessageTrait + Send + Sync,
         F: Fn(Option<&SendResult>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()));
+        msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
             .as_mut()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
@@ -912,7 +912,7 @@ impl MQProducer for DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()));
+        msg.set_topic(self.with_namespace(msg.topic()));
         let mq = self.client_config.queue_with_namespace(mq);
         self.default_mqproducer_impl
             .as_mut()
@@ -933,7 +933,7 @@ impl MQProducer for DefaultMQProducer {
         S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue> + Send + Sync + 'static,
         T: std::any::Any + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()));
+        msg.set_topic(self.with_namespace(msg.topic()));
         let mq = self
             .default_mqproducer_impl
             .as_mut()
@@ -965,7 +965,7 @@ impl MQProducer for DefaultMQProducer {
         S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue> + Send + Sync + 'static,
         T: std::any::Any + Sync + Send,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()));
+        msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
             .as_mut()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
@@ -985,7 +985,7 @@ impl MQProducer for DefaultMQProducer {
         S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue> + Send + Sync + 'static,
         T: std::any::Any + Sync + Send,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()));
+        msg.set_topic(self.with_namespace(msg.topic()));
         let mq = self
             .default_mqproducer_impl
             .as_mut()
@@ -1019,7 +1019,7 @@ impl MQProducer for DefaultMQProducer {
         S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue> + Send + Sync + 'static,
         T: std::any::Any + Sync + Send,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()));
+        msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
             .as_mut()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
@@ -1038,7 +1038,7 @@ impl MQProducer for DefaultMQProducer {
         S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue> + Send + Sync + 'static,
         T: std::any::Any + Sync + Send,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()));
+        msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
             .as_mut()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
@@ -1205,7 +1205,7 @@ impl MQProducer for DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()));
+        msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
             .as_mut()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
@@ -1223,7 +1223,7 @@ impl MQProducer for DefaultMQProducer {
         F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()));
+        msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
             .as_mut()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl is not initialized"))?
@@ -1243,7 +1243,7 @@ impl MQProducer for DefaultMQProducer {
         T: std::any::Any + Sync + Send,
         M: MessageTrait + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()));
+        msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
             .as_mut()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl is not initialized"))?
@@ -1265,7 +1265,7 @@ impl MQProducer for DefaultMQProducer {
         T: std::any::Any + Sync + Send,
         M: MessageTrait + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()));
+        msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
             .as_mut()
             .ok_or_else(|| rocketmq_error::RocketMQError::not_initialized("DefaultMQProducerImpl is not initialized"))?
@@ -1282,7 +1282,7 @@ impl MQProducer for DefaultMQProducer {
     where
         M: MessageTrait + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()));
+        msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
             .as_mut()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?
@@ -1301,7 +1301,7 @@ impl MQProducer for DefaultMQProducer {
         F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
-        msg.set_topic(self.with_namespace(msg.get_topic()));
+        msg.set_topic(self.with_namespace(msg.topic()));
         self.default_mqproducer_impl
             .as_mut()
             .ok_or(RocketMQError::not_initialized("DefaultMQProducerImpl not initialized"))?

@@ -81,7 +81,7 @@ impl MessageBatch {
                 message_list.push(m.clone());
             } else {
                 let mut m = Message::default();
-                m.set_topic(msg.get_topic().clone());
+                m.set_topic(msg.topic().clone());
                 if let Some(body) = msg.get_body() {
                     m.set_body(Some(body.clone()));
                 }
@@ -101,14 +101,14 @@ impl MessageBatch {
                     "TimeDelayLevel is not supported for batching",
                 ));
             }
-            if message.get_topic().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
+            if message.topic().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
                 return Err(RocketMQError::illegal_argument(
                     "Retry group topic is not supported for batching",
                 ));
             }
 
             if let Some(first_message) = first {
-                if first_message.get_topic() != message.get_topic() {
+                if first_message.topic() != message.topic() {
                     return Err(RocketMQError::illegal_argument(
                         "The topic of the messages in one batch should be the same",
                     ));
@@ -190,7 +190,7 @@ impl MessageTrait for MessageBatch {
     }
 
     #[inline]
-    fn get_topic(&self) -> &CheetahString {
+    fn topic(&self) -> &CheetahString {
         self.final_message.topic()
     }
 
@@ -411,7 +411,7 @@ mod tests {
         let messages = vec![msg1.clone(), msg1];
         let batch = MessageBatch::generate_from_vec(messages).unwrap();
 
-        assert_eq!(batch.final_message.get_topic().as_str(), "topic1");
+        assert_eq!(batch.final_message.topic().as_str(), "topic1");
         assert!(batch.final_message.is_wait_store_msg_ok());
     }
 

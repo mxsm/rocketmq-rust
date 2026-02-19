@@ -213,7 +213,7 @@ impl ClientRemotingProcessor {
         if let Some(mut message_ext) = message_ext {
             if let Some(ref namespace) = self.client_instance.client_config.get_namespace() {
                 let topic = NamespaceUtil::without_namespace_with_namespace(
-                    message_ext.get_topic(),
+                    message_ext.topic(),
                     self.client_instance
                         .client_config
                         .get_namespace()

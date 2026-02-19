@@ -1083,7 +1083,7 @@ where
                                 pop_time as i64,
                                 request_header.invisible_time as i64,
                                 revive_qid,
-                                message_ext.get_topic(),
+                                message_ext.topic(),
                                 broker_name,
                                 message_ext.queue_id(),
                                 message_ext.queue_offset(),

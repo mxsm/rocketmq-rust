@@ -434,7 +434,7 @@ impl DefaultMQProducerImpl {
                 continue;
             }
 
-            let topic = msg.get_topic().clone();
+            let topic = msg.topic().clone();
             let topic_publish_info = self.try_to_find_topic_publish_info(&topic).await;
 
             if let Some(info) = topic_publish_info {
@@ -519,7 +519,7 @@ impl DefaultMQProducerImpl {
         self.make_sure_state_ok()?;
         Validators::check_message(Some(&msg), self.producer_config.as_ref())?;
 
-        if msg.get_topic() != mq.get_topic() {
+        if msg.topic() != mq.get_topic() {
             return Err(mq_client_err!(format!(
                 "message topic [{}] is not equal with message queue topic [{}]",
                 msg.get_topic(),
@@ -646,7 +646,7 @@ impl DefaultMQProducerImpl {
         let begin_start_time = Instant::now();
         self.make_sure_state_ok()?;
         Validators::check_message(Some(&msg), self.producer_config.as_ref())?;
-        let topic_publish_info = self.try_to_find_topic_publish_info(msg.get_topic()).await;
+        let topic_publish_info = self.try_to_find_topic_publish_info(msg.topic()).await;
         if let Some(topic_publish_info) = topic_publish_info {
             if topic_publish_info.ok() {
                 let message_queue_list = self
@@ -657,7 +657,7 @@ impl DefaultMQProducerImpl {
                     .parse_publish_message_queues(&topic_publish_info.message_queue_list, &mut self.client_config);
                 let mut user_message = MessageAccessor::clone_message(&msg);
                 let user_topic = NamespaceUtil::without_namespace_with_namespace(
-                    user_message.get_topic(),
+                    user_message.topic(),
                     self.client_config.get_namespace().unwrap_or_default().as_str(),
                 );
                 user_message.set_topic(CheetahString::from_string(user_topic));
@@ -723,12 +723,12 @@ impl DefaultMQProducerImpl {
                 send_callback_inner.as_ref().unwrap()(None, Some(&err));
                 return;
             }
-            if msg.get_topic() != mq.get_topic() {
+            if msg.topic() != mq.get_topic() {
                 send_callback_inner.as_ref().unwrap()(
                     None,
                     Some(&rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(format!(
                         "message topic [{}] is not equal with message queue topic [{}]",
-                        msg.get_topic(),
+                        msg.topic(),
                         mq.get_topic()
                     )))),
                 );
@@ -930,7 +930,7 @@ impl DefaultMQProducerImpl {
     {
         self.make_sure_state_ok()?;
 
-        let topic = msg.get_topic().clone();
+        let topic = msg.topic().clone();
         let topic_publish_info = self.try_to_find_topic_publish_info(&topic).await;
 
         if let Some(topic_publish_info) = topic_publish_info {
@@ -1213,7 +1213,7 @@ impl DefaultMQProducerImpl {
         //build send message request header
         let mut request_header = SendMessageRequestHeader {
             producer_group: CheetahString::from_string(self.producer_config.producer_group().to_string()),
-            topic: CheetahString::from_string(msg.get_topic().to_string()),
+            topic: CheetahString::from_string(msg.topic().to_string()),
             default_topic: CheetahString::from_string(self.producer_config.create_topic_key().to_string()),
             default_topic_queue_nums: self.producer_config.default_topic_queue_nums() as i32,
             queue_id: mq.get_queue_id(),
@@ -1252,7 +1252,7 @@ impl DefaultMQProducerImpl {
         if topic_with_namespace && communication_mode == CommunicationMode::Async {
             msg.set_topic(CheetahString::from_string(
                 NamespaceUtil::without_namespace_with_namespace(
-                    msg.get_topic(),
+                    msg.topic(),
                     self.client_config.get_namespace().unwrap_or_default().as_str(),
                 ),
             ));
@@ -1550,7 +1550,7 @@ impl DefaultMQProducerImpl {
         let begin_start_time = Instant::now();
         self.make_sure_state_ok()?;
         Validators::check_message(Some(msg), self.producer_config.as_ref())?;
-        let topic_publish_info = self.try_to_find_topic_publish_info(msg.get_topic()).await;
+        let topic_publish_info = self.try_to_find_topic_publish_info(msg.topic()).await;
         if let Some(topic_publish_info) = topic_publish_info {
             if topic_publish_info.ok() {
                 let message_queue_list = self
@@ -1561,7 +1561,7 @@ impl DefaultMQProducerImpl {
                     .parse_publish_message_queues(&topic_publish_info.message_queue_list, &mut self.client_config);
                 let mut user_message = MessageAccessor::clone_message(msg);
                 let user_topic = NamespaceUtil::without_namespace_with_namespace(
-                    user_message.get_topic(),
+                    user_message.topic(),
                     self.client_config.get_namespace().unwrap_or_default().as_str(),
                 );
                 user_message.set_topic(CheetahString::from_string(user_topic));
@@ -1648,7 +1648,7 @@ impl DefaultMQProducerImpl {
                 )));
             }
         };
-        let topic = msg.get_topic().clone();
+        let topic = msg.topic().clone();
         let _ = self
             .send_select_impl(
                 msg,
@@ -1751,7 +1751,7 @@ impl DefaultMQProducerImpl {
                 )));
             }
         };
-        let topic = msg.get_topic().clone();
+        let topic = msg.topic().clone();
         let _ = self
             .send_kernel_impl(
                 &mut msg,
@@ -1903,7 +1903,7 @@ impl DefaultMQProducerImpl {
                 )));
             }
         };
-        let topic = msg.get_topic().clone();
+        let topic = msg.topic().clone();
         let cost = begin_timestamp.elapsed().as_millis() as u64;
         self.send_default_impl(
             &mut msg,
@@ -1974,10 +1974,10 @@ impl DefaultMQProducerImpl {
             .as_mut()
             .unwrap()
             .topic_route_table
-            .contains_key(msg.get_topic().as_str());
+            .contains_key(msg.topic().as_str());
         if !has_route_data {
             let begin_timestamp = Instant::now();
-            self.try_to_find_topic_publish_info(msg.get_topic()).await;
+            self.try_to_find_topic_publish_info(msg.topic()).await;
             self.client_instance
                 .as_mut()
                 .unwrap()
@@ -1985,7 +1985,7 @@ impl DefaultMQProducerImpl {
                 .await;
             let cost = begin_timestamp.elapsed().as_millis() as u64;
             if cost > 500 {
-                warn!("prepare send request for <{}> cost {} ms", msg.get_topic(), cost);
+                warn!("prepare send request for <{}> cost {} ms", msg.topic(), cost);
             }
         }
     }
@@ -2090,7 +2090,7 @@ impl DefaultMQProducerImpl {
             .find_broker_address_in_publish(dest_broker_name.as_ref())
             .await;
         let request_header = EndTransactionRequestHeader {
-            topic: CheetahString::from_string(msg.get_topic().to_string()),
+            topic: CheetahString::from_string(msg.topic().to_string()),
             producer_group: CheetahString::from_string(self.producer_config.producer_group().to_string()),
             tran_state_table_offset: send_result.queue_offset,
             commit_log_offset: id.offset as u64,
@@ -2732,7 +2732,7 @@ where
     // Build request header (simplified for oneway)
     let request_header = SendMessageRequestHeader {
         producer_group: CheetahString::from_string(producer_config.producer_group().to_string()),
-        topic: CheetahString::from_string(msg.get_topic().to_string()),
+        topic: CheetahString::from_string(msg.topic().to_string()),
         default_topic: CheetahString::from_string(producer_config.create_topic_key().to_string()),
         default_topic_queue_nums: producer_config.default_topic_queue_nums() as i32,
         queue_id: mq.get_queue_id(),

@@ -597,7 +597,7 @@ where
                                 MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX
                             ))
                             .unwrap_or_default(),
-                        msg_ext.get_topic()
+                        msg_ext.topic()
                     );
                     return true;
                 }
@@ -606,7 +606,7 @@ where
 
         error!(
             "PutBackToHalfQueueReturnResult write failed, topic: {}, queueId: {}, msgId: {}",
-            msg_ext.get_topic(),
+            msg_ext.topic(),
             msg_ext.queue_id(),
             msg_ext.msg_id()
         );
@@ -911,7 +911,7 @@ where
 
             debug!(
                 "Topic: {} tags: {:?}, OpOffset: {}, HalfOffset: {}",
-                op_message_ext.get_topic(),
+                op_message_ext.topic(),
                 op_message_ext.get_tags(),
                 op_message_ext.queue_offset(),
                 queue_offset_body

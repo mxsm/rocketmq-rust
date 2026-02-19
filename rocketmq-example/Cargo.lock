@@ -2046,6 +2046,7 @@ name = "rocketmq-admin-core"
 version = "0.8.0"
 dependencies = [
  "cheetah-string",
+ "chrono",
  "clap",
  "clap_complete",
  "colored",
@@ -2187,7 +2188,6 @@ dependencies = [
  "rocketmq-common",
  "rocketmq-error",
  "rocketmq-macros",
- "rocketmq-runtime",
  "rocketmq-rust",
  "serde",
  "serde_json",
