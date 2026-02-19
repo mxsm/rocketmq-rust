@@ -75,25 +75,18 @@ where
         entry.set_reachable(reachable);
 
         if !reachable {
-            info!(
-                "{} is unreachable, it will not be used until it's reachable",
-                name
-            );
+            info!("{} is unreachable, it will not be used until it's reachable", name);
         }
     }
 
     #[inline]
     fn is_available(&self, name: &CheetahString) -> bool {
-        self.fault_item_table
-            .get(name)
-            .is_none_or(|item| item.is_available())
+        self.fault_item_table.get(name).is_none_or(|item| item.is_available())
     }
 
     #[inline]
     fn is_reachable(&self, name: &CheetahString) -> bool {
-        self.fault_item_table
-            .get(name)
-            .is_none_or(|item| item.is_reachable())
+        self.fault_item_table.get(name).is_none_or(|item| item.is_reachable())
     }
 
     async fn remove(&self, name: &CheetahString) {
@@ -122,8 +115,7 @@ where
     fn start_detector(this: ArcMut<Self>) {
         let token = this.cancel_token.clone();
         tokio::spawn(async move {
-            let mut interval =
-                tokio::time::interval(tokio::time::Duration::from_secs(3));
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3));
             // First tick completes immediately; skip it to match Java's 3s initial delay.
             interval.tick().await;
 
@@ -135,10 +127,7 @@ where
                     }
                     _ = interval.tick() => {}
                 }
-                if !this
-                    .start_detector_enable
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                {
+                if !this.start_detector_enable.load(std::sync::atomic::Ordering::Relaxed) {
                     continue;
                 }
 
@@ -156,11 +145,7 @@ where
 
         for entry in self.fault_item_table.iter() {
             let (name, fault_item) = (entry.key(), entry.value());
-            if get_current_millis() as i64
-                - (fault_item
-                    .check_stamp
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                    as i64)
+            if get_current_millis() as i64 - (fault_item.check_stamp.load(std::sync::atomic::Ordering::Relaxed) as i64)
                 < 0
             {
                 continue;
@@ -215,8 +200,7 @@ where
     }
 
     fn is_start_detector_enable(&self) -> bool {
-        self.start_detector_enable
-            .load(std::sync::atomic::Ordering::Acquire)
+        self.start_detector_enable.load(std::sync::atomic::Ordering::Acquire)
     }
 }
 
