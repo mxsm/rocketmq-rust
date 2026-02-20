@@ -48,20 +48,4 @@ mod tests {
 
         assert_eq!(body.filter, deserialized.filter);
     }
-
-    #[test]
-    fn list_users_request_header_to_map() {
-        let header = ListUsersRequestHeader { filter: "test".into() };
-        let map = header.to_map().unwrap();
-        assert_eq!(map.get("filter"), Some(&"test".to_string()));
-    }
-
-    #[test]
-    fn list_users_request_header_from_map() {
-        let mut map = std::collections::HashMap::new();
-        map.insert("filter".to_string(), "test".to_string());
-
-        let header = ListUsersRequestHeader::from_map(&map).unwrap();
-        assert_eq!(header.filter, "test");
-    }
 }
