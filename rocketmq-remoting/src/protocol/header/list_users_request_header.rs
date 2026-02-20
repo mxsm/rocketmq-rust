@@ -22,3 +22,29 @@ use serde::Serialize;
 pub struct ListUsersRequestHeader {
     pub filter: CheetahString,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_users_request_header_default() {
+        let body = ListUsersRequestHeader::default();
+        assert_eq!(body.filter, "");
+    }
+
+    #[test]
+    fn list_users_request_header_clone() {
+        let body = ListUsersRequestHeader { filter: "test".into() };
+        let cloned = body.clone();
+        assert_eq!(body.filter, cloned.filter);
+    }
+
+    #[test]
+    fn list_users_request_header_serialize_deserialize() {
+        let body = ListUsersRequestHeader { filter: "test".into() };
+        let serialized = serde_json::to_string(&body).unwrap();
+        let deserialized: ListUsersRequestHeader = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(body.filter, deserialized.filter);
+    }
+}
