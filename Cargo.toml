@@ -85,7 +85,7 @@ serde              = { version = "1.0", features = ["derive"] }
 serde_json         = "1.0"
 serde_yaml         = "0.9"
 serde_json_any_key = "2.0.0"
-anyhow             = "1.0.101"
+anyhow             = "1.0.102"
 bytes              = "1.11.1"
 rand               = "0.10.0"
 num_cpus           = "1.17"
