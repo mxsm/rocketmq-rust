@@ -45,6 +45,7 @@ mod tests {
         let body = ListUsersRequestHeader { filter: "test".into() };
         let serialized = serde_json::to_string(&body).unwrap();
         let deserialized: ListUsersRequestHeader = serde_json::from_str(&serialized).unwrap();
+
         assert_eq!(body.filter, deserialized.filter);
     }
 
