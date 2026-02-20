@@ -27,17 +27,33 @@ use crate::protocol::body::process_queue_info::ProcessQueueInfo;
 use crate::protocol::heartbeat::consume_type::ConsumeType;
 use crate::protocol::heartbeat::subscription_data::SubscriptionData;
 
-#[derive(Clone)]
+#[derive(Clone, Default, Debug)]
 pub struct ConsumerRunningInfo {
-    subscription_set: BTreeSet<SubscriptionData>,
-    mq_table: BTreeMap<MessageQueue, ProcessQueueInfo>,
-    mq_pop_table: BTreeMap<MessageQueue, PopProcessQueueInfo>,
-    status_table: BTreeMap<String, ConsumeStatus>,
-    user_consumer_info: BTreeMap<String, String>,
-    consume_type: ConsumeType,
-    consume_orderly: bool,
-    prop_consumer_start_timestamp: u64,
+    pub subscription_set: BTreeSet<SubscriptionData>,
+    pub mq_table: BTreeMap<MessageQueue, ProcessQueueInfo>,
+    pub mq_pop_table: BTreeMap<MessageQueue, PopProcessQueueInfo>,
+    pub status_table: BTreeMap<String, ConsumeStatus>,
+    pub user_consumer_info: BTreeMap<String, String>,
+    pub consume_type: ConsumeType,
+    pub consume_orderly: bool,
+    pub prop_consumer_start_timestamp: u64,
 }
+
+impl ConsumerRunningInfo {
+    pub fn new() -> Self {
+        ConsumerRunningInfo {
+            subscription_set: BTreeSet::new(),
+            mq_table: BTreeMap::new(),
+            mq_pop_table: BTreeMap::new(),
+            status_table: BTreeMap::new(),
+            user_consumer_info: BTreeMap::new(),
+            consume_type: ConsumeType::ConsumePassively,
+            consume_orderly: false,
+            prop_consumer_start_timestamp: 0,
+        }
+    }
+}
+
 impl Display for ConsumerRunningInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut sb = String::new();
@@ -117,6 +133,7 @@ impl Display for ConsumerRunningInfo {
         f.write_str(&sb)
     }
 }
+
 impl ConsumerRunningInfo {
     pub async fn analyze_subscription(
         cri_table: BTreeMap<String /* clientId */, ConsumerRunningInfo>,
@@ -145,6 +162,7 @@ impl ConsumerRunningInfo {
         }
         Ok(())
     }
+
     pub async fn analyze_process_queue(client_id: String, info: ConsumerRunningInfo) -> RocketMQResult<String> {
         let mut sb = String::new();
         let push = matches!(info.consume_type, ConsumeType::ConsumePassively);
@@ -181,5 +199,82 @@ impl ConsumerRunningInfo {
         }
 
         Ok(sb)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn consumer_running_info_default() {
+        let info = ConsumerRunningInfo::new();
+        assert!(info.subscription_set.is_empty());
+        assert!(info.mq_table.is_empty());
+        assert!(info.mq_pop_table.is_empty());
+        assert!(info.status_table.is_empty());
+        assert!(info.user_consumer_info.is_empty());
+        assert_eq!(info.consume_type, ConsumeType::ConsumePassively);
+        assert!(!info.consume_orderly);
+        assert_eq!(info.prop_consumer_start_timestamp, 0);
+    }
+
+    #[test]
+    fn consumer_running_info_display() {
+        let mut info = ConsumerRunningInfo::new();
+        let subscription_data = SubscriptionData {
+            topic: "topic".into(),
+            sub_string: "*".into(),
+            ..Default::default()
+        };
+        info.subscription_set.insert(subscription_data);
+
+        let mq = MessageQueue::from_parts("topic", "broker", 1);
+        let process_queue_info = ProcessQueueInfo {
+            commit_offset: 100,
+            cached_msg_min_offset: 0,
+            cached_msg_max_offset: 100,
+            cached_msg_count: 100,
+            cached_msg_size_in_mib: 0,
+            transaction_msg_min_offset: 0,
+            transaction_msg_max_offset: 0,
+            transaction_msg_count: 0,
+            locked: false,
+            try_unlock_times: 0,
+            last_lock_timestamp: 0,
+            droped: false,
+            last_pull_timestamp: 0,
+            last_consume_timestamp: 0,
+        };
+        info.mq_table.insert(mq.clone(), process_queue_info);
+
+        let pop_process_queue_info = PopProcessQueueInfo::new(1, true, 2);
+        info.mq_pop_table.insert(mq.clone(), pop_process_queue_info);
+
+        let status = ConsumeStatus {
+            pull_rt: 1.0,
+            pull_tps: 2.0,
+            consume_rt: 3.0,
+            consume_ok_tps: 4.0,
+            consume_failed_tps: 5.0,
+            consume_failed_msgs: 6,
+        };
+
+        info.status_table.insert("clientId".to_string(), status);
+        info.user_consumer_info
+            .insert("userKey".to_string(), "userValue".to_string());
+
+        let display = format!("{}", info);
+        assert!(display.contains("#Consumer Subscription#"));
+        assert!(display.contains("Topic: topic"));
+        assert!(display.contains("#Consumer Offset#"));
+        assert!(display.contains("broker"));
+        assert!(display.contains("100"));
+        assert!(display.contains("#Consumer MQ Detail#"));
+        assert!(display.contains("#Consumer Pop Detail#"));
+        assert!(display.contains("#Consumer RT&TPS#"));
+        assert!(display.contains("clientId"));
+        assert!(display.contains("#User Consume Info#"));
+        assert!(display.contains("userKey: userValue"));
     }
 }

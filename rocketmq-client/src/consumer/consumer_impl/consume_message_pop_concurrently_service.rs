@@ -444,7 +444,7 @@ impl ConsumeMessagePopConcurrentlyService {
             .as_mut()
             .unwrap()
             .change_pop_invisible_time_async(
-                message.get_topic(),
+                message.topic(),
                 consumer_group,
                 &extra_info.unwrap_or_default(),
                 (delay_second * 1000) as u64,

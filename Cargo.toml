@@ -15,25 +15,25 @@
 
 [workspace]
 members = [
-    "rocketmq",
-    "rocketmq-auth",
-    "rocketmq-broker",
-    "rocketmq-client",
-    "rocketmq-common",
-    "rocketmq-controller",
-    "rocketmq-error",
-    "rocketmq-filter",
-    "rocketmq-macros",
-    "rocketmq-namesrv",
-    "rocketmq-proxy",
-    "rocketmq-remoting",
-    "rocketmq-runtime",
-    "rocketmq-store",
-    "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli",
-    "rocketmq-tools/rocketmq-admin/rocketmq-admin-core",
-    "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui",
-    "rocketmq-tools/rocketmq-store-inspect",
-    "rocketmq-dashboard/rocketmq-dashboard-common"
+  "rocketmq",
+  "rocketmq-auth",
+  "rocketmq-broker",
+  "rocketmq-client",
+  "rocketmq-common",
+  "rocketmq-controller",
+  "rocketmq-error",
+  "rocketmq-filter",
+  "rocketmq-macros",
+  "rocketmq-namesrv",
+  "rocketmq-proxy",
+  "rocketmq-remoting",
+  "rocketmq-runtime",
+  "rocketmq-store",
+  "rocketmq-tools/rocketmq-admin/rocketmq-admin-cli",
+  "rocketmq-tools/rocketmq-admin/rocketmq-admin-core",
+  "rocketmq-tools/rocketmq-admin/rocketmq-admin-tui",
+  "rocketmq-tools/rocketmq-store-inspect",
+  "rocketmq-dashboard/rocketmq-dashboard-common",
 ]
 resolver = "2"
 
@@ -45,11 +45,11 @@ homepage = "https://github.com/mxsm/rocketmq-rust"
 repository = "https://github.com/mxsm/rocketmq-rust"
 license = "MIT OR Apache-2.0"
 keywords = [
-    "apache-rocketmq",
-    "rocketmq-rust",
-    "rocketmq-rs",
-    "rust",
-    "rocketmq-client",
+  "apache-rocketmq",
+  "rocketmq-rust",
+  "rocketmq-rs",
+  "rust",
+  "rocketmq-client",
 ]
 categories = ["asynchronous", "network-programming", "development-tools"]
 readme = "README.md"
@@ -58,53 +58,52 @@ Unofficial Rust implementation of Apache RocketMQ
 """
 rust-version = "1.85.0"
 [workspace.dependencies]
-rocketmq-common = { path = "./rocketmq-common" }
-rocketmq-runtime = { path = "./rocketmq-runtime" }
-rocketmq-macros = { path = "./rocketmq-macros" }
-rocketmq-rust = { path = "./rocketmq" }
-rocketmq-filter = { path = "./rocketmq-filter" }
-rocketmq-store = { path = "./rocketmq-store", default-features = true }
-rocketmq-remoting = { path = "./rocketmq-remoting" }
+rocketmq-common      = { path = "./rocketmq-common" }
+rocketmq-runtime     = { path = "./rocketmq-runtime" }
+rocketmq-macros      = { path = "./rocketmq-macros" }
+rocketmq-rust        = { path = "./rocketmq" }
+rocketmq-filter      = { path = "./rocketmq-filter" }
+rocketmq-store       = { path = "./rocketmq-store", default-features = true }
+rocketmq-remoting    = { path = "./rocketmq-remoting" }
 rocketmq-client-rust = { path = "./rocketmq-client" }
-rocketmq-tools = { path = "./rocketmq-tools/rocketmq-admin/rocketmq-admin-core", package = "rocketmq-admin-core" }
-rocketmq-error = { path = "./rocketmq-error" }
-rocketmq-auth = { path = "./rocketmq-auth" }
+rocketmq-error       = { path = "./rocketmq-error" }
+rocketmq-auth        = { path = "./rocketmq-auth" }
 
-tokio = { version = "1.49", features = ["full"] }
-tokio-util = { version = "0.7.18", features = ["full"] }
+tokio        = { version = "1.49", features = ["full"] }
+tokio-util   = { version = "0.7.18", features = ["full"] }
 tokio-stream = { version = "0.1.18", features = ["full"] }
 
-tracing = "0.1.44"
+tracing            = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["time"] }
-tracing-appender = "0.2.4"
+tracing-appender   = "0.2.4"
 
 thiserror = "2.0.18"
 
 
 #serde
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-serde_yaml = "0.9"
+serde              = { version = "1.0", features = ["derive"] }
+serde_json         = "1.0"
+serde_yaml         = "0.9"
 serde_json_any_key = "2.0.0"
-anyhow = "1.0.101"
-bytes = "1.11.1"
-rand = "0.10.0"
-num_cpus = "1.17"
+anyhow             = "1.0.101"
+bytes              = "1.11.1"
+rand               = "0.10.0"
+num_cpus           = "1.17"
 
 config = "0.15.19"
 
-parking_lot = "0.12"
-dirs = "6.0"
+parking_lot   = "0.12"
+dirs          = "6.0"
 trait-variant = "0.1.2"
 
 mockall = "0.14.0"
-cfg-if = "1.0.4"
+cfg-if  = "1.0.4"
 
-sysinfo = "0.38.1"
-uuid = { version = "1.20.0", features = [
-    "v4", # Lets you generate random UUIDs
-    "fast-rng", # Use a faster (but still sufficiently random) RNG
-    "macro-diagnostics",
+sysinfo = "0.38.2"
+uuid = { version = "1.21.0", features = [
+  "v4",                # Lets you generate random UUIDs
+  "fast-rng",          # Use a faster (but still sufficiently random) RNG
+  "macro-diagnostics",
 ] }
 
 
@@ -112,10 +111,10 @@ futures = "0.3"
 
 cheetah-string = { version = "1.0.1", features = ["serde", "bytes", "simd"] }
 
-flate2 = "1.1.9"
-dashmap = "6.1.0"
-strum = { version = "0.27.2", features = ["derive"] }
+flate2   = "1.1.9"
+dashmap  = "6.1.0"
+strum    = { version = "0.27.2", features = ["derive"] }
 smallvec = "1.13"
 
-opentelemetry = { version = "0.31", features = ["metrics"] }
+opentelemetry     = { version = "0.31", features = ["metrics"] }
 opentelemetry_sdk = { version = "0.31", features = ["metrics", "rt-tokio"] }

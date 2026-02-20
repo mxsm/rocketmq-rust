@@ -30,7 +30,6 @@ pub mod consume_queue_store;
 mod file_queue_life_cycle;
 pub mod local_file_consume_queue_store;
 mod queue_offset_operator;
-pub mod referred_iterator;
 pub mod single_consume_queue;
 
 pub type ArcConsumeQueue = ArcMut<Box<dyn ConsumeQueueTrait>>;

@@ -538,13 +538,6 @@ mod tests {
                 .as_ref()
         );
         assert_eq!(msg_inner.message_ext_inner.sys_flag, msg_ext.sys_flag);
-        /*        assert_eq!(
-            msg_inner.tags_code,
-            MessageExtBrokerInner::tags_string2tags_code(
-                &TopicFilterType::SingleTag,
-                msg_ext.get_tags().as_ref().unwrap()
-            )
-        );*/
         assert_eq!(msg_inner.get_properties(), msg_ext.get_properties());
         assert_eq!(
             msg_inner.properties_string,
@@ -555,7 +548,6 @@ mod tests {
     #[test]
     fn end_message_transaction_with_empty_body() {
         let mut msg_ext = MessageExt::default();
-        //msg_ext.set_body(None);
         let msg_inner = end_message_transaction(&mut msg_ext);
         assert!(!msg_inner.get_body().is_some_and(|b| b.is_empty()));
     }

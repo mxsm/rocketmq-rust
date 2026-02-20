@@ -65,15 +65,8 @@ where
 }
 
 impl<MS: MessageStore> QueryMessageProcessor<MS> {
-    pub fn new(
-        /* message_store_config: Arc<MessageStoreConfig>, message_store: ArcMut<MS> */
-        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
-    ) -> Self {
-        Self {
-            /*message_store_config,
-            message_store,*/
-            broker_runtime_inner,
-        }
+    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+        Self { broker_runtime_inner }
     }
 }
 

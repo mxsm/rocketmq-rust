@@ -239,7 +239,7 @@ impl ConsumeMessagePopOrderlyService {
                 let result = impl_
                     .mut_from_ref()
                     .change_pop_invisible_time_async(
-                        msg.get_topic(),
+                        msg.topic(),
                         &self.consumer_group,
                         &extra_info,
                         invisible_time,

@@ -185,7 +185,7 @@ impl ConsumeMessageConcurrentlyService {
 
     pub async fn send_message_back(&mut self, msg: &mut MessageExt, context: &ConsumeConcurrentlyContext) -> bool {
         let delay_level = context.delay_level_when_next_consume;
-        msg.set_topic(self.client_config.with_namespace(msg.get_topic().as_str()));
+        msg.set_topic(self.client_config.with_namespace(msg.topic().as_str()));
 
         self.default_mqpush_consumer_impl
             .as_mut()

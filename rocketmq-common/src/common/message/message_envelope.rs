@@ -353,7 +353,7 @@ impl crate::common::message::MessageTrait for MessageEnvelope {
         self.message.property_ref(name)
     }
 
-    fn get_topic(&self) -> &CheetahString {
+    fn topic(&self) -> &CheetahString {
         self.topic()
     }
 

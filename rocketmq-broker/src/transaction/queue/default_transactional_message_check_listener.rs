@@ -98,7 +98,7 @@ where
         } else {
             error!(
                 "Put checked-too-many-time half message to TRANS_CHECK_MAXTIME_TOPIC failed, real topic={}, msgId={}",
-                msg_ext.get_topic(),
+                msg_ext.topic(),
                 msg_ext.msg_id(),
             );
         }

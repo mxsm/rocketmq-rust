@@ -14,8 +14,6 @@
 
 use std::sync::Arc;
 
-use cheetah_string::CheetahString;
-use clap::ArgGroup;
 use clap::Parser;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::TimeUtils::get_current_millis;
@@ -27,19 +25,15 @@ use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::commands::CommandExecute;
 
 #[derive(Debug, Clone, Parser)]
-#[command(group(ArgGroup::new("target")
-    .required(false)
-    .args(&["broker_addr", "cluster_name"]))
-)]
-pub struct CleanUnusedTopicCommand {
-    #[arg(short = 'b', long = "brokerAddr", required = false, help = "Broker address")]
+pub struct ResetMasterFlushOffsetSubCommand {
+    #[arg(short = 'b', long = "brokerAddr", required = false, help = "which broker to reset")]
     broker_addr: Option<String>,
 
-    #[arg(short = 'c', long = "cluster", required = false, help = "Cluster name")]
-    cluster_name: Option<String>,
+    #[arg(short = 'o', long = "offset", required = false, help = "the offset to reset at")]
+    offset: Option<i64>,
 }
 
-impl CommandExecute for CleanUnusedTopicCommand {
+impl CommandExecute for ResetMasterFlushOffsetSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
             DefaultMQAdminExt::with_rpc_hook(rpc_hook)
@@ -51,36 +45,37 @@ impl CommandExecute for CleanUnusedTopicCommand {
             .set_instance_name(get_current_millis().to_string().into());
 
         MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
-            RocketMQError::Internal(format!("CleanUnusedTopicCommand: Failed to start MQAdminExt: {}", e))
+            RocketMQError::Internal(format!(
+                "ResetMasterFlushOffsetSubCommand: Failed to start MQAdminExt: {}",
+                e
+            ))
         })?;
 
-        let operation_result = clean_unused_topic(&default_mqadmin_ext, self).await;
+        let broker_addr = self
+            .broker_addr
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| RocketMQError::Internal("brokerAddr is required".into()))?;
+        let master_flush_offset = self
+            .offset
+            .ok_or_else(|| RocketMQError::Internal("offset is required".into()))?;
+
+        let result = default_mqadmin_ext
+            .reset_master_flush_offset(broker_addr.into(), master_flush_offset as u64)
+            .await;
 
         MQAdminExt::shutdown(&mut default_mqadmin_ext).await;
-        operation_result
+
+        match result {
+            Ok(()) => {
+                println!("reset master flush offset to {} success", master_flush_offset);
+                Ok(())
+            }
+            Err(e) => Err(RocketMQError::Internal(format!(
+                "ResetMasterFlushOffsetSubCommand command failed: {}",
+                e
+            ))),
+        }
     }
-}
-
-async fn clean_unused_topic(
-    default_mqadmin_ext: &DefaultMQAdminExt,
-    command: &CleanUnusedTopicCommand,
-) -> RocketMQResult<()> {
-    let addr = command
-        .broker_addr
-        .as_ref()
-        .map(|s| CheetahString::from(s.trim().to_string()));
-    let cluster = command
-        .cluster_name
-        .as_ref()
-        .map(|s| CheetahString::from(s.trim().to_string()));
-
-    let result = default_mqadmin_ext.clean_unused_topic(cluster, addr).await?;
-
-    if result {
-        println!("success");
-    } else {
-        println!("false");
-    }
-
-    Ok(())
 }

@@ -237,6 +237,10 @@ pub(crate) mod inner {
         pub fn register_rpc_hook(&mut self, hook: Arc<dyn RPCHook>) {
             self.rpc_hooks.push(hook);
         }
+
+        pub fn clear_rpc_hook(&mut self) {
+            self.rpc_hooks.clear();
+        }
     }
     async fn handle_error(
         ctx: &mut ConnectionHandlerContext,

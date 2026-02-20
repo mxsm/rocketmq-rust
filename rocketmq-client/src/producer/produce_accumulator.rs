@@ -280,7 +280,7 @@ impl ProduceAccumulator {
                 concrete_messages.push(msg.clone());
             } else {
                 let mut msg = Message::default();
-                msg.set_topic(boxed_msg.get_topic().clone());
+                msg.set_topic(boxed_msg.topic().clone());
                 if let Some(body) = boxed_msg.get_body() {
                     msg.set_body(Some(body.clone()));
                 }
@@ -343,7 +343,7 @@ impl ProduceAccumulator {
                 concrete_messages.push(msg.clone());
             } else {
                 let mut msg = Message::default();
-                msg.set_topic(boxed_msg.get_topic().clone());
+                msg.set_topic(boxed_msg.topic().clone());
                 if let Some(body) = boxed_msg.get_body() {
                     msg.set_body(Some(body.clone()));
                 }
@@ -387,7 +387,7 @@ pub struct AggregateKey {
 impl AggregateKey {
     pub fn new_from_message<M: MessageTrait>(message: &M) -> Self {
         Self {
-            topic: message.get_topic().clone(),
+            topic: message.topic().clone(),
             mq: None,
             wait_store_msg_ok: message.is_wait_store_msg_ok(),
             tag: message.get_tags(),
@@ -396,7 +396,7 @@ impl AggregateKey {
 
     pub fn new_from_message_queue<M: MessageTrait>(message: &M, mq: Option<MessageQueue>) -> Self {
         Self {
-            topic: message.get_topic().clone(),
+            topic: message.topic().clone(),
             mq,
             wait_store_msg_ok: message.is_wait_store_msg_ok(),
             tag: message.get_tags(),
@@ -706,7 +706,7 @@ impl GuardForAsyncSendService {
                 concrete_messages.push(msg.clone());
             } else {
                 let mut msg = Message::default();
-                msg.set_topic(boxed_msg.get_topic().clone());
+                msg.set_topic(boxed_msg.topic().clone());
                 if let Some(body) = boxed_msg.get_body() {
                     msg.set_body(Some(body.clone()));
                 }
