@@ -396,7 +396,9 @@ impl MQAdminExt for DefaultMQAdminExt {
     }
 
     async fn fetch_broker_runtime_stats(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<KVTable> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .fetch_broker_runtime_stats(broker_addr)
+            .await
     }
 
     async fn examine_consume_stats(

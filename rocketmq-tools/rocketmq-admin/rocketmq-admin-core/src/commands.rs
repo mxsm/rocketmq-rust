@@ -260,6 +260,11 @@ impl CommandExecute for ClassificationTablePrint {
                 remark: "List All clusters Message Send RT.",
             },
             Command {
+                category: "Cluster",
+                command: "clusterList",
+                remark: "List cluster infos.",
+            },
+            Command {
                 category: "Consumer",
                 command: "consumerStatus",
                 remark: "Query and display consumer's internal data structures.",

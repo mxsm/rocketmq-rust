@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod cluster_list_sub_command;
 mod cluster_send_msg_rt_sub_command;
 
 use std::sync::Arc;
@@ -20,11 +21,19 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
+use crate::commands::cluster_commands::cluster_list_sub_command::ClusterListSubCommand;
 use crate::commands::cluster_commands::cluster_send_msg_rt_sub_command::ClusterSendMsgRTSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
 pub enum ClusterCommands {
+    #[command(
+        name = "clusterList",
+        about = "List cluster infos.",
+        long_about = None,
+    )]
+    ClusterList(ClusterListSubCommand),
+
     #[command(
         name = "clusterRT",
         about = "List All clusters Message Send RT.",
@@ -36,6 +45,7 @@ pub enum ClusterCommands {
 impl CommandExecute for ClusterCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
+            ClusterCommands::ClusterList(value) => value.execute(rpc_hook).await,
             ClusterCommands::ClusterRT(value) => value.execute(rpc_hook).await,
         }
     }
