@@ -89,7 +89,7 @@ impl Validators {
             ));
         }
 
-        let lmq_path = msg.get_user_property(&CheetahString::from_static_str(
+        let lmq_path = msg.user_property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_INNER_MULTI_DISPATCH,
         ));
         if let Some(value) = lmq_path {

@@ -93,7 +93,7 @@ where
                  commitLogOffset={}, real topic={:?}",
                 msg_ext.queue_offset,
                 msg_ext.commit_log_offset,
-                msg_ext.get_user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC,)),
+                msg_ext.user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC,)),
             );
         } else {
             error!(
@@ -105,7 +105,7 @@ where
     }
 
     async fn send_check_message(&self, mut msg_ext: MessageExt) -> rocketmq_error::RocketMQResult<()> {
-        let msg_id = msg_ext.get_user_property(&CheetahString::from_static_str(
+        let msg_id = msg_ext.user_property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
         ));
         let header = CheckTransactionStateRequestHeader {
@@ -120,17 +120,16 @@ where
                 ..Default::default()
             }),
         };
-        let topic = msg_ext.get_user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC));
+        let topic = msg_ext.user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC));
         if let Some(topic) = topic {
             msg_ext.set_topic(topic);
         }
-        let queue_id = msg_ext.get_user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID));
+        let queue_id = msg_ext.user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID));
         if let Some(queue_id) = queue_id {
             msg_ext.set_queue_id(queue_id.as_str().parse::<i32>().unwrap_or_default());
         }
         msg_ext.store_size = 0;
-        let group_id =
-            msg_ext.get_user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP));
+        let group_id = msg_ext.user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP));
         let channel = self
             .broker_runtime_inner
             .producer_manager()
