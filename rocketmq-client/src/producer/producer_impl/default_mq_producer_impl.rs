@@ -1135,30 +1135,19 @@ impl DefaultMQProducerImpl {
         T: MessageTrait + Send + Sync,
     {
         let begin_start_time = Instant::now();
-        let mut broker_name = self
-            .client_instance
-            .as_ref()
-            .unwrap()
-            .get_broker_name_from_message_queue(mq)
-            .await;
-        let mut broker_addr = self
-            .client_instance
-            .as_ref()
-            .unwrap()
+
+        let client_instance = self.client_instance.as_ref().unwrap();
+
+        // Get broker info with a single lookup path
+        let mut broker_name = client_instance.get_broker_name_from_message_queue(mq).await;
+        let mut broker_addr = client_instance
             .find_broker_address_in_publish(broker_name.as_ref())
             .await;
+
         if broker_addr.is_none() {
             self.try_to_find_topic_publish_info(mq.get_topic_cs()).await;
-            broker_name = self
-                .client_instance
-                .as_ref()
-                .unwrap()
-                .get_broker_name_from_message_queue(mq)
-                .await;
-            broker_addr = self
-                .client_instance
-                .as_ref()
-                .unwrap()
+            broker_name = client_instance.get_broker_name_from_message_queue(mq).await;
+            broker_addr = client_instance
                 .find_broker_address_in_publish(broker_name.as_ref())
                 .await;
         }
@@ -1168,16 +1157,19 @@ impl DefaultMQProducerImpl {
         }
         let mut broker_addr = broker_addr.unwrap();
         broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, broker_addr.as_str());
-        //let prev_body = msg.body.clone();
+
         let batch = msg.as_any().downcast_ref::<MessageBatch>().is_some();
         if !batch {
             MessageClientIDSetter::set_uniq_id(msg);
         }
+
+        let namespace = self.client_config.get_namespace();
         let mut topic_with_namespace = false;
-        if self.client_config.get_namespace().is_some() {
-            msg.set_instance_id(self.client_config.get_namespace().unwrap_or_default());
+        if let Some(ref ns) = namespace {
+            msg.set_instance_id(ns.clone());
             topic_with_namespace = true;
         }
+
         let mut sys_flag = 0i32;
         let mut msg_body_compressed = false;
         if self.try_to_compress_message(msg) {
@@ -1185,14 +1177,14 @@ impl DefaultMQProducerImpl {
             sys_flag |= self.producer_config.compress_type().get_compression_flag();
             msg_body_compressed = true;
         }
-        let tran_msg = msg.property(&CheetahString::from_static_str(
+
+        let tran_msg_property = msg.property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_TRANSACTION_PREPARED,
         ));
-        if let Some(value) = tran_msg {
-            let value_ = value.parse().unwrap_or(false);
-            if value_ {
-                sys_flag |= MessageSysFlag::TRANSACTION_PREPARED_TYPE;
-            }
+        let is_transaction_prepared = tran_msg_property.as_ref().and_then(|v| v.parse().ok()).unwrap_or(false);
+
+        if is_transaction_prepared {
+            sys_flag |= MessageSysFlag::TRANSACTION_PREPARED_TYPE;
         }
 
         if self.has_check_forbidden_hook() {
@@ -1209,11 +1201,15 @@ impl DefaultMQProducerImpl {
             self.execute_check_forbidden_hook(&check_forbidden_context)?;
         }
 
-        //build send message request header
+        // Build send message request header
+        let producer_group = self.producer_config.producer_group();
+        let topic = msg.topic();
+        let create_topic_key = self.producer_config.create_topic_key();
+
         let mut request_header = SendMessageRequestHeader {
-            producer_group: CheetahString::from_string(self.producer_config.producer_group().to_string()),
-            topic: CheetahString::from_string(msg.topic().to_string()),
-            default_topic: CheetahString::from_string(self.producer_config.create_topic_key().to_string()),
+            producer_group: producer_group.clone(),
+            topic: topic.clone(),
+            default_topic: create_topic_key.clone(),
             default_topic_queue_nums: self.producer_config.default_topic_queue_nums() as i32,
             queue_id: mq.get_queue_id(),
             sys_flag,
@@ -1249,22 +1245,17 @@ impl DefaultMQProducerImpl {
 
         // Handle namespace before creating send_message_context
         if topic_with_namespace && communication_mode == CommunicationMode::Async {
-            msg.set_topic(CheetahString::from_string(
-                NamespaceUtil::without_namespace_with_namespace(
-                    msg.topic(),
-                    self.client_config.get_namespace().unwrap_or_default().as_str(),
-                ),
-            ));
+            // Safe: topic_with_namespace is true only when namespace is Some
+            if let Some(ref ns) = namespace {
+                msg.set_topic(CheetahString::from_string(
+                    NamespaceUtil::without_namespace_with_namespace(msg.topic(), ns.as_str()),
+                ));
+            }
         }
 
         let mut send_message_context = if self.has_send_message_hook() {
-            let namespace = self.client_config.get_namespace();
-            let producer_group = self.producer_config.producer_group().clone();
             let born_host = self.client_config.client_ip.clone();
-            let is_trans = msg.property(&CheetahString::from_static_str(
-                MessageConst::PROPERTY_TRANSACTION_PREPARED,
-            ));
-            let msg_type_flag = msg
+            let has_delay_property = msg
                 .property(&CheetahString::from_static_str(
                     MessageConst::PROPERTY_STARTDE_LIVER_TIME,
                 ))
@@ -1272,30 +1263,28 @@ impl DefaultMQProducerImpl {
                 || msg
                     .property(&CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL))
                     .is_some();
+
             let mut send_message_context = SendMessageContext {
                 producer: self
                     .default_mqproducer_impl_inner
                     .as_ref()
                     .and_then(|weak| weak.upgrade()),
-                producer_group: Some(producer_group),
+                producer_group: Some(producer_group.clone()),
                 communication_mode: Some(communication_mode),
                 born_host,
                 broker_addr: Some(broker_addr.clone()),
                 message: None, // Don't store message reference to avoid borrow conflicts
                 mq: Some(mq),
-                namespace,
+                namespace: namespace.clone(),
                 ..Default::default()
             };
 
-            if let Some(value) = is_trans {
-                let value_ = value.parse().unwrap_or(false);
-                if value_ {
-                    send_message_context.msg_type = Some(MessageType::TransMsgHalf);
-                }
-            }
-            if msg_type_flag {
+            if is_transaction_prepared {
+                send_message_context.msg_type = Some(MessageType::TransMsgHalf);
+            } else if has_delay_property {
                 send_message_context.msg_type = Some(MessageType::DelayMsg);
             }
+
             let send_message_context = Some(send_message_context);
             self.execute_send_message_hook_before(&send_message_context);
             send_message_context
@@ -1303,19 +1292,21 @@ impl DefaultMQProducerImpl {
             None
         };
 
+        // Calculate cost time once
+        let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
+
         let send_result = match communication_mode {
             CommunicationMode::Async => {
-                let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
-                self.client_instance
-                    .as_ref()
-                    .unwrap()
+                // Async mode: no early timeout check, let the underlying method handle it
+                let remaining_timeout = timeout.saturating_sub(cost_time_sync);
+                client_instance
                     .get_mq_client_api_impl()
                     .send_message(
                         &broker_addr,
                         &broker_name,
                         msg,
                         request_header,
-                        timeout - cost_time_sync,
+                        remaining_timeout,
                         communication_mode,
                         send_callback,
                         topic_publish_info,
@@ -1327,23 +1318,22 @@ impl DefaultMQProducerImpl {
                     .await
             }
             CommunicationMode::Oneway | CommunicationMode::Sync => {
-                let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
+                // Sync/Oneway mode: check timeout before sending
                 if timeout < cost_time_sync {
                     return Err(rocketmq_error::RocketMQError::Timeout {
                         operation: "sendKernelImpl",
                         timeout_ms: timeout,
                     });
                 }
-                self.client_instance
-                    .as_ref()
-                    .unwrap()
+                let remaining_timeout = timeout - cost_time_sync;
+                client_instance
                     .get_mq_client_api_impl()
                     .send_message_simple(
                         &broker_addr,
                         &broker_name,
                         msg,
                         request_header,
-                        timeout - cost_time_sync,
+                        remaining_timeout,
                         communication_mode,
                         &mut send_message_context,
                         self,
@@ -1363,8 +1353,6 @@ impl DefaultMQProducerImpl {
             }
             Err(err) => {
                 if self.has_send_message_hook() {
-                    //send_message_context.as_mut().unwrap().exception =
-                    // Some(Arc::new(err.clone()));
                     self.execute_send_message_hook_after(&send_message_context);
                 }
                 Err(err)
