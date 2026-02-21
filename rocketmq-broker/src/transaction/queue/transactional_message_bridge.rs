@@ -254,7 +254,7 @@ where
     /// 6. **Queue Reset**: Sets queue ID to 0 (all half messages go to queue 0)
     /// 7. **Properties Serialization**: Updates the properties string representation
     pub fn parse_half_message_inner(message: &mut MessageExtBrokerInner) {
-        let uniq_id = message.get_user_property(&CheetahString::from_static_str(
+        let uniq_id = message.user_property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
         ));
         if let Some(uniq_id) = uniq_id {
@@ -292,7 +292,7 @@ where
 
     pub fn renew_immunity_half_message_inner(msg_ext: &MessageExt) -> MessageExtBrokerInner {
         let mut message_inner = Self::renew_half_message_inner(msg_ext);
-        let queue_offset_from_prepare = msg_ext.get_user_property(&CheetahString::from_static_str(
+        let queue_offset_from_prepare = msg_ext.user_property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET,
         ));
         if let Some(queue_offset_from_prepare) = queue_offset_from_prepare {
