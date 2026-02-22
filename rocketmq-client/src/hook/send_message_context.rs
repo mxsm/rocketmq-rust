@@ -34,7 +34,7 @@ pub struct SendMessageContext<'a> {
     pub broker_addr: Option<CheetahString>,
     pub born_host: Option<CheetahString>,
     pub communication_mode: Option<CommunicationMode>,
-    pub send_result: Option<SendResult>,
+    pub send_result: Option<&'a SendResult>,
     pub exception: Option<Arc<Box<dyn Error + Send + Sync>>>,
     pub mq_trace_context: Option<Arc<Box<dyn std::any::Any + Send + Sync>>>,
     pub props: HashMap<CheetahString, CheetahString>,
