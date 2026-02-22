@@ -469,9 +469,7 @@ impl DefaultMQProducerImpl {
 
             // Get broker address
             let broker_name = client_instance.get_broker_name_from_message_queue(&mq).await;
-            let broker_addr = client_instance
-                .find_broker_address_in_publish(broker_name.as_ref())
-                .await;
+            let broker_addr = client_instance.find_broker_address_in_publish(broker_name.as_ref());
 
             if broker_addr.is_none() {
                 return; // Silently skip in oneway mode
@@ -589,7 +587,7 @@ impl DefaultMQProducerImpl {
             if timeout <= cost_time {
                 send_callback_clone.as_ref().unwrap()(
                     None,
-                    Some(&RemotingTooMuchRequestError("call timeout".to_string())),
+                    Some(&RemotingTooMuchRequestError("call timeout".to_string()) as &dyn std::error::Error),
                 );
             }
 
@@ -720,7 +718,7 @@ impl DefaultMQProducerImpl {
         };
         let future = async move {
             if let Err(err) = producer_impl.make_sure_state_ok() {
-                send_callback_inner.as_ref().unwrap()(None, Some(&err));
+                send_callback_inner.as_ref().unwrap()(None, Some(&err as &dyn std::error::Error));
                 return;
             }
             if msg.topic() != mq.get_topic() {
@@ -730,7 +728,7 @@ impl DefaultMQProducerImpl {
                         "message topic [{}] is not equal with message queue topic [{}]",
                         msg.topic(),
                         mq.get_topic()
-                    )))),
+                    ))) as &dyn std::error::Error),
                 );
                 return;
             }
@@ -739,7 +737,7 @@ impl DefaultMQProducerImpl {
             if timeout <= cost_time {
                 send_callback_inner.as_ref().unwrap()(
                     None,
-                    Some(&RemotingTooMuchRequestError("call timeout".to_string())),
+                    Some(&RemotingTooMuchRequestError("call timeout".to_string()) as &dyn std::error::Error),
                 );
             }
             let result = producer_impl
@@ -755,7 +753,7 @@ impl DefaultMQProducerImpl {
             match result {
                 Ok(_) => {}
                 Err(err) => {
-                    send_callback_inner.as_ref().unwrap()(None, Some(&err));
+                    send_callback_inner.as_ref().unwrap()(None, Some(&err as &dyn std::error::Error));
                 }
             }
         };
@@ -794,7 +792,7 @@ impl DefaultMQProducerImpl {
             if timeout <= cost_time {
                 send_callback_inner.as_ref().unwrap()(
                     None,
-                    Some(&RemotingTooMuchRequestError("asyncSend call timeout".to_string())),
+                    Some(&RemotingTooMuchRequestError("asyncSend call timeout".to_string()) as &dyn std::error::Error),
                 );
             }
 
@@ -804,7 +802,7 @@ impl DefaultMQProducerImpl {
             match result {
                 Ok(_) => {}
                 Err(err) => {
-                    send_callback_inner.as_ref().unwrap()(None, Some(&err));
+                    send_callback_inner.as_ref().unwrap()(None, Some(&err as &dyn std::error::Error));
                 }
             }
         };
@@ -827,92 +825,93 @@ impl DefaultMQProducerImpl {
     {
         let is_enable_backpressure_for_async_mode = self.producer_config.enable_backpressure_for_async_mode();
 
-        let (acquire_value_num, acquire_value_size) = if is_enable_backpressure_for_async_mode {
-            //back pressure
-            let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
-            let is_semaphore_async_numb_acquired = (timeout - cost_time) > 0;
-            if !is_semaphore_async_numb_acquired {
-                send_callback.as_ref().unwrap()(
-                    None,
-                    Some(&RemotingTooMuchRequestError(
-                        "send message tryAcquire semaphoreAsyncNum timeout".to_string(),
-                    )),
-                );
-                return Ok(());
-            }
-            let result = tokio::time::timeout(
-                Duration::from_millis(timeout - cost_time),
-                self.semaphore_async_send_num.acquire(),
-            )
-            .await;
-            let acquire_value_num = match result {
-                Ok(acquire_value) => match acquire_value {
-                    Ok(value) => Some(value),
+        let (acquire_value_num, acquire_value_size) =
+            if is_enable_backpressure_for_async_mode {
+                //back pressure
+                let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
+                let is_semaphore_async_numb_acquired = (timeout - cost_time) > 0;
+                if !is_semaphore_async_numb_acquired {
+                    send_callback.as_ref().unwrap()(
+                        None,
+                        Some(&RemotingTooMuchRequestError(
+                            "send message tryAcquire semaphoreAsyncNum timeout".to_string(),
+                        ) as &dyn std::error::Error),
+                    );
+                    return Ok(());
+                }
+                let result = tokio::time::timeout(
+                    Duration::from_millis(timeout - cost_time),
+                    self.semaphore_async_send_num.acquire(),
+                )
+                .await;
+                let acquire_value_num = match result {
+                    Ok(acquire_value) => match acquire_value {
+                        Ok(value) => Some(value),
+                        Err(_) => {
+                            send_callback.as_ref().unwrap()(
+                                None,
+                                Some(&RemotingTooMuchRequestError(
+                                    "send message tryAcquire semaphoreAsyncNum timeout".to_string(),
+                                ) as &dyn std::error::Error),
+                            );
+                            return Ok(());
+                        }
+                    },
                     Err(_) => {
                         send_callback.as_ref().unwrap()(
                             None,
                             Some(&RemotingTooMuchRequestError(
                                 "send message tryAcquire semaphoreAsyncNum timeout".to_string(),
-                            )),
+                            ) as &dyn std::error::Error),
                         );
                         return Ok(());
                     }
-                },
-                Err(_) => {
+                };
+
+                //message size
+                let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
+                let is_semaphore_async_size_acquired = (timeout - cost_time) > 0;
+                if !is_semaphore_async_size_acquired {
                     send_callback.as_ref().unwrap()(
                         None,
                         Some(&RemotingTooMuchRequestError(
-                            "send message tryAcquire semaphoreAsyncNum timeout".to_string(),
-                        )),
+                            "send message tryAcquire semaphoreAsyncSize timeout".to_string(),
+                        ) as &dyn std::error::Error),
                     );
                     return Ok(());
                 }
-            };
-
-            //message size
-            let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
-            let is_semaphore_async_size_acquired = (timeout - cost_time) > 0;
-            if !is_semaphore_async_size_acquired {
-                send_callback.as_ref().unwrap()(
-                    None,
-                    Some(&RemotingTooMuchRequestError(
-                        "send message tryAcquire semaphoreAsyncSize timeout".to_string(),
-                    )),
-                );
-                return Ok(());
-            }
-            let result = tokio::time::timeout(
-                Duration::from_millis(timeout - cost_time),
-                self.semaphore_async_send_size.acquire_many(msg_len as u32),
-            )
-            .await;
-            let acquire_value_size = match result {
-                Ok(acquire_value) => match acquire_value {
-                    Ok(value) => Some(value),
+                let result = tokio::time::timeout(
+                    Duration::from_millis(timeout - cost_time),
+                    self.semaphore_async_send_size.acquire_many(msg_len as u32),
+                )
+                .await;
+                let acquire_value_size = match result {
+                    Ok(acquire_value) => match acquire_value {
+                        Ok(value) => Some(value),
+                        Err(_) => {
+                            send_callback.as_ref().unwrap()(
+                                None,
+                                Some(&RemotingTooMuchRequestError(
+                                    "send message tryAcquire semaphoreAsyncSize timeout".to_string(),
+                                ) as &dyn std::error::Error),
+                            );
+                            return Ok(());
+                        }
+                    },
                     Err(_) => {
                         send_callback.as_ref().unwrap()(
                             None,
                             Some(&RemotingTooMuchRequestError(
                                 "send message tryAcquire semaphoreAsyncSize timeout".to_string(),
-                            )),
+                            ) as &dyn std::error::Error),
                         );
                         return Ok(());
                     }
-                },
-                Err(_) => {
-                    send_callback.as_ref().unwrap()(
-                        None,
-                        Some(&RemotingTooMuchRequestError(
-                            "send message tryAcquire semaphoreAsyncSize timeout".to_string(),
-                        )),
-                    );
-                    return Ok(());
-                }
+                };
+                (acquire_value_num, acquire_value_size)
+            } else {
+                (None, None)
             };
-            (acquire_value_num, acquire_value_size)
-        } else {
-            (None, None)
-        };
         tokio::spawn(f);
         drop((acquire_value_num, acquire_value_size));
         Ok(())
@@ -1140,16 +1139,12 @@ impl DefaultMQProducerImpl {
 
         // Get broker info with a single lookup path
         let mut broker_name = client_instance.get_broker_name_from_message_queue(mq).await;
-        let mut broker_addr = client_instance
-            .find_broker_address_in_publish(broker_name.as_ref())
-            .await;
+        let mut broker_addr = client_instance.find_broker_address_in_publish(broker_name.as_ref());
 
         if broker_addr.is_none() {
             self.try_to_find_topic_publish_info(mq.get_topic_cs()).await;
             broker_name = client_instance.get_broker_name_from_message_queue(mq).await;
-            broker_addr = client_instance
-                .find_broker_address_in_publish(broker_name.as_ref())
-                .await;
+            broker_addr = client_instance.find_broker_address_in_publish(broker_name.as_ref());
         }
 
         if broker_addr.is_none() {
@@ -1676,7 +1671,7 @@ impl DefaultMQProducerImpl {
                 request_response_future_inner.put_response_message(None);
                 request_response_future_inner.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(
                     ClientErr::new(error.to_string()),
-                )));
+                )) as Box<dyn std::error::Error + Send + Sync>);
             }
         };
         let topic = msg.topic().clone();
@@ -1730,9 +1725,9 @@ impl DefaultMQProducerImpl {
                 return;
             }
             if let Some(error) = err {
-                request_response_future.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(
-                    ClientErr::new(error.to_string()),
-                )));
+                request_response_future.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(
+                    error.to_string(),
+                ))) as Box<dyn std::error::Error + Send + Sync>);
                 Self::request_fail(correlation_id.as_str());
             }
         };
@@ -1779,7 +1774,7 @@ impl DefaultMQProducerImpl {
                 request_response_future_inner.put_response_message(None);
                 request_response_future_inner.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(
                     ClientErr::new(error.to_string()),
-                )));
+                )) as Box<dyn std::error::Error + Send + Sync>);
             }
         };
         let topic = msg.topic().clone();
@@ -1829,9 +1824,9 @@ impl DefaultMQProducerImpl {
                 return;
             }
             if let Some(error) = err {
-                request_response_future.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(
-                    ClientErr::new(error.to_string()),
-                )));
+                request_response_future.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(
+                    error.to_string(),
+                ))) as Box<dyn std::error::Error + Send + Sync>);
                 Self::request_fail(correlation_id.as_str());
             }
         };
@@ -1878,9 +1873,9 @@ impl DefaultMQProducerImpl {
                 return;
             }
             if let Some(error) = err {
-                request_response_future.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(
-                    ClientErr::new(error.to_string()),
-                )));
+                request_response_future.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(
+                    error.to_string(),
+                ))) as Box<dyn std::error::Error + Send + Sync>);
                 Self::request_fail(correlation_id.as_str());
             }
         };
@@ -1931,7 +1926,7 @@ impl DefaultMQProducerImpl {
                 request_response_future_inner.put_response_message(None);
                 request_response_future_inner.set_cause(Box::new(rocketmq_error::RocketmqError::MQClientErr(
                     ClientErr::new(error.to_string()),
-                )));
+                )) as Box<dyn std::error::Error + Send + Sync>);
             }
         };
         let topic = msg.topic().clone();
