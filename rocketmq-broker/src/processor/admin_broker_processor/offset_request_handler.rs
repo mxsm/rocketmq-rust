@@ -113,13 +113,6 @@ impl<MS: MessageStore> OffsetRequestHandler<MS> {
             response_header,
         )))
     }
-    /*
-    async fn handle_get_min_offset(
-        &mut self,
-        mut request_header: GetMinOffsetRequestHeader,
-    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-
-    }*/
 
     async fn handle_get_min_offset_for_static_topic(
         &mut self,

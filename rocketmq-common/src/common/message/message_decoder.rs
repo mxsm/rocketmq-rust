@@ -437,7 +437,7 @@ pub fn decode_messages_from(mut message_ext: MessageExt, vec_: &mut Vec<MessageE
             message,
             ..MessageExt::default()
         };
-        message_ext_inner.set_topic(message_ext.get_topic().to_owned());
+        message_ext_inner.set_topic(message_ext.topic().to_owned());
         message_ext_inner.queue_offset = message_ext.queue_offset;
         message_ext_inner.queue_id = message_ext.queue_id;
         message_ext_inner.set_flag(message_ext.get_flag());
@@ -517,7 +517,7 @@ pub fn decode_message_id(msg_id: &str) -> MessageId {
 
 pub fn encode(message_ext: &MessageExt, need_compress: bool) -> rocketmq_error::RocketMQResult<Bytes> {
     let body = message_ext.get_body().unwrap();
-    let topic = message_ext.get_topic().as_bytes();
+    let topic = message_ext.topic().as_bytes();
     let topic_len = topic.len();
     let properties = message_properties_to_string(message_ext.get_properties());
     let properties_bytes = properties.as_bytes();
@@ -642,7 +642,7 @@ pub fn encode(message_ext: &MessageExt, need_compress: bool) -> rocketmq_error::
 
 pub fn encode_uniquely(message_ext: &MessageExt, need_compress: bool) -> rocketmq_error::RocketMQResult<Bytes> {
     let body = message_ext.get_body().unwrap();
-    let topics = message_ext.get_topic().as_bytes();
+    let topics = message_ext.topic().as_bytes();
     let topic_len = topics.len();
     let properties = message_properties_to_string(message_ext.get_properties());
     let properties_bytes = properties.as_bytes();

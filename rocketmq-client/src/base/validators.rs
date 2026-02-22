@@ -61,8 +61,8 @@ impl Validators {
             ));
         }
         let msg = msg.unwrap();
-        Self::check_topic(msg.get_topic())?;
-        Self::is_not_allowed_send_topic(msg.get_topic())?;
+        Self::check_topic(msg.topic())?;
+        Self::is_not_allowed_send_topic(msg.topic())?;
 
         if msg.get_body().is_none() {
             return Err(mq_client_err!(
@@ -89,7 +89,7 @@ impl Validators {
             ));
         }
 
-        let lmq_path = msg.get_user_property(&CheetahString::from_static_str(
+        let lmq_path = msg.user_property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_INNER_MULTI_DISPATCH,
         ));
         if let Some(value) = lmq_path {

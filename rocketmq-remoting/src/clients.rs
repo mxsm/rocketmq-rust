@@ -81,6 +81,20 @@ pub trait RemotingClient: RemotingService {
     /// * `timeout_millis` - The timeout for the operation in milliseconds.
     async fn invoke_request_oneway(&self, addr: &CheetahString, request: RemotingCommand, timeout_millis: u64);
 
+    /// Invokes a command on a specified address without waiting for a response or confirmation.
+    /// This is a true fire-and-forget method that returns immediately after spawning the send task.
+    ///
+    /// # Arguments
+    /// * `addr` - The address to invoke the command on.
+    /// * `request` - The `RemotingCommand` to be sent.
+    ///
+    /// # Semantics
+    /// - Returns immediately after spawning background task
+    /// - Does NOT wait for the message to be sent
+    /// - Does NOT wait for network I/O
+    /// - Errors are silently dropped (logged only)
+    fn invoke_oneway_unbounded(&self, addr: CheetahString, request: RemotingCommand);
+
     /// Checks if a specified address is reachable.
     ///
     /// # Arguments

@@ -14,17 +14,15 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rand::RngExt;
-use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
 use tokio::time;
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -43,8 +41,6 @@ use crate::request_processor::default_request_processor::DefaultRemotingRequestP
 use crate::runtime::config::client_config::TokioClientConfig;
 use crate::runtime::processor::RequestProcessor;
 use crate::runtime::RPCHook;
-
-const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 
 /// High-performance async RocketMQ client with connection pooling and auto-reconnection.
 ///
@@ -79,8 +75,7 @@ const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 ///
 /// # Performance Characteristics
 ///
-/// - **Lock Contention**: Uses `Arc<Mutex<HashMap>>` for connection pool
-///   - ⚠️ TODO: Migrate to `DashMap` for lock-free reads
+/// - **Concurrency**: Uses `DashMap` for lock-free reads on connection pool
 /// - **Memory**: O(N) where N = number of unique broker addresses
 /// - **Latency**: Single async hop for cached connections, 2-3 hops for new
 ///
@@ -147,11 +142,6 @@ pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
     /// Updated asynchronously by health check task (`scan_available_name_srv`)
     available_namesrv_addr_set: ArcMut<HashSet<CheetahString>>,
 
-    /// Round-robin index for nameserver selection
-    ///
-    /// ⚠️ Deprecated: Use `latency_tracker` for smart selection
-    namesrv_index: Arc<AtomicI32>,
-
     /// Latency tracker for smart nameserver selection
     ///
     /// Tracks P99 latency and error rates to select the best nameserver
@@ -172,10 +162,11 @@ pub struct RocketmqDefaultClient<PR = DefaultRemotingRequestProcessor> {
     /// **Usage**: Call `enable_connection_pool()` to activate
     connection_pool: Option<ConnectionPool<PR>>,
 
-    /// Background task runtime for health checks and cleanup
+    /// Token used to signal graceful shutdown of background tasks.
     ///
-    /// `None` after `shutdown()` is called
-    client_runtime: Option<RocketMQRuntime>,
+    /// Cancelling this token stops the nameserver scan and idle connection
+    /// scan loops spawned in [`start()`].
+    shutdown_token: CancellationToken,
 
     /// Shared command handler (processor + response table)
     ///
@@ -199,7 +190,6 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     ) -> Self {
         let handler = RemotingGeneralHandler {
             request_processor: processor,
-            //shutdown: (),
             rpc_hooks: vec![],
             response_table: ArcMut::new(HashMap::with_capacity(512)),
         };
@@ -209,11 +199,10 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             namesrv_addr_list: ArcMut::new(Default::default()),
             namesrv_addr_choosed: ArcMut::new(Default::default()),
             available_namesrv_addr_set: ArcMut::new(Default::default()),
-            namesrv_index: Arc::new(AtomicI32::new(init_value_index())),
             latency_tracker: LatencyTracker::new(),
             circuit_breakers: Arc::new(DashMap::with_capacity(64)),
-            connection_pool: None, // Disabled by default, enable via enable_connection_pool()
-            client_runtime: Some(RocketMQRuntime::new_multi(10, "client-thread")),
+            connection_pool: None,
+            shutdown_token: CancellationToken::new(),
             cmd_handler: ArcMut::new(handler),
             tx,
         }
@@ -304,7 +293,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     ///
     /// # Selection Strategy
     ///
-    /// **Latency-based** (NEW): Selects lowest P99 latency nameserver
+    /// **Latency-based**: Selects lowest P99 latency nameserver
     /// ```text
     /// namesrv_list = [ns1, ns2, ns3]
     /// Metrics:
@@ -333,7 +322,6 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     /// * `Some(client)` - Connected to healthy nameserver
     /// * `None` - No nameservers available or all unhealthy
     async fn get_and_create_nameserver_client(&self) -> Option<Client<PR>> {
-        // Try cached nameserver ===
         let cached_addr = self.namesrv_addr_choosed.as_ref().clone();
 
         if let Some(ref addr) = cached_addr {
@@ -347,7 +335,6 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             }
         }
 
-        // Smart nameserver selection ===
         let addr_list = self.namesrv_addr_list.as_ref();
 
         if addr_list.is_empty() {
@@ -380,7 +367,6 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         // Update cached selection
         self.namesrv_addr_choosed.mut_from_ref().replace(selected_addr.clone());
 
-        //Create connection to selected nameserver ===
         self.create_client(
             selected_addr,
             Duration::from_millis(self.tokio_client_config.connect_timeout_millis as u64),
@@ -399,20 +385,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     /// # Performance
     /// - **Fast path**: Single lock acquire + HashMap lookup + health check (< 100ns)
     /// - **Slow path**: Lock + TCP handshake + TLS (if enabled) (10-50ms)
-    ///
-    /// # Lock Optimization
-    /// Current: Hold lock during `get()` and `clone()`
-    /// TODO: Use `DashMap` for lock-free read path:
-    /// ```rust,ignore
-    /// if let Some(client) = self.connection_tables.get(addr) {
-    ///     if client.connection().is_healthy() {
-    ///         return Some(client.clone());
-    ///     }
-    /// }
-    /// ```
     async fn get_and_create_client(&self, addr: Option<&CheetahString>) -> Option<Client<PR>> {
-        // HOT PATH: Most requests hit this method
-
         // Route empty addresses to nameserver
         let target_addr = match addr {
             None => return self.get_and_create_nameserver_client().await,
@@ -476,7 +449,6 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     /// * `Some(client)` - Successfully connected (either new or cached)
     /// * `None` - Connection failed or timed out (or circuit breaker OPEN)
     async fn create_client(&self, addr: &CheetahString, duration: Duration) -> Option<Client<PR>> {
-        // Try connection pool first (if enabled) ===
         if let Some(ref pool) = self.connection_pool {
             if let Some(pooled_conn) = pool.get(addr) {
                 if pooled_conn.is_healthy() {
@@ -488,9 +460,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             }
         }
 
-        // Double-check before expensive connect (lock-free with DashMap) ===
-
-        // Check if healthy client already exists (fallback to DashMap)
+        // Check if healthy client already exists
         if let Some(client_ref) = self.connection_tables.get(addr) {
             let client = client_ref.value().clone();
             if client.connection().is_healthy() {
@@ -501,8 +471,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             self.connection_tables.remove(addr);
         }
 
-        // check circuit breaker ===
-        // Get or create circuit breaker for this address
+        // Check circuit breaker for this address
         let mut breaker = self
             .circuit_breakers
             .entry(addr.clone())
@@ -515,7 +484,6 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             return None;
         }
 
-        // Perform TCP connect WITHOUT holding lock ===
         let addr_inner = addr.to_string();
 
         let connect_result = time::timeout(duration, async {
@@ -523,14 +491,12 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
         })
         .await;
 
-        // Handle connection result and update circuit breaker ===
         match connect_result {
             Ok(Ok(new_client)) => {
                 // Connection successful - record success in circuit breaker
                 breaker.record_success();
                 self.circuit_breakers.insert(addr.clone(), breaker);
 
-                // Insert into connection pool (if enabled) ===
                 if let Some(ref pool) = self.connection_pool {
                     if pool.insert(addr.clone(), new_client.clone()) {
                         info!("Added connection to pool: {} (pool size: {})", addr, pool.stats().total);
@@ -539,7 +505,6 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
                     }
                 }
 
-                // Insert into DashMap (fallback or dual-store) ===
                 match self.connection_tables.entry(addr.clone()) {
                     dashmap::mapref::entry::Entry::Occupied(mut entry) => {
                         // Check if existing is still healthy
@@ -653,15 +618,8 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
     /// # Performance
     ///
     /// - **Frequency**: Called every `connect_timeout_millis` (typically 3s)
-    /// - **Concurrency**: Sequential probes (TODO: parallelize with `join_all`)
+    /// - **Concurrency**: Parallel probes via `futures::future::join_all`
     /// - **Overhead**: O(N) where N = number of nameservers (typically < 10)
-    ///
-    /// # Optimization Opportunities
-    ///
-    /// 1. **Parallel probes**: Use `futures::future::join_all` to probe all nameservers
-    ///    concurrently
-    /// 2. **Smart backoff**: Skip probing recently-successful servers
-    /// 3. **Metrics**: Track probe latency for latency-based selection
     ///
     /// # Example Timeline
     ///
@@ -682,7 +640,6 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             return;
         }
 
-        // Cleanup - Remove stale entries ===
         // Collect addresses to remove (avoid holding borrow during mutation)
         let stale_addrs: Vec<CheetahString> = self
             .available_namesrv_addr_set
@@ -697,8 +654,7 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             self.available_namesrv_addr_set.mut_from_ref().remove(&stale_addr);
         }
 
-        // Parallel probe all configured nameservers ===
-        // Parallel probing reduces scan time from O(N * 50ms) to O(max(50ms))
+        // Parallel probing reduces total scan time
         use futures::future::join_all;
 
         let probe_futures: Vec<_> = addr_list
@@ -740,6 +696,51 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RocketmqDefaultClient<PR> {
             addr_list.len()
         );
     }
+
+    /// Scans connections and removes those that are unhealthy or idle.
+    ///
+    /// Unhealthy connections (state != `Healthy`) are removed unconditionally.
+    /// When the connection pool is enabled, idle connections (exceeding
+    /// `channel_not_active_interval` since last use) are also evicted.
+    fn scan_idle_connections(&self) {
+        let interval_ms = self.tokio_client_config.channel_not_active_interval;
+        if interval_ms <= 0 {
+            return;
+        }
+
+        let idle_threshold = Duration::from_millis(interval_ms as u64);
+        let mut stale_addrs = Vec::new();
+
+        for entry in self.connection_tables.iter() {
+            let addr = entry.key().clone();
+            let client = entry.value();
+
+            // Remove connections that are no longer healthy
+            if !client.connection().is_healthy() {
+                stale_addrs.push(addr);
+                continue;
+            }
+
+            // Remove connections idle beyond the threshold (pool metrics required)
+            if let Some(ref pool) = self.connection_pool {
+                if let Some(pooled) = pool.get(&addr) {
+                    if pooled.is_idle(idle_threshold) {
+                        stale_addrs.push(addr);
+                    }
+                }
+            }
+        }
+
+        for addr in &stale_addrs {
+            if self.connection_tables.remove(addr).is_some() {
+                warn!("[SCAN] Removed idle/unhealthy connection: {}", addr);
+
+                if let Some(ref pool) = self.connection_pool {
+                    pool.remove(addr);
+                }
+            }
+        }
+    }
 }
 
 #[allow(unused_variables)]
@@ -747,25 +748,46 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for Rocketmq
     async fn start(&self, this: WeakArcMut<Self>) {
         if let Some(client) = this.upgrade() {
             let connect_timeout_millis = self.tokio_client_config.connect_timeout_millis as u64;
-            self.client_runtime.as_ref().unwrap().get_handle().spawn(async move {
+            let token = self.shutdown_token.clone();
+
+            let client_for_scan = client.clone();
+            let scan_token = token.clone();
+            tokio::spawn(async move {
                 loop {
-                    client.scan_available_name_srv().await;
-                    time::sleep(Duration::from_millis(connect_timeout_millis)).await;
+                    tokio::select! {
+                        () = scan_token.cancelled() => break,
+                        () = async {
+                            client_for_scan.scan_available_name_srv().await;
+                            time::sleep(Duration::from_millis(connect_timeout_millis)).await;
+                        } => {}
+                    }
                 }
             });
+
+            let channel_not_active_interval = self.tokio_client_config.channel_not_active_interval as u64;
+            if channel_not_active_interval > 0 {
+                let idle_token = token.clone();
+                tokio::spawn(async move {
+                    loop {
+                        tokio::select! {
+                            () = idle_token.cancelled() => break,
+                            () = time::sleep(Duration::from_millis(channel_not_active_interval)) => {
+                                client.scan_idle_connections();
+                            }
+                        }
+                    }
+                });
+            }
         }
     }
 
     fn shutdown(&mut self) {
-        if let Some(rt) = self.client_runtime.take() {
-            rt.shutdown();
-        }
-        // DashMap::clear() is already thread-safe, no need for async lock
+        self.shutdown_token.cancel();
         self.connection_tables.clear();
         self.namesrv_addr_list.clear();
         self.available_namesrv_addr_set.clear();
 
-        info!(">>>>>>>>>>>>>>>RemotingClient shutdown success<<<<<<<<<<<<<<<<<");
+        info!("RemotingClient shutdown complete");
     }
 
     fn register_rpc_hook(&mut self, hook: Arc<dyn RPCHook>) {
@@ -773,48 +795,59 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingService for Rocketmq
     }
 
     fn clear_rpc_hook(&mut self) {
-        todo!()
+        self.cmd_handler.clear_rpc_hook();
     }
 }
 
 #[allow(unused_variables)]
 impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqDefaultClient<PR> {
     async fn update_name_server_address_list(&self, addrs: Vec<CheetahString>) {
-        let old = self.namesrv_addr_list.mut_from_ref();
+        if addrs.is_empty() {
+            return;
+        }
+
         let mut update = false;
 
-        if !addrs.is_empty() {
-            if old.is_empty() || addrs.len() != old.len() {
+        // Determine if the list has changed (read-only comparison, no mutable borrow)
+        {
+            let current: &Vec<CheetahString> = &self.namesrv_addr_list;
+            if current.is_empty() || addrs.len() != current.len() {
                 update = true;
             } else {
                 for addr in &addrs {
-                    if !old.contains(addr) {
+                    if !current.contains(addr) {
                         update = true;
                         break;
                     }
                 }
             }
+        }
 
-            if update {
-                // Shuffle the addresses
-                // Shuffle logic is not implemented here as it is not available in standard library
-                // You can implement it using various algorithms like Fisher-Yates shuffle
+        if !update {
+            return;
+        }
 
-                info!(
-                    "name remoting_server address updated. NEW : {:?} , OLD: {:?}",
-                    addrs, old
-                );
-                /* let mut rng = thread_rng();
-                addrs.shuffle(&mut rng);*/
-                self.namesrv_addr_list.mut_from_ref().extend(addrs.clone());
+        info!(
+            "name server address updated. NEW : {:?} , OLD: {:?}",
+            addrs,
+            self.namesrv_addr_list.as_ref() as &Vec<CheetahString>
+        );
 
-                // should close the channel if choosed addr is not exist.
-                if let Some(namesrv_addr) = self.namesrv_addr_choosed.as_ref() {
-                    if !addrs.contains(namesrv_addr) {
-                        // DashMap allows direct removal without collecting
-                        self.connection_tables.remove(namesrv_addr);
-                    }
-                }
+        use rand::seq::SliceRandom;
+        let mut shuffled = addrs.clone();
+        shuffled.shuffle(&mut rand::rng());
+
+        let list = self.namesrv_addr_list.mut_from_ref();
+        list.clear();
+        list.extend(shuffled);
+
+        // Clone the cached choice before mutating to avoid use-after-free
+        let stale_addr = self.namesrv_addr_choosed.as_ref().clone();
+        if let Some(namesrv_addr) = stale_addr {
+            if !addrs.contains(&namesrv_addr) {
+                self.namesrv_addr_choosed.mut_from_ref().take();
+
+                self.connection_tables.remove(&namesrv_addr);
             }
         }
     }
@@ -829,31 +862,19 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
 
     /// Send request and wait for response with timeout.
     ///
-    /// # HOT PATH
-    /// This is the primary client API - optimize for low latency and high throughput.
-    ///
     /// # Flow
     /// ```text
     /// 1. Get/create client connection         (~100ns fast path, ~50ms slow)
-    /// 2. Spawn send task on runtime           (~10μs)
-    /// 3. Apply timeout wrapper                (~100ns)
-    /// 4. Wait for response via oneshot        (network RTT + processing)
-    /// 5. Unwrap nested Result layers          (~10ns)
+    /// 2. Send request with timeout            (network RTT + processing)
+    /// 3. Record latency / error metrics       (~10ns)
     /// ```
-    ///
-    /// # Performance Optimizations
-    ///
-    /// - **Early validation**: Check client availability before expensive spawn
-    /// - **Flat error handling**: Reduce nested `match` overhead
-    /// - **Direct await**: Spawn only for timeout enforcement (could be optimized further)
     ///
     /// # Error Handling
     ///
-    /// Returns `RocketmqError::RemoteError` for all failures:
+    /// Returns `RocketMQError` for all failures:
     /// - Client unavailable (no connection)
     /// - Network I/O error (send/recv failure)
     /// - Timeout (no response within deadline)
-    /// - Task spawn error (runtime shutdown)
     ///
     /// # Arguments
     ///
@@ -888,7 +909,6 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         // Determine target address (for metrics recording)
         let target_addr = addr.cloned().or_else(|| self.namesrv_addr_choosed.as_ref().clone());
 
-        // === Get client connection ===
         let mut client = self.get_and_create_client(addr).await.ok_or_else(|| {
             let target = addr.map(|a| a.as_str()).unwrap_or("<nameserver>");
 
@@ -913,78 +933,56 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
             rocketmq_error::RocketMQError::network_connection_failed(target.to_string(), "Failed to connect")
         })?;
 
-        // === Send request with timeout ===
-        let runtime = self.client_runtime.as_ref().ok_or_else(|| {
-            error!("Client runtime has been shut down");
-            rocketmq_error::RocketMQError::ClientNotStarted
-        })?;
+        if self.shutdown_token.is_cancelled() {
+            return Err(rocketmq_error::RocketMQError::ClientNotStarted);
+        }
 
-        let send_task = runtime.get_handle().spawn(async move {
-            // Apply timeout at the send_read level
-            match time::timeout(
-                Duration::from_millis(timeout_millis),
-                client.send_read(request, timeout_millis),
-            )
-            .await
-            {
-                Ok(result) => result,
-                Err(_) => Err(rocketmq_error::RocketMQError::Timeout {
-                    operation: "send_request",
-                    timeout_ms: timeout_millis,
-                }),
-            }
-        });
+        let send_result = time::timeout(
+            Duration::from_millis(timeout_millis),
+            client.send_read(request, timeout_millis),
+        )
+        .await;
 
-        // === Await result and record metrics ===
-        match send_task.await {
-            Ok(send_result) => {
-                let latency = start.elapsed();
+        let latency = start.elapsed();
 
-                match send_result {
-                    Ok(response) => {
-                        // Record successful request latency
-                        if let Some(ref addr) = target_addr {
-                            let latency_ms = latency.as_millis() as u64;
-                            self.latency_tracker.record_success(addr, latency);
+        match send_result {
+            Ok(Ok(response)) => {
+                if let Some(ref addr) = target_addr {
+                    let latency_ms = latency.as_millis() as u64;
+                    self.latency_tracker.record_success(addr, latency);
 
-                            // Record in connection pool metrics (if enabled)
-                            if let Some(ref pool) = self.connection_pool {
-                                pool.record_success(addr, latency_ms);
-                            }
-
-                            debug!("Request to {} completed in {:?}", addr, latency);
-                        }
-                        Ok(response)
+                    if let Some(ref pool) = self.connection_pool {
+                        pool.record_success(addr, latency_ms);
                     }
-                    Err(err) => {
-                        // Record error
-                        if let Some(ref addr) = target_addr {
-                            self.latency_tracker.record_error(addr);
 
-                            // Record in connection pool metrics (if enabled)
-                            if let Some(ref pool) = self.connection_pool {
-                                pool.record_error(addr);
-                            }
-
-                            warn!("Request to {} failed after {:?}: {:?}", addr, latency, err);
-                        }
-                        Err(err)
-                    }
+                    debug!("Request to {} completed in {:?}", addr, latency);
                 }
+                Ok(response)
             }
-            Err(join_err) => {
-                // Task panic or cancellation
-                error!("Send task failed: {:?}", join_err);
-
-                // Record error
+            Ok(Err(err)) => {
                 if let Some(ref addr) = target_addr {
                     self.latency_tracker.record_error(addr);
-                }
 
-                Err(rocketmq_error::RocketMQError::Internal(format!(
-                    "Send task error: {}",
-                    join_err
-                )))
+                    if let Some(ref pool) = self.connection_pool {
+                        pool.record_error(addr);
+                    }
+
+                    warn!("Request to {} failed after {:?}: {:?}", addr, latency, err);
+                }
+                Err(err)
+            }
+            Err(_) => {
+                if let Some(ref addr) = target_addr {
+                    self.latency_tracker.record_error(addr);
+
+                    if let Some(ref pool) = self.connection_pool {
+                        pool.record_error(addr);
+                    }
+                }
+                Err(rocketmq_error::RocketMQError::Timeout {
+                    operation: "send_request",
+                    timeout_ms: timeout_millis,
+                })
             }
         }
     }
@@ -993,10 +991,11 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
         let client = self.get_and_create_client(Some(addr)).await;
         match client {
             None => {
-                error!("get client failed");
+                error!("invokeOneway: get client for {} failed", addr);
             }
             Some(mut client) => {
-                self.client_runtime.as_ref().unwrap().get_handle().spawn(async move {
+                let addr_clone = addr.clone();
+                tokio::spawn(async move {
                     match time::timeout(Duration::from_millis(timeout_millis), async move {
                         let mut request = request;
                         request.mark_oneway_rpc_ref();
@@ -1004,31 +1003,63 @@ impl<PR: RequestProcessor + Sync + Clone + 'static> RemotingClient for RocketmqD
                     })
                     .await
                     {
-                        Ok(_) => Ok::<(), rocketmq_error::RocketMQError>(()),
-                        Err(_) => Err(rocketmq_error::RocketMQError::Timeout {
-                            operation: "send_oneway",
-                            timeout_ms: timeout_millis,
-                        }),
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => {
+                            warn!("invokeOneway: send request to {} failed: {:?}", addr_clone, e);
+                        }
+                        Err(_) => {
+                            warn!(
+                                "invokeOneway: send request to {} timeout ({}ms)",
+                                addr_clone, timeout_millis
+                            );
+                        }
                     }
                 });
             }
         }
     }
 
+    fn invoke_oneway_unbounded(&self, addr: CheetahString, request: RemotingCommand) {
+        let connection_tables = self.connection_tables.clone();
+
+        tokio::spawn(async move {
+            // Clone client value and drop the DashMap guard before awaiting
+            let client = connection_tables.get(&addr).map(|r| r.value().clone());
+
+            if let Some(mut client) = client {
+                let mut request = request;
+                request.mark_oneway_rpc_ref();
+                let _ = client.send(request).await;
+            } else {
+                tracing::debug!("No cached client for oneway send to {}, skipping fire-and-forget", addr);
+            }
+        });
+    }
+
     fn is_address_reachable(&mut self, addr: &CheetahString) {
-        todo!()
+        if let Some(client_ref) = self.connection_tables.get(addr) {
+            if client_ref.value().connection().is_healthy() {
+                return;
+            }
+            // Connection exists but is unhealthy; drop the guard before removal
+            drop(client_ref);
+            self.connection_tables.remove(addr);
+            warn!("Removed unhealthy connection for {}", addr);
+        } else {
+            debug!("No connection found for {}", addr);
+        }
     }
 
     fn close_clients(&mut self, addrs: Vec<String>) {
-        todo!()
+        for addr in &addrs {
+            let key = CheetahString::from(addr.as_str());
+            if let Some((_, _client)) = self.connection_tables.remove(&key) {
+                info!("Closed client connection for {}", addr);
+            }
+        }
     }
 
     fn register_processor(&mut self, processor: impl RequestProcessor + Sync) {
         todo!()
     }
-}
-
-fn init_value_index() -> i32 {
-    let mut rng = rand::rng();
-    rng.random_range(0..999)
 }

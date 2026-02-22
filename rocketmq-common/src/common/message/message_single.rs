@@ -585,7 +585,7 @@ impl MessageTrait for Message {
     }
 
     #[inline]
-    fn get_topic(&self) -> &CheetahString {
+    fn topic(&self) -> &CheetahString {
         &self.topic
     }
 

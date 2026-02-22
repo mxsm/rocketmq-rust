@@ -308,8 +308,8 @@ impl MessageTrait for MessageExt {
         self.message.property_ref(name)
     }
 
-    fn get_topic(&self) -> &CheetahString {
-        self.message.get_topic()
+    fn topic(&self) -> &CheetahString {
+        self.message.topic()
     }
 
     fn set_topic(&mut self, topic: CheetahString) {

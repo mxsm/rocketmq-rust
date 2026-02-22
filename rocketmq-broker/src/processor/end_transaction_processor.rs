@@ -294,7 +294,7 @@ where
         // The setting of MessageConst::PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS is configured in the
         // SendMessageActivity of the Proxy. Therefore, messages sent through the SDK will not have
         // this property.
-        if let Some(check_immunity_time_str) = message_ext.get_user_property(&CheetahString::from_static_str(
+        if let Some(check_immunity_time_str) = message_ext.user_property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS,
         )) {
             if !check_immunity_time_str.is_empty() {
@@ -458,11 +458,11 @@ fn end_message_transaction(msg_ext: &mut MessageExt) -> MessageExtBrokerInner {
     let mut msg_inner = MessageExtBrokerInner::default();
     msg_inner.set_topic(
         msg_ext
-            .get_user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+            .user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
             .unwrap_or_default(),
     );
     msg_inner.message_ext_inner.queue_id = msg_ext
-        .get_user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID))
+        .user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID))
         .unwrap_or_default()
         .parse()
         .unwrap_or_default();
@@ -475,7 +475,7 @@ fn end_message_transaction(msg_ext: &mut MessageExt) -> MessageExtBrokerInner {
     msg_inner.message_ext_inner.store_host = msg_ext.store_host;
     msg_inner.message_ext_inner.reconsume_times = msg_ext.reconsume_times;
     msg_inner.set_wait_store_msg_ok(false);
-    if let Some(transaction_id) = msg_ext.get_user_property(&CheetahString::from_static_str(
+    if let Some(transaction_id) = msg_ext.user_property(&CheetahString::from_static_str(
         MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
     )) {
         msg_inner.set_transaction_id(transaction_id);
@@ -511,13 +511,13 @@ mod tests {
         assert_eq!(
             msg_inner.get_topic(),
             &msg_ext
-                .get_user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+                .user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
                 .unwrap_or_default()
         );
         assert_eq!(
             msg_inner.message_ext_inner.queue_id,
             msg_ext
-                .get_user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID))
+                .user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_QUEUE_ID))
                 .unwrap_or_default()
                 .parse::<i32>()
                 .unwrap_or_default()
@@ -532,19 +532,12 @@ mod tests {
         assert_eq!(
             msg_inner.get_transaction_id(),
             msg_ext
-                .get_user_property(&CheetahString::from_static_str(
+                .user_property(&CheetahString::from_static_str(
                     MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX
                 ))
                 .as_ref()
         );
         assert_eq!(msg_inner.message_ext_inner.sys_flag, msg_ext.sys_flag);
-        /*        assert_eq!(
-            msg_inner.tags_code,
-            MessageExtBrokerInner::tags_string2tags_code(
-                &TopicFilterType::SingleTag,
-                msg_ext.get_tags().as_ref().unwrap()
-            )
-        );*/
         assert_eq!(msg_inner.get_properties(), msg_ext.get_properties());
         assert_eq!(
             msg_inner.properties_string,
@@ -555,7 +548,6 @@ mod tests {
     #[test]
     fn end_message_transaction_with_empty_body() {
         let mut msg_ext = MessageExt::default();
-        //msg_ext.set_body(None);
         let msg_inner = end_message_transaction(&mut msg_ext);
         assert!(!msg_inner.get_body().is_some_and(|b| b.is_empty()));
     }

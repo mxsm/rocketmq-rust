@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cell::RefCell;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
@@ -28,10 +27,6 @@ use crate::producer::producer_impl::default_mq_producer_impl::DefaultServiceDete
 use crate::producer::producer_impl::queue_filter::QueueFilter;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 
-thread_local! {
-    static THREAD_BROKER_FILTER: RefCell<BrokerFilter> = RefCell::new(BrokerFilter::default());
-}
-
 pub struct MQFaultStrategy {
     latency_fault_tolerance: ArcMut<LatencyFaultToleranceImpl<DefaultResolver, DefaultServiceDetector>>,
     send_latency_fault_enable: AtomicBool,
@@ -43,7 +38,7 @@ pub struct MQFaultStrategy {
 }
 
 impl MQFaultStrategy {
-    /// 隔离模式下的延迟惩罚值（10 秒）
+    /// Latency penalty applied when a broker is isolated (10 seconds).
     const ISOLATION_LATENCY_MS: u64 = 10_000;
 
     pub fn new(client_config: &ClientConfig) -> Self {
@@ -78,13 +73,22 @@ impl MQFaultStrategy {
     }
 
     pub fn shutdown(&mut self) {
-        // Stop the detector if it's running
         self.latency_fault_tolerance.shutdown();
-        tracing::info!("MQFaultStrategy shutdown");
     }
 
     pub fn is_start_detector_enable(&self) -> bool {
         self.start_detector_enable.load(Ordering::Relaxed)
+    }
+
+    pub fn set_start_detector_enable(&mut self, start_detector_enable: bool) {
+        self.start_detector_enable
+            .store(start_detector_enable, Ordering::Relaxed);
+        self.latency_fault_tolerance
+            .set_start_detector_enable(start_detector_enable);
+    }
+
+    pub fn is_send_latency_fault_enable(&self) -> bool {
+        self.send_latency_fault_enable.load(Ordering::Relaxed)
     }
 
     pub fn select_one_message_queue(
@@ -93,12 +97,9 @@ impl MQFaultStrategy {
         last_broker_name: Option<&CheetahString>,
         reset_index: bool,
     ) -> Option<MessageQueue> {
-        // 只克隆一次 BrokerFilter
-        let broker_filter = THREAD_BROKER_FILTER.with(|filer| {
-            let mut f = filer.borrow_mut();
-            f.last_broker_name = last_broker_name.cloned();
-            f.clone()
-        });
+        let broker_filter = BrokerFilter {
+            last_broker_name: last_broker_name.cloned(),
+        };
 
         if self.send_latency_fault_enable.load(Ordering::Relaxed) {
             if reset_index {
@@ -147,7 +148,6 @@ impl MQFaultStrategy {
             };
             let duration = self.compute_not_available_duration(effective_latency);
             self.latency_fault_tolerance
-                .mut_from_ref()
                 .update_fault_item(broker_name, current_latency, duration, reachable)
                 .await;
         }
@@ -169,7 +169,7 @@ impl MQFaultStrategy {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 struct BrokerFilter {
     last_broker_name: Option<CheetahString>,
 }

@@ -47,11 +47,6 @@ pub(crate) struct DefaultPullCallback {
 
 impl PullCallback for DefaultPullCallback {
     async fn on_success(&mut self, mut pull_result_ext: PullResultExt) {
-        /*let push_consumer_impl = self.push_consumer_impl.upgrade();
-        if push_consumer_impl.is_none() {
-            warn!("push_consumer_impl is None");
-            return;
-        }*/
         let mut push_consumer_impl = self.push_consumer_impl.clone();
 
         let message_queue_inner = self.message_queue_inner.take().unwrap();

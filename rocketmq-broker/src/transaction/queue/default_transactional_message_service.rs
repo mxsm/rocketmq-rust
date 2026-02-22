@@ -388,7 +388,7 @@ where
                             escape_fail_cnt + 1,
                             msg_ext.msg_id(),
                             msg_ext
-                                .get_user_property(&CheetahString::from_static_str(
+                                .user_property(&CheetahString::from_static_str(
                                     MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX
                                 ))
                                 .unwrap_or_default()
@@ -430,7 +430,7 @@ where
                 let value_of_current_minus_born = current_time - msg_ext.born_timestamp();
                 let mut check_immunity_time = transaction_timeout as i64;
 
-                if let Some(immunity_time_str) = msg_ext.get_user_property(&CheetahString::from_static_str(
+                if let Some(immunity_time_str) = msg_ext.user_property(&CheetahString::from_static_str(
                     MessageConst::PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS,
                 )) {
                     check_immunity_time = self.get_immunity_time(&immunity_time_str, transaction_timeout as i64);
@@ -475,10 +475,10 @@ where
                     info!(
                         "Check transaction. real_topic={}, uniqKey={}, offset={}, commitLogOffset={}",
                         msg_ext
-                            .get_user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+                            .user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
                             .unwrap_or_default(),
                         msg_ext
-                            .get_user_property(&CheetahString::from_static_str(
+                            .user_property(&CheetahString::from_static_str(
                                 MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX
                             ))
                             .unwrap_or_default(),
@@ -593,11 +593,11 @@ where
                         msg_ext.commit_log_offset(),
                         msg_ext.msg_id(),
                         msg_ext
-                            .get_user_property(&CheetahString::from_static_str(
+                            .user_property(&CheetahString::from_static_str(
                                 MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX
                             ))
                             .unwrap_or_default(),
-                        msg_ext.get_topic()
+                        msg_ext.topic()
                     );
                     return true;
                 }
@@ -606,7 +606,7 @@ where
 
         error!(
             "PutBackToHalfQueueReturnResult write failed, topic: {}, queueId: {}, msgId: {}",
-            msg_ext.get_topic(),
+            msg_ext.topic(),
             msg_ext.queue_id(),
             msg_ext.msg_id()
         );
@@ -655,7 +655,7 @@ where
         msg_ext: &MessageExt,
         check_immunity_time_str: &str,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        let prepare_queue_offset_str = msg_ext.get_user_property(&CheetahString::from_static_str(
+        let prepare_queue_offset_str = msg_ext.user_property(&CheetahString::from_static_str(
             MessageConst::PROPERTY_TRANSACTION_PREPARED_QUEUE_OFFSET,
         ));
 
@@ -670,10 +670,10 @@ where
                             "removeMap contain prepareQueueOffset. real_topic={}, uniqKey={}, immunityTime={}, \
                              offset={}",
                             msg_ext
-                                .get_user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
+                                .user_property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))
                                 .unwrap_or_default(),
                             msg_ext
-                                .get_user_property(&CheetahString::from_static_str(
+                                .user_property(&CheetahString::from_static_str(
                                     MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX
                                 ))
                                 .unwrap_or_default(),
@@ -911,7 +911,7 @@ where
 
             debug!(
                 "Topic: {} tags: {:?}, OpOffset: {}, HalfOffset: {}",
-                op_message_ext.get_topic(),
+                op_message_ext.topic(),
                 op_message_ext.get_tags(),
                 op_message_ext.queue_offset(),
                 queue_offset_body

@@ -228,7 +228,7 @@ impl ConsumeMessageOrderlyService {
         MessageAccessor::put_property(
             &mut new_msg,
             CheetahString::from_static_str(MessageConst::PROPERTY_RETRY_TOPIC),
-            msg.get_topic().to_owned(),
+            msg.topic().to_owned(),
         );
         MessageAccessor::set_reconsume_time(
             &mut new_msg,

@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
 use std::collections::HashSet;
 
 use dashmap::DashMap;
+use tokio_util::sync::CancellationToken;
 
 use crate::latency::latency_fault_tolerance::LatencyFaultTolerance;
 use crate::latency::resolver::Resolver;
@@ -28,10 +28,11 @@ pub struct LatencyFaultToleranceImpl<R, S> {
     start_detector_enable: AtomicBool,
     resolver: Option<R>,
     service_detector: Option<S>,
+    cancel_token: CancellationToken,
 }
 
 impl<R, S> LatencyFaultToleranceImpl<R, S> {
-    pub fn new(/*fetcher: impl Resolver, service_detector: impl ServiceDetector*/) -> Self {
+    pub fn new() -> Self {
         Self {
             resolver: None,
             service_detector: None,
@@ -39,17 +40,26 @@ impl<R, S> LatencyFaultToleranceImpl<R, S> {
             detect_timeout: 200,
             detect_interval: 2000,
             start_detector_enable: AtomicBool::new(false),
+            cancel_token: CancellationToken::new(),
         }
+    }
+
+    pub fn set_resolver(&mut self, resolver: R) {
+        self.resolver = Some(resolver);
+    }
+
+    pub fn set_service_detector(&mut self, service_detector: S) {
+        self.service_detector = Some(service_detector);
     }
 }
 
-impl<R, S> LatencyFaultTolerance<CheetahString, R, S> for LatencyFaultToleranceImpl<R, S>
+impl<R, S> LatencyFaultTolerance<CheetahString> for LatencyFaultToleranceImpl<R, S>
 where
     R: Resolver,
     S: ServiceDetector,
 {
     async fn update_fault_item(
-        &mut self,
+        &self,
         name: CheetahString,
         current_latency: u64,
         not_available_duration: u64,
@@ -79,7 +89,7 @@ where
         self.fault_item_table.get(name).is_none_or(|item| item.is_reachable())
     }
 
-    async fn remove(&mut self, name: &CheetahString) {
+    async fn remove(&self, name: &CheetahString) {
         self.fault_item_table.remove(name);
     }
 
@@ -103,9 +113,20 @@ where
     }
 
     fn start_detector(this: ArcMut<Self>) {
+        let token = this.cancel_token.clone();
         tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3));
+            // First tick completes immediately; skip it to match Java's 3s initial delay.
+            interval.tick().await;
+
             loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                tokio::select! {
+                    _ = token.cancelled() => {
+                        tracing::info!("Fault tolerance detector stopped");
+                        break;
+                    }
+                    _ = interval.tick() => {}
+                }
                 if !this.start_detector_enable.load(std::sync::atomic::Ordering::Relaxed) {
                     continue;
                 }
@@ -115,26 +136,12 @@ where
         });
     }
 
-    fn shutdown(&self) {}
+    fn shutdown(&self) {
+        self.cancel_token.cancel();
+    }
 
     async fn detect_by_one_round(&self) {
         let mut remove_set = HashSet::new();
-
-        let resolver = match self.resolver.as_ref() {
-            Some(r) => r,
-            None => {
-                tracing::warn!("Resolver not configured, skipping detection round");
-                return;
-            }
-        };
-
-        let service_detector = match self.service_detector.as_ref() {
-            Some(d) => d,
-            None => {
-                tracing::debug!("ServiceDetector not configured, skipping service checks");
-                return;
-            }
-        };
 
         for entry in self.fault_item_table.iter() {
             let (name, fault_item) = (entry.key(), entry.value());
@@ -148,12 +155,20 @@ where
                 std::sync::atomic::Ordering::Release,
             );
 
-            let broker_addr = match resolver.resolve(fault_item.name.as_ref()).await {
-                Some(addr) => addr,
-                None => {
-                    remove_set.insert(name.clone());
-                    continue;
-                }
+            let broker_addr = match self.resolver.as_ref() {
+                Some(resolver) => match resolver.resolve(fault_item.name.as_ref()).await {
+                    Some(addr) => addr,
+                    None => {
+                        remove_set.insert(name.clone());
+                        continue;
+                    }
+                },
+                None => continue,
+            };
+
+            let service_detector = match self.service_detector.as_ref() {
+                Some(d) => d,
+                None => continue,
             };
 
             let service_ok = service_detector
@@ -186,22 +201,6 @@ where
 
     fn is_start_detector_enable(&self) -> bool {
         self.start_detector_enable.load(std::sync::atomic::Ordering::Acquire)
-    }
-
-    fn set_resolver(&mut self, resolver: R) {
-        self.resolver = Some(resolver);
-    }
-
-    fn set_service_detector(&mut self, service_detector: S) {
-        self.service_detector = Some(service_detector);
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
     }
 }
 

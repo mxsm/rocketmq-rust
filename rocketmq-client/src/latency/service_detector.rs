@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[allow(async_fn_in_trait)]
-pub trait ServiceDetector: Send + Sync + 'static {
-    type Fut<'a>: std::future::Future<Output = bool> + Send + 'a
-    where
-        Self: 'a;
-
-    fn detect<'a>(&'a self, endpoint: &'a str, timeout_millis: u64) -> Self::Fut<'a>;
+/// Detects whether a remote service endpoint is healthy.
+#[trait_variant::make(ServiceDetector: Send)]
+pub trait ServiceDetectorLocal: Send + Sync + 'static {
+    /// Checks if the remote service at the given endpoint is reachable.
+    ///
+    /// Returns `true` if the service is back to normal; `false` otherwise.
+    async fn detect(&self, endpoint: &str, timeout_millis: u64) -> bool;
 }
