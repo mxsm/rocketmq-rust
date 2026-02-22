@@ -71,4 +71,8 @@ impl TopicConfigSerializeWrapper {
     pub fn take_topic_config_table(&mut self) -> Option<HashMap<CheetahString, TopicConfig>> {
         self.topic_config_table.take()
     }
+
+    pub fn topic_config_table_mut(&mut self) -> Option<&mut HashMap<CheetahString, TopicConfig>> {
+        self.topic_config_table.as_mut()
+    }
 }
