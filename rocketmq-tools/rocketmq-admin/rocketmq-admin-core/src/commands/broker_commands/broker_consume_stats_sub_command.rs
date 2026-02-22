@@ -132,10 +132,10 @@ impl CommandExecute for BrokerConsumeStatsSubCommand {
                                 let last_time = format_timestamp(offset_wrapper.get_last_timestamp());
                                 println!(
                                     "{:<64}  {:<64}  {:<32}  {:<4}  {:<20}  {:<20}  {:<20}  {}",
-                                    mq.get_topic(),
+                                    mq.topic_str(),
                                     group,
-                                    mq.get_broker_name(),
-                                    mq.get_queue_id(),
+                                    mq.broker_name(),
+                                    mq.queue_id(),
                                     offset_wrapper.get_broker_offset(),
                                     offset_wrapper.get_consumer_offset(),
                                     diff,

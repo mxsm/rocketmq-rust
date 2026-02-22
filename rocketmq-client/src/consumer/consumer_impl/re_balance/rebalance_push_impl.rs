@@ -276,7 +276,7 @@ impl Rebalance for RebalancePushImpl {
                 if last_offset >= 0 {
                     last_offset
                 } else if -1 == last_offset {
-                    if mq.get_topic().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
+                    if mq.topic_str().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
                         0
                     } else {
                         let Some(client_instance) = self.rebalance_impl_inner.client_instance.as_mut() else {
@@ -313,7 +313,7 @@ impl Rebalance for RebalancePushImpl {
                 if last_offset >= 0 {
                     last_offset
                 } else if -1 == last_offset {
-                    if mq.get_topic().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
+                    if mq.topic_str().starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
                         let Some(client_instance) = self.rebalance_impl_inner.client_instance.as_mut() else {
                             error!("Client instance not initialized for mq: {}", mq);
                             return Err(mq_client_err!(

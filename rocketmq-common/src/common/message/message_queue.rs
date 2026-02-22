@@ -55,12 +55,12 @@ impl MessageQueue {
     }
 
     #[inline]
-    pub fn get_topic(&self) -> &str {
+    pub fn topic_str(&self) -> &str {
         &self.topic
     }
 
     #[inline]
-    pub fn get_topic_cs(&self) -> &CheetahString {
+    pub fn topic(&self) -> &CheetahString {
         &self.topic
     }
 
@@ -70,7 +70,7 @@ impl MessageQueue {
     }
 
     #[inline]
-    pub fn get_broker_name(&self) -> &CheetahString {
+    pub fn broker_name(&self) -> &CheetahString {
         &self.broker_name
     }
 
@@ -80,7 +80,7 @@ impl MessageQueue {
     }
 
     #[inline]
-    pub fn get_queue_id(&self) -> i32 {
+    pub fn queue_id(&self) -> i32 {
         self.queue_id
     }
 
@@ -147,9 +147,9 @@ mod test {
     #[test]
     fn new_message_queue_has_default_values() {
         let mq = MessageQueue::new();
-        assert_eq!(mq.get_topic(), "");
-        assert_eq!(mq.get_broker_name(), "");
-        assert_eq!(mq.get_queue_id(), 0);
+        assert_eq!(mq.topic_str(), "");
+        assert_eq!(mq.broker_name(), "");
+        assert_eq!(mq.queue_id(), 0);
     }
 
     #[test]
@@ -162,30 +162,30 @@ mod test {
     #[test]
     fn from_parts_creates_message_queue_with_given_values() {
         let mq = MessageQueue::from_parts("topic1", "broker1", 1);
-        assert_eq!(mq.get_topic(), "topic1");
-        assert_eq!(mq.get_broker_name(), "broker1");
-        assert_eq!(mq.get_queue_id(), 1);
+        assert_eq!(mq.topic_str(), "topic1");
+        assert_eq!(mq.broker_name(), "broker1");
+        assert_eq!(mq.queue_id(), 1);
     }
 
     #[test]
     fn set_topic_updates_topic() {
         let mut mq = MessageQueue::new();
         mq.set_topic(CheetahString::from("new_topic"));
-        assert_eq!(mq.get_topic(), "new_topic");
+        assert_eq!(mq.topic_str(), "new_topic");
     }
 
     #[test]
     fn set_broker_name_updates_broker_name() {
         let mut mq = MessageQueue::new();
         mq.set_broker_name(CheetahString::from("new_broker"));
-        assert_eq!(mq.get_broker_name(), "new_broker");
+        assert_eq!(mq.broker_name(), "new_broker");
     }
 
     #[test]
     fn set_queue_id_updates_queue_id() {
         let mut mq = MessageQueue::new();
         mq.set_queue_id(10);
-        assert_eq!(mq.get_queue_id(), 10);
+        assert_eq!(mq.queue_id(), 10);
     }
 
     #[test]

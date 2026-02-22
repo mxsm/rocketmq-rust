@@ -139,7 +139,7 @@ impl PopCallback for DefaultPopCallback {
 
         let message_queue_inner = self.message_queue_inner.take().unwrap();
         let pop_request = self.pop_request.take().unwrap();
-        let topic = message_queue_inner.get_topic();
+        let topic = message_queue_inner.topic_str();
         if !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
             if let Some(er) = err.downcast_ref::<RocketmqError>() {
                 match er {

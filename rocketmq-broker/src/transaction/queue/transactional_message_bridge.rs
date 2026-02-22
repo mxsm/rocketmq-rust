@@ -73,8 +73,8 @@ where
 {
     pub(crate) fn fetch_consume_offset(&self, mq: &MessageQueue) -> i64 {
         let group = CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group());
-        let topic = mq.get_topic_cs();
-        let queue_id = mq.get_queue_id();
+        let topic = mq.topic();
+        let queue_id = mq.queue_id();
         let mut offset = self
             .broker_runtime_inner
             .consumer_offset_manager()
@@ -106,8 +106,8 @@ where
         self.broker_runtime_inner.consumer_offset_manager().commit_offset(
             self.store_host.to_string().into(),
             &CheetahString::from_static_str(TransactionalMessageUtil::build_consumer_group()),
-            mq.get_topic_cs(),
-            mq.get_queue_id(),
+            mq.topic(),
+            mq.queue_id(),
             offset,
         );
     }
@@ -333,7 +333,7 @@ where
         msg_inner.message_ext_inner.message = message;
         //msg_inner.set_topic(message.get_topic().to_owned());
         //msg_inner.set_body(message.get_body().expect("message body is empty").clone());
-        msg_inner.message_ext_inner.queue_id = message_queue.get_queue_id();
+        msg_inner.message_ext_inner.queue_id = message_queue.queue_id();
         //msg_inner.set_tags(message.get_tags().unwrap_or_default());
         msg_inner.tags_code =
             MessageExtBrokerInner::tags_string_to_tags_code(msg_inner.get_tags().unwrap_or_default().as_str());

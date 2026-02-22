@@ -48,15 +48,12 @@ impl MQAdminImpl {
         let mut message_queues = Vec::new();
         for message_queue in message_queue_array {
             let user_topic = NamespaceUtil::without_namespace_with_namespace(
-                message_queue.get_topic(),
+                message_queue.topic_str(),
                 client_config.get_namespace().unwrap_or_default().as_str(),
             );
 
-            let message_queue = MessageQueue::from_parts(
-                user_topic,
-                message_queue.get_broker_name(),
-                message_queue.get_queue_id(),
-            );
+            let message_queue =
+                MessageQueue::from_parts(user_topic, message_queue.broker_name(), message_queue.queue_id());
             message_queues.push(message_queue);
         }
         message_queues
@@ -89,9 +86,7 @@ impl MQAdminImpl {
         let broker_name = client.get_broker_name_from_message_queue(mq).await;
         let mut broker_addr = client.find_broker_address_in_publish(broker_name.as_ref()).await;
         if broker_addr.is_none() {
-            client
-                .update_topic_route_info_from_name_server_topic(mq.get_topic_cs())
-                .await;
+            client.update_topic_route_info_from_name_server_topic(mq.topic()).await;
             let broker_name = client.get_broker_name_from_message_queue(mq).await;
             broker_addr = client.find_broker_address_in_publish(broker_name.as_ref()).await;
         }

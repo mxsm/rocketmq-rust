@@ -60,7 +60,7 @@ impl RemoteBrokerOffsetStore {
         if find_broker_result.is_none() {
             self.client_instance
                 .mut_from_ref()
-                .update_topic_route_info_from_name_server_topic(mq.get_topic_cs())
+                .update_topic_route_info_from_name_server_topic(mq.topic())
                 .await;
             let broker_name = self.client_instance.get_broker_name_from_message_queue(mq).await;
             find_broker_result = self
@@ -72,15 +72,15 @@ impl RemoteBrokerOffsetStore {
         if let Some(find_broker_result) = find_broker_result {
             let request_header = QueryConsumerOffsetRequestHeader {
                 consumer_group: self.group_name.clone(),
-                topic: CheetahString::from_string(mq.get_topic().to_string()),
-                queue_id: mq.get_queue_id(),
+                topic: CheetahString::from_string(mq.topic_str().to_string()),
+                queue_id: mq.queue_id(),
                 set_zero_if_not_found: None,
                 topic_request_header: Some(TopicRequestHeader {
                     lo: None,
                     rpc: Some(RpcRequestHeader {
                         namespace: None,
                         namespaced: None,
-                        broker_name: Some(CheetahString::from_string(mq.get_broker_name().to_string())),
+                        broker_name: Some(CheetahString::from_string(mq.broker_name().to_string())),
                         oneway: None,
                     }),
                 }),
@@ -228,7 +228,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
         let offset_table = self.offset_table.lock().await;
         offset_table
             .iter()
-            .filter(|(mq, _)| mq.get_topic() == topic)
+            .filter(|(mq, _)| mq.topic_str() == topic)
             .map(|(mq, offset)| (mq.clone(), offset.get_offset()))
             .collect()
     }
@@ -247,7 +247,7 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
 
         if find_broker_result.is_none() {
             self.client_instance
-                .update_topic_route_info_from_name_server_topic(mq.get_topic_cs())
+                .update_topic_route_info_from_name_server_topic(mq.topic())
                 .await;
             let broker_name = self.client_instance.get_broker_name_from_message_queue(mq).await;
             find_broker_result = self
@@ -259,15 +259,15 @@ impl OffsetStoreTrait for RemoteBrokerOffsetStore {
         if let Some(find_broker_result) = find_broker_result {
             let request_header = UpdateConsumerOffsetRequestHeader {
                 consumer_group: self.group_name.clone(),
-                topic: mq.get_topic_cs().clone(),
-                queue_id: mq.get_queue_id(),
+                topic: mq.topic().clone(),
+                queue_id: mq.queue_id(),
                 commit_offset: offset,
                 topic_request_header: Some(TopicRequestHeader {
                     lo: None,
                     rpc: Some(RpcRequestHeader {
                         namespace: None,
                         namespaced: None,
-                        broker_name: Some(CheetahString::from_string(mq.get_broker_name().to_string())),
+                        broker_name: Some(CheetahString::from_string(mq.broker_name().to_string())),
                         oneway: None,
                     }),
                 }),

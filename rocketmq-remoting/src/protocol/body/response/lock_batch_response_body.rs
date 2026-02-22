@@ -65,8 +65,8 @@ mod test {
 
         assert_eq!(decoded.lock_ok_mq_set.len(), 1);
         let mq = decoded.lock_ok_mq_set.iter().next().unwrap();
-        assert_eq!(mq.get_broker_name(), "TEST_BROKER");
-        assert_eq!(mq.get_queue_id(), 1);
+        assert_eq!(mq.broker_name(), "TEST_BROKER");
+        assert_eq!(mq.queue_id(), 1);
     }
 
     #[test]
