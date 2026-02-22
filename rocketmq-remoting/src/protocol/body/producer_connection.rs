@@ -24,12 +24,17 @@ use crate::protocol::body::connection::Connection;
 pub struct ProducerConnection {
     connection_set: HashSet<Connection>,
 }
+
 impl ProducerConnection {
     pub fn new() -> Self {
         Self {
             connection_set: HashSet::new(),
         }
     }
+    pub fn connection_set(&self) -> &HashSet<Connection> {
+        &self.connection_set
+    }
+
     pub fn connection_set_mut(&mut self) -> &mut HashSet<Connection> {
         &mut self.connection_set
     }

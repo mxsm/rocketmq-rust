@@ -177,7 +177,7 @@ impl ClientConfig {
     pub fn queue_with_namespace(&mut self, mut queue: MessageQueue) -> MessageQueue {
         if let Some(namespace) = self.get_namespace() {
             if !namespace.is_empty() {
-                let topic = NamespaceUtil::wrap_namespace(namespace.as_str(), queue.get_topic());
+                let topic = NamespaceUtil::wrap_namespace(namespace.as_str(), queue.topic_str());
                 queue.set_topic(topic);
                 return queue;
             }

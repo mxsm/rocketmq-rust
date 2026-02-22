@@ -119,7 +119,7 @@ mod tests {
 
     impl MachineRoomResolver for TestMachineRoomResolver {
         fn broker_deploy_in(&self, message_queue: &MessageQueue) -> Option<CheetahString> {
-            let parts: Vec<&str> = message_queue.get_broker_name().split('-').collect();
+            let parts: Vec<&str> = message_queue.broker_name().split('-').collect();
             Some(CheetahString::from(parts[0]))
         }
 

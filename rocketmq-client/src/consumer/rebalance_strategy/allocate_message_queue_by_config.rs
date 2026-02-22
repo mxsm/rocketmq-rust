@@ -67,7 +67,7 @@ mod tests {
             let queues = strategy
                 .allocate(&consumer_group, consumer_id, &mq_all, &cid_all)
                 .unwrap();
-            let queue_ids: Vec<i32> = queues.into_iter().map(|mq| mq.get_queue_id()).collect();
+            let queue_ids: Vec<i32> = queues.into_iter().map(|mq| mq.queue_id()).collect();
             consumer_allocate_queue.insert(consumer_id.clone(), queue_ids);
         }
 

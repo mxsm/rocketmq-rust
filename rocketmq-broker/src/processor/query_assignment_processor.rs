@@ -418,7 +418,7 @@ impl<MS: MessageStore> QueryAssignmentProcessor<MS> {
             //each client pop all message queue
             Ok(mq_all
                 .iter()
-                .map(|mq| MessageQueue::from_parts(mq.get_topic_cs().clone(), mq.get_broker_name().clone(), -1))
+                .map(|mq| MessageQueue::from_parts(mq.topic().clone(), mq.broker_name().clone(), -1))
                 .collect::<HashSet<MessageQueue>>())
         } else if cid_all.len() <= mq_all.len() {
             //consumer working in pop mode could share the MessageQueues assigned to
@@ -568,7 +568,7 @@ mod tests {
 
         let result = allocate(&consumer_group, &current_cid, &mq_all, &cid_all).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result.iter().next().unwrap().get_queue_id(), 0);
+        assert_eq!(result.iter().next().unwrap().queue_id(), 0);
     }
 
     #[test]
@@ -583,7 +583,7 @@ mod tests {
 
         let result = allocate(&consumer_group, &current_cid, &mq_all, &cid_all).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result.iter().next().unwrap().get_queue_id(), 1);
+        assert_eq!(result.iter().next().unwrap().queue_id(), 1);
     }
 
     #[test]

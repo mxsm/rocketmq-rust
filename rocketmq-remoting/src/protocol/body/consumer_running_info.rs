@@ -74,9 +74,9 @@ impl Display for ConsumerRunningInfo {
         for (k, v) in &self.mq_table {
             let item = format!(
                 "{}  {}  {}  {}\n",
-                k.get_topic(),
-                k.get_broker_name(),
-                k.get_queue_id(),
+                k.topic_str(),
+                k.broker_name(),
+                k.queue_id(),
                 v.commit_offset
             );
 
@@ -87,13 +87,7 @@ impl Display for ConsumerRunningInfo {
         sb.push_str("#Topic #Broker Name #QID #ProcessQueueInfo\n");
 
         for (k, v) in &self.mq_table {
-            let item = format!(
-                "{}  {}  {}  {}\n",
-                k.get_topic(),
-                k.get_broker_name(),
-                k.get_queue_id(),
-                v
-            );
+            let item = format!("{}  {}  {}  {}\n", k.topic_str(), k.broker_name(), k.queue_id(), v);
 
             sb.push_str(&item);
         }
@@ -101,13 +95,7 @@ impl Display for ConsumerRunningInfo {
         sb.push_str("\n\n#Consumer Pop Detail#\n");
         sb.push_str("#Topic #Broker Name #QID #ProcessQueueInfo\n");
         for (k, v) in &self.mq_pop_table {
-            let item = format!(
-                "{}  {}  {}  {}\n",
-                k.get_topic(),
-                k.get_broker_name(),
-                k.get_queue_id(),
-                v
-            );
+            let item = format!("{}  {}  {}  {}\n", k.topic_str(), k.broker_name(), k.queue_id(), v);
 
             sb.push_str(&item);
         }

@@ -180,7 +180,7 @@ fn select_by_broker_prefers_different_one() {
     let out = tpi.select_one_message_queue_by_broker(Some(&last));
     assert!(out.is_some());
     let out = out.unwrap();
-    assert_ne!(out.get_broker_name(), &last);
+    assert_ne!(out.broker_name(), &last);
 }
 
 #[test]
@@ -193,7 +193,7 @@ fn select_by_broker_falls_back_when_all_same() {
     let out = tpi.select_one_message_queue_by_broker(Some(&last));
     assert!(out.is_some());
     let out = out.unwrap();
-    assert_eq!(out.get_broker_name(), &last);
+    assert_eq!(out.broker_name(), &last);
 }
 
 #[test]
@@ -203,7 +203,7 @@ fn select_with_filters_matches_and_no_match() {
     let mq2 = MessageQueue::from_parts("t", "b2", 2);
     tpi.message_queue_list = vec![mq1.clone(), mq2.clone()];
 
-    let filter_match = |mq: &MessageQueue| mq.get_queue_id() == 2;
+    let filter_match = |mq: &MessageQueue| mq.queue_id() == 2;
     let out = tpi.select_one_message_queue_filters(&[&filter_match]);
     assert!(out.is_some());
     assert_eq!(out.unwrap(), mq2);

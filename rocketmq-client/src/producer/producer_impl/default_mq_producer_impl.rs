@@ -261,7 +261,7 @@ pub struct DefaultMQProducerImpl {
 
     rpc_hook: Option<Arc<dyn RPCHook>>,
     client_instance: Option<ArcMut<MQClientInstance>>,
-    mq_fault_strategy: ArcMut<MQFaultStrategy>,
+    pub(crate) mq_fault_strategy: ArcMut<MQFaultStrategy>,
 
     // ===== Backpressure control =====
     semaphore_async_send_num: Arc<Semaphore>,
@@ -517,7 +517,7 @@ impl DefaultMQProducerImpl {
         self.make_sure_state_ok()?;
         Validators::check_message(Some(&msg), self.producer_config.as_ref())?;
 
-        if msg.topic() != mq.get_topic() {
+        if msg.topic() != mq.topic_str() {
             return Err(mq_client_err!(format!(
                 "message topic [{}] is not equal with message queue topic [{}]",
                 msg.get_topic(),
@@ -721,14 +721,14 @@ impl DefaultMQProducerImpl {
                 send_callback_inner.as_ref().unwrap()(None, Some(&err as &dyn std::error::Error));
                 return;
             }
-            if msg.topic() != mq.get_topic() {
+            if msg.topic() != mq.topic_str() {
                 send_callback_inner.as_ref().unwrap()(
                     None,
                     Some(&rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(format!(
                         "message topic [{}] is not equal with message queue topic [{}]",
                         msg.topic(),
-                        mq.get_topic()
-                    ))) as &dyn std::error::Error),
+                        mq.topic_str()
+                    )))),
                 );
                 return;
             }
@@ -978,8 +978,8 @@ impl DefaultMQProducerImpl {
                 None => break,
             };
 
-            retry_state.record_broker(attempt as usize, mq.get_broker_name());
-            last_broker_name = Some(mq.get_broker_name().clone());
+            retry_state.record_broker(attempt as usize, mq.broker_name());
+            last_broker_name = Some(mq.broker_name().clone());
 
             // Prepare message for retry
             if attempt > 0 {
@@ -1007,7 +1007,7 @@ impl DefaultMQProducerImpl {
             match result {
                 Ok(result) => {
                     // Update fault item - success
-                    self.update_fault_item(mq.get_broker_name(), elapsed, false, true).await;
+                    self.update_fault_item(mq.broker_name(), elapsed, false, true).await;
 
                     // Check if need to retry based on send status
                     if self.should_retry_on_result(&result, ctx.communication_mode) {
@@ -1042,16 +1042,16 @@ impl DefaultMQProducerImpl {
     #[inline]
     fn get_retry_times(&self, mode: CommunicationMode) -> u32 {
         if mode == CommunicationMode::Sync {
-            self.producer_config.retry_times_when_send_failed() + 1
-        } else {
             1
+        } else {
+            self.producer_config.retry_times_when_send_failed() + 1
         }
     }
 
     /// Prepare message for retry (reset topic with namespace)
     fn prepare_message_for_retry<T: MessageTrait>(&self, msg: &mut T, topic: &CheetahString) {
-        let namespace = self.client_config.namespace.as_ref().map(|s| s.as_str()).unwrap_or("");
-        msg.set_topic(NamespaceUtil::wrap_namespace(namespace, topic.as_str()));
+        let namespace = self.client_config.namespace.clone().unwrap_or(CheetahString::empty());
+        msg.set_topic(NamespaceUtil::wrap_namespace(namespace, topic));
     }
 
     /// Handle send error - update fault item and log
@@ -1062,7 +1062,7 @@ impl DefaultMQProducerImpl {
         elapsed: u64,
         invoke_id: u64,
     ) {
-        let broker_name = mq.get_broker_name();
+        let broker_name = mq.broker_name();
 
         match error {
             rocketmq_error::RocketMQError::IllegalArgument(_) => {
@@ -1142,7 +1142,7 @@ impl DefaultMQProducerImpl {
         let mut broker_addr = client_instance.find_broker_address_in_publish(broker_name.as_ref());
 
         if broker_addr.is_none() {
-            self.try_to_find_topic_publish_info(mq.get_topic_cs()).await;
+            self.try_to_find_topic_publish_info(mq.topic()).await;
             broker_name = client_instance.get_broker_name_from_message_queue(mq).await;
             broker_addr = client_instance.find_broker_address_in_publish(broker_name.as_ref());
         }
@@ -1175,10 +1175,10 @@ impl DefaultMQProducerImpl {
             msg_body_compressed = true;
         }
 
-        let tran_msg_property = msg.property(&CheetahString::from_static_str(
+        let tran_msg_property = msg.property_ref(&CheetahString::from_static_str(
             MessageConst::PROPERTY_TRANSACTION_PREPARED,
         ));
-        let is_transaction_prepared = tran_msg_property.as_ref().and_then(|v| v.parse().ok()).unwrap_or(false);
+        let is_transaction_prepared = tran_msg_property.and_then(|v| v.parse().ok()).unwrap_or(false);
 
         if is_transaction_prepared {
             sys_flag |= MessageSysFlag::TRANSACTION_PREPARED_TYPE;
@@ -1208,7 +1208,7 @@ impl DefaultMQProducerImpl {
             topic: topic.clone(),
             default_topic: create_topic_key.clone(),
             default_topic_queue_nums: self.producer_config.default_topic_queue_nums() as i32,
-            queue_id: mq.get_queue_id(),
+            queue_id: mq.queue_id(),
             sys_flag,
             born_timestamp: get_current_millis() as i64,
             flag: msg.get_flag(),
@@ -1248,27 +1248,27 @@ impl DefaultMQProducerImpl {
 
                     // Check all delay message properties (aligned with Java implementation)
                     let has_delay_property = $msg_ref
-                        .property(&CheetahString::from_static_str(
+                        .property_ref(&CheetahString::from_static_str(
                             MessageConst::PROPERTY_STARTDE_LIVER_TIME,
                         ))
                         .is_some()
                         || $msg_ref
-                            .property(&CheetahString::from_static_str(
+                            .property_ref(&CheetahString::from_static_str(
                                 MessageConst::PROPERTY_DELAY_TIME_LEVEL,
                             ))
                             .is_some()
                         || $msg_ref
-                            .property(&CheetahString::from_static_str(
+                            .property_ref(&CheetahString::from_static_str(
                                 MessageConst::PROPERTY_TIMER_DELIVER_MS,
                             ))
                             .is_some()
                         || $msg_ref
-                            .property(&CheetahString::from_static_str(
+                            .property_ref(&CheetahString::from_static_str(
                                 MessageConst::PROPERTY_TIMER_DELAY_SEC,
                             ))
                             .is_some()
                         || $msg_ref
-                            .property(&CheetahString::from_static_str(
+                            .property_ref(&CheetahString::from_static_str(
                                 MessageConst::PROPERTY_TIMER_DELAY_MS,
                             ))
                             .is_some();
@@ -1368,7 +1368,7 @@ impl DefaultMQProducerImpl {
             Ok(result) => {
                 if self.has_send_message_hook() {
                     let smc = send_message_context.as_mut().unwrap();
-                    smc.send_result = result.clone();
+                    smc.send_result = result.as_ref();
                     self.execute_send_message_hook_after(&send_message_context);
                 }
                 Ok(result)
@@ -2743,7 +2743,7 @@ where
         topic: CheetahString::from_string(msg.topic().to_string()),
         default_topic: CheetahString::from_string(producer_config.create_topic_key().to_string()),
         default_topic_queue_nums: producer_config.default_topic_queue_nums() as i32,
-        queue_id: mq.get_queue_id(),
+        queue_id: mq.queue_id(),
         sys_flag: 0,
         born_timestamp: get_current_millis() as i64,
         flag: msg.get_flag(),

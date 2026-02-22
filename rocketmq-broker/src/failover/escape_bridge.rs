@@ -195,21 +195,21 @@ where
             let mq = topic_publish_info
                 .select_one_message_queue_by_broker(broker_name_to_send.as_ref())
                 .unwrap();
-            message_to_put.message_ext_inner.queue_id = mq.get_queue_id();
-            broker_name_to_send = Some(mq.get_broker_name().clone());
+            message_to_put.message_ext_inner.queue_id = mq.queue_id();
+            broker_name_to_send = Some(mq.broker_name().clone());
             if self
                 .broker_runtime_inner
                 .broker_config()
                 .broker_identity
                 .broker_name
                 .as_str()
-                == mq.get_broker_name().as_str()
+                == mq.broker_name().as_str()
             {
                 warn!(
                     "putMessageToRemoteBroker failed, remote broker not found. Topic: {}, MsgId: {}, Broker: {}",
                     message_to_put.get_topic(),
                     message_to_put.message_ext_inner.msg_id,
-                    mq.get_broker_name()
+                    mq.broker_name()
                 );
                 return Ok(None);
             }
@@ -287,8 +287,8 @@ where
                 return PutMessageResult::new_default(PutMessageStatus::ServiceNotAvailable);
             }
             let message_queue = mq_selected.unwrap();
-            message_ext.message_ext_inner.queue_id = message_queue.get_queue_id();
-            let broker_name_to_send = message_queue.get_broker_name();
+            message_ext.message_ext_inner.queue_id = message_queue.queue_id();
+            let broker_name_to_send = message_queue.broker_name();
             let broker_addr_to_send = self
                 .broker_runtime_inner
                 .topic_route_info_manager()
@@ -345,8 +345,8 @@ where
             let code = JavaStringHasher::hash_str(id.as_str());
             let index = code as usize % topic_publish_info.message_queue_list.len();
             let message_queue = topic_publish_info.message_queue_list[index].clone();
-            message_ext.message_ext_inner.queue_id = message_queue.get_queue_id();
-            let broker_name_to_send = message_queue.get_broker_name();
+            message_ext.message_ext_inner.queue_id = message_queue.queue_id();
+            let broker_name_to_send = message_queue.broker_name();
             let broker_addr_to_send = self
                 .broker_runtime_inner
                 .topic_route_info_manager()

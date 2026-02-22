@@ -52,9 +52,9 @@ impl MessageQueueForC {
     /// Create from MessageQueue with offset
     pub fn from_message_queue(mq: &MessageQueue, offset: i64) -> Self {
         Self {
-            topic: mq.get_topic().into(),
-            broker_name: mq.get_broker_name().into(),
-            queue_id: mq.get_queue_id(),
+            topic: mq.topic_str().into(),
+            broker_name: mq.broker_name().into(),
+            queue_id: mq.queue_id(),
             offset,
         }
     }

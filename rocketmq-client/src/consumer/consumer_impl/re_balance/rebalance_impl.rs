@@ -253,7 +253,7 @@ where
             process_queue_table
                 .iter()
                 .filter_map(|(mq, _pq)| {
-                    if !topics.contains(mq.get_topic()) {
+                    if !topics.contains(mq.topic_str()) {
                         Some(mq.clone())
                     } else {
                         None
@@ -273,7 +273,7 @@ where
                 info!(
                     "doRebalance, {}, truncateMessageQueueNotMyTopic remove unnecessary mq, {}",
                     self.consumer_group.as_ref().unwrap(),
-                    mq.get_topic()
+                    mq.topic_str()
                 );
             }
         }
@@ -284,7 +284,7 @@ where
             pop_process_queue_table
                 .iter()
                 .filter_map(|(mq, _pq)| {
-                    if !topics.contains(mq.get_topic()) {
+                    if !topics.contains(mq.topic_str()) {
                         Some(mq.clone())
                     } else {
                         None
@@ -303,7 +303,7 @@ where
                 info!(
                     "doRebalance, {}, truncateMessageQueueNotMyTopic remove unnecessary pop mq, {}",
                     self.consumer_group.as_ref().unwrap(),
-                    mq.get_topic()
+                    mq.topic_str()
                 );
             }
         }
@@ -465,7 +465,7 @@ where
 
             let process_queue_table = self.process_queue_table.read().await;
             for (mq, pq) in process_queue_table.iter() {
-                if mq.get_topic() == topic {
+                if mq.topic_str() == topic {
                     if !mq2push_assignment.contains_key(mq) {
                         pq.set_dropped(true);
                         remove_queue_map.insert(mq.clone(), pq.clone());
@@ -478,7 +478,7 @@ where
                                     "[BUG]doRebalance, {:?}, try remove unnecessary mq, {}, because pull is pause, so \
                                      try to fixed it",
                                     self.consumer_group,
-                                    mq.get_topic()
+                                    mq.topic_str()
                                 );
                             }
                         }
@@ -499,7 +499,7 @@ where
                             info!(
                                 "doRebalance, {:?}, remove unnecessary mq, {}",
                                 self.consumer_group,
-                                mq.get_topic()
+                                mq.topic_str()
                             );
                         }
                     }
@@ -512,7 +512,7 @@ where
             // Drop process queues no longer belong to me
             let pop_process_queue_table = self.pop_process_queue_table.read().await;
             for (mq, pq) in pop_process_queue_table.iter() {
-                if mq.get_topic() == topic {
+                if mq.topic_str() == topic {
                     if !mq2pop_assignment.contains_key(mq) {
                         pq.set_dropped(true);
                         remove_queue_map.insert(mq.clone(), pq.clone());
@@ -525,7 +525,7 @@ where
                                     "[BUG]doRebalance, {:?}, try remove unnecessary mq, {}, because pull is pause, so \
                                      try to fixed it",
                                     self.consumer_group,
-                                    mq.get_topic()
+                                    mq.topic_str()
                                 );
                             }
                         }
@@ -546,7 +546,7 @@ where
                             info!(
                                 "doRebalance, {:?}, remove unnecessary pop mq, {}",
                                 self.consumer_group,
-                                mq.get_topic()
+                                mq.topic_str()
                             );
                         }
                     }
@@ -593,7 +593,7 @@ where
                         warn!(
                             "doRebalance, {:?}, lock mq failed before adding, {}",
                             self.consumer_group,
-                            mq.get_topic()
+                            mq.topic_str()
                         );
                         all_mq_locked = false;
                     }
@@ -610,7 +610,7 @@ where
                         warn!(
                             "doRebalance, {:?}, skip adding mq because lock failed, {}",
                             self.consumer_group,
-                            mq.get_topic()
+                            mq.topic_str()
                         );
                         continue;
                     }
@@ -628,7 +628,7 @@ where
                             info!(
                                 "doRebalance, {:?}, add a new mq, {}",
                                 self.consumer_group,
-                                mq.get_topic()
+                                mq.topic_str()
                             );
                             pull_request_list.push(PullRequest::new(
                                 self.consumer_group.as_ref().unwrap().clone(),
@@ -641,14 +641,14 @@ where
                             info!(
                                 "doRebalance, {:?}, mq already exists, {}",
                                 self.consumer_group,
-                                mq.get_topic()
+                                mq.topic_str()
                             );
                         }
                     } else {
                         warn!(
                             "doRebalance, {:?}, add new mq failed, {}",
                             self.consumer_group,
-                            mq.get_topic()
+                            mq.topic_str()
                         );
                     }
                 }
@@ -704,7 +704,7 @@ where
             let process_queue_table = process_queue_table_cloned.read().await;
             // Drop process queues no longer belong to me
             for (mq, pq) in process_queue_table.iter() {
-                if mq.get_topic() == topic {
+                if mq.topic_str() == topic {
                     if !mq_set.contains(mq) {
                         pq.set_dropped(true);
                         remove_queue_map.insert(mq.clone(), pq.clone());
@@ -717,7 +717,7 @@ where
                                     "[BUG]doRebalance, {:?}, try remove unnecessary mq, {}, because pull is pause, so \
                                      try to fixed it",
                                     self.consumer_group,
-                                    mq.get_topic()
+                                    mq.topic_str()
                                 );
                             }
                         }
@@ -738,7 +738,7 @@ where
                             info!(
                                 "doRebalance, {:?}, remove unnecessary mq, {}",
                                 self.consumer_group,
-                                mq.get_topic()
+                                mq.topic_str()
                             );
                         }
                     }
@@ -777,7 +777,7 @@ where
                     warn!(
                         "doRebalance, {:?}, lock mq failed before adding, {}",
                         self.consumer_group,
-                        mq.get_topic()
+                        mq.topic_str()
                     );
                     all_mq_locked = false;
                 }
@@ -793,7 +793,7 @@ where
                     warn!(
                         "doRebalance, {:?}, skip adding mq because lock failed, {}",
                         self.consumer_group,
-                        mq.get_topic()
+                        mq.topic_str()
                     );
                     continue;
                 }
@@ -807,7 +807,7 @@ where
                         info!(
                             "doRebalance, {:?}, add a new mq, {}",
                             self.consumer_group,
-                            mq.get_topic()
+                            mq.topic_str()
                         );
                         pull_request_list.push(PullRequest::new(
                             self.consumer_group.as_ref().unwrap().clone(),
@@ -820,14 +820,14 @@ where
                         info!(
                             "doRebalance, {:?}, mq already exists, {}",
                             self.consumer_group,
-                            mq.get_topic()
+                            mq.topic_str()
                         );
                     }
                 } else {
                     warn!(
                         "doRebalance, {:?}, add new mq failed, {}",
                         self.consumer_group,
-                        mq.get_topic()
+                        mq.topic_str()
                     );
                 }
             }
@@ -963,13 +963,13 @@ where
         let mut queue_set = HashSet::new();
         let process_queue_table = self.process_queue_table.read().await;
         for (mq, pq) in process_queue_table.iter() {
-            if mq.get_topic() == topic && !pq.is_dropped() {
+            if mq.topic_str() == topic && !pq.is_dropped() {
                 queue_set.insert(mq.clone());
             }
         }
         let pop_process_queue_table = self.pop_process_queue_table.read().await;
         for (mq, pq) in pop_process_queue_table.iter() {
-            if mq.get_topic() == topic && !pq.is_dropped() {
+            if mq.topic_str() == topic && !pq.is_dropped() {
                 queue_set.insert(mq.clone());
             }
         }

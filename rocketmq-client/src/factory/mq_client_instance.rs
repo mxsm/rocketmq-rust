@@ -54,6 +54,7 @@ use crate::consumer::consumer_impl::pull_message_service::PullMessageService;
 use crate::consumer::consumer_impl::re_balance::rebalance_service::RebalanceService;
 use crate::consumer::mq_consumer_inner::MQConsumerInner;
 use crate::consumer::mq_consumer_inner::MQConsumerInnerImpl;
+use crate::factory::client_tables::*;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
 use crate::implementation::find_broker_result::FindBrokerResult;
 use crate::implementation::mq_admin_impl::MQAdminImpl;
@@ -73,22 +74,21 @@ pub struct MQClientInstance {
      * The container of the producer in the current client. The key is the name of
      * producerGroup.
      */
-    producer_table: Arc<DashMap<CheetahString, MQProducerInnerImpl>>,
+    producer_table: ProducerTable,
     /**
      * The container of the consumer in the current client. The key is the name of
      * consumer_group.
      */
-    consumer_table: Arc<DashMap<CheetahString, MQConsumerInnerImpl>>,
+    consumer_table: ConsumerTable,
     /**
      * The container of the adminExt in the current client. The key is the name of
      * adminExtGroup.
      */
-    admin_ext_table: Arc<DashMap<CheetahString, MQAdminExtInnerImpl>>,
+    admin_ext_table: AdminExtTable,
     pub(crate) mq_client_api_impl: Option<ArcMut<MQClientAPIImpl>>,
     pub(crate) mq_admin_impl: ArcMut<MQAdminImpl>,
-    pub(crate) topic_route_table: Arc<DashMap<CheetahString /* Topic */, TopicRouteData>>,
-    topic_end_points_table:
-        Arc<DashMap<CheetahString /* Topic */, HashMap<MessageQueue, CheetahString /* brokerName */>>>,
+    pub(crate) topic_route_table: TopicRouteTable,
+    topic_end_points_table: TopicEndPointsTable,
     lock_namesrv: Arc<RocketMQTokioMutex<()>>,
     lock_heartbeat: Arc<RocketMQTokioMutex<()>>,
 
@@ -96,14 +96,14 @@ pub struct MQClientInstance {
     pub(crate) pull_message_service: ArcMut<PullMessageService>,
     rebalance_service: RebalanceService,
     pub(crate) default_producer: ArcMut<DefaultMQProducer>,
-    broker_addr_table: Arc<DashMap<CheetahString, HashMap<u64, CheetahString>>>,
-    broker_version_table: Arc<DashMap<CheetahString /* Broker Name */, HashMap<CheetahString /* address */, i32>>>,
+    broker_addr_table: BrokerAddrTable,
+    broker_version_table: BrokerVersionTable,
     send_heartbeat_times_total: Arc<AtomicI64>,
     scheduled_task_manager: ScheduledTaskManager,
     /// HeartbeatV2: Cache of broker address -> last fingerprint
-    broker_heartbeat_fingerprint_table: Arc<DashMap<CheetahString, i32>>,
+    broker_heartbeat_fingerprint_table: BrokerHeartbeatFingerprintTable,
     /// HeartbeatV2: Set of brokers that support V2 protocol
-    broker_support_v2_heartbeat_set: Arc<DashMap<CheetahString, ()>>,
+    broker_support_v2_heartbeat_set: BrokerSupportV2HeartbeatSet,
 }
 
 impl MQClientInstance {
@@ -167,7 +167,7 @@ impl MQClientInstance {
             Arc::new(TokioClientConfig::default()),
             ClientRemotingProcessor::new(instance.clone()),
             rpc_hook,
-            client_config.clone(),
+            Arc::new(client_config.clone()),
             Some(tx),
         ));
 
@@ -754,12 +754,12 @@ impl MQClientInstance {
     }
 
     pub async fn get_broker_name_from_message_queue(&self, message_queue: &MessageQueue) -> CheetahString {
-        if let Some(broker_name) = self.topic_end_points_table.get(message_queue.get_topic()) {
+        if let Some(broker_name) = self.topic_end_points_table.get(message_queue.topic_str()) {
             if let Some(addr) = broker_name.value().get(message_queue) {
                 return addr.clone();
             }
         }
-        message_queue.get_broker_name().clone()
+        message_queue.broker_name().clone()
     }
 
     pub fn find_broker_address_in_publish(&self, broker_name: &CheetahString) -> Option<CheetahString> {
@@ -1565,7 +1565,7 @@ pub fn topic_route_data2topic_publish_info(topic: &str, route: &mut TopicRouteDa
             }
         }
         info.message_queue_list
-            .sort_by(|a, b| match a.get_queue_id().cmp(&b.get_queue_id()) {
+            .sort_by(|a, b| match a.queue_id().cmp(&b.queue_id()) {
                 Ordering::Less => std::cmp::Ordering::Less,
                 Ordering::Equal => std::cmp::Ordering::Equal,
                 Ordering::Greater => std::cmp::Ordering::Greater,

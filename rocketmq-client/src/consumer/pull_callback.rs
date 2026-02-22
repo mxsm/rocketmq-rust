@@ -148,7 +148,7 @@ impl PullCallback for DefaultPullCallback {
     fn on_exception(&mut self, err: Box<dyn std::error::Error + Send>) {
         let message_queue_inner = self.message_queue_inner.take().unwrap();
         let pull_request = self.pull_request.take().unwrap();
-        let topic = message_queue_inner.get_topic();
+        let topic = message_queue_inner.topic_str();
         if !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
             if let Some(er) = err.downcast_ref::<RocketmqError>() {
                 match er {

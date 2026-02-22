@@ -174,8 +174,8 @@ impl PullAPIWrapper {
                     CheetahString::from_static_str(MessageConst::PROPERTY_MAX_OFFSET),
                     CheetahString::from_string(pull_result_ext.pull_result.max_offset.to_string()),
                 );
-                msg.broker_name = CheetahString::from_string(message_queue.get_broker_name().to_string());
-                msg.queue_id = message_queue.get_queue_id();
+                msg.broker_name = CheetahString::from_string(message_queue.broker_name().to_string());
+                msg.queue_id = message_queue.queue_id();
                 if let Some(offset_delta) = pull_result_ext.offset_delta {
                     msg.queue_offset += offset_delta;
                 }
@@ -254,7 +254,7 @@ impl PullAPIWrapper {
 
         if find_broker_result.is_none() {
             self.client_instance
-                .update_topic_route_info_from_name_server_topic(mq.get_topic_cs())
+                .update_topic_route_info_from_name_server_topic(mq.topic())
                 .await;
             let broker_name_again = self.client_instance.get_broker_name_from_message_queue(mq).await;
             let broker_id_again = self.recalculate_pull_from_which_node(mq);
@@ -285,8 +285,8 @@ impl PullAPIWrapper {
 
             let request_header = PullMessageRequestHeader {
                 consumer_group: self.consumer_group.clone(),
-                topic: CheetahString::from_string(mq.get_topic().to_string()),
-                queue_id: mq.get_queue_id(),
+                topic: CheetahString::from_string(mq.topic_str().to_string()),
+                queue_id: mq.queue_id(),
                 queue_offset: offset,
                 max_msg_nums: max_nums,
                 sys_flag: sys_flag_inner,
@@ -303,7 +303,7 @@ impl PullAPIWrapper {
                     rpc: Some(RpcRequestHeader {
                         namespace: None,
                         namespaced: None,
-                        broker_name: Some(CheetahString::from_string(mq.get_broker_name().to_string())),
+                        broker_name: Some(CheetahString::from_string(mq.broker_name().to_string())),
                         oneway: None,
                     }),
                 }),
@@ -312,7 +312,7 @@ impl PullAPIWrapper {
             let mut broker_addr = find_broker_result.broker_addr.clone();
             if PullSysFlag::has_class_filter_flag(sys_flag_inner as u32) {
                 broker_addr = self
-                    .compute_pull_from_which_filter_server(mq.get_topic_cs(), &broker_addr)
+                    .compute_pull_from_which_filter_server(mq.topic(), &broker_addr)
                     .await?;
             }
 
@@ -375,22 +375,22 @@ impl PullAPIWrapper {
     {
         let mut find_broker_result = self
             .client_instance
-            .find_broker_address_in_subscribe(mq.get_broker_name(), mix_all::MASTER_ID, true)
+            .find_broker_address_in_subscribe(mq.broker_name(), mix_all::MASTER_ID, true)
             .await;
         if find_broker_result.is_none() {
             self.client_instance
-                .update_topic_route_info_from_name_server_topic(mq.get_topic_cs())
+                .update_topic_route_info_from_name_server_topic(mq.topic())
                 .await;
             find_broker_result = self
                 .client_instance
-                .find_broker_address_in_subscribe(mq.get_broker_name(), mix_all::MASTER_ID, true)
+                .find_broker_address_in_subscribe(mq.broker_name(), mix_all::MASTER_ID, true)
                 .await;
         }
         if let Some(find_broker_result) = find_broker_result {
             let mut request_header = PopMessageRequestHeader {
                 consumer_group,
-                topic: mq.get_topic_cs().clone(),
-                queue_id: mq.get_queue_id(),
+                topic: mq.topic().clone(),
+                queue_id: mq.queue_id(),
                 max_msg_nums: max_nums,
                 invisible_time,
                 init_mode,
@@ -402,7 +402,7 @@ impl PullAPIWrapper {
                     rpc: Some(RpcRequestHeader {
                         namespace: None,
                         namespaced: None,
-                        broker_name: Some(CheetahString::from_string(mq.get_broker_name().to_string())),
+                        broker_name: Some(CheetahString::from_string(mq.broker_name().to_string())),
                         oneway: None,
                     }),
                 }),
@@ -417,7 +417,7 @@ impl PullAPIWrapper {
                 .as_mut()
                 .unwrap()
                 .pop_message_async(
-                    mq.get_broker_name(),
+                    mq.broker_name(),
                     &find_broker_result.broker_addr,
                     request_header,
                     timeout,

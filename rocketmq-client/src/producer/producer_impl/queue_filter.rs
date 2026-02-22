@@ -59,14 +59,14 @@ mod tests {
 
     #[test]
     fn queue_filter_closure_returns_true() {
-        let filter = |mq: &MessageQueue| mq.get_topic() == "test_topic";
+        let filter = |mq: &MessageQueue| mq.topic_str() == "test_topic";
         let mq = MessageQueue::from_parts("test_topic", "broker", 1);
         assert!(filter.filter(&mq));
     }
 
     #[test]
     fn queue_filter_closure_returns_false() {
-        let filter = |mq: &MessageQueue| mq.get_topic() == "test_topic";
+        let filter = |mq: &MessageQueue| mq.topic_str() == "test_topic";
         let mq = MessageQueue::from_parts("other_topic", "broker", 1);
         assert!(!filter.filter(&mq));
     }
@@ -74,7 +74,7 @@ mod tests {
     #[test]
     fn queue_filter_function_returns_true() {
         fn filter_fn(mq: &MessageQueue) -> bool {
-            mq.get_queue_id() == 1
+            mq.queue_id() == 1
         }
         let mq = MessageQueue::from_parts("test_topic", "broker", 1);
         assert!(filter_fn.filter(&mq));
@@ -83,7 +83,7 @@ mod tests {
     #[test]
     fn queue_filter_function_returns_false() {
         fn filter_fn(mq: &MessageQueue) -> bool {
-            mq.get_queue_id() == 1
+            mq.queue_id() == 1
         }
         let mq = MessageQueue::from_parts("test_topic", "broker", 2);
         assert!(!filter_fn.filter(&mq));

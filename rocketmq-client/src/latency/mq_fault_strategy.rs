@@ -177,7 +177,7 @@ struct BrokerFilter {
 impl QueueFilter for BrokerFilter {
     fn filter(&self, message_queue: &MessageQueue) -> bool {
         if let Some(last_broker_name) = &self.last_broker_name {
-            message_queue.get_broker_name() != last_broker_name
+            message_queue.broker_name() != last_broker_name
         } else {
             true
         }
@@ -190,8 +190,7 @@ struct ReachableFilter {
 
 impl QueueFilter for ReachableFilter {
     fn filter(&self, message_queue: &MessageQueue) -> bool {
-        self.latency_fault_tolerance
-            .is_reachable(message_queue.get_broker_name())
+        self.latency_fault_tolerance.is_reachable(message_queue.broker_name())
     }
 }
 
@@ -201,7 +200,6 @@ struct AvailableFilter {
 
 impl QueueFilter for AvailableFilter {
     fn filter(&self, message_queue: &MessageQueue) -> bool {
-        self.latency_fault_tolerance
-            .is_available(message_queue.get_broker_name())
+        self.latency_fault_tolerance.is_available(message_queue.broker_name())
     }
 }

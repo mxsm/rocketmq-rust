@@ -85,8 +85,8 @@ mod tests {
             .allocate(&consumer_group, &current_cid, &mq_all, &cid_all)
             .unwrap();
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].get_queue_id(), 0);
-        assert_eq!(result[1].get_queue_id(), 1);
+        assert_eq!(result[0].queue_id(), 0);
+        assert_eq!(result[1].queue_id(), 1);
     }
 
     #[test]
@@ -109,7 +109,7 @@ mod tests {
             .allocate(&consumer_group, &current_cid, &mq_all, &cid_all)
             .unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].get_queue_id(), 1);
+        assert_eq!(result[0].queue_id(), 1);
     }
 
     #[test]
@@ -142,7 +142,7 @@ mod tests {
                     &consumer_id_list,
                 )
                 .unwrap();
-            let queue_ids: Vec<i32> = queues.iter().map(|q| q.get_queue_id()).collect();
+            let queue_ids: Vec<i32> = queues.iter().map(|q| q.queue_id()).collect();
             consumer_allocate_queue.insert(consumer_id.clone(), queue_ids);
         }
         assert_eq!(vec![0, 4, 8], consumer_allocate_queue["CID_PREFIX0"]);
