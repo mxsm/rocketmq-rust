@@ -1321,7 +1321,7 @@ impl MQClientAPIImpl {
                 namespace: namespace.clone(),
                 mq_trace_context: mq_trace_context.clone(),
                 mq: mq.as_ref(),
-                send_result: Some(result.clone()),
+                send_result: Some(result),
                 ..Default::default()
             };
             producer.execute_send_message_hook_after(&Some(context));

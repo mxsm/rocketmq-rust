@@ -1051,8 +1051,12 @@ impl DefaultMQProducerImpl {
 
     /// Prepare message for retry (reset topic with namespace)
     fn prepare_message_for_retry<T: MessageTrait>(&self, msg: &mut T, topic: &CheetahString) {
-        let namespace = self.client_config.namespace.as_ref().map(|s| s.as_str()).unwrap_or("");
-        msg.set_topic(NamespaceUtil::wrap_namespace(namespace, topic.as_str()));
+        let namespace = self
+            .client_config
+            .namespace
+            .clone()
+            .unwrap_or(CheetahString::empty());
+        msg.set_topic(NamespaceUtil::wrap_namespace(namespace, topic));
     }
 
     /// Handle send error - update fault item and log
@@ -1180,10 +1184,10 @@ impl DefaultMQProducerImpl {
             msg_body_compressed = true;
         }
 
-        let tran_msg_property = msg.property(&CheetahString::from_static_str(
+        let tran_msg_property = msg.property_ref(&CheetahString::from_static_str(
             MessageConst::PROPERTY_TRANSACTION_PREPARED,
         ));
-        let is_transaction_prepared = tran_msg_property.as_ref().and_then(|v| v.parse().ok()).unwrap_or(false);
+        let is_transaction_prepared = tran_msg_property.and_then(|v| v.parse().ok()).unwrap_or(false);
 
         if is_transaction_prepared {
             sys_flag |= MessageSysFlag::TRANSACTION_PREPARED_TYPE;
@@ -1253,27 +1257,27 @@ impl DefaultMQProducerImpl {
 
                     // Check all delay message properties (aligned with Java implementation)
                     let has_delay_property = $msg_ref
-                        .property(&CheetahString::from_static_str(
+                        .property_ref(&CheetahString::from_static_str(
                             MessageConst::PROPERTY_STARTDE_LIVER_TIME,
                         ))
                         .is_some()
                         || $msg_ref
-                            .property(&CheetahString::from_static_str(
+                            .property_ref(&CheetahString::from_static_str(
                                 MessageConst::PROPERTY_DELAY_TIME_LEVEL,
                             ))
                             .is_some()
                         || $msg_ref
-                            .property(&CheetahString::from_static_str(
+                            .property_ref(&CheetahString::from_static_str(
                                 MessageConst::PROPERTY_TIMER_DELIVER_MS,
                             ))
                             .is_some()
                         || $msg_ref
-                            .property(&CheetahString::from_static_str(
+                            .property_ref(&CheetahString::from_static_str(
                                 MessageConst::PROPERTY_TIMER_DELAY_SEC,
                             ))
                             .is_some()
                         || $msg_ref
-                            .property(&CheetahString::from_static_str(
+                            .property_ref(&CheetahString::from_static_str(
                                 MessageConst::PROPERTY_TIMER_DELAY_MS,
                             ))
                             .is_some();
@@ -1373,7 +1377,7 @@ impl DefaultMQProducerImpl {
             Ok(result) => {
                 if self.has_send_message_hook() {
                     let smc = send_message_context.as_mut().unwrap();
-                    smc.send_result = result.clone();
+                    smc.send_result = result.as_ref();
                     self.execute_send_message_hook_after(&send_message_context);
                 }
                 Ok(result)
