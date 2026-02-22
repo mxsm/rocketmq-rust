@@ -762,7 +762,7 @@ impl MQClientInstance {
         message_queue.broker_name().clone()
     }
 
-    pub async fn find_broker_address_in_publish(&self, broker_name: &CheetahString) -> Option<CheetahString> {
+    pub fn find_broker_address_in_publish(&self, broker_name: &CheetahString) -> Option<CheetahString> {
         if broker_name.is_empty() {
             return None;
         }
