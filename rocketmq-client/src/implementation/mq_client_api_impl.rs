@@ -2217,12 +2217,12 @@ impl MQClientAPIImpl {
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<i64> {
         let request_header = GetMaxOffsetRequestHeader {
-            topic: CheetahString::from_slice(message_queue.get_topic()),
-            queue_id: message_queue.get_queue_id(),
+            topic: CheetahString::from_slice(message_queue.topic_str()),
+            queue_id: message_queue.queue_id(),
             committed: false,
             topic_request_header: Some(TopicRequestHeader {
                 rpc_request_header: Some(RpcRequestHeader {
-                    broker_name: Some(CheetahString::from_slice(message_queue.get_broker_name())),
+                    broker_name: Some(CheetahString::from_slice(message_queue.broker_name())),
                     ..Default::default()
                 }),
                 lo: None,

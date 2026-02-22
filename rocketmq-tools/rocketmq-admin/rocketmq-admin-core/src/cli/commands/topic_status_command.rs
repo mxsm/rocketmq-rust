@@ -59,8 +59,8 @@ impl CommandExecute for TopicStatusCommand {
             .get_offset_table()
             .iter()
             .map(|(mq, offset_info)| TopicStatsInfo {
-                broker_name: mq.get_broker_name().to_string(),
-                queue_id: mq.get_queue_id(),
+                broker_name: mq.broker_name().to_string(),
+                queue_id: mq.queue_id(),
                 min_offset: offset_info.get_min_offset(),
                 max_offset: offset_info.get_max_offset(),
                 last_update_timestamp: offset_info.get_last_update_timestamp(),

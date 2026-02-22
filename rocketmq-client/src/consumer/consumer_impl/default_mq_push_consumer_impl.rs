@@ -723,7 +723,7 @@ impl DefaultMQPushConsumerImpl {
             .get_subscription_inner()
             .read()
             .await
-            .get(pop_request.get_message_queue().get_topic_cs())
+            .get(pop_request.get_message_queue().topic())
             .cloned();
         if subscription_data.is_none() {
             self.execute_pop_request_later(pop_request, self.pull_time_delay_mills_when_exception);
@@ -912,7 +912,7 @@ impl DefaultMQPushConsumerImpl {
         let message_queue = pull_request.get_message_queue().clone();
         let inner = self.rebalance_impl.get_subscription_inner();
         let guard = inner.read().await;
-        let subscription_data = guard.get(message_queue.get_topic()).cloned();
+        let subscription_data = guard.get(message_queue.topic_str()).cloned();
 
         if subscription_data.is_none() {
             error!(
@@ -923,7 +923,7 @@ impl DefaultMQPushConsumerImpl {
             return;
         }
         let begin_timestamp = Instant::now();
-        let topic = message_queue.get_topic().to_string();
+        let topic = message_queue.topic_str().to_string();
 
         let message_queue_inner = message_queue.clone();
         let next_offset = pull_request.next_offset;
@@ -1130,7 +1130,7 @@ impl DefaultMQPushConsumerImpl {
             && mq.is_some()
             && mq
                 .unwrap()
-                .get_broker_name()
+                .broker_name()
                 .starts_with(mix_all::LOGICAL_QUEUE_MOCK_BROKER_PREFIX)
         {
             let _ = self.send_message_back_as_normal_message(msg).await;

@@ -81,9 +81,9 @@ impl ClientMetadata {
 
     pub fn get_broker_name_from_message_queue(&self, mq: &MessageQueue) -> Option<CheetahString> {
         let read_guard = self.topic_end_points_table.read();
-        let topic_end_points = read_guard.get(mq.get_topic());
+        let topic_end_points = read_guard.get(mq.topic_str());
         if topic_end_points.is_none() {
-            return Some(mq.get_broker_name().clone());
+            return Some(mq.broker_name().clone());
         }
         let topic_end_points = topic_end_points.unwrap();
         let broker_name = topic_end_points.get(mq);

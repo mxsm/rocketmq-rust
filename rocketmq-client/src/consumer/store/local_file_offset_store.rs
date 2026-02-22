@@ -235,7 +235,7 @@ impl OffsetStoreTrait for LocalFileOffsetStore {
         let offset_table = self.offset_table.lock().await;
         offset_table
             .iter()
-            .filter(|(mq, _)| topic.is_empty() || mq.get_topic() == topic)
+            .filter(|(mq, _)| topic.is_empty() || mq.topic_str() == topic)
             .map(|(mq, offset)| (mq.clone(), offset.get_offset()))
             .collect()
     }

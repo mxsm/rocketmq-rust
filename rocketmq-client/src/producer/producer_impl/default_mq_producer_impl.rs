@@ -519,7 +519,7 @@ impl DefaultMQProducerImpl {
         self.make_sure_state_ok()?;
         Validators::check_message(Some(&msg), self.producer_config.as_ref())?;
 
-        if msg.topic() != mq.get_topic() {
+        if msg.topic() != mq.topic_str() {
             return Err(mq_client_err!(format!(
                 "message topic [{}] is not equal with message queue topic [{}]",
                 msg.get_topic(),
@@ -723,13 +723,13 @@ impl DefaultMQProducerImpl {
                 send_callback_inner.as_ref().unwrap()(None, Some(&err));
                 return;
             }
-            if msg.topic() != mq.get_topic() {
+            if msg.topic() != mq.topic_str() {
                 send_callback_inner.as_ref().unwrap()(
                     None,
                     Some(&rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(format!(
                         "message topic [{}] is not equal with message queue topic [{}]",
                         msg.topic(),
-                        mq.get_topic()
+                        mq.topic_str()
                     )))),
                 );
                 return;
@@ -979,8 +979,8 @@ impl DefaultMQProducerImpl {
                 None => break,
             };
 
-            retry_state.record_broker(attempt as usize, mq.get_broker_name());
-            last_broker_name = Some(mq.get_broker_name().clone());
+            retry_state.record_broker(attempt as usize, mq.broker_name());
+            last_broker_name = Some(mq.broker_name().clone());
 
             // Prepare message for retry
             if attempt > 0 {
@@ -1008,7 +1008,7 @@ impl DefaultMQProducerImpl {
             match result {
                 Ok(result) => {
                     // Update fault item - success
-                    self.update_fault_item(mq.get_broker_name(), elapsed, false, true).await;
+                    self.update_fault_item(mq.broker_name(), elapsed, false, true).await;
 
                     // Check if need to retry based on send status
                     if self.should_retry_on_result(&result, ctx.communication_mode) {
@@ -1063,7 +1063,7 @@ impl DefaultMQProducerImpl {
         elapsed: u64,
         invoke_id: u64,
     ) {
-        let broker_name = mq.get_broker_name();
+        let broker_name = mq.broker_name();
 
         match error {
             rocketmq_error::RocketMQError::IllegalArgument(_) => {
@@ -1145,7 +1145,7 @@ impl DefaultMQProducerImpl {
             .await;
 
         if broker_addr.is_none() {
-            self.try_to_find_topic_publish_info(mq.get_topic_cs()).await;
+            self.try_to_find_topic_publish_info(mq.topic()).await;
             broker_name = client_instance.get_broker_name_from_message_queue(mq).await;
             broker_addr = client_instance
                 .find_broker_address_in_publish(broker_name.as_ref())
@@ -1213,7 +1213,7 @@ impl DefaultMQProducerImpl {
             topic: topic.clone(),
             default_topic: create_topic_key.clone(),
             default_topic_queue_nums: self.producer_config.default_topic_queue_nums() as i32,
-            queue_id: mq.get_queue_id(),
+            queue_id: mq.queue_id(),
             sys_flag,
             born_timestamp: get_current_millis() as i64,
             flag: msg.get_flag(),
@@ -2750,7 +2750,7 @@ where
         topic: CheetahString::from_string(msg.topic().to_string()),
         default_topic: CheetahString::from_string(producer_config.create_topic_key().to_string()),
         default_topic_queue_nums: producer_config.default_topic_queue_nums() as i32,
-        queue_id: mq.get_queue_id(),
+        queue_id: mq.queue_id(),
         sys_flag: 0,
         born_timestamp: get_current_millis() as i64,
         flag: msg.get_flag(),

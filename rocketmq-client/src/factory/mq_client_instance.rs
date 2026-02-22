@@ -754,12 +754,12 @@ impl MQClientInstance {
     }
 
     pub async fn get_broker_name_from_message_queue(&self, message_queue: &MessageQueue) -> CheetahString {
-        if let Some(broker_name) = self.topic_end_points_table.get(message_queue.get_topic()) {
+        if let Some(broker_name) = self.topic_end_points_table.get(message_queue.topic_str()) {
             if let Some(addr) = broker_name.value().get(message_queue) {
                 return addr.clone();
             }
         }
-        message_queue.get_broker_name().clone()
+        message_queue.broker_name().clone()
     }
 
     pub async fn find_broker_address_in_publish(&self, broker_name: &CheetahString) -> Option<CheetahString> {
@@ -1565,7 +1565,7 @@ pub fn topic_route_data2topic_publish_info(topic: &str, route: &mut TopicRouteDa
             }
         }
         info.message_queue_list
-            .sort_by(|a, b| match a.get_queue_id().cmp(&b.get_queue_id()) {
+            .sort_by(|a, b| match a.queue_id().cmp(&b.queue_id()) {
                 Ordering::Less => std::cmp::Ordering::Less,
                 Ordering::Equal => std::cmp::Ordering::Equal,
                 Ordering::Greater => std::cmp::Ordering::Greater,

@@ -49,7 +49,7 @@ impl AllocateMessageQueueStrategy for AllocateMessageQueueByMachineRoom {
         let premq_all: Vec<MessageQueue> = mq_all
             .iter()
             .filter(|mq| {
-                let parts: Vec<&str> = mq.get_broker_name().split('@').collect();
+                let parts: Vec<&str> = mq.broker_name().split('@').collect();
                 parts.len() == 2 && self.consumer_idcs.contains(parts[0])
             })
             .cloned()
@@ -109,7 +109,7 @@ mod tests {
             let queues = strategy
                 .allocate(&consumer_group, consumer_id, &mq_all, &cid_all)
                 .unwrap();
-            let queue_ids: Vec<i32> = queues.into_iter().map(|mq| mq.get_queue_id()).collect();
+            let queue_ids: Vec<i32> = queues.into_iter().map(|mq| mq.queue_id()).collect();
             consumer_allocate_queue.insert(consumer_id.clone(), queue_ids);
         }
 
@@ -152,8 +152,8 @@ mod tests {
             .allocate(&consumer_group, &current_cid, &mq_all, &cid_all)
             .unwrap();
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].get_queue_id(), 0);
-        assert_eq!(result[1].get_queue_id(), 1);
+        assert_eq!(result[0].queue_id(), 0);
+        assert_eq!(result[1].queue_id(), 1);
     }
 
     #[test]
@@ -177,7 +177,7 @@ mod tests {
             .allocate(&consumer_group, &current_cid, &mq_all, &cid_all)
             .unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].get_queue_id(), 1);
+        assert_eq!(result[0].queue_id(), 1);
     }
 
     #[test]

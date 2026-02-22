@@ -85,7 +85,7 @@ impl MockRebalanceImpl {
             process_queue_table
                 .iter()
                 .filter_map(|(mq, _pq)| {
-                    if !topics.contains(mq.get_topic()) {
+                    if !topics.contains(mq.topic_str()) {
                         Some(mq.clone())
                     } else {
                         None
@@ -120,7 +120,7 @@ impl MockRebalanceImpl {
             process_queue_table
                 .iter()
                 .filter_map(|(mq, pq)| {
-                    if !topics.contains(mq.get_topic()) {
+                    if !topics.contains(mq.topic_str()) {
                         pq.set_dropped(true);
                         Some(mq.clone())
                     } else {

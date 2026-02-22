@@ -809,7 +809,7 @@ where
     /// Pull half message
     async fn pull_half_msg(&self, mq: &MessageQueue, offset: i64, nums: i32) -> Option<PullResult> {
         self.transactional_message_bridge
-            .get_half_message(mq.get_queue_id(), offset, nums)
+            .get_half_message(mq.queue_id(), offset, nums)
             .await
     }
 
@@ -822,8 +822,8 @@ where
             .or_insert_with(|| {
                 MessageQueue::from_parts(
                     CheetahString::from_static_str(TransactionalMessageUtil::build_op_topic()),
-                    message_queue.get_broker_name(),
-                    message_queue.get_queue_id(),
+                    message_queue.broker_name(),
+                    message_queue.queue_id(),
                 )
             })
             .clone()
@@ -955,7 +955,7 @@ where
     /// Pull operation message
     async fn pull_op_msg(&self, mq: &MessageQueue, offset: i64, nums: i32) -> Option<PullResult> {
         self.transactional_message_bridge
-            .get_op_message(mq.get_queue_id(), offset, nums)
+            .get_op_message(mq.queue_id(), offset, nums)
             .await
     }
 }

@@ -90,8 +90,8 @@ impl CommandExecute for TopicStatusSubCommand {
                     let human_timestamp = time_millis_to_human_string2(offset.get_last_update_timestamp());
                     println!(
                         "{}  {}  {}  {}  {}",
-                        queue.get_broker_name(),
-                        queue.get_queue_id(),
+                        queue.broker_name(),
+                        queue.queue_id(),
                         offset.get_min_offset(),
                         offset.get_max_offset(),
                         human_timestamp

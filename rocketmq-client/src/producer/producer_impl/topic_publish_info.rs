@@ -55,7 +55,7 @@ impl TopicPublishInfo {
     pub fn select_one_message_queue_by_broker(&self, last_broker_name: Option<&CheetahString>) -> Option<MessageQueue> {
         if let Some(last_broker_name) = last_broker_name {
             for mq in &self.message_queue_list {
-                if mq.get_broker_name() != last_broker_name {
+                if mq.broker_name() != last_broker_name {
                     return Some(mq.clone());
                 }
             }
