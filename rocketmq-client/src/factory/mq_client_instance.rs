@@ -167,7 +167,7 @@ impl MQClientInstance {
             Arc::new(TokioClientConfig::default()),
             ClientRemotingProcessor::new(instance.clone()),
             rpc_hook,
-            client_config.clone(),
+            Arc::new(client_config.clone()),
             Some(tx),
         ));
 

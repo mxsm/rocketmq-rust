@@ -12,6 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[allow(dead_code)]
+use crate::RocketMQError;
+
 #[derive(thiserror::Error, Debug)]
-pub enum ClientError {}
+pub enum ClientError {
+    /// Wrapper for MQClientException to use in SendMessageContext exception field
+    #[error("MQ client error: {0}")]
+    MQClientError(String),
+}
+
+impl ClientError {
+    /// Create a new MQClientError from a message
+    pub fn new(message: String) -> Self {
+        ClientError::MQClientError(message)
+    }
+
+    /// Create a new MQClientError from a RocketMQError
+    pub fn from_rocketmq_error(err: &RocketMQError) -> Self {
+        ClientError::MQClientError(err.to_string())
+    }
+}
