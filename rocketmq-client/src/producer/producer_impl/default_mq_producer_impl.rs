@@ -1028,8 +1028,7 @@ impl DefaultMQProducerImpl {
             .client_instance
             .as_ref()
             .unwrap()
-            .find_broker_address_in_publish(broker_name.as_ref())
-            .await;
+            .find_broker_address_in_publish(broker_name.as_ref());
         if broker_addr.is_none() {
             self.try_to_find_topic_publish_info(mq.get_topic_cs()).await;
             broker_name = self
@@ -1042,8 +1041,7 @@ impl DefaultMQProducerImpl {
                 .client_instance
                 .as_ref()
                 .unwrap()
-                .find_broker_address_in_publish(broker_name.as_ref())
-                .await;
+                .find_broker_address_in_publish(broker_name.as_ref());
         }
 
         if broker_addr.is_none() {
@@ -1969,8 +1967,7 @@ impl DefaultMQProducerImpl {
             .client_instance
             .as_mut()
             .unwrap()
-            .find_broker_address_in_publish(dest_broker_name.as_ref())
-            .await;
+            .find_broker_address_in_publish(dest_broker_name.as_ref());
         let request_header = EndTransactionRequestHeader {
             topic: CheetahString::from_string(msg.get_topic().to_string()),
             producer_group: CheetahString::from_string(self.producer_config.producer_group().to_string()),
@@ -2494,8 +2491,7 @@ impl DefaultMQProducerImpl {
             .client_instance
             .as_ref()
             .unwrap()
-            .find_broker_address_in_publish(&broker_name_cs)
-            .await;
+            .find_broker_address_in_publish(&broker_name_cs);
 
         if broker_addr.is_none() {
             broker_addr = self
@@ -2597,6 +2593,6 @@ pub(crate) struct DefaultResolver {
 
 impl Resolver for DefaultResolver {
     async fn resolve(&self, name: &CheetahString) -> Option<CheetahString> {
-        self.client_instance.find_broker_address_in_publish(name).await
+        self.client_instance.find_broker_address_in_publish(name)
     }
 }

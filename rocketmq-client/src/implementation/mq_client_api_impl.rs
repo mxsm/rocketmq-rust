@@ -1271,10 +1271,7 @@ impl MQClientAPIImpl {
         }
 
         if let Some(instance) = instance {
-            if let Some(addr) = instance
-                .find_broker_address_in_publish(retry_broker_name.as_ref())
-                .await
-            {
+            if let Some(addr) = instance.find_broker_address_in_publish(retry_broker_name.as_ref()) {
                 return Some((addr, retry_broker_name));
             }
         }
