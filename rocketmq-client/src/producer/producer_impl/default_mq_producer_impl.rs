@@ -1043,9 +1043,9 @@ impl DefaultMQProducerImpl {
     #[inline]
     fn get_retry_times(&self, mode: CommunicationMode) -> u32 {
         if mode == CommunicationMode::Sync {
-            self.producer_config.retry_times_when_send_failed() + 1
-        } else {
             1
+        } else {
+            self.producer_config.retry_times_when_send_failed() + 1
         }
     }
 
