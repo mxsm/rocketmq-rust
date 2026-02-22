@@ -60,9 +60,13 @@ pub mod controller_error;
 // Filter error module
 pub mod filter_error;
 
+// Client error module
+pub mod client_error;
+
 // Re-export new error types as primary API
 // Re-export auth error types from unified module
 // Re-export controller error types
+pub use client_error::ClientError;
 pub use controller_error::ControllerError;
 pub use controller_error::ControllerResult;
 // Re-export filter error types
@@ -80,8 +84,6 @@ pub use unified::ToolsError;
 // Legacy error modules (deprecated but kept for compatibility)
 #[deprecated(since = "0.7.0", note = "Use unified error system instead")]
 mod cli_error;
-#[deprecated(since = "0.7.0", note = "Use unified error system instead")]
-mod client_error;
 #[deprecated(since = "0.7.0", note = "Use unified error system instead")]
 mod common_error;
 #[deprecated(since = "0.7.0", note = "Use unified error system instead")]

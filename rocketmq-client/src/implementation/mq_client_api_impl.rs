@@ -14,7 +14,6 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::OnceLock;
@@ -36,6 +35,7 @@ use crate::factory::mq_client_instance::MQClientInstance;
 use crate::hook::send_message_context::SendMessageContext;
 use crate::implementation::client_remoting_processor::ClientRemotingProcessor;
 use crate::implementation::communication_mode::CommunicationMode;
+use crate::latency::mq_fault_strategy::MQFaultStrategy;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::producer::send_callback::SendMessageCallback;
@@ -45,6 +45,7 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_batch::MessageBatch;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
+use rocketmq_common::common::message::message_enum::MessageType;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
@@ -154,7 +155,7 @@ pub struct MQClientAPIImpl {
     top_addressing: Arc<Box<dyn TopAddressing>>,
     // client_remoting_processor: ClientRemotingProcessor,
     name_srv_addr: Option<String>,
-    client_config: ClientConfig,
+    client_config: Arc<ClientConfig>,
 }
 
 impl MQClientAPIImpl {
@@ -640,7 +641,7 @@ impl MQClientAPIImpl {
         tokio_client_config: Arc<TokioClientConfig>,
         client_remoting_processor: ClientRemotingProcessor,
         rpc_hook: Option<Arc<dyn RPCHook>>,
-        client_config: ClientConfig,
+        client_config: Arc<ClientConfig>,
         tx: Option<tokio::sync::broadcast::Sender<ConnectionNetEvent>>,
     ) -> Self {
         init_remoting_version();
@@ -833,7 +834,7 @@ impl MQClientAPIImpl {
             CommunicationMode::Sync => {
                 let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
                 if cost_time_sync > timeout_millis {
-                    return Err(rocketmq_error::RocketMQError::Timeout {
+                    return Err(rocketmq_common::RocketMQError::Timeout {
                         operation: "sendMessage",
                         timeout_ms: timeout_millis,
                     });
@@ -844,7 +845,6 @@ impl MQClientAPIImpl {
                 Ok(Some(result))
             }
             CommunicationMode::Async => {
-                let times = AtomicU32::new(0);
                 let cost_time_sync = (Instant::now() - begin_start_time).as_millis() as u64;
                 if cost_time_sync > timeout_millis {
                     return Err(rocketmq_error::RocketMQError::Timeout {
@@ -852,7 +852,7 @@ impl MQClientAPIImpl {
                         timeout_ms: timeout_millis,
                     });
                 }
-                Box::pin(self.send_message_async(
+                self.send_message_async(
                     addr,
                     broker_name,
                     msg,
@@ -862,11 +862,9 @@ impl MQClientAPIImpl {
                     topic_publish_info,
                     instance,
                     retry_times_when_send_failed,
-                    &times,
                     context,
                     producer,
-                ))
-                .await;
+                );
                 Ok(None)
             }
             CommunicationMode::Oneway => {
@@ -1041,7 +1039,7 @@ impl MQClientAPIImpl {
         }
     }*/
 
-    async fn send_message_async<T: MessageTrait>(
+    fn send_message_async<T: MessageTrait>(
         &mut self,
         addr: &CheetahString,
         broker_name: &CheetahString,
@@ -1052,103 +1050,199 @@ impl MQClientAPIImpl {
         topic_publish_info: Option<&TopicPublishInfo>,
         instance: Option<ArcMut<MQClientInstance>>,
         retry_times_when_send_failed: u32,
-        times: &AtomicU32,
         context: &mut Option<SendMessageContext<'_>>,
         producer: &DefaultMQProducerImpl,
     ) {
-        let mut current_addr = addr.clone();
-        let mut current_broker_name = broker_name.clone();
-        let mut current_request = request;
+        // Extract message metadata before spawning (msg cannot be moved)
+        let msg_topic = msg.topic().clone();
+        let is_batch_message = msg.as_any().downcast_ref::<MessageBatch>().is_some();
+
+        // For MessageBatch, pre-compute combined uniq_id from all messages
+        let msg_uniq_id = if is_batch_message {
+            if let Some(batch) = msg.as_any().downcast_ref::<MessageBatch>() {
+                let mut combined_id = String::new();
+                for msg in &batch.messages {
+                    if !combined_id.is_empty() {
+                        combined_id.push(',');
+                    }
+                    if let Some(id) = MessageClientIDSetter::get_uniq_id(msg) {
+                        combined_id.push_str(id.as_str());
+                    }
+                }
+                if combined_id.is_empty() {
+                    None
+                } else {
+                    Some(CheetahString::from_string(combined_id))
+                }
+            } else {
+                None
+            }
+        } else {
+            MessageClientIDSetter::get_uniq_id(msg)
+        };
+
+        // Clone all necessary data for background task
+        let remoting_client = self.remoting_client.clone();
+        let client_config = self.client_config.clone();
+        let current_addr = addr.clone();
+        let current_broker_name = broker_name.clone();
+        let current_request = request;
+        let topic_publish_info_cloned = topic_publish_info.cloned();
+        let instance_cloned = instance.clone();
+        let mq_fault_strategy = producer.mq_fault_strategy.clone();
+
+        // Clone the context data that we need for hook execution
+        // We'll use the execute_send_message_hook_after method which requires a context
+        let context_data = if context.is_some() {
+            let c = context.as_ref().unwrap();
+            Some((
+                c.producer_group.as_ref().cloned(),
+                c.broker_addr.as_ref().cloned(),
+                c.born_host.as_ref().cloned(),
+                c.communication_mode,
+                c.msg_type,
+                c.namespace.as_ref().cloned(),
+                c.mq_trace_context.clone(),
+                c.producer.clone(),
+                c.mq.cloned(),
+            ))
+        } else {
+            None
+        };
+
+        // Spawn truly asynchronous background task
+        tokio::spawn(async move {
+            Self::send_message_async_impl(
+                remoting_client,
+                client_config,
+                mq_fault_strategy,
+                current_addr,
+                current_broker_name,
+                msg_topic,
+                msg_uniq_id,
+                is_batch_message,
+                timeout_millis,
+                current_request,
+                send_callback,
+                topic_publish_info_cloned,
+                instance_cloned,
+                retry_times_when_send_failed,
+                context_data,
+            )
+            .await;
+        });
+    }
+
+    /// Background task implementation for async message sending with retry logic
+    #[allow(clippy::type_complexity)]
+    async fn send_message_async_impl(
+        remoting_client: ArcMut<RocketmqDefaultClient<ClientRemotingProcessor>>,
+        client_config: Arc<ClientConfig>,
+        mq_fault_strategy: ArcMut<MQFaultStrategy>,
+        mut current_addr: CheetahString,
+        mut current_broker_name: CheetahString,
+        msg_topic: CheetahString,
+        msg_uniq_id: Option<CheetahString>,
+        is_batch_message: bool,
+        timeout_millis: u64,
+        current_request: RemotingCommand,
+        send_callback: Option<SendMessageCallback>,
+        topic_publish_info: Option<TopicPublishInfo>,
+        instance: Option<ArcMut<MQClientInstance>>,
+        retry_times_when_send_failed: u32,
+        context_data: Option<(
+            Option<CheetahString>,
+            Option<CheetahString>,
+            Option<CheetahString>,
+            Option<CommunicationMode>,
+            Option<MessageType>,
+            Option<CheetahString>,
+            Option<Arc<Box<dyn std::any::Any + Send + Sync>>>,
+            Option<ArcMut<DefaultMQProducerImpl>>,
+            Option<MessageQueue>,
+        )>,
+    ) {
+        let mut current_times = 0u32;
+        let mut remaining_timeout = timeout_millis;
+        let has_callback = send_callback.is_some();
+        let mut request = current_request;
 
         loop {
             let begin_start_time = Instant::now();
-            let result = self
-                .remoting_client
-                .invoke_request(Some(&current_addr), current_request.clone(), timeout_millis)
+
+            let result = remoting_client
+                .invoke_request(Some(&current_addr), request.clone(), remaining_timeout)
                 .await;
+
+            let cost = (Instant::now() - begin_start_time).as_millis() as u64;
 
             match result {
                 Ok(response) => {
-                    let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
-                    if send_callback.is_none() {
-                        let send_result =
-                            self.process_send_response(&current_broker_name, msg, &response, &current_addr);
+                    // Process response
+                    let send_result = Self::process_send_response_static(
+                        &client_config,
+                        &current_broker_name,
+                        &msg_topic,
+                        msg_uniq_id.as_ref(),
+                        is_batch_message,
+                        &response,
+                        &current_addr,
+                    );
+
+                    // If sendCallback is None, handle like Java version (no retry)
+                    if !has_callback {
+                        // When sendCallback is null in Java, it processes response and executes hooks
+                        // but swallows any exceptions and doesn't retry
                         if let Ok(result) = send_result {
-                            if context.is_some() {
-                                let inner = context.as_mut().unwrap();
-                                inner.send_result = Some(result);
-                                producer.execute_send_message_hook_after(context);
-                            }
+                            Self::execute_hooks_on_success(&context_data, &result);
                         }
-                        let duration = (Instant::now() - begin_start_time).as_millis() as u64;
-                        producer
-                            .update_fault_item(&current_broker_name, duration, false, true)
+                        // Update fault item and return (no retry even on error, matching Java)
+                        mq_fault_strategy
+                            .update_fault_item(current_broker_name.clone(), cost, false, true)
                             .await;
                         return;
                     }
 
-                    let send_result = self.process_send_response(&current_broker_name, msg, &response, &current_addr);
+                    // sendCallback is Some, handle with retry logic
                     match send_result {
                         Ok(result) => {
-                            if context.is_some() {
-                                let inner = context.as_mut().unwrap();
-                                inner.send_result = Some(result.clone());
-                                producer.execute_send_message_hook_after(context);
-                            }
-                            let duration = (Instant::now() - begin_start_time).as_millis() as u64;
-                            send_callback.as_ref().unwrap()(Some(&result), None);
-                            producer
-                                .update_fault_item(&current_broker_name, duration, false, true)
-                                .await;
-                            return; // success, return loop
-                        }
-                        Err(err) => {
-                            let duration = (Instant::now() - begin_start_time).as_millis() as u64;
-                            producer
-                                .update_fault_item(&current_broker_name, duration, true, true)
+                            // Success: update fault item and invoke callback
+                            mq_fault_strategy
+                                .update_fault_item(current_broker_name.clone(), cost, false, true)
                                 .await;
 
-                            // Check if a retry is needed
-                            let current_times = times.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                            if current_times < retry_times_when_send_failed {
-                                // Prepare to retry: Select a new broker
-                                match self
-                                    .prepare_retry(
-                                        &current_broker_name,
-                                        msg,
-                                        &mut current_request,
-                                        topic_publish_info,
-                                        instance.as_ref(),
-                                        producer,
-                                    )
-                                    .await
-                                {
-                                    Some((new_addr, new_broker_name)) => {
-                                        current_addr = new_addr;
-                                        current_broker_name = new_broker_name;
-                                        warn!(
-                                            "async send msg by retry {} times. topic={}, brokerAddr={}, brokerName={}",
-                                            current_times + 1,
-                                            msg.topic(),
-                                            current_addr,
-                                            current_broker_name
-                                        );
-                                        current_request.set_opaque_mut(RemotingCommand::create_new_request_id());
-                                        continue; // continue to retry
-                                    }
-                                    None => {
-                                        // can not choose new broker, fail
-                                        if let Some(callback) = send_callback {
-                                            callback(None, Some(&err));
-                                        }
-                                        return;
-                                    }
-                                }
-                            } else {
-                                // The maximum number of retries has been reached
-                                if let Some(callback) = send_callback {
-                                    callback(None, Some(&err));
-                                }
+                            // Execute hooks and callback
+                            Self::execute_hooks_on_success(&context_data, &result);
+                            if let Some(callback) = send_callback {
+                                callback(Some(&result), None);
+                            }
+                            return;
+                        }
+                        Err(err) => {
+                            // Update fault item on error
+                            mq_fault_strategy
+                                .update_fault_item(current_broker_name.clone(), cost, true, true)
+                                .await;
+
+                            // Handle retry or final failure
+                            if !Self::handle_send_error(
+                                err,
+                                &mut current_times,
+                                &mut remaining_timeout,
+                                cost,
+                                retry_times_when_send_failed,
+                                &mq_fault_strategy,
+                                &mut current_addr,
+                                &mut current_broker_name,
+                                &msg_topic,
+                                &mut request,
+                                topic_publish_info.as_ref(),
+                                instance.as_ref(),
+                                &context_data,
+                                &send_callback,
+                            )
+                            .await
+                            {
                                 return;
                             }
                         }
@@ -1156,42 +1250,292 @@ impl MQClientAPIImpl {
                 }
                 Err(err) => {
                     error!("send message async error: {:?}", err);
-                    let current_times = times.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-                    if current_times < retry_times_when_send_failed {
-                        // Try to retry even if there is a network error.
-                        match self
-                            .prepare_retry(
-                                &current_broker_name,
-                                msg,
-                                &mut current_request,
-                                topic_publish_info,
-                                instance.as_ref(),
-                                producer,
-                            )
-                            .await
-                        {
-                            Some((new_addr, new_broker_name)) => {
-                                current_addr = new_addr;
-                                current_broker_name = new_broker_name;
-                                current_request.set_opaque_mut(RemotingCommand::create_new_request_id());
-                                continue;
-                            }
-                            None => {
-                                if let Some(callback) = send_callback {
-                                    callback(None, Some(&err));
-                                }
-                                return;
-                            }
-                        }
-                    } else {
-                        if let Some(callback) = send_callback {
-                            callback(None, Some(&err));
-                        }
+
+                    // Update fault item on network error
+                    mq_fault_strategy
+                        .update_fault_item(current_broker_name.clone(), cost, true, true)
+                        .await;
+
+                    // All network errors can be retried in async send
+                    // Handle retry or final failure
+                    if !Self::handle_send_error(
+                        err,
+                        &mut current_times,
+                        &mut remaining_timeout,
+                        cost,
+                        retry_times_when_send_failed,
+                        &mq_fault_strategy,
+                        &mut current_addr,
+                        &mut current_broker_name,
+                        &msg_topic,
+                        &mut request,
+                        topic_publish_info.as_ref(),
+                        instance.as_ref(),
+                        &context_data,
+                        &send_callback,
+                    )
+                    .await
+                    {
                         return;
                     }
                 }
             }
         }
+    }
+
+    /// Helper function to execute hooks on successful send
+    #[inline]
+    #[allow(clippy::type_complexity)]
+    fn execute_hooks_on_success(
+        context_data: &Option<(
+            Option<CheetahString>,
+            Option<CheetahString>,
+            Option<CheetahString>,
+            Option<CommunicationMode>,
+            Option<MessageType>,
+            Option<CheetahString>,
+            Option<Arc<Box<dyn std::any::Any + Send + Sync>>>,
+            Option<ArcMut<DefaultMQProducerImpl>>,
+            Option<MessageQueue>,
+        )>,
+        result: &SendResult,
+    ) {
+        if let Some((
+            producer_group,
+            broker_addr,
+            born_host,
+            communication_mode,
+            msg_type,
+            namespace,
+            mq_trace_context,
+            Some(producer),
+            mq,
+        )) = context_data
+        {
+            let context = SendMessageContext {
+                producer_group: producer_group.clone(),
+                broker_addr: broker_addr.clone(),
+                born_host: born_host.clone(),
+                communication_mode: *communication_mode,
+                msg_type: *msg_type,
+                namespace: namespace.clone(),
+                mq_trace_context: mq_trace_context.clone(),
+                mq: mq.as_ref(),
+                send_result: Some(result.clone()),
+                ..Default::default()
+            };
+            producer.execute_send_message_hook_after(&Some(context));
+        }
+    }
+
+    /// Handle send error with retry logic
+    /// Returns true if should continue retry, false if should return
+    #[allow(clippy::type_complexity)]
+    async fn handle_send_error(
+        err: rocketmq_common::RocketMQError,
+        current_times: &mut u32,
+        remaining_timeout: &mut u64,
+        cost: u64,
+        retry_times_when_send_failed: u32,
+        mq_fault_strategy: &ArcMut<MQFaultStrategy>,
+        current_addr: &mut CheetahString,
+        current_broker_name: &mut CheetahString,
+        msg_topic: &CheetahString,
+        request: &mut RemotingCommand,
+        topic_publish_info: Option<&TopicPublishInfo>,
+        instance: Option<&ArcMut<MQClientInstance>>,
+        context_data: &Option<(
+            Option<CheetahString>,
+            Option<CheetahString>,
+            Option<CheetahString>,
+            Option<CommunicationMode>,
+            Option<MessageType>,
+            Option<CheetahString>,
+            Option<Arc<Box<dyn std::any::Any + Send + Sync>>>,
+            Option<ArcMut<DefaultMQProducerImpl>>,
+            Option<MessageQueue>,
+        )>,
+        send_callback: &Option<SendMessageCallback>,
+    ) -> bool {
+        // Increment retry counter first (matching Java's incrementAndGet)
+        *current_times += 1;
+
+        // Update remaining timeout
+        *remaining_timeout = remaining_timeout.saturating_sub(cost);
+
+        // Check retry condition: tmp <= timesTotal && timeoutMillis > 0
+        if *current_times <= retry_times_when_send_failed && *remaining_timeout > 0 {
+            // Prepare retry: select new broker
+            match Self::prepare_retry_static(mq_fault_strategy, current_broker_name, topic_publish_info, instance).await
+            {
+                Some((new_addr, new_broker_name)) => {
+                    *current_addr = new_addr;
+                    *current_broker_name = new_broker_name;
+                    warn!(
+                        "async send msg by retry {} times. topic={}, brokerAddr={}, brokerName={}",
+                        current_times, msg_topic, current_addr, current_broker_name
+                    );
+                    request.set_opaque_mut(RemotingCommand::create_new_request_id());
+                    true // Continue retry
+                }
+                None => {
+                    // Execute hooks before invoking callback on final failure
+                    Self::execute_hooks_on_error(context_data, &err);
+                    if let Some(callback) = send_callback {
+                        callback(None, Some(&err));
+                    }
+                    false // Stop retry
+                }
+            }
+        } else {
+            // Max retries reached or timeout exhausted
+            Self::execute_hooks_on_error(context_data, &err);
+            if let Some(callback) = send_callback {
+                callback(None, Some(&err));
+            }
+            false // Stop retry
+        }
+    }
+
+    /// Helper function to execute hooks on error
+    #[allow(clippy::type_complexity)]
+    fn execute_hooks_on_error(
+        context_data: &Option<(
+            Option<CheetahString>,
+            Option<CheetahString>,
+            Option<CheetahString>,
+            Option<CommunicationMode>,
+            Option<MessageType>,
+            Option<CheetahString>,
+            Option<Arc<Box<dyn std::any::Any + Send + Sync>>>,
+            Option<ArcMut<DefaultMQProducerImpl>>,
+            Option<MessageQueue>,
+        )>,
+        err: &rocketmq_common::RocketMQError,
+    ) {
+        if let Some((
+            producer_group,
+            broker_addr,
+            born_host,
+            communication_mode,
+            msg_type,
+            namespace,
+            mq_trace_context,
+            Some(producer),
+            mq,
+        )) = context_data
+        {
+            let context = SendMessageContext {
+                producer_group: producer_group.clone(),
+                broker_addr: broker_addr.clone(),
+                born_host: born_host.clone(),
+                communication_mode: *communication_mode,
+                msg_type: *msg_type,
+                namespace: namespace.clone(),
+                mq_trace_context: mq_trace_context.clone(),
+                mq: mq.as_ref(),
+                exception: Some(Arc::new(Box::new(rocketmq_error::ClientError::from_rocketmq_error(
+                    err,
+                )))),
+                ..Default::default()
+            };
+            producer.execute_send_message_hook_after(&Some(context));
+        }
+    }
+
+    /// Static version of process_send_response for use in background task
+    fn process_send_response_static(
+        client_config: &Arc<ClientConfig>,
+        broker_name: &CheetahString,
+        msg_topic: &CheetahString,
+        msg_uniq_id: Option<&CheetahString>,
+        is_batch_message: bool,
+        response: &RemotingCommand,
+        addr: &CheetahString,
+    ) -> rocketmq_error::RocketMQResult<SendResult> {
+        let response_code = ResponseCode::from(response.code());
+        let send_status = match response_code {
+            ResponseCode::FlushDiskTimeout => SendStatus::FlushDiskTimeout,
+            ResponseCode::FlushSlaveTimeout => SendStatus::FlushSlaveTimeout,
+            ResponseCode::SlaveNotAvailable => SendStatus::SlaveNotAvailable,
+            ResponseCode::Success => SendStatus::SendOk,
+            _ => {
+                return Err(client_broker_err!(
+                    response.code(),
+                    response.remark().map_or("".to_string(), |s| s.to_string()),
+                    addr.to_string()
+                ))
+            }
+        };
+
+        let response_header = response
+            .decode_command_custom_header_fast::<SendMessageResponseHeader>()
+            .unwrap();
+
+        let mut topic = msg_topic.to_string();
+        if let Some(ns) = client_config.get_namespace_v2() {
+            if !ns.is_empty() {
+                topic = NamespaceUtil::without_namespace_with_namespace(topic.as_str(), ns.as_str());
+            }
+        }
+
+        let message_queue = MessageQueue::from_parts(topic.as_str(), broker_name, response_header.queue_id());
+        let uniq_msg_id = msg_uniq_id.cloned();
+
+        let region_id = response
+            .ext_fields()
+            .unwrap()
+            .get(MessageConst::PROPERTY_MSG_REGION)
+            .map_or(mix_all::DEFAULT_TRACE_REGION_ID.to_string(), |s| s.to_string());
+        let trace_on = response
+            .ext_fields()
+            .unwrap()
+            .get(MessageConst::PROPERTY_TRACE_SWITCH)
+            .is_some_and(|s| s.parse().unwrap_or(false));
+
+        let send_result = SendResult {
+            send_status,
+            msg_id: uniq_msg_id,
+            offset_msg_id: Some(response_header.msg_id().to_string()),
+            message_queue: Some(message_queue),
+            queue_offset: response_header.queue_offset() as u64,
+            transaction_id: response_header.transaction_id().map(|s| s.to_string()),
+            region_id: Some(region_id),
+            trace_on,
+            ..Default::default()
+        };
+
+        Ok(send_result)
+    }
+
+    /// Static version of prepare_retry for use in background task
+    async fn prepare_retry_static(
+        mq_fault_strategy: &ArcMut<MQFaultStrategy>,
+        broker_name: &CheetahString,
+        topic_publish_info: Option<&TopicPublishInfo>,
+        instance: Option<&ArcMut<MQClientInstance>>,
+    ) -> Option<(CheetahString, CheetahString)> {
+        let mut retry_broker_name = broker_name.clone();
+
+        if let Some(topic_publish_info) = topic_publish_info {
+            // Use mq_fault_strategy to select new broker (avoid faulty brokers)
+            if let Some(mq) = mq_fault_strategy.select_one_message_queue(topic_publish_info, Some(broker_name), false) {
+                if let Some(instance) = instance {
+                    retry_broker_name = instance.get_broker_name_from_message_queue(&mq).await;
+                }
+            }
+        }
+
+        if let Some(instance) = instance {
+            if let Some(addr) = instance
+                .find_broker_address_in_publish(retry_broker_name.as_ref())
+                .await
+            {
+                return Some((addr, retry_broker_name));
+            }
+        }
+
+        None
     }
 
     fn process_send_response<T>(
@@ -1222,8 +1566,7 @@ impl MQClientAPIImpl {
             .decode_command_custom_header_fast::<SendMessageResponseHeader>()
             .unwrap();
         let mut topic = msg.topic().to_string();
-        let namespace = self.client_config.get_namespace();
-        if let Some(ns) = namespace.as_ref() {
+        if let Some(ns) = self.client_config.get_namespace_v2() {
             if !ns.is_empty() {
                 topic = NamespaceUtil::without_namespace_with_namespace(topic.as_str(), ns.as_str());
             }

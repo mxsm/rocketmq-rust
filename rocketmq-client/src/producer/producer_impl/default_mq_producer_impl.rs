@@ -261,7 +261,7 @@ pub struct DefaultMQProducerImpl {
 
     rpc_hook: Option<Arc<dyn RPCHook>>,
     client_instance: Option<ArcMut<MQClientInstance>>,
-    mq_fault_strategy: ArcMut<MQFaultStrategy>,
+    pub(crate) mq_fault_strategy: ArcMut<MQFaultStrategy>,
 
     // ===== Backpressure control =====
     semaphore_async_send_num: Arc<Semaphore>,
