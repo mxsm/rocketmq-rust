@@ -2874,6 +2874,53 @@ impl MQClientAPIImpl {
             )),
         }
     }
+
+    pub(crate) async fn get_all_topic_config(
+        &self,
+        addr: &CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper> {
+        let request = RemotingCommand::create_request_command(RequestCode::GetAllTopicConfig, EmptyHeader {});
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper::decode(
+                    body.as_ref(),
+                );
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn get_all_subscription_group_config(
+        &self,
+        addr: &CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<rocketmq_remoting::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper> {
+        let request =
+            RemotingCommand::create_request_command(RequestCode::GetAllSubscriptionGroupConfig, EmptyHeader {});
+        let mut response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.take_body() {
+                return rocketmq_remoting::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper::decode(
+                    body.as_ref(),
+                );
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
 }
 
 fn build_queue_offset_sorted_map(

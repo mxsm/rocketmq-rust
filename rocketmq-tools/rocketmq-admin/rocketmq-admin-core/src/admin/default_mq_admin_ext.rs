@@ -666,7 +666,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         broker_addr: CheetahString,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<TopicConfigSerializeWrapper> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .get_all_topic_config(broker_addr, timeout_millis)
+            .await
     }
 
     async fn get_user_topic_config(
@@ -675,7 +677,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         special_topic: bool,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<TopicConfigSerializeWrapper> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .get_user_topic_config(broker_addr, special_topic, timeout_millis)
+            .await
     }
 
     async fn update_consume_offset(
@@ -1206,18 +1210,22 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn get_all_subscription_group(
         &self,
-        _broker_addr: CheetahString,
-        _timeout_millis: u64,
+        broker_addr: CheetahString,
+        timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<SubscriptionGroupWrapper> {
-        unimplemented!("get_all_subscription_group not implemented yet")
+        self.default_mqadmin_ext_impl
+            .get_all_subscription_group(broker_addr, timeout_millis)
+            .await
     }
 
     async fn get_user_subscription_group(
         &self,
-        _broker_addr: CheetahString,
-        _timeout_millis: u64,
+        broker_addr: CheetahString,
+        timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<SubscriptionGroupWrapper> {
-        unimplemented!("get_user_subscription_group not implemented yet")
+        self.default_mqadmin_ext_impl
+            .get_user_subscription_group(broker_addr, timeout_millis)
+            .await
     }
 
     async fn query_consume_queue(

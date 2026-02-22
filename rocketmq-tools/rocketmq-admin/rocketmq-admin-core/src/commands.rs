@@ -20,6 +20,7 @@ mod cluster_commands;
 mod connection_commands;
 mod consumer_commands;
 mod controller_commands;
+mod export_commands;
 mod namesrv_commands;
 mod target;
 mod topic_commands;
@@ -104,6 +105,11 @@ pub enum Commands {
     Controller(controller_commands::ControllerCommands),
 
     #[command(subcommand)]
+    #[command(about = "Export commands")]
+    #[command(name = "export")]
+    Export(export_commands::ExportCommands),
+
+    #[command(subcommand)]
     #[command(about = "Name server commands")]
     #[command(name = "nameserver")]
     NameServer(namesrv_commands::NameServerCommands),
@@ -125,6 +131,7 @@ impl CommandExecute for Commands {
             Commands::Connection(value) => value.execute(rpc_hook).await,
             Commands::Consumer(value) => value.execute(rpc_hook).await,
             Commands::Controller(value) => value.execute(rpc_hook).await,
+            Commands::Export(value) => value.execute(rpc_hook).await,
             Commands::NameServer(value) => value.execute(rpc_hook).await,
             Commands::Topic(value) => value.execute(rpc_hook).await,
             Commands::Show(value) => value.execute(rpc_hook).await,
@@ -322,6 +329,41 @@ impl CommandExecute for ClassificationTablePrint {
                 remark: "Get meta data of controller.",
             },
             Command {
+                category: "Export",
+                command: "exportMetadata",
+                remark: "Export metadata.",
+            },
+            Command {
+                category: "NameServer",
+                command: "addWritePerm",
+                remark: "Add write perm of broker in all name server.",
+            },
+            Command {
+                category: "NameServer",
+                command: "deleteKvConfig",
+                remark: "Delete KV config.",
+            },
+            Command {
+                category: "NameServer",
+                command: "getNamesrvConfig",
+                remark: "Get configs of name server.",
+            },
+            Command {
+                category: "NameServer",
+                command: "updateKvConfig",
+                remark: "Create or update KV config.",
+            },
+            Command {
+                category: "NameServer",
+                command: "updateNamesrvConfig",
+                remark: "Update configs of name server.",
+            },
+            Command {
+                category: "NameServer",
+                command: "wipeWritePerm",
+                remark: "Wipe write perm of broker in all name server.",
+            },
+            Command {
                 category: "Topic",
                 command: "allocateMQ",
                 remark: "Allocate MQ.",
@@ -375,36 +417,6 @@ impl CommandExecute for ClassificationTablePrint {
                 category: "Topic",
                 command: "updateTopic",
                 remark: "Update or create topic.",
-            },
-            Command {
-                category: "NameServer",
-                command: "addWritePerm",
-                remark: "Add write perm of broker in all name server.",
-            },
-            Command {
-                category: "NameServer",
-                command: "deleteKvConfig",
-                remark: "Delete KV config.",
-            },
-            Command {
-                category: "NameServer",
-                command: "getNamesrvConfig",
-                remark: "Get configs of name server.",
-            },
-            Command {
-                category: "NameServer",
-                command: "updateKvConfig",
-                remark: "Create or update KV config.",
-            },
-            Command {
-                category: "NameServer",
-                command: "updateNamesrvConfig",
-                remark: "Update configs of name server.",
-            },
-            Command {
-                category: "NameServer",
-                command: "wipeWritePerm",
-                remark: "Wipe write perm of broker in all name server.",
             },
         ];
         let mut table = Table::new(commands);
