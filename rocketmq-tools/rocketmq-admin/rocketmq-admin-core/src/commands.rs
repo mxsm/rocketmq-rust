@@ -17,6 +17,7 @@ pub mod command_util;
 mod auth_commands;
 mod broker_commands;
 mod cluster_commands;
+mod connection_commands;
 mod consumer_commands;
 mod controller_commands;
 mod namesrv_commands;
@@ -88,6 +89,11 @@ pub enum Commands {
     Cluster(cluster_commands::ClusterCommands),
 
     #[command(subcommand)]
+    #[command(about = "Connection commands")]
+    #[command(name = "connection")]
+    Connection(connection_commands::ConnectionCommands),
+
+    #[command(subcommand)]
     #[command(about = "Consumer commands")]
     #[command(name = "consumer")]
     Consumer(consumer_commands::ConsumerCommands),
@@ -116,6 +122,7 @@ impl CommandExecute for Commands {
             Commands::Auth(value) => value.execute(rpc_hook).await,
             Commands::Broker(value) => value.execute(rpc_hook).await,
             Commands::Cluster(value) => value.execute(rpc_hook).await,
+            Commands::Connection(value) => value.execute(rpc_hook).await,
             Commands::Consumer(value) => value.execute(rpc_hook).await,
             Commands::Controller(value) => value.execute(rpc_hook).await,
             Commands::NameServer(value) => value.execute(rpc_hook).await,
@@ -263,6 +270,11 @@ impl CommandExecute for ClassificationTablePrint {
                 category: "Cluster",
                 command: "clusterList",
                 remark: "List cluster infos.",
+            },
+            Command {
+                category: "Connection",
+                command: "producerConnection",
+                remark: "Query producer's socket connection and client version.",
             },
             Command {
                 category: "Consumer",
