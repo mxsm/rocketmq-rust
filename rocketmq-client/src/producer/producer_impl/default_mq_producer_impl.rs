@@ -1051,11 +1051,7 @@ impl DefaultMQProducerImpl {
 
     /// Prepare message for retry (reset topic with namespace)
     fn prepare_message_for_retry<T: MessageTrait>(&self, msg: &mut T, topic: &CheetahString) {
-        let namespace = self
-            .client_config
-            .namespace
-            .clone()
-            .unwrap_or(CheetahString::empty());
+        let namespace = self.client_config.namespace.clone().unwrap_or(CheetahString::empty());
         msg.set_topic(NamespaceUtil::wrap_namespace(namespace, topic));
     }
 
