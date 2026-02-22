@@ -728,7 +728,7 @@ impl DefaultMQProducerImpl {
                         "message topic [{}] is not equal with message queue topic [{}]",
                         msg.topic(),
                         mq.topic_str()
-                    )))),
+                    ))) as &dyn std::error::Error),
                 );
                 return;
             }
