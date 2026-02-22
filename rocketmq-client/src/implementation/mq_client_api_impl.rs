@@ -551,6 +551,27 @@ impl MQClientAPIImpl {
         ))
     }
 
+    pub(crate) async fn get_broker_runtime_info(
+        &self,
+        addr: &CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<rocketmq_remoting::protocol::body::kv_table::KVTable> {
+        let request = RemotingCommand::create_request_command(RequestCode::GetBrokerRuntimeInfo, EmptyHeader {});
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return rocketmq_remoting::protocol::body::kv_table::KVTable::decode(body.as_ref());
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
     pub async fn delete_subscription_group(
         &self,
         addr: &CheetahString,
