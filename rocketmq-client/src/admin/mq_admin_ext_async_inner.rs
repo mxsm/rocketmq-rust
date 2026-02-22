@@ -29,6 +29,7 @@ use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInf
 use rocketmq_remoting::protocol::body::group_list::GroupList;
 use rocketmq_remoting::protocol::body::kv_table::KVTable;
 use rocketmq_remoting::protocol::body::producer_connection::ProducerConnection;
+use rocketmq_remoting::protocol::body::subscription_group_wrapper::SubscriptionGroupWrapper;
 use rocketmq_remoting::protocol::body::topic::topic_list::TopicList;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
@@ -496,17 +497,21 @@ impl MQAdminExtInnerImpl {
         unimplemented!()
     }
 
-    /*async fn get_all_subscription_group(
+    async fn get_all_subscription_group(
         &self,
         broker_addr: CheetahString,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<SubscriptionGroupWrapper>{ unimplemented!()}*/
+    ) -> rocketmq_error::RocketMQResult<SubscriptionGroupWrapper> {
+        unimplemented!()
+    }
 
-    /*async fn get_user_subscription_group(
+    async fn get_user_subscription_group(
         &self,
         broker_addr: CheetahString,
         timeout_millis: u64,
-    ) -> rocketmq_error::RocketMQResult<SubscriptionGroupWrapper>{ unimplemented!()}*/
+    ) -> rocketmq_error::RocketMQResult<SubscriptionGroupWrapper> {
+        unimplemented!()
+    }
 
     async fn get_all_topic_config(
         &self,
