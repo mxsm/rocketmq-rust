@@ -428,7 +428,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         consumer_group: CheetahString,
         broker_addr: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<ConsumerConnection> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .examine_consumer_connection_info(consumer_group, broker_addr)
+            .await
     }
 
     async fn examine_producer_connection_info(

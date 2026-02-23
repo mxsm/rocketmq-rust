@@ -27,6 +27,7 @@ use crate::common::admin_tool_result::AdminToolResult;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::implementation::mq_client_manager::MQClientManager;
 use cheetah_string::CheetahString;
+use rand::seq::IndexedRandom;
 use rocketmq_common::common::base::plain_access_config::PlainAccessConfig;
 use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::config::TopicConfig;
@@ -509,7 +510,53 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         consumer_group: CheetahString,
         broker_addr: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<ConsumerConnection> {
-        todo!()
+        let mut result = ConsumerConnection::new();
+        let timeout = self.timeout_millis.as_millis() as u64;
+
+        if let Some(broker_addr) = broker_addr {
+            result = self
+                .client_instance
+                .as_ref()
+                .unwrap()
+                .get_mq_client_api_impl()
+                .get_consumer_connection_list(broker_addr.as_str(), consumer_group.clone(), timeout)
+                .await?;
+        } else {
+            let topic = CheetahString::from_string(mix_all::get_retry_topic(consumer_group.as_str()));
+            let topic_route_data = self
+                .client_instance
+                .as_ref()
+                .unwrap()
+                .get_mq_client_api_impl()
+                .get_topic_route_info_from_name_server(&topic, timeout)
+                .await?;
+
+            if let Some(topic_route_data) = topic_route_data {
+                let brokers = &topic_route_data.broker_datas;
+                if !brokers.is_empty() {
+                    if let Some(broker_data) = brokers.choose(&mut rand::rng()) {
+                        if let Some(addr) = broker_data.select_broker_addr() {
+                            result = self
+                                .client_instance
+                                .as_ref()
+                                .unwrap()
+                                .get_mq_client_api_impl()
+                                .get_consumer_connection_list(addr.as_str(), consumer_group.clone(), timeout)
+                                .await?;
+                        }
+                    }
+                }
+            }
+        }
+
+        if result.get_connection_set().is_empty() {
+            return Err(mq_client_err!(
+                rocketmq_remoting::code::response_code::ResponseCode::ConsumerNotOnline,
+                "Not found the consumer group connection"
+            ));
+        }
+
+        Ok(result)
     }
 
     async fn examine_producer_connection_info(

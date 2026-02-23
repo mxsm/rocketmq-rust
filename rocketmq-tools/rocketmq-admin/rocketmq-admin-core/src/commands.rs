@@ -280,6 +280,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Connection",
+                command: "consumerConnection",
+                remark: "Query consumer's socket connection, client version and subscription.",
+            },
+            Command {
+                category: "Connection",
                 command: "producerConnection",
                 remark: "Query producer's socket connection and client version.",
             },
