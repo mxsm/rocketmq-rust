@@ -1538,10 +1538,17 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
 
     async fn get_in_sync_state_data(
         &self,
-        _controller_address: CheetahString,
-        _brokers: Vec<CheetahString>,
+        controller_address: CheetahString,
+        brokers: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<BrokerReplicasInfo> {
-        unimplemented!("get_in_sync_state_data not implemented yet")
+        if let Some(ref mq_client_instance) = self.client_instance {
+            Ok(mq_client_instance
+                .get_mq_client_api_impl()
+                .get_in_sync_state_data(controller_address, brokers, self.timeout_millis.as_millis() as u64)
+                .await?)
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn get_broker_epoch_cache(

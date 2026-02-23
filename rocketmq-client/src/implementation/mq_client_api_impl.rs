@@ -70,6 +70,7 @@ use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::acl_info::AclInfo;
 use rocketmq_remoting::protocol::body::batch_ack_message_request_body::BatchAckMessageRequestBody;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
+use rocketmq_remoting::protocol::body::broker_replicas_info::BrokerReplicasInfo;
 use rocketmq_remoting::protocol::body::check_client_request_body::CheckClientRequestBody;
 use rocketmq_remoting::protocol::body::epoch_entry_cache::EpochEntryCache;
 use rocketmq_remoting::protocol::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody;
@@ -2541,6 +2542,43 @@ impl MQClientAPIImpl {
                 Ok(header) => Ok(header),
                 Err(_) => Err(mq_client_err!("Could not decode GetMetaDataResponseHeader".to_string())),
             },
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string())
+            )),
+        }
+    }
+
+    pub async fn get_in_sync_state_data(
+        &self,
+        controller_address: CheetahString,
+        brokers: Vec<CheetahString>,
+        timeout_millis: u64,
+    ) -> RocketMQResult<BrokerReplicasInfo> {
+        let controller_meta_data = self.get_controller_metadata(controller_address, timeout_millis).await?;
+        let leader_address = controller_meta_data
+            .controller_leader_address
+            .ok_or_else(|| mq_client_err!("Controller leader address is not available".to_string()))?;
+
+        let request = RemotingCommand::create_remoting_command(RequestCode::ControllerGetSyncStateData);
+        let body = serde_json::to_vec(&brokers)
+            .map_err(|e| mq_client_err!(format!("Failed to serialize broker names: {}", e)))?;
+        let request = request.set_body(body);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&leader_address), request, timeout_millis)
+            .await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                if let Some(body) = response.body() {
+                    serde_json::from_slice(body)
+                        .map_err(|e| mq_client_err!(format!("Failed to decode BrokerReplicasInfo: {}", e)))
+                } else {
+                    Err(mq_client_err!(
+                        "get_in_sync_state_data response body is empty".to_string()
+                    ))
+                }
+            }
             _ => Err(mq_client_err!(
                 response.code(),
                 response.remark().map_or("".to_string(), |s| s.to_string())
