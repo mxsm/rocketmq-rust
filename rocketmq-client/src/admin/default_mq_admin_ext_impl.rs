@@ -30,14 +30,18 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::base::plain_access_config::PlainAccessConfig;
 use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::config::TopicConfig;
+use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
+use rocketmq_common::common::mix_all::DLQ_GROUP_TOPIC_PREFIX;
+use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
 #[allow(deprecated)]
 use rocketmq_common::common::tools::broker_operator_result::BrokerOperatorResult;
 #[allow(deprecated)]
 use rocketmq_common::common::tools::message_track::MessageTrack;
+use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
 use rocketmq_remoting::protocol::admin::consume_stats_list::ConsumeStatsList;
@@ -797,7 +801,12 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         broker_addr: CheetahString,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<TopicConfigSerializeWrapper> {
-        todo!()
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .get_all_topic_config(&broker_addr, timeout_millis)
+            .await
     }
 
     async fn get_user_topic_config(
@@ -806,7 +815,27 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         special_topic: bool,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<TopicConfigSerializeWrapper> {
-        todo!()
+        let mut topic_config_wrapper = self.get_all_topic_config(broker_addr, timeout_millis).await?;
+
+        if let Some(ref mut topic_table) = topic_config_wrapper.topic_config_table_mut() {
+            topic_table.retain(|topic_name, topic_config| {
+                if TopicValidator::is_system_topic(topic_name.as_str()) {
+                    return false;
+                }
+                if !special_topic
+                    && (topic_name.starts_with(RETRY_GROUP_TOPIC_PREFIX)
+                        || topic_name.starts_with(DLQ_GROUP_TOPIC_PREFIX))
+                {
+                    return false;
+                }
+                if !PermName::is_valid(topic_config.perm) {
+                    return false;
+                }
+                true
+            });
+        }
+
+        Ok(topic_config_wrapper)
     }
 
     async fn update_consume_offset(
@@ -1399,18 +1428,30 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
 
     async fn get_all_subscription_group(
         &self,
-        _broker_addr: CheetahString,
-        _timeout_millis: u64,
+        broker_addr: CheetahString,
+        timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<SubscriptionGroupWrapper> {
-        unimplemented!("get_all_subscription_group not implemented yet")
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .get_all_subscription_group_config(&broker_addr, timeout_millis)
+            .await
     }
 
     async fn get_user_subscription_group(
         &self,
-        _broker_addr: CheetahString,
-        _timeout_millis: u64,
+        broker_addr: CheetahString,
+        timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<SubscriptionGroupWrapper> {
-        unimplemented!("get_user_subscription_group not implemented yet")
+        let subscription_group_wrapper = self.get_all_subscription_group(broker_addr, timeout_millis).await?;
+
+        let system_group_set = get_system_group_set();
+        let table = subscription_group_wrapper.get_subscription_group_table();
+        // Remove system consumer groups
+        table.retain(|key, _| !mix_all::is_sys_consumer_group(key.as_str()) && !system_group_set.contains(key));
+
+        Ok(subscription_group_wrapper)
     }
 
     async fn query_consume_queue(
