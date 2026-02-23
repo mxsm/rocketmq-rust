@@ -1140,7 +1140,6 @@ impl DefaultMQPushConsumerImpl {
                     .as_mut()
                     .unwrap()
                     .find_broker_address_in_publish(broker_name_.as_ref())
-                    .await
                     .unwrap()
             } else {
                 CheetahString::from_string(msg.store_host.to_string())

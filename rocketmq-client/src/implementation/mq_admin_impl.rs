@@ -84,11 +84,11 @@ impl MQAdminImpl {
     pub async fn max_offset(&mut self, mq: &MessageQueue) -> rocketmq_error::RocketMQResult<i64> {
         let client = self.client.as_mut().expect("client is None");
         let broker_name = client.get_broker_name_from_message_queue(mq).await;
-        let mut broker_addr = client.find_broker_address_in_publish(broker_name.as_ref()).await;
+        let mut broker_addr = client.find_broker_address_in_publish(broker_name.as_ref());
         if broker_addr.is_none() {
             client.update_topic_route_info_from_name_server_topic(mq.topic()).await;
             let broker_name = client.get_broker_name_from_message_queue(mq).await;
-            broker_addr = client.find_broker_address_in_publish(broker_name.as_ref()).await;
+            broker_addr = client.find_broker_address_in_publish(broker_name.as_ref());
         }
         if let Some(ref broker_addr) = broker_addr {
             let offset = client
