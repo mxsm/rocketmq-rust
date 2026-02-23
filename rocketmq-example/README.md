@@ -34,6 +34,22 @@ cargo run --example <TAB>
 
 ### Consumer Examples
 
+#### Cluster Consumer
+Demonstrates how to consume messages in cluster mode with load balancing across multiple consumer instances.
+
+**File**: [examples/consumer/consumer_cluster.rs](examples/consumer/consumer_cluster.rs)
+
+**Run**:
+```bash
+cargo run --example consumer-cluster
+```
+
+**Features**:
+- Cluster mode consumption (default mode)
+- Load balancing across consumer instances
+- Concurrent message processing
+- Each message consumed by only one instance
+
 #### Pop Consumer
 Demonstrates how to use the pop consumption model with client-side load balancing disabled.
 
@@ -95,6 +111,7 @@ This project references local RocketMQ-Rust crates:
 rocketmq-example/
 ├── examples/
 │   └── consumer/
+│       ├── consumer_cluster.rs
 │       └── pop_consumer.rs
 ├── Cargo.toml
 └── README.md
