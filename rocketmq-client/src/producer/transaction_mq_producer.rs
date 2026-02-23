@@ -199,8 +199,8 @@ impl MQProducer for TransactionMQProducer {
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
-        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue> + Send + Sync + 'static,
-        T: std::any::Any + Send + Sync,
+        S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
+        T: Send + Sync,
     {
         self.default_producer.send_with_selector(msg, selector, arg).await
     }
@@ -214,8 +214,8 @@ impl MQProducer for TransactionMQProducer {
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
-        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue> + Send + Sync + 'static,
-        T: std::any::Any + Sync + Send,
+        S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
+        T: Send + Sync,
     {
         self.default_producer
             .send_with_selector_timeout(msg, selector, arg, timeout)
@@ -231,8 +231,8 @@ impl MQProducer for TransactionMQProducer {
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue> + Send + Sync + 'static,
-        T: std::any::Any + Sync + Send,
+        S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
+        T: Send + Sync,
     {
         self.default_producer
             .send_with_selector_callback(msg, selector, arg, send_callback)
@@ -249,8 +249,8 @@ impl MQProducer for TransactionMQProducer {
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue> + Send + Sync + 'static,
-        T: std::any::Any + Sync + Send,
+        S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
+        T: Send + Sync + 'static,
     {
         self.default_producer
             .send_with_selector_callback_timeout(msg, selector, arg, send_callback, timeout)
@@ -265,8 +265,8 @@ impl MQProducer for TransactionMQProducer {
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue> + Send + Sync + 'static,
-        T: std::any::Any + Sync + Send,
+        S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
+        T: Send + Sync + 'static,
     {
         self.default_producer
             .send_oneway_with_selector(msg, selector, arg)
@@ -420,8 +420,8 @@ impl MQProducer for TransactionMQProducer {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
     where
-        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue> + Send + Sync + 'static,
-        T: std::any::Any + Sync + Send,
+        S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
+        T: Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
         self.default_producer
@@ -438,9 +438,9 @@ impl MQProducer for TransactionMQProducer {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue> + Send + Sync + 'static,
+        S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
         F: Fn(Option<&dyn MessageTrait>, Option<&dyn std::error::Error>) + Send + Sync + 'static,
-        T: std::any::Any + Sync + Send,
+        T: Send + Sync + 'static,
         M: MessageTrait + Send + Sync,
     {
         self.default_producer

@@ -125,31 +125,40 @@ Message 5 → Queue 0
 
 ### Custom Queue Selector
 
-Route specific messages to specific queues:
+Route specific messages to specific queues using a closure:
 
 ```rust
-use rocketmq::selector::MessageQueueSelector;
+use rocketmq::common::message::message_queue::MessageQueue;
 
-struct OrderIdSelector;
-
-impl MessageQueueSelector for OrderIdSelector {
-    fn select(
-        &self,
-        queues: &[MessageQueue],
-        message: &Message,
-        arg: &str,
-    ) -> &MessageQueue {
+// Send with selector closure
+let order_id = 12345i64;
+producer.send_with_selector(
+    message,
+    |queues, _msg, order_id: &i64| {
         // Route by order_id to maintain ordering
-        let hash = compute_hash(arg);
-        let index = (hash % queues.len() as u64) as usize;
-        &queues[index]
-    }
+        let index = (*order_id % queues.len() as i64) as usize;
+        queues.get(index).cloned()
+    },
+    order_id,
+).await?;
+```
+
+You can also create reusable selector functions:
+
+```rust
+// Define a reusable selector function
+fn order_hash_selector(
+    queues: &[MessageQueue],
+    _msg: &dyn MessageTrait,
+    order_id: &i64,
+) -> Option<MessageQueue> {
+    let index = (*order_id % queues.len() as i64) as usize;
+    queues.get(index).cloned()
 }
 
-// Send with selector
-let selector = OrderIdSelector;
-let order_id = "order_12345";
-producer.send_with_selector(message, selector, order_id).await?;
+// Use the selector function
+let order_id = 12345i64;
+producer.send_with_selector(message, order_hash_selector, order_id).await?;
 ```
 
 ## Error Handling

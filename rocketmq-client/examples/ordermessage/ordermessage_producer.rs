@@ -51,9 +51,8 @@ pub async fn main() -> RocketMQResult<()> {
         let send_result = producer
             .send_with_selector(
                 message,
-                |mqs, _msg, arg| {
-                    let id = arg.downcast_ref::<usize>().unwrap();
-                    let index = id % mqs.len();
+                |mqs, _msg, arg: &usize| {
+                    let index = arg % mqs.len();
                     Some(mqs[index].clone())
                 },
                 order_id,
