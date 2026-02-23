@@ -123,6 +123,7 @@ use rocketmq_remoting::protocol::header::unlock_batch_mq_request_header::UnlockB
 use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::update_user_request_header::UpdateUserRequestHeader;
+use rocketmq_remoting::protocol::headers::client::GetConsumerConnectionListRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
@@ -137,6 +138,7 @@ use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
+use rocketmq_remoting::ConsumerConnection;
 use rocketmq_rust::ArcMut;
 use tracing::error;
 use tracing::warn;
@@ -1546,6 +1548,47 @@ impl MQClientAPIImpl {
                             .remark()
                             .map_or("".to_string(), |s| s.to_string()))),
                     };
+                }
+            }
+            _ => {
+                return Err(client_broker_err!(
+                    response.code(),
+                    response.remark().map_or("".to_string(), |s| s.to_string()),
+                    addr.to_string()
+                ));
+            }
+        }
+        Err(client_broker_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string()),
+            addr.to_string()
+        ))
+    }
+
+    pub async fn get_consumer_connection_list(
+        &mut self,
+        addr: &str,
+        consumer_group: CheetahString,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<rocketmq_remoting::protocol::body::consumer_connection::ConsumerConnection>
+    {
+        let request_header = GetConsumerConnectionListRequestHeader {
+            consumer_group,
+            rpc_request_header: None,
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::GetConsumerConnectionList, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(
+                Some(mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr).as_ref()),
+                request,
+                timeout_millis,
+            )
+            .await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                if let Some(body) = response.body() {
+                    return ConsumerConnection::decode(body);
                 }
             }
             _ => {
