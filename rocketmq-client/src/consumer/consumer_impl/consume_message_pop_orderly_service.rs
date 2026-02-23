@@ -43,7 +43,7 @@ use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
 use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
-use crate::consumer::listener::message_listener_orderly::ArcBoxMessageListenerOrderly;
+use crate::consumer::listener::message_listener_orderly::ArcMessageListenerOrderly;
 use crate::consumer::message_queue_lock::MessageQueueLock;
 
 pub struct ConsumeMessagePopOrderlyService {
@@ -51,7 +51,7 @@ pub struct ConsumeMessagePopOrderlyService {
     pub(crate) client_config: ArcMut<ClientConfig>,
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     pub(crate) consumer_group: CheetahString,
-    pub(crate) message_listener: ArcBoxMessageListenerOrderly,
+    pub(crate) message_listener: ArcMessageListenerOrderly,
     pub(crate) concurrency_limiter: Arc<Semaphore>,
     pub(self) consume_request_set: Arc<DashSet<ConsumeRequest>>,
     pub(crate) message_queue_lock: MessageQueueLock,
@@ -76,7 +76,7 @@ impl ConsumeMessagePopOrderlyService {
         client_config: ArcMut<ClientConfig>,
         consumer_config: ArcMut<ConsumerConfig>,
         consumer_group: CheetahString,
-        message_listener: ArcBoxMessageListenerOrderly,
+        message_listener: ArcMessageListenerOrderly,
         default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
     ) -> Self {
         let consume_thread = consumer_config.consume_thread_max;

@@ -28,6 +28,5 @@ pub use consume_orderly_context::ConsumeOrderlyContext;
 pub use consume_orderly_status::ConsumeOrderlyStatus;
 pub use message_listener_concurrently::ArcMessageListenerConcurrently;
 pub use message_listener_concurrently::MessageListenerConcurrently;
-pub use message_listener_orderly::ArcBoxMessageListenerOrderly;
+pub use message_listener_orderly::ArcMessageListenerOrderly;
 pub use message_listener_orderly::MessageListenerOrderly;
-pub use message_listener_orderly::MessageListenerOrderlyFn;
