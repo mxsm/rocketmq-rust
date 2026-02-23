@@ -116,9 +116,8 @@ async fn send_with_selector_timeout(producer: &mut DefaultMQProducer) -> RocketM
     println!("   Method: producer.send_with_selector_timeout(message, selector_fn, arg, timeout_ms).await");
     println!("   Timeout: {}ms", TIMEOUT_MS);
 
-    let selector = |queues: &[MessageQueue], _msg: &Message, _arg: &&str| -> Option<MessageQueue> {
-        queues.first().cloned()
-    };
+    let selector =
+        |queues: &[MessageQueue], _msg: &Message, _arg: &&str| -> Option<MessageQueue> { queues.first().cloned() };
 
     let message = Message::builder()
         .topic(TOPIC)
@@ -147,9 +146,8 @@ async fn send_with_selector_callback(producer: &mut DefaultMQProducer) -> Rocket
     println!("3. Send with Selector and Callback");
     println!("   Method: producer.send_with_selector_callback(message, selector_fn, arg, callback_fn).await");
 
-    let selector = |queues: &[MessageQueue], _msg: &Message, _arg: &&str| -> Option<MessageQueue> {
-        queues.first().cloned()
-    };
+    let selector =
+        |queues: &[MessageQueue], _msg: &Message, _arg: &&str| -> Option<MessageQueue> { queues.first().cloned() };
 
     let message = Message::builder()
         .topic(TOPIC)
@@ -186,9 +184,8 @@ async fn send_with_selector_callback_timeout(producer: &mut DefaultMQProducer) -
     );
     println!("   Timeout: {}ms", TIMEOUT_MS);
 
-    let selector = |queues: &[MessageQueue], _msg: &Message, _arg: &&str| -> Option<MessageQueue> {
-        queues.first().cloned()
-    };
+    let selector =
+        |queues: &[MessageQueue], _msg: &Message, _arg: &&str| -> Option<MessageQueue> { queues.first().cloned() };
 
     let message = Message::builder()
         .topic(TOPIC)
@@ -221,9 +218,8 @@ async fn send_oneway_with_selector(producer: &mut DefaultMQProducer) -> RocketMQ
     println!("5. One-way Send with Selector");
     println!("   Method: producer.send_oneway_with_selector(message, selector_fn, arg).await");
 
-    let selector = |queues: &[MessageQueue], _msg: &Message, _arg: &&str| -> Option<MessageQueue> {
-        queues.first().cloned()
-    };
+    let selector =
+        |queues: &[MessageQueue], _msg: &Message, _arg: &&str| -> Option<MessageQueue> { queues.first().cloned() };
 
     let message = Message::builder()
         .topic(TOPIC)
