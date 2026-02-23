@@ -14,6 +14,7 @@
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
 
+#[derive(Debug)]
 pub struct ConsumeConcurrentlyContext {
     pub(crate) message_queue: MessageQueue,
     pub(crate) delay_level_when_next_consume: i32,
