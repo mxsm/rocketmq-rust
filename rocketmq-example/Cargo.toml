@@ -40,6 +40,7 @@ resolver = "3"
 
 [dev-dependencies]
 cheetah-string       = { version = "1.0.1", features = ["serde", "bytes", "simd"] }
+rand                 = "0.8"
 rocketmq-client-rust = { path = "../rocketmq-client" }
 rocketmq-common      = { path = "../rocketmq-common" }
 rocketmq-error       = { path = "../rocketmq-error" }
@@ -75,3 +76,7 @@ path = "examples/producer/send_to_queue.rs"
 [[example]]
 name = "producer-send-with-selector"
 path = "examples/producer/send_with_selector.rs"
+
+[[example]]
+name = "producer-send-with-selector-advanced"
+path = "examples/producer/send_with_selector_advanced.rs"
