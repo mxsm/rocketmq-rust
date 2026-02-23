@@ -41,7 +41,7 @@ use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
 use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
 use crate::consumer::listener::consume_return_type::ConsumeReturnType;
-use crate::consumer::listener::message_listener_concurrently::ArcBoxMessageListenerConcurrently;
+use crate::consumer::listener::message_listener_concurrently::ArcMessageListenerConcurrently;
 use crate::hook::consume_message_context::ConsumeMessageContext;
 
 pub struct ConsumeMessageConcurrentlyService {
@@ -49,7 +49,7 @@ pub struct ConsumeMessageConcurrentlyService {
     pub(crate) client_config: ArcMut<ClientConfig>,
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     pub(crate) consumer_group: CheetahString,
-    pub(crate) message_listener: ArcBoxMessageListenerConcurrently,
+    pub(crate) message_listener: ArcMessageListenerConcurrently,
     pub(crate) consume_runtime: RocketMQRuntime,
 }
 
@@ -58,7 +58,7 @@ impl ConsumeMessageConcurrentlyService {
         client_config: ArcMut<ClientConfig>,
         consumer_config: ArcMut<ConsumerConfig>,
         consumer_group: CheetahString,
-        message_listener: ArcBoxMessageListenerConcurrently,
+        message_listener: ArcMessageListenerConcurrently,
         default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
     ) -> Self {
         let consume_thread = consumer_config.consume_thread_max;
@@ -237,10 +237,8 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 
         let begin_timestamp = Instant::now();
 
-        let status = self.message_listener.consume_message(
-            &msgs.iter().map(|msg| msg.as_ref()).collect::<Vec<&MessageExt>>(),
-            &context,
-        );
+        let msgs_refs: Vec<&MessageExt> = msgs.iter().map(|msg| msg.as_ref()).collect();
+        let status = self.message_listener.consume_message(&msgs_refs, &context);
         let mut result = ConsumeMessageDirectlyResult::default();
         result.set_order(false);
         result.set_auto_commit(true);
@@ -320,7 +318,7 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 
 struct ConsumeRequest {
     msgs: Vec<ArcMut<MessageExt>>,
-    message_listener: ArcBoxMessageListenerConcurrently,
+    message_listener: ArcMessageListenerConcurrently,
     process_queue: Arc<ProcessQueue>,
     message_queue: MessageQueue,
     dispatch_to_consume: bool,
@@ -380,8 +378,8 @@ impl ConsumeRequest {
                 });
                 default_mqpush_consumer_impl.execute_hook_before(&mut consume_message_context);
             }
-            let vec = self.msgs.iter().map(|msg| msg.as_ref()).collect::<Vec<&MessageExt>>();
-            status = self.execute_consume_with_error_handling(&vec, &context, &mut has_exception);
+            let msgs_refs: Vec<&MessageExt> = self.msgs.iter().map(|msg| msg.as_ref()).collect();
+            status = self.execute_consume_with_error_handling(&msgs_refs, &context, &mut has_exception);
         }
 
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;

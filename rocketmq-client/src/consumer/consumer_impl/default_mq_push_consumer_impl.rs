@@ -246,13 +246,13 @@ impl DefaultMQPushConsumerImpl {
 
                 if let Some(message_listener) = self.message_listener.as_ref() {
                     if message_listener.message_listener_concurrently.is_some() {
-                        let (listener, _) = message_listener.message_listener_concurrently.clone().unwrap();
+                        let listener = message_listener.message_listener_concurrently.clone().unwrap();
                         self.consume_orderly = false;
                         let consume_message_concurrently_service = ArcMut::new(ConsumeMessageConcurrentlyService::new(
                             self.client_config.clone(),
                             self.consumer_config.clone(),
                             self.consumer_config.consumer_group.clone(),
-                            listener.clone().expect("listener is None"),
+                            listener.clone(),
                             self.default_mqpush_consumer_impl.clone(),
                         ));
                         self.consume_message_service = Some(ArcMut::new(ConsumeMessageServiceGeneral::new(
@@ -264,7 +264,7 @@ impl DefaultMQPushConsumerImpl {
                                 self.client_config.clone(),
                                 self.consumer_config.clone(),
                                 self.consumer_config.consumer_group.clone(),
-                                listener.expect("listener is None"),
+                                listener.clone(),
                                 self.default_mqpush_consumer_impl.clone(),
                             ));
 

@@ -12,26 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::consumer::listener::message_listener_concurrently::ArcBoxMessageListenerConcurrently;
-use crate::consumer::listener::message_listener_concurrently::MessageListenerConcurrentlyFn;
+use crate::consumer::listener::message_listener_concurrently::ArcMessageListenerConcurrently;
 use crate::consumer::listener::message_listener_orderly::ArcBoxMessageListenerOrderly;
 use crate::consumer::listener::message_listener_orderly::MessageListenerOrderlyFn;
 
 pub(crate) struct MessageListener {
-    pub(crate) message_listener_concurrently: Option<(
-        Option<ArcBoxMessageListenerConcurrently>,
-        Option<MessageListenerConcurrentlyFn>,
-    )>,
+    pub(crate) message_listener_concurrently: Option<ArcMessageListenerConcurrently>,
     pub(crate) message_listener_orderly:
         Option<(Option<ArcBoxMessageListenerOrderly>, Option<MessageListenerOrderlyFn>)>,
 }
 
 impl MessageListener {
     pub(crate) fn new(
-        message_listener_concurrently: Option<(
-            Option<ArcBoxMessageListenerConcurrently>,
-            Option<MessageListenerConcurrentlyFn>,
-        )>,
+        message_listener_concurrently: Option<ArcMessageListenerConcurrently>,
         message_listener_orderly: Option<(Option<ArcBoxMessageListenerOrderly>, Option<MessageListenerOrderlyFn>)>,
     ) -> Self {
         Self {

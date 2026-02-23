@@ -472,7 +472,7 @@ impl MQPushConsumer for DefaultMQPushConsumer {
         ML: MessageListenerConcurrently + Send + Sync + 'static,
     {
         let message_listener = MessageListener {
-            message_listener_concurrently: Some((Some(Arc::new(Box::new(message_listener))), None)),
+            message_listener_concurrently: Some(Arc::new(message_listener)),
             message_listener_orderly: None,
         };
         self.consumer_config.message_listener = Some(ArcMut::new(message_listener));
