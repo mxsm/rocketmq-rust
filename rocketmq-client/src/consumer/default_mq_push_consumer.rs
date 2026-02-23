@@ -458,15 +458,6 @@ impl MQPushConsumer for DefaultMQPushConsumer {
         todo!()
     }
 
-    fn register_message_listener_concurrently_fn<MLCFN>(&mut self, message_listener: MLCFN)
-    where
-        MLCFN: Fn(Vec<MessageExt>, ConsumeConcurrentlyContext) -> rocketmq_error::RocketMQResult<ConsumeConcurrentlyStatus>
-            + Send
-            + Sync,
-    {
-        todo!()
-    }
-
     fn register_message_listener_concurrently<ML>(&mut self, message_listener: ML)
     where
         ML: MessageListenerConcurrently + Send + Sync + 'static,
@@ -480,15 +471,6 @@ impl MQPushConsumer for DefaultMQPushConsumer {
             .as_mut()
             .unwrap()
             .register_message_listener(self.consumer_config.message_listener.clone());
-    }
-
-    async fn register_message_listener_orderly_fn<MLOFN>(&mut self, message_listener: MLOFN)
-    where
-        MLOFN: Fn(Vec<MessageExt>, ConsumeOrderlyContext) -> rocketmq_error::RocketMQResult<ConsumeOrderlyStatus>
-            + Send
-            + Sync,
-    {
-        todo!()
     }
 
     fn register_message_listener_orderly<ML>(&mut self, message_listener: ML)
