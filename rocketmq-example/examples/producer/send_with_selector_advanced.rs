@@ -33,8 +33,9 @@
 //! 5. Random selection
 //! 6. Weighted selection
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::mq_producer::MQProducer;
@@ -237,11 +238,7 @@ async fn example_3_property_based_selection(producer: &mut DefaultMQProducer) ->
 
         if let Some(send_result) = result {
             if let Some(queue) = &send_result.message_queue {
-                println!(
-                    "User {} -> Queue {}",
-                    user_id,
-                    queue.queue_id()
-                );
+                println!("User {} -> Queue {}", user_id, queue.queue_id());
             }
         }
     }
@@ -292,11 +289,7 @@ async fn example_4_round_robin_selection(producer: &mut DefaultMQProducer) -> Ro
 
         if let Some(send_result) = result {
             if let Some(queue) = &send_result.message_queue {
-                println!(
-                    "Message #{} -> Queue {}",
-                    i,
-                    queue.queue_id()
-                );
+                println!("Message #{} -> Queue {}", i, queue.queue_id());
             }
         }
     }
@@ -342,11 +335,7 @@ async fn example_5_random_selection(producer: &mut DefaultMQProducer) -> RocketM
 
         if let Some(send_result) = result {
             if let Some(queue) = &send_result.message_queue {
-                println!(
-                    "Message #{} -> Queue {} (random)",
-                    i,
-                    queue.queue_id()
-                );
+                println!("Message #{} -> Queue {} (random)", i, queue.queue_id());
             }
         }
     }
@@ -421,11 +410,7 @@ async fn example_6_weighted_selection(producer: &mut DefaultMQProducer) -> Rocke
 
         if let Some(send_result) = result {
             if let Some(queue) = &send_result.message_queue {
-                println!(
-                    "Message #{:2} -> Queue {}",
-                    i,
-                    queue.queue_id()
-                );
+                println!("Message #{:2} -> Queue {}", i, queue.queue_id());
             }
         }
     }
