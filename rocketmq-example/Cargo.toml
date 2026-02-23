@@ -44,6 +44,7 @@ rand                 = "0.8"
 rocketmq-client-rust = { path = "../rocketmq-client" }
 rocketmq-common      = { path = "../rocketmq-common" }
 rocketmq-error       = { path = "../rocketmq-error" }
+rocketmq-remoting    = { path = "../rocketmq-remoting" }
 rocketmq-rust        = { path = "../rocketmq" }
 rocketmq-tools       = { path = "../rocketmq-tools/rocketmq-admin/rocketmq-admin-core", package = "rocketmq-admin-core" }
 tokio                = { version = "1.49", features = ["full"] }
@@ -52,6 +53,10 @@ tracing              = "0.1.44"
 [[example]]
 name = "pop-consumer"
 path = "examples/consumer/pop_consumer.rs"
+
+[[example]]
+name = "consumer-cluster"
+path = "examples/consumer/consumer_cluster.rs"
 
 [[example]]
 name = "producer-simple"

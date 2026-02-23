@@ -34,6 +34,22 @@ cargo run --example <TAB>
 
 ### 消费者示例
 
+#### 集群消费者
+演示如何使用集群模式消费消息，在多个消费者实例之间实现负载均衡。
+
+**文件**：[examples/consumer/consumer_cluster.rs](examples/consumer/consumer_cluster.rs)
+
+**运行**：
+```bash
+cargo run --example consumer-cluster
+```
+
+**功能特性**：
+- 集群模式消费（默认模式）
+- 消费者实例间负载均衡
+- 并发消息处理
+- 每条消息仅被一个实例消费
+
 #### Pop 消费者
 演示如何使用 pop 消费模式并禁用客户端侧负载均衡。
 
@@ -95,6 +111,7 @@ cargo run --example my-example
 rocketmq-example/
 ├── examples/
 │   └── consumer/
+│       ├── consumer_cluster.rs
 │       └── pop_consumer.rs
 ├── Cargo.toml
 └── README.md
