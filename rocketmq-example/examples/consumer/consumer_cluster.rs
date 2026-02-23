@@ -83,31 +83,30 @@ pub async fn main() -> RocketMQResult<()> {
     // Register message listener
     if USE_CLOSURE {
         // Method 1: Using closure (simple and direct)
-        // Wrap closure using ClosureListener helper for type system compatibility
-        consumer.register_message_listener_concurrently(ClosureListener::new(
-            |msgs: &[&MessageExt], _context: &ConsumeConcurrentlyContext| {
-                for msg in msgs {
-                    info!(
-                        "[Closure] Received message [MsgId: {}, Topic: {}, Tags: {}]",
-                        msg.msg_id(),
-                        msg.topic(),
-                        msg.tags().unwrap_or_default()
-                    );
+        let listener = |msgs: &[&MessageExt], _context: &ConsumeConcurrentlyContext| {
+            for msg in msgs {
+                info!(
+                    "[Closure] Received message [MsgId: {}, Topic: {}, Tags: {}]",
+                    msg.msg_id(),
+                    msg.topic(),
+                    msg.tags().unwrap_or_default()
+                );
 
-                    if let Some(body) = msg.get_body() {
-                        match String::from_utf8(body.to_vec()) {
-                            Ok(content) => {
-                                info!("[Closure] Message content: {}", content);
-                            }
-                            Err(e) => {
-                                info!("[Closure] Failed to parse message body as UTF-8: {}", e);
-                            }
+                if let Some(body) = msg.get_body() {
+                    match String::from_utf8(body.to_vec()) {
+                        Ok(content) => {
+                            info!("[Closure] Message content: {}", content);
+                        }
+                        Err(e) => {
+                            info!("[Closure] Failed to parse message body as UTF-8: {}", e);
                         }
                     }
                 }
-                Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
-            },
-        ));
+            }
+            Ok(ConsumeConcurrentlyStatus::ConsumeSuccess)
+        };
+        // Wrap closure using ClosureListener helper for type system compatibility
+        consumer.register_message_listener_concurrently(listener);
         info!("Registered message listener using closure");
     } else {
         // Method 2: Using struct implementation (recommended for production)
@@ -130,7 +129,6 @@ pub async fn main() -> RocketMQResult<()> {
 
     Ok(())
 }
-
 // ============================================================================
 // Struct-based message listener implementation
 // ============================================================================
