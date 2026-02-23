@@ -21,14 +21,12 @@
 //! - `send_with_selector_callback_timeout`: Send with selector, callback, and timeout
 //! - `send_oneway_with_selector`: One-way send with selector
 
-use std::any::Any;
 use std::sync::Arc;
 
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_client_rust::producer::send_callback::SendMessageCallback;
 use rocketmq_client_rust::producer::send_result::SendResult;
-use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_error::RocketMQResult;
@@ -81,8 +79,8 @@ async fn send_with_selector(producer: &mut DefaultMQProducer) -> RocketMQResult<
     println!("1. Send with Selector");
     println!("   Method: producer.send_with_selector(message, selector_fn, arg).await");
 
-    // Define a selector function
-    let selector = |queues: &[MessageQueue], _msg: &dyn MessageTrait, _arg: &dyn Any| -> Option<MessageQueue> {
+    // Define a selector function with concrete types
+    let selector = |queues: &[MessageQueue], _msg: &Message, _arg: &&str| -> Option<MessageQueue> {
         // Example: Select first queue (simple selection)
         queues.first().cloned()
 
@@ -99,7 +97,7 @@ async fn send_with_selector(producer: &mut DefaultMQProducer) -> RocketMQResult<
         .body("Send with selector message")
         .build()?;
 
-    let arg = "selector-arg"; // Can be any type implementing Any
+    let arg = "selector-arg";
 
     match producer.send_with_selector(message, selector, arg).await? {
         Some(result) => println!("   Result: {:?}", result),
@@ -118,9 +116,8 @@ async fn send_with_selector_timeout(producer: &mut DefaultMQProducer) -> RocketM
     println!("   Method: producer.send_with_selector_timeout(message, selector_fn, arg, timeout_ms).await");
     println!("   Timeout: {}ms", TIMEOUT_MS);
 
-    let selector = |queues: &[MessageQueue], _msg: &dyn MessageTrait, _arg: &dyn Any| -> Option<MessageQueue> {
-        queues.first().cloned()
-    };
+    let selector =
+        |queues: &[MessageQueue], _msg: &Message, _arg: &&str| -> Option<MessageQueue> { queues.first().cloned() };
 
     let message = Message::builder()
         .topic(TOPIC)
@@ -149,9 +146,8 @@ async fn send_with_selector_callback(producer: &mut DefaultMQProducer) -> Rocket
     println!("3. Send with Selector and Callback");
     println!("   Method: producer.send_with_selector_callback(message, selector_fn, arg, callback_fn).await");
 
-    let selector = |queues: &[MessageQueue], _msg: &dyn MessageTrait, _arg: &dyn Any| -> Option<MessageQueue> {
-        queues.first().cloned()
-    };
+    let selector =
+        |queues: &[MessageQueue], _msg: &Message, _arg: &&str| -> Option<MessageQueue> { queues.first().cloned() };
 
     let message = Message::builder()
         .topic(TOPIC)
@@ -188,9 +184,8 @@ async fn send_with_selector_callback_timeout(producer: &mut DefaultMQProducer) -
     );
     println!("   Timeout: {}ms", TIMEOUT_MS);
 
-    let selector = |queues: &[MessageQueue], _msg: &dyn MessageTrait, _arg: &dyn Any| -> Option<MessageQueue> {
-        queues.first().cloned()
-    };
+    let selector =
+        |queues: &[MessageQueue], _msg: &Message, _arg: &&str| -> Option<MessageQueue> { queues.first().cloned() };
 
     let message = Message::builder()
         .topic(TOPIC)
@@ -223,9 +218,8 @@ async fn send_oneway_with_selector(producer: &mut DefaultMQProducer) -> RocketMQ
     println!("5. One-way Send with Selector");
     println!("   Method: producer.send_oneway_with_selector(message, selector_fn, arg).await");
 
-    let selector = |queues: &[MessageQueue], _msg: &dyn MessageTrait, _arg: &dyn Any| -> Option<MessageQueue> {
-        queues.first().cloned()
-    };
+    let selector =
+        |queues: &[MessageQueue], _msg: &Message, _arg: &&str| -> Option<MessageQueue> { queues.first().cloned() };
 
     let message = Message::builder()
         .topic(TOPIC)
