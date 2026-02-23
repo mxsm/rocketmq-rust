@@ -20,6 +20,7 @@ use cheetah_string::CheetahString;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_common::common::message::message_single::Message;
 
 #[tokio::test]
 async fn test_send_oneway_compiles() {
@@ -73,11 +74,9 @@ async fn test_send_oneway_with_selector_compiles() {
         .build()
         .unwrap();
 
-    let selector = |queues: &[_], _: &dyn rocketmq_common::common::message::MessageTrait, _: &dyn std::any::Any| {
-        queues.first().cloned()
-    };
+    let selector = |queues: &[_], _msg: &Message, _arg: &i32| queues.first().cloned();
 
-    let _ = producer.send_oneway_with_selector(msg, selector, "arg").await;
+    let _ = producer.send_oneway_with_selector(msg, selector, 1).await;
 }
 
 #[test]

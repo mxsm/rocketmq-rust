@@ -78,7 +78,6 @@ use crate::latency::resolver::Resolver;
 use crate::latency::service_detector::ServiceDetector;
 use crate::producer::default_mq_producer::ProducerConfig;
 use crate::producer::local_transaction_state::LocalTransactionState;
-use crate::producer::message_queue_selector::MessageQueueSelectorFn;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInner;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInnerImpl;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
@@ -554,17 +553,18 @@ impl DefaultMQProducerImpl {
         .await
     }
 
-    pub async fn send_with_selector_callback_timeout<M, T>(
+    pub async fn send_with_selector_callback_timeout<M, S, T>(
         &mut self,
         msg: M,
-        selector: MessageQueueSelectorFn,
+        selector: S,
         arg: T,
         send_callback: Option<SendMessageCallback>,
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        T: std::any::Any + Sync + Send,
+        S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
+        T: Send + Sync + 'static,
     {
         let begin_start_time = Instant::now();
         let mut producer_impl = self
@@ -606,15 +606,16 @@ impl DefaultMQProducerImpl {
             .await
     }
 
-    pub async fn send_oneway_with_selector<M, T>(
+    pub async fn send_oneway_with_selector<M, S, T>(
         &mut self,
         msg: M,
-        selector: MessageQueueSelectorFn,
+        selector: S,
         arg: T,
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
-        T: std::any::Any + Sync + Send,
+        S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
+        T: Send + Sync,
     {
         self.send_select_impl(
             msg,
@@ -628,10 +629,10 @@ impl DefaultMQProducerImpl {
         Ok(())
     }
 
-    pub async fn send_select_impl<M, T>(
+    pub async fn send_select_impl<M, S, T>(
         &mut self,
         mut msg: M,
-        selector: MessageQueueSelectorFn,
+        selector: S,
         arg: T,
         communication_mode: CommunicationMode,
         send_message_callback: Option<SendMessageCallback>,
@@ -639,7 +640,8 @@ impl DefaultMQProducerImpl {
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
-        T: std::any::Any + Sync + Send,
+        S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
+        T: Send + Sync,
     {
         let begin_start_time = Instant::now();
         self.make_sure_state_ok()?;
@@ -1562,16 +1564,17 @@ impl DefaultMQProducerImpl {
         Ok(())
     }
 
-    pub async fn invoke_message_queue_selector<M, T>(
+    pub async fn invoke_message_queue_selector<M, S, T>(
         &mut self,
         msg: &M,
-        selector: MessageQueueSelectorFn,
+        selector: S,
         arg: &T,
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<MessageQueue>
     where
         M: MessageTrait,
-        T: std::any::Any + Send,
+        S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
+        T: Send,
     {
         let begin_start_time = Instant::now();
         self.make_sure_state_ok()?;
@@ -1609,16 +1612,17 @@ impl DefaultMQProducerImpl {
         Err(mq_client_err!("select message queue return null."))
     }
 
-    pub async fn send_with_selector_timeout<M, T>(
+    pub async fn send_with_selector_timeout<M, S, T>(
         &mut self,
         msg: M,
-        selector: MessageQueueSelectorFn,
+        selector: S,
         arg: T,
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
-        T: std::any::Any + Sync + Send,
+        S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync,
+        T: Send + Sync,
     {
         self.send_select_impl(msg, selector, arg, CommunicationMode::Sync, None, timeout)
             .await
@@ -1646,8 +1650,8 @@ impl DefaultMQProducerImpl {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<Box<dyn MessageTrait + Send>>
     where
-        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue> + Send + Sync + 'static,
-        T: std::any::Any + Sync + Send,
+        S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
+        T: Send + Sync,
         M: MessageTrait + Send + Sync,
     {
         let begin_timestamp = Instant::now();
@@ -1678,7 +1682,7 @@ impl DefaultMQProducerImpl {
         let _ = self
             .send_select_impl(
                 msg,
-                Arc::new(selector),
+                selector,
                 arg,
                 CommunicationMode::Async,
                 Some(Arc::new(send_callback)),
@@ -1700,8 +1704,8 @@ impl DefaultMQProducerImpl {
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        S: Fn(&[MessageQueue], &dyn MessageTrait, &dyn std::any::Any) -> Option<MessageQueue> + Send + Sync + 'static,
-        T: std::any::Any + Sync + Send,
+        S: Fn(&[MessageQueue], &M, &T) -> Option<MessageQueue> + Send + Sync + 'static,
+        T: Send + Sync,
         M: MessageTrait + Send + Sync,
     {
         let begin_timestamp = Instant::now();
@@ -1734,7 +1738,7 @@ impl DefaultMQProducerImpl {
         let _ = self
             .send_select_impl(
                 msg,
-                Arc::new(selector),
+                selector,
                 arg,
                 CommunicationMode::Async,
                 Some(Arc::new(send_callback)),
