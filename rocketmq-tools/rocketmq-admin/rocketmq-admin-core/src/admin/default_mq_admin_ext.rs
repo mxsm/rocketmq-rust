@@ -1267,10 +1267,12 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn get_in_sync_state_data(
         &self,
-        _controller_address: CheetahString,
-        _brokers: Vec<CheetahString>,
+        controller_address: CheetahString,
+        brokers: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<BrokerReplicasInfo> {
-        unimplemented!("get_in_sync_state_data not implemented yet")
+        self.default_mqadmin_ext_impl
+            .get_in_sync_state_data(controller_address, brokers)
+            .await
     }
 
     async fn get_broker_epoch_cache(

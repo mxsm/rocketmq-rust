@@ -21,6 +21,7 @@ mod connection_commands;
 mod consumer_commands;
 mod controller_commands;
 mod export_commands;
+mod ha_commands;
 mod namesrv_commands;
 mod target;
 mod topic_commands;
@@ -110,6 +111,11 @@ pub enum Commands {
     Export(export_commands::ExportCommands),
 
     #[command(subcommand)]
+    #[command(about = "HA commands")]
+    #[command(name = "ha")]
+    HA(ha_commands::HACommands),
+
+    #[command(subcommand)]
     #[command(about = "Name server commands")]
     #[command(name = "nameserver")]
     NameServer(namesrv_commands::NameServerCommands),
@@ -132,6 +138,7 @@ impl CommandExecute for Commands {
             Commands::Consumer(value) => value.execute(rpc_hook).await,
             Commands::Controller(value) => value.execute(rpc_hook).await,
             Commands::Export(value) => value.execute(rpc_hook).await,
+            Commands::HA(value) => value.execute(rpc_hook).await,
             Commands::NameServer(value) => value.execute(rpc_hook).await,
             Commands::Topic(value) => value.execute(rpc_hook).await,
             Commands::Show(value) => value.execute(rpc_hook).await,
@@ -337,6 +344,11 @@ impl CommandExecute for ClassificationTablePrint {
                 category: "Export",
                 command: "exportMetadata",
                 remark: "Export metadata.",
+            },
+            Command {
+                category: "HA",
+                command: "getSyncStateSet",
+                remark: "Fetch sync state set for target brokers.",
             },
             Command {
                 category: "NameServer",
