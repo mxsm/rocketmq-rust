@@ -38,11 +38,12 @@ use rocketmq_common::common::message::MessageTrait;
 /// # Example
 ///
 /// ```no_run
-/// use rocketmq_client::producer::MessageQueueSelector;
-/// use rocketmq_common::common::message::MessageQueue;
+/// use rocketmq_client_rust::producer::message_queue_selector::MessageQueueSelector;
+/// use rocketmq_common::common::message::message_queue::MessageQueue;
+/// use rocketmq_common::common::message::message_single::Message;
 ///
 /// // Closures automatically implement MessageQueueSelector
-/// let selector = |mqs: &[MessageQueue], _msg, order_id: &i64| {
+/// let selector = |mqs: &[MessageQueue], _msg: &Message, order_id: &i64| {
 ///     let index = (*order_id % mqs.len() as i64) as usize;
 ///     mqs.get(index).cloned()
 /// };
@@ -95,7 +96,7 @@ where
 /// # Example
 ///
 /// ```no_run
-/// use rocketmq_client::producer::MessageQueueSelectorFn;
+/// use rocketmq_client_rust::producer::message_queue_selector::MessageQueueSelectorFn;
 /// use std::sync::Arc;
 ///
 /// let selector: MessageQueueSelectorFn = Arc::new(|mqs, _msg, arg| {
