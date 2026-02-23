@@ -30,6 +30,13 @@ impl ControllableOffset {
         }
     }
 
+    pub fn new_frozen(value: i64) -> Self {
+        Self {
+            value: Arc::new(AtomicI64::new(value)),
+            allow_to_update: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
     pub fn new_atomic(value: AtomicI64) -> Self {
         Self {
             value: Arc::new(value),
