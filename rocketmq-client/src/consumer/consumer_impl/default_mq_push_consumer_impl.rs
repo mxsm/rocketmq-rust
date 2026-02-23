@@ -273,13 +273,13 @@ impl DefaultMQPushConsumerImpl {
                             None,
                         )));
                     } else if message_listener.message_listener_orderly.is_some() {
-                        let (listener, _) = message_listener.message_listener_orderly.clone().unwrap();
+                        let listener = message_listener.message_listener_orderly.clone().unwrap();
                         self.consume_orderly = true;
                         let consume_message_orderly_service = ArcMut::new(ConsumeMessageOrderlyService::new(
                             self.client_config.clone(),
                             self.consumer_config.clone(),
                             self.consumer_config.consumer_group.clone(),
-                            listener.clone().expect("listener is None"),
+                            listener.clone(),
                             self.default_mqpush_consumer_impl.clone(),
                         ));
                         self.consume_message_service = Some(ArcMut::new(ConsumeMessageServiceGeneral::new(
@@ -291,7 +291,7 @@ impl DefaultMQPushConsumerImpl {
                             self.client_config.clone(),
                             self.consumer_config.clone(),
                             self.consumer_config.consumer_group.clone(),
-                            listener.expect("listener is None"),
+                            listener,
                             self.default_mqpush_consumer_impl.clone(),
                         ));
                         self.consume_message_pop_service = Some(ArcMut::new(ConsumeMessagePopServiceGeneral::new(

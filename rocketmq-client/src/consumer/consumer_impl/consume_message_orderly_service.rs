@@ -47,7 +47,7 @@ use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
 use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 use crate::consumer::listener::consume_return_type::ConsumeReturnType;
-use crate::consumer::listener::message_listener_orderly::ArcBoxMessageListenerOrderly;
+use crate::consumer::listener::message_listener_orderly::ArcMessageListenerOrderly;
 use crate::consumer::message_queue_lock::MessageQueueLock;
 use crate::consumer::mq_consumer_inner::MQConsumerInnerLocal;
 use crate::hook::consume_message_context::ConsumeMessageContext;
@@ -65,7 +65,7 @@ pub struct ConsumeMessageOrderlyService {
     pub(crate) client_config: ArcMut<ClientConfig>,
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     pub(crate) consumer_group: CheetahString,
-    pub(crate) message_listener: ArcBoxMessageListenerOrderly,
+    pub(crate) message_listener: ArcMessageListenerOrderly,
     pub(crate) stopped: Arc<AtomicBool>,
     pub(crate) global_lock: Arc<RocketMQTokioMutex<()>>,
     pub(crate) message_queue_lock: MessageQueueLock,
@@ -78,7 +78,7 @@ impl ConsumeMessageOrderlyService {
         client_config: ArcMut<ClientConfig>,
         consumer_config: ArcMut<ConsumerConfig>,
         consumer_group: CheetahString,
-        message_listener: ArcBoxMessageListenerOrderly,
+        message_listener: ArcMessageListenerOrderly,
         default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
     ) -> Self {
         Self {
