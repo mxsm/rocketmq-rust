@@ -26,8 +26,9 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::body::cm_result::CMResult;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
-use rocketmq_runtime::RocketMQRuntime;
 use rocketmq_rust::ArcMut;
+use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -50,7 +51,14 @@ pub struct ConsumeMessageConcurrentlyService {
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     pub(crate) consumer_group: CheetahString,
     pub(crate) message_listener: ArcMessageListenerConcurrently,
-    pub(crate) consume_runtime: RocketMQRuntime,
+    /// Semaphore used for two purposes:
+    ///   1. Backpressure: limits the number of concurrently executing consume tasks to
+    ///      `consume_thread_max`. New tasks that cannot acquire a permit are retried after 5 s.
+    ///   2. Graceful shutdown: `shutdown()` acquires all permits, which is only possible once every
+    ///      in-flight task has released its permit.
+    consume_semaphore: Arc<Semaphore>,
+    /// Token cancelled by `shutdown()` to prevent new task submissions.
+    shutdown_token: CancellationToken,
 }
 
 impl ConsumeMessageConcurrentlyService {
@@ -61,15 +69,15 @@ impl ConsumeMessageConcurrentlyService {
         message_listener: ArcMessageListenerConcurrently,
         default_mqpush_consumer_impl: Option<ArcMut<DefaultMQPushConsumerImpl>>,
     ) -> Self {
-        let consume_thread = consumer_config.consume_thread_max;
-        let consumer_group_tag = format!("{}_{}", "ConsumeMessageThread_", consumer_group);
+        let max_concurrent = consumer_config.consume_thread_max as usize;
         Self {
             default_mqpush_consumer_impl,
             client_config,
             consumer_config,
             consumer_group,
             message_listener,
-            consume_runtime: RocketMQRuntime::new_multi(consume_thread as usize, consumer_group_tag.as_str()),
+            consume_semaphore: Arc::new(Semaphore::new(max_concurrent)),
+            shutdown_token: CancellationToken::new(),
         }
     }
 }
@@ -116,33 +124,42 @@ impl ConsumeMessageConcurrentlyService {
         match self.consumer_config.message_model {
             MessageModel::Broadcasting => {
                 for i in ((ack_index + 1) as usize)..consume_request.msgs.len() {
-                    warn!("BROADCASTING, the message consume failed, drop it");
+                    let msg = consume_request.msgs[i].as_ref();
+                    warn!(
+                        "BROADCASTING, the message consume failed, drop it, topic={}, msgId={}, queueOffset={}",
+                        msg.topic(),
+                        msg.msg_id(),
+                        msg.queue_offset()
+                    );
                 }
             }
             MessageModel::Clustering => {
-                let len = consume_request.msgs.len();
-                let mut msg_back_failed = Vec::with_capacity(len);
-                let mut msg_back_success = Vec::with_capacity(len);
-                let failed_msgs = consume_request.msgs.split_off((ack_index + 1) as usize);
-                for mut msg in failed_msgs {
+                let mut msg_back_failed = Vec::new();
+                let pending = consume_request.msgs.split_off((ack_index + 1) as usize);
+                for mut msg in pending {
                     if !consume_request.process_queue.contains_message(&msg).await {
-                        /*info!("Message is not found in its process queue; skip send-back-procedure, topic={}, "
-                            + "brokerName={}, queueId={}, queueOffset={}", msg.get_topic(), msg.get_broker_name(),
-                        msg.getQueueId(), msg.getQueueOffset());*/
+                        info!(
+                            "Message is not found in its process queue; skip send-back-procedure, topic={}, \
+                             brokerName={}, queueId={}, queueOffset={}",
+                            msg.topic(),
+                            msg.broker_name(),
+                            msg.queue_id(),
+                            msg.queue_offset()
+                        );
+                        consume_request.msgs.push(msg);
                         continue;
                     }
 
-                    let result = self.send_message_back(&mut msg, context).await;
-                    if !result {
-                        let reconsume_times = msg.reconsume_times() + 1;
-                        msg.set_reconsume_times(reconsume_times);
-                        msg_back_failed.push(msg);
+                    let sent = self.send_message_back(&mut msg, context).await;
+                    if sent {
+                        consume_request.msgs.push(msg);
                     } else {
-                        msg_back_success.push(msg);
+                        let times = msg.reconsume_times() + 1;
+                        msg.set_reconsume_times(times);
+                        msg_back_failed.push(msg);
                     }
                 }
                 if !msg_back_failed.is_empty() {
-                    consume_request.msgs.append(&mut msg_back_success);
                     self.submit_consume_request_later(
                         msg_back_failed,
                         this,
@@ -174,11 +191,9 @@ impl ConsumeMessageConcurrentlyService {
         process_queue: Arc<ProcessQueue>,
         message_queue: MessageQueue,
     ) {
-        self.consume_runtime.get_handle().spawn(async move {
+        tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(5)).await;
-            let this_ = this.clone();
-
-            this.submit_consume_request(this_, msgs, process_queue, message_queue, true)
+            this.submit_consume_request(this.clone(), msgs, process_queue, message_queue, true)
                 .await;
         });
     }
@@ -204,7 +219,7 @@ impl ConsumeMessageConcurrentlyService {
 
 impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
     fn start(&mut self, mut this: ArcMut<Self>) {
-        self.consume_runtime.get_handle().spawn(async move {
+        tokio::spawn(async move {
             let timeout = this.consumer_config.consume_timeout;
             let mut interval = tokio::time::interval(Duration::from_secs(timeout * 60));
             interval.tick().await;
@@ -216,7 +231,28 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
     }
 
     async fn shutdown(&mut self, await_terminate_millis: u64) {
-        // todo!()
+        self.shutdown_token.cancel();
+        let max = self.consumer_config.consume_thread_max;
+        match tokio::time::timeout(
+            Duration::from_millis(await_terminate_millis),
+            Arc::clone(&self.consume_semaphore).acquire_many_owned(max),
+        )
+        .await
+        {
+            Ok(Ok(_permits)) => {
+                info!("ConsumeMessageConcurrentlyService shutdown gracefully");
+            }
+            Ok(Err(_closed)) => {
+                // Semaphore was closed externally; treat as clean.
+            }
+            Err(_elapsed) => {
+                warn!(
+                    "ConsumeMessageConcurrentlyService shutdown timed out after {}ms; some consume tasks may still be \
+                     running",
+                    await_terminate_millis
+                );
+            }
+        }
     }
 
     async fn consume_message_directly(
@@ -228,7 +264,6 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
         msg.broker_name = broker_name.unwrap_or_default();
         let mq = MessageQueue::from_parts(msg.topic().clone(), msg.broker_name.clone(), msg.queue_id());
         let mut msgs = vec![ArcMut::new(msg)];
-        let context = ConsumeConcurrentlyContext::new(mq);
         self.default_mqpush_consumer_impl
             .as_ref()
             .unwrap()
@@ -237,8 +272,20 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
 
         let begin_timestamp = Instant::now();
 
-        let msgs_refs: Vec<&MessageExt> = msgs.iter().map(|msg| msg.as_ref()).collect();
-        let status = self.message_listener.consume_message(&msgs_refs, &context);
+        let listener = self.message_listener.clone();
+        let status = tokio::task::spawn_blocking(move || {
+            let context = ConsumeConcurrentlyContext::new(mq);
+            let msgs_refs: Vec<&MessageExt> = msgs.iter().map(|m| m.as_ref()).collect();
+            listener.consume_message(&msgs_refs, &context)
+        })
+        .await
+        .unwrap_or_else(|join_err| {
+            error!("consume_message_directly task panicked: {:?}", join_err);
+            Err(rocketmq_error::RocketMQError::illegal_argument(format!(
+                "consume_message_directly task panicked: {join_err:?}"
+            )))
+        });
+
         let mut result = ConsumeMessageDirectlyResult::default();
         result.set_order(false);
         result.set_auto_commit(true);
@@ -269,38 +316,29 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
         message_queue: MessageQueue,
         dispatch_to_consume: bool,
     ) {
+        if self.shutdown_token.is_cancelled() {
+            warn!(
+                "ConsumeMessageConcurrentlyService is shutting down; dropping {} message(s) for queue {}",
+                msgs.len(),
+                message_queue
+            );
+            return;
+        }
+
         let consume_batch_size = self.consumer_config.consume_message_batch_max_size;
         if msgs.len() <= consume_batch_size as usize {
-            let mut consume_request = ConsumeRequest {
-                msgs,
-                message_listener: self.message_listener.clone(),
-                process_queue,
-                message_queue,
-                dispatch_to_consume,
-                consumer_group: self.consumer_group.clone(),
-                default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
-            };
-
-            self.consume_runtime
-                .get_handle()
-                .spawn(async move { consume_request.run(this).await });
+            self.spawn_consume_task(this, msgs, process_queue, message_queue, dispatch_to_consume);
         } else {
             msgs.chunks(consume_batch_size as usize)
-                .map(|t| t.to_vec())
-                .for_each(|msgs| {
-                    let mut consume_request = ConsumeRequest {
-                        msgs,
-                        message_listener: self.message_listener.clone(),
-                        process_queue: process_queue.clone(),
-                        message_queue: message_queue.clone(),
+                .map(|chunk| chunk.to_vec())
+                .for_each(|chunk| {
+                    self.spawn_consume_task(
+                        this.clone(),
+                        chunk,
+                        process_queue.clone(),
+                        message_queue.clone(),
                         dispatch_to_consume,
-                        consumer_group: self.consumer_group.clone(),
-                        default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
-                    };
-                    let consume_message_concurrently_service = this.clone();
-                    self.consume_runtime
-                        .get_handle()
-                        .spawn(async move { consume_request.run(consume_message_concurrently_service).await });
+                    );
                 });
         }
     }
@@ -313,6 +351,46 @@ impl ConsumeMessageServiceTrait for ConsumeMessageConcurrentlyService {
         message_queue: &MessageQueue,
     ) {
         unimplemented!("ConsumeMessageConcurrentlyService not support submit_pop_consume_request");
+    }
+}
+
+impl ConsumeMessageConcurrentlyService {
+    /// Attempts to acquire a semaphore permit and, if successful, spawns a consume task on the
+    /// current Tokio runtime.  When all `consume_thread_max` permits are in use the request is
+    /// retried after 5 s, matching the Java SDK's `RejectedExecutionException` path.
+    fn spawn_consume_task(
+        &self,
+        this: ArcMut<Self>,
+        msgs: Vec<ArcMut<MessageExt>>,
+        process_queue: Arc<ProcessQueue>,
+        message_queue: MessageQueue,
+        dispatch_to_consume: bool,
+    ) {
+        match Arc::clone(&self.consume_semaphore).try_acquire_owned() {
+            Ok(permit) => {
+                let mut consume_request = ConsumeRequest {
+                    msgs,
+                    message_listener: self.message_listener.clone(),
+                    process_queue,
+                    message_queue,
+                    dispatch_to_consume,
+                    consumer_group: self.consumer_group.clone(),
+                    default_mqpush_consumer_impl: self.default_mqpush_consumer_impl.clone(),
+                };
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    consume_request.run(this).await;
+                });
+            }
+            Err(_saturated) => {
+                warn!(
+                    "consume semaphore saturated for group {}; will retry {} message(s) in 5 s",
+                    self.consumer_group,
+                    msgs.len()
+                );
+                self.submit_consume_request_later(msgs, this, process_queue, message_queue);
+            }
+        }
     }
 }
 
@@ -335,37 +413,35 @@ impl ConsumeRequest {
             );
             return;
         }
-        let context = ConsumeConcurrentlyContext {
+        let mut context = ConsumeConcurrentlyContext {
             message_queue: self.message_queue.clone(),
             delay_level_when_next_consume: 0,
             ack_index: i32::MAX,
         };
 
         let mut default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
-        let consumer_group = self.consumer_group.clone();
-        DefaultMQPushConsumerImpl::try_reset_pop_retry_topic(&mut self.msgs, consumer_group.as_str());
-        default_mqpush_consumer_impl.reset_retry_and_namespace(&mut self.msgs, consumer_group.as_str());
+        DefaultMQPushConsumerImpl::try_reset_pop_retry_topic(&mut self.msgs, self.consumer_group.as_str());
+        default_mqpush_consumer_impl.reset_retry_and_namespace(&mut self.msgs, self.consumer_group.as_str());
 
         let mut consume_message_context = None;
 
+        let has_hook = default_mqpush_consumer_impl.has_hook();
+
         let begin_timestamp = Instant::now();
         let mut has_exception = false;
-
         let mut status = None;
 
         if !self.msgs.is_empty() {
+            let start_ts = CheetahString::from_string(get_current_millis().to_string());
             for msg in self.msgs.iter_mut() {
-                MessageAccessor::set_consume_start_time_stamp(
-                    msg.as_mut(),
-                    CheetahString::from_string(get_current_millis().to_string()),
-                );
+                MessageAccessor::set_consume_start_time_stamp(msg.as_mut(), start_ts.clone());
             }
-            if default_mqpush_consumer_impl.has_hook() {
-                let queue = self.message_queue.clone();
+
+            if has_hook {
                 consume_message_context = Some(ConsumeMessageContext {
-                    consumer_group,
+                    consumer_group: self.consumer_group.clone(),
                     msg_list: &self.msgs,
-                    mq: Some(queue),
+                    mq: Some(self.message_queue.clone()),
                     success: false,
                     status: CheetahString::new(),
                     mq_trace_context: None,
@@ -378,8 +454,43 @@ impl ConsumeRequest {
                 });
                 default_mqpush_consumer_impl.execute_hook_before(&mut consume_message_context);
             }
-            let msgs_refs: Vec<&MessageExt> = self.msgs.iter().map(|msg| msg.as_ref()).collect();
-            status = self.execute_consume_with_error_handling(&msgs_refs, &context, &mut has_exception);
+
+            let listener = self.message_listener.clone();
+            let msgs_for_blocking = self.msgs.clone();
+            let group_for_err = self.consumer_group.clone();
+
+            let (blocking_status, blocking_has_exception, returned_context) = tokio::task::spawn_blocking(move || {
+                let msgs_refs: Vec<&MessageExt> = msgs_for_blocking.iter().map(|m| m.as_ref()).collect();
+                match listener.consume_message(&msgs_refs, &context) {
+                    Ok(s) => (Some(s), false, context),
+                    Err(e) => {
+                        error!(
+                            "consumeMessage exception: {:?}, Group: {}, Msgs: {}, MQ: {}",
+                            e,
+                            group_for_err,
+                            msgs_refs.len(),
+                            context.message_queue
+                        );
+                        (None, true, context)
+                    }
+                }
+            })
+            .await
+            .unwrap_or_else(|join_err| {
+                error!(
+                    "consume_message task panicked: {:?}, Group: {}, MQ: {}",
+                    join_err, self.consumer_group, self.message_queue
+                );
+                let fallback = ConsumeConcurrentlyContext {
+                    message_queue: self.message_queue.clone(),
+                    delay_level_when_next_consume: 0,
+                    ack_index: i32::MAX,
+                };
+                (None, true, fallback)
+            });
+            context = returned_context;
+            status = blocking_status;
+            has_exception = blocking_has_exception;
         }
 
         let consume_rt = begin_timestamp.elapsed().as_millis() as u64;
@@ -390,7 +501,6 @@ impl ConsumeRequest {
             } else if s == ConsumeConcurrentlyStatus::ReconsumeLater {
                 ConsumeReturnType::Failed
             } else {
-                // Must be ConsumeSuccess
                 ConsumeReturnType::Success
             }
         } else if has_exception {
@@ -399,7 +509,7 @@ impl ConsumeRequest {
             ConsumeReturnType::ReturnNull
         };
 
-        if default_mqpush_consumer_impl.has_hook() {
+        if has_hook {
             consume_message_context.as_mut().unwrap().props.insert(
                 CheetahString::from_static_str(mix_all::CONSUME_CONTEXT_TYPE),
                 return_type.to_string().into(),
@@ -407,50 +517,35 @@ impl ConsumeRequest {
         }
 
         if status.is_none() {
+            warn!(
+                "consumeMessage return null, Group: {} Msgs: {} MQ: {}",
+                self.consumer_group,
+                self.msgs.len(),
+                self.message_queue
+            );
             status = Some(ConsumeConcurrentlyStatus::ReconsumeLater);
         }
 
-        if default_mqpush_consumer_impl.has_hook() {
+        if has_hook {
             let cmc = consume_message_context.as_mut().unwrap();
-            cmc.status = status.unwrap().to_string().into();
-            cmc.success = status.unwrap() == ConsumeConcurrentlyStatus::ConsumeSuccess;
+            let s = status.unwrap();
+            cmc.status = s.to_string().into();
+            cmc.success = s == ConsumeConcurrentlyStatus::ConsumeSuccess;
             cmc.access_channel = Some(default_mqpush_consumer_impl.client_config.access_channel);
             default_mqpush_consumer_impl.execute_hook_after(&mut consume_message_context);
         }
 
         if self.process_queue.is_dropped() {
             warn!(
-                "the message queue not be able to consume, because it's dropped. group={} {}",
-                self.consumer_group, self.message_queue,
+                "processQueue is dropped without process consume result. messageQueue={}, msgs={}",
+                self.message_queue,
+                self.msgs.len()
             );
         } else {
             let this = consume_message_concurrently_service.clone();
-
             consume_message_concurrently_service
                 .process_consume_result(this, status.unwrap(), &context, self)
                 .await;
-        }
-    }
-
-    fn execute_consume_with_error_handling(
-        &self,
-        msgs: &[&MessageExt],
-        context: &ConsumeConcurrentlyContext,
-        has_exception: &mut bool,
-    ) -> Option<ConsumeConcurrentlyStatus> {
-        match self.message_listener.consume_message(msgs, context) {
-            Ok(status) => Some(status),
-            Err(e) => {
-                *has_exception = true;
-                error!(
-                    "consumeMessage exception: {:?}, Group: {}, Msgs: {}, MQ: {}",
-                    e,
-                    self.consumer_group,
-                    self.msgs.len(),
-                    self.message_queue
-                );
-                None
-            }
         }
     }
 }
