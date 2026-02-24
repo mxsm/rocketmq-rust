@@ -40,7 +40,7 @@ use crate::consumer::mq_push_consumer::MQPushConsumer;
 use crate::consumer::rebalance_strategy::allocate_message_queue_averagely::AllocateMessageQueueAveragely;
 use crate::trace::async_trace_dispatcher::AsyncTraceDispatcher;
 use crate::trace::hook::consume_message_trace_hook_impl::ConsumeMessageTraceHookImpl;
-use crate::trace::trace_dispatcher::TraceDispatcher;
+use crate::trace::trace_dispatcher::ArcTraceDispatcher;
 use crate::trace::trace_dispatcher::Type;
 
 #[derive(Clone)]
@@ -77,7 +77,7 @@ pub struct ConsumerConfig {
     pub(crate) pop_invisible_time: u64,
     pub(crate) pop_batch_nums: u32,
     pub(crate) await_termination_millis_when_shutdown: u64,
-    pub(crate) trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>,
+    pub(crate) trace_dispatcher: Option<ArcTraceDispatcher>,
     pub(crate) client_rebalance: bool,
     pub(crate) rpc_hook: Option<Arc<dyn RPCHook>>,
 }
@@ -199,7 +199,7 @@ impl ConsumerConfig {
         self.await_termination_millis_when_shutdown
     }
 
-    pub fn trace_dispatcher(&self) -> &Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>> {
+    pub fn trace_dispatcher(&self) -> &Option<ArcTraceDispatcher> {
         &self.trace_dispatcher
     }
 
@@ -337,7 +337,7 @@ impl ConsumerConfig {
         self.await_termination_millis_when_shutdown = await_termination_millis_when_shutdown;
     }
 
-    pub fn set_trace_dispatcher(&mut self, trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>) {
+    pub fn set_trace_dispatcher(&mut self, trace_dispatcher: Option<ArcTraceDispatcher>) {
         self.trace_dispatcher = trace_dispatcher;
     }
 
@@ -436,7 +436,7 @@ impl MQPushConsumer for DefaultMQPushConsumer {
             );
             dispatcher.set_host_consumer(self.default_mqpush_consumer_impl.as_ref().unwrap().clone());
             dispatcher.set_namespace_v2(self.client_config.namespace_v2.clone());
-            let dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>> = Arc::new(Box::new(dispatcher));
+            let dispatcher: ArcTraceDispatcher = Arc::new(dispatcher);
             self.consumer_config.trace_dispatcher = Some(dispatcher.clone());
             let default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_mut().unwrap();
             default_mqpush_consumer_impl

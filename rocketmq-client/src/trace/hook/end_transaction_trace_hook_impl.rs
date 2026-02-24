@@ -12,18 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use crate::hook::end_transaction_context::EndTransactionContext;
 use crate::hook::end_transaction_hook::EndTransactionHook;
-use crate::trace::trace_dispatcher::TraceDispatcher;
+use crate::trace::trace_dispatcher::ArcTraceDispatcher;
 
 pub struct EndTransactionTraceHookImpl {
-    trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>,
+    trace_dispatcher: ArcTraceDispatcher,
 }
 
 impl EndTransactionTraceHookImpl {
-    pub fn new(trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>) -> Self {
+    pub fn new(trace_dispatcher: ArcTraceDispatcher) -> Self {
         Self { trace_dispatcher }
     }
 }

@@ -47,7 +47,7 @@ use crate::producer::transaction_send_result::TransactionSendResult;
 use crate::trace::async_trace_dispatcher::AsyncTraceDispatcher;
 use crate::trace::hook::end_transaction_trace_hook_impl::EndTransactionTraceHookImpl;
 use crate::trace::hook::send_message_trace_hook_impl::SendMessageTraceHookImpl;
-use crate::trace::trace_dispatcher::TraceDispatcher;
+use crate::trace::trace_dispatcher::ArcTraceDispatcher;
 use crate::trace::trace_dispatcher::Type;
 
 #[derive(Clone)]
@@ -85,7 +85,7 @@ pub struct ProducerConfig {
     retry_another_broker_when_not_store_ok: bool,
     /// Maximum allowed message size in bytes.
     max_message_size: u32,
-    trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>,
+    trace_dispatcher: Option<ArcTraceDispatcher>,
     /// Switch flag instance for automatic batch message
     auto_batch: bool,
     /// Maximum hold time of accumulator in milliseconds.
@@ -163,7 +163,7 @@ impl ProducerConfig {
         self.max_message_size
     }
 
-    pub fn trace_dispatcher(&self) -> Option<&Arc<Box<dyn TraceDispatcher + Send + Sync>>> {
+    pub fn trace_dispatcher(&self) -> Option<&ArcTraceDispatcher> {
         self.trace_dispatcher.as_ref()
     }
 
@@ -343,7 +343,7 @@ impl DefaultMQProducer {
     }
 
     #[inline]
-    pub fn trace_dispatcher(&self) -> Option<&Arc<Box<dyn TraceDispatcher + Send + Sync>>> {
+    pub fn trace_dispatcher(&self) -> Option<&ArcTraceDispatcher> {
         self.producer_config.trace_dispatcher()
     }
 
@@ -462,7 +462,7 @@ impl DefaultMQProducer {
         self.producer_config.max_message_size = max_message_size;
     }
 
-    pub fn set_trace_dispatcher(&mut self, trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>) {
+    pub fn set_trace_dispatcher(&mut self, trace_dispatcher: ArcTraceDispatcher) {
         self.producer_config.trace_dispatcher = Some(trace_dispatcher);
     }
 
@@ -712,7 +712,7 @@ impl MQProducer for DefaultMQProducer {
             );
             dispatcher.set_host_producer(default_mqproducer_impl.clone());
             dispatcher.set_namespace_v2(self.client_config.namespace_v2.clone());
-            let dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>> = Arc::new(Box::new(dispatcher));
+            let dispatcher: ArcTraceDispatcher = Arc::new(dispatcher);
             self.producer_config.trace_dispatcher = Some(dispatcher.clone());
             default_mqproducer_impl
                 .register_send_message_hook(Arc::new(SendMessageTraceHookImpl::new(dispatcher.clone())));

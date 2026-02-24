@@ -26,7 +26,7 @@ use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrate
 use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
 use crate::consumer::message_queue_listener::ArcMessageQueueListener;
-use crate::trace::trace_dispatcher::TraceDispatcher;
+use crate::trace::trace_dispatcher::ArcTraceDispatcher;
 
 #[derive(Default)]
 pub struct DefaultMQPushConsumerBuilder {
@@ -61,7 +61,7 @@ pub struct DefaultMQPushConsumerBuilder {
     pop_invisible_time: Option<u64>,
     pop_batch_nums: Option<u32>,
     await_termination_millis_when_shutdown: Option<u64>,
-    trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>,
+    trace_dispatcher: Option<ArcTraceDispatcher>,
     client_rebalance: Option<bool>,
     rpc_hook: Option<Arc<dyn RPCHook>>,
 }
@@ -253,7 +253,7 @@ impl DefaultMQPushConsumerBuilder {
     }
 
     #[inline]
-    pub fn trace_dispatcher(mut self, trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>) -> Self {
+    pub fn trace_dispatcher(mut self, trace_dispatcher: Option<ArcTraceDispatcher>) -> Self {
         self.trace_dispatcher = trace_dispatcher;
         self
     }
