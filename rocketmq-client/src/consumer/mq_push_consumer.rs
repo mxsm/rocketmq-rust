@@ -13,12 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_ext::MessageExt;
 
-use crate::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
-use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
-use crate::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
-use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 use crate::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
 use crate::consumer::listener::message_listener_orderly::MessageListenerOrderly;
 use crate::consumer::message_selector::MessageSelector;
