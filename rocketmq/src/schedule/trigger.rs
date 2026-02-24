@@ -446,9 +446,6 @@ impl Trigger for DelayedIntervalTrigger {
 
 // Helper functions for time conversion
 fn system_time_to_datetime(system_time: SystemTime) -> DateTime<Utc> {
-    /*let duration = system_time.duration_since(UNIX_EPOCH).unwrap();
-    let naive = NaiveDateTime::from_timestamp(duration.as_secs() as i64, duration.subsec_nanos());
-    DateTime::from_utc(naive, Utc)*/
     DateTime::from(system_time)
 }
 
