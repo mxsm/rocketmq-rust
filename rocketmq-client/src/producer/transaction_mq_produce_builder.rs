@@ -28,7 +28,7 @@ use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerI
 use crate::producer::transaction_listener::TransactionListener;
 use crate::producer::transaction_mq_producer::TransactionMQProducer;
 use crate::producer::transaction_mq_producer::TransactionProducerConfig;
-use crate::trace::trace_dispatcher::TraceDispatcher;
+use crate::trace::trace_dispatcher::ArcTraceDispatcher;
 
 #[derive(Default)]
 pub struct TransactionMQProducerBuilder {
@@ -45,7 +45,7 @@ pub struct TransactionMQProducerBuilder {
     retry_times_when_send_async_failed: Option<u32>,
     retry_another_broker_when_not_store_ok: Option<bool>,
     max_message_size: Option<u32>,
-    trace_dispatcher: Option<Arc<Box<dyn TraceDispatcher + Send + Sync>>>,
+    trace_dispatcher: Option<ArcTraceDispatcher>,
     auto_batch: Option<bool>,
     produce_accumulator: Option<ProduceAccumulator>,
     enable_backpressure_for_async_mode: Option<bool>,
@@ -165,7 +165,7 @@ impl TransactionMQProducerBuilder {
         self
     }
 
-    pub fn trace_dispatcher(mut self, trace_dispatcher: Arc<Box<dyn TraceDispatcher + Send + Sync>>) -> Self {
+    pub fn trace_dispatcher(mut self, trace_dispatcher: ArcTraceDispatcher) -> Self {
         self.trace_dispatcher = Some(trace_dispatcher);
         self
     }
