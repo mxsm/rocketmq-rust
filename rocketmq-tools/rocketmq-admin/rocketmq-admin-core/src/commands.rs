@@ -14,17 +14,17 @@
 
 pub mod command_util;
 
-mod auth_commands;
-mod broker_commands;
-mod cluster_commands;
-mod connection_commands;
-mod consumer_commands;
-mod controller_commands;
-mod export_commands;
-mod ha_commands;
-mod namesrv_commands;
+mod auth;
+mod broker;
+mod cluster;
+mod connection;
+mod consumer;
+mod controller;
+mod export;
+mod ha;
+mod namesrv;
 mod target;
-mod topic_commands;
+mod topic;
 
 use std::sync::Arc;
 
@@ -78,51 +78,51 @@ pub enum Commands {
     #[command(subcommand)]
     #[command(about = "Auth commands")]
     #[command(name = "auth")]
-    Auth(auth_commands::AuthCommands),
+    Auth(auth::AuthCommands),
 
     #[command(subcommand)]
     #[command(about = "Broker commands")]
     #[command(name = "broker")]
-    Broker(broker_commands::BrokerCommands),
+    Broker(broker::BrokerCommands),
 
     #[command(subcommand)]
     #[command(about = "Cluster commands")]
     #[command(name = "cluster")]
-    Cluster(cluster_commands::ClusterCommands),
+    Cluster(cluster::ClusterCommands),
 
     #[command(subcommand)]
     #[command(about = "Connection commands")]
     #[command(name = "connection")]
-    Connection(connection_commands::ConnectionCommands),
+    Connection(connection::ConnectionCommands),
 
     #[command(subcommand)]
     #[command(about = "Consumer commands")]
     #[command(name = "consumer")]
-    Consumer(consumer_commands::ConsumerCommands),
+    Consumer(consumer::ConsumerCommands),
 
     #[command(subcommand)]
     #[command(about = "Controller commands")]
     #[command(name = "controller")]
-    Controller(controller_commands::ControllerCommands),
+    Controller(controller::ControllerCommands),
 
     #[command(subcommand)]
     #[command(about = "Export commands")]
     #[command(name = "export")]
-    Export(export_commands::ExportCommands),
+    Export(export::ExportCommands),
 
     #[command(subcommand)]
     #[command(about = "HA commands")]
     #[command(name = "ha")]
-    HA(ha_commands::HACommands),
+    HA(ha::HACommands),
 
     #[command(subcommand)]
     #[command(about = "Name server commands")]
     #[command(name = "nameserver")]
-    NameServer(namesrv_commands::NameServerCommands),
+    NameServer(namesrv::NameServerCommands),
 
     #[command(subcommand)]
     #[command(about = "Topic commands")]
-    Topic(topic_commands::TopicCommands),
+    Topic(topic::TopicCommands),
 
     #[command(about = "Category commands show")]
     Show(ClassificationTablePrint),

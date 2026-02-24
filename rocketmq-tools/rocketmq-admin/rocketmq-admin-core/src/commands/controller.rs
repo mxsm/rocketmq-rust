@@ -23,10 +23,10 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
-use crate::commands::controller_commands::clean_broker_metadata_sub_command::CleanBrokerMetadataSubCommand;
-use crate::commands::controller_commands::get_controller_config_sub_command::GetControllerConfigSubCommand;
-use crate::commands::controller_commands::get_controller_metadata_sub_command::GetControllerMetadataSubCommand;
-use crate::commands::controller_commands::update_controller_config_sub_command::UpdateControllerConfigSubCommand;
+use crate::commands::controller::clean_broker_metadata_sub_command::CleanBrokerMetadataSubCommand;
+use crate::commands::controller::get_controller_config_sub_command::GetControllerConfigSubCommand;
+use crate::commands::controller::get_controller_metadata_sub_command::GetControllerMetadataSubCommand;
+use crate::commands::controller::update_controller_config_sub_command::UpdateControllerConfigSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]

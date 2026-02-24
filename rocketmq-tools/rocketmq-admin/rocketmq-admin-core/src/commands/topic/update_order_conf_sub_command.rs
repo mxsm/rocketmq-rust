@@ -18,7 +18,7 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_error::RocketMQError;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
-use crate::commands::topic_commands::NAMESPACE_ORDER_TOPIC_CONFIG;
+use crate::commands::topic::NAMESPACE_ORDER_TOPIC_CONFIG;
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
 

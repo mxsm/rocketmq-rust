@@ -25,13 +25,13 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
-use crate::commands::consumer_commands::consumer_status_sub_command::ConsumerStatusSubCommand;
-use crate::commands::consumer_commands::consumer_sub_command::ConsumerSubCommand;
-use crate::commands::consumer_commands::delete_subscription_group_sub_command::DeleteSubscriptionGroupSubCommand;
-use crate::commands::consumer_commands::set_consume_mode_sub_command::SetConsumeModeSubCommand;
-use crate::commands::consumer_commands::start_monitoring_sub_command::StartMonitoringSubCommand;
-use crate::commands::consumer_commands::update_sub_group_list_sub_command::UpdateSubGroupListSubCommand;
-use crate::commands::consumer_commands::update_sub_group_sub_command::UpdateSubGroupSubCommand;
+use crate::commands::consumer::consumer_status_sub_command::ConsumerStatusSubCommand;
+use crate::commands::consumer::consumer_sub_command::ConsumerSubCommand;
+use crate::commands::consumer::delete_subscription_group_sub_command::DeleteSubscriptionGroupSubCommand;
+use crate::commands::consumer::set_consume_mode_sub_command::SetConsumeModeSubCommand;
+use crate::commands::consumer::start_monitoring_sub_command::StartMonitoringSubCommand;
+use crate::commands::consumer::update_sub_group_list_sub_command::UpdateSubGroupListSubCommand;
+use crate::commands::consumer::update_sub_group_sub_command::UpdateSubGroupSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]

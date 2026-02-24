@@ -25,12 +25,12 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
-use crate::commands::namesrv_commands::add_write_perm_sub_command::AddWritePermSubCommand;
-use crate::commands::namesrv_commands::delete_kv_config_sub_command::DeleteKvConfigSubCommand;
-use crate::commands::namesrv_commands::get_namesrv_config_sub_command::GetNamesrvConfigSubCommand;
-use crate::commands::namesrv_commands::update_kv_config_sub_command::UpdateKvConfigSubCommand;
-use crate::commands::namesrv_commands::update_namesrv_config_sub_command::UpdateNamesrvConfigSubCommand;
-use crate::commands::namesrv_commands::wipe_write_perm_sub_command::WipeWritePermSubCommand;
+use crate::commands::namesrv::add_write_perm_sub_command::AddWritePermSubCommand;
+use crate::commands::namesrv::delete_kv_config_sub_command::DeleteKvConfigSubCommand;
+use crate::commands::namesrv::get_namesrv_config_sub_command::GetNamesrvConfigSubCommand;
+use crate::commands::namesrv::update_kv_config_sub_command::UpdateKvConfigSubCommand;
+use crate::commands::namesrv::update_namesrv_config_sub_command::UpdateNamesrvConfigSubCommand;
+use crate::commands::namesrv::wipe_write_perm_sub_command::WipeWritePermSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]

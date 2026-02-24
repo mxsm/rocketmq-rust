@@ -267,7 +267,7 @@ impl CommandExecute for UpdateSubGroupSubCommand {
 
 #[cfg(test)]
 mod tests {
-    use crate::commands::consumer_commands::update_sub_group_sub_command::UpdateSubGroupSubCommand;
+    use crate::commands::consumer::update_sub_group_sub_command::UpdateSubGroupSubCommand;
 
     use clap::Parser;
 

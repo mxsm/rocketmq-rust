@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod cluster_list_sub_command;
-mod cluster_send_msg_rt_sub_command;
+mod consumer_connection_sub_command;
+mod producer_connection_sub_command;
 
 use std::sync::Arc;
 
@@ -21,32 +21,27 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
-use crate::commands::cluster_commands::cluster_list_sub_command::ClusterListSubCommand;
-use crate::commands::cluster_commands::cluster_send_msg_rt_sub_command::ClusterSendMsgRTSubCommand;
+use crate::commands::connection::consumer_connection_sub_command::ConsumerConnectionSubCommand;
+use crate::commands::connection::producer_connection_sub_command::ProducerConnectionSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
-pub enum ClusterCommands {
+pub enum ConnectionCommands {
     #[command(
-        name = "clusterList",
-        about = "List cluster infos.",
-        long_about = None,
+        name = "consumerConnection",
+        about = "Query consumer's socket connection, client version and subscription"
     )]
-    ClusterList(ClusterListSubCommand),
+    ConsumerConnection(ConsumerConnectionSubCommand),
 
-    #[command(
-        name = "clusterRT",
-        about = "List All clusters Message Send RT.",
-        long_about = None,
-    )]
-    ClusterRT(ClusterSendMsgRTSubCommand),
+    #[command(name = "producerConnection", about = "Query producer's connection")]
+    ProducerConnection(ProducerConnectionSubCommand),
 }
 
-impl CommandExecute for ClusterCommands {
+impl CommandExecute for ConnectionCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
-            ClusterCommands::ClusterList(value) => value.execute(rpc_hook).await,
-            ClusterCommands::ClusterRT(value) => value.execute(rpc_hook).await,
+            ConnectionCommands::ConsumerConnection(cmd) => cmd.execute(rpc_hook).await,
+            ConnectionCommands::ProducerConnection(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }

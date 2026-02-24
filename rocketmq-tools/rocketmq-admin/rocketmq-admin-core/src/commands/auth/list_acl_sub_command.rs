@@ -285,7 +285,7 @@ mod tests {
 
     use clap::Parser;
 
-    use crate::commands::auth_commands::list_acl_sub_command::ListAclSubCommand;
+    use crate::commands::auth::list_acl_sub_command::ListAclSubCommand;
 
     #[test]
     fn test_list_acl_sub_command_with_broker_addr_using_short_commands() {
