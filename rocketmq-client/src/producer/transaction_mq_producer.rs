@@ -24,16 +24,55 @@ use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::mq_producer::MQProducer;
 use crate::producer::send_callback::SendMessageCallback;
 use crate::producer::send_result::SendResult;
+use crate::producer::transaction_listener::ArcTransactionListener;
 use crate::producer::transaction_listener::TransactionListener;
 use crate::producer::transaction_mq_produce_builder::TransactionMQProducerBuilder;
 use crate::producer::transaction_send_result::TransactionSendResult;
 
-#[derive(Clone, Default)]
+/// Configuration for transaction message producer
+///
+/// Controls transaction check behavior, aligning with Java's TransactionMQProducer.
+#[derive(Clone)]
 pub struct TransactionProducerConfig {
-    pub transaction_listener: Option<Arc<Box<dyn TransactionListener>>>,
+    /// Transaction listener for executing and checking local transactions
+    pub transaction_listener: Option<ArcTransactionListener>,
+
+    /// Minimum size of transaction check thread pool (corresponds to Java checkThreadPoolMinSize)
+    ///
+    /// Note: When using spawn_blocking with default Tokio Runtime, this serves as a reference.
+    /// Default: 1
     pub check_thread_pool_min_size: u32,
+
+    /// Maximum size of transaction check thread pool (corresponds to Java checkThreadPoolMaxSize)
+    ///
+    /// Note: When using spawn_blocking with default Tokio Runtime, this serves as a reference.
+    /// To control actual thread count, configure the Runtime:
+    /// ```ignore
+    /// tokio::runtime::Builder::new_multi_thread()
+    ///     .max_blocking_threads(100)
+    ///     .build()
+    /// ```
+    /// Default: 1
     pub check_thread_pool_max_size: u32,
+
+    /// Maximum capacity of transaction check request queue (corresponds to Java
+    /// checkRequestHoldMax)
+    ///
+    /// Current version does not implement queue limiting (Tokio's spawn_blocking has built-in
+    /// queue). Reserved for future implementation.
+    /// Default: 2000
     pub check_request_hold_max: u32,
+}
+
+impl Default for TransactionProducerConfig {
+    fn default() -> Self {
+        Self {
+            transaction_listener: None,
+            check_thread_pool_min_size: 1,
+            check_thread_pool_max_size: 1,
+            check_request_hold_max: 2000,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -62,7 +101,7 @@ impl TransactionMQProducer {
             .default_mqproducer_impl
             .as_mut()
             .unwrap()
-            .set_transaction_listener(Arc::new(Box::new(transaction_listener)));
+            .set_transaction_listener(Arc::new(transaction_listener));
     }
 }
 
