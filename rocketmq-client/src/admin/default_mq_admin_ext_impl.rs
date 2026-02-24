@@ -1674,9 +1674,14 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
 
     async fn get_broker_lite_info(
         &self,
-        _broker_addr: CheetahString,
+        broker_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<GetBrokerLiteInfoResponseBody> {
-        unimplemented!("get_broker_lite_info not implemented yet")
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .get_broker_lite_info(&broker_addr, self.timeout_millis.as_millis() as u64)
+            .await
     }
 
     async fn get_parent_topic_info(

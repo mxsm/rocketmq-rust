@@ -22,6 +22,7 @@ mod consumer;
 mod controller;
 mod export;
 mod ha;
+mod lite;
 mod namesrv;
 mod target;
 mod topic;
@@ -116,6 +117,11 @@ pub enum Commands {
     HA(ha::HACommands),
 
     #[command(subcommand)]
+    #[command(about = "Lite commands")]
+    #[command(name = "lite")]
+    Lite(lite::LiteCommands),
+
+    #[command(subcommand)]
     #[command(about = "Name server commands")]
     #[command(name = "nameserver")]
     NameServer(namesrv::NameServerCommands),
@@ -139,6 +145,7 @@ impl CommandExecute for Commands {
             Commands::Controller(value) => value.execute(rpc_hook).await,
             Commands::Export(value) => value.execute(rpc_hook).await,
             Commands::HA(value) => value.execute(rpc_hook).await,
+            Commands::Lite(value) => value.execute(rpc_hook).await,
             Commands::NameServer(value) => value.execute(rpc_hook).await,
             Commands::Topic(value) => value.execute(rpc_hook).await,
             Commands::Show(value) => value.execute(rpc_hook).await,
@@ -354,6 +361,11 @@ impl CommandExecute for ClassificationTablePrint {
                 category: "HA",
                 command: "haStatus",
                 remark: "Fetch ha runtime status data.",
+            },
+            Command {
+                category: "Lite",
+                command: "getBrokerLiteInfo",
+                remark: "Get broker lite info.",
             },
             Command {
                 category: "NameServer",
