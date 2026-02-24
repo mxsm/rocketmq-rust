@@ -23,6 +23,7 @@ mod controller;
 mod export;
 mod ha;
 mod namesrv;
+mod offset;
 mod target;
 mod topic;
 
@@ -121,6 +122,11 @@ pub enum Commands {
     NameServer(namesrv::NameServerCommands),
 
     #[command(subcommand)]
+    #[command(about = "Offset commands")]
+    #[command(name = "offset")]
+    Offset(offset::OffsetCommands),
+
+    #[command(subcommand)]
     #[command(about = "Topic commands")]
     Topic(topic::TopicCommands),
 
@@ -140,6 +146,7 @@ impl CommandExecute for Commands {
             Commands::Export(value) => value.execute(rpc_hook).await,
             Commands::HA(value) => value.execute(rpc_hook).await,
             Commands::NameServer(value) => value.execute(rpc_hook).await,
+            Commands::Offset(value) => value.execute(rpc_hook).await,
             Commands::Topic(value) => value.execute(rpc_hook).await,
             Commands::Show(value) => value.execute(rpc_hook).await,
         }
@@ -384,6 +391,11 @@ impl CommandExecute for ClassificationTablePrint {
                 category: "NameServer",
                 command: "wipeWritePerm",
                 remark: "Wipe write perm of broker in all name server.",
+            },
+            Command {
+                category: "Offset",
+                command: "resetOffsetByTime",
+                remark: "Reset consumer group offsets to a specific timestamp (no restart required).",
             },
             Command {
                 category: "Topic",
