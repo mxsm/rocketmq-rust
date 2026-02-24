@@ -13,13 +13,12 @@
 // limitations under the License.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
 
 use parking_lot::Mutex;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
-use rocketmq_store::filter::MessageFilter;
+use rocketmq_store::filter::ArcMessageFilter;
 use tracing::warn;
 
 pub const NO_SUSPEND_KEY: &str = "_noSuspend_";
@@ -33,7 +32,7 @@ pub struct ColdDataPullRequest {
     timeout_millis: u64,
     queue_offset: i64,
     subscription_data: SubscriptionData,
-    message_filter: Arc<Box<dyn MessageFilter>>,
+    message_filter: ArcMessageFilter,
 }
 
 impl ColdDataPullRequest {
@@ -44,7 +43,7 @@ impl ColdDataPullRequest {
         suspend_timestamp: u64,
         queue_offset: i64,
         subscription_data: SubscriptionData,
-        message_filter: Arc<Box<dyn MessageFilter>>,
+        message_filter: ArcMessageFilter,
     ) -> Self {
         Self {
             request,

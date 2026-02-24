@@ -41,6 +41,7 @@ use crate::base::store_checkpoint::StoreCheckpoint;
 use crate::base::store_stats_service::StoreStatsService;
 use crate::base::transient_store_pool::TransientStorePool;
 use crate::config::message_store_config::MessageStoreConfig;
+use crate::filter::ArcMessageFilter;
 use crate::filter::MessageFilter;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::hook::put_message_hook::BoxedPutMessageHook;
@@ -137,7 +138,7 @@ pub trait MessageStoreInner: Sync + 'static {
         queue_id: i32,
         offset: i64,
         max_msg_nums: i32,
-        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+        message_filter: Option<ArcMessageFilter>,
     ) -> Option<GetMessageResult>;
 
     /*    /// Asynchronous get message
@@ -160,7 +161,7 @@ pub trait MessageStoreInner: Sync + 'static {
         offset: i64,
         max_msg_nums: i32,
         max_total_msg_size: i32,
-        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+        message_filter: Option<ArcMessageFilter>,
     ) -> Option<GetMessageResult>;
 
     /*    /// Asynchronous get message with size constraint

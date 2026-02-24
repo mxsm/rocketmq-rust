@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 
@@ -48,3 +49,9 @@ pub trait MessageFilter: Send + Sync {
         properties: Option<&HashMap<CheetahString, CheetahString>>,
     ) -> bool;
 }
+
+/// Type alias for an atomically reference-counted message filter.
+///
+/// This is the standard way to share a [`MessageFilter`] implementation across multiple
+/// threads or components. The `Arc` provides thread-safe reference counting.
+pub type ArcMessageFilter = Arc<dyn MessageFilter>;

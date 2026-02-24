@@ -59,7 +59,7 @@ use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::base::select_result::SelectMappedBufferResult;
-use rocketmq_store::filter::MessageFilter;
+use rocketmq_store::filter::ArcMessageFilter;
 use rocketmq_store::pop::batch_ack_msg::BatchAckMsg;
 use rocketmq_store::pop::pop_check_point::PopCheckPoint;
 use rocketmq_store::pop::AckMessage;
@@ -365,7 +365,7 @@ where
                     )));
                 }
                 let consumer_filter_data = consumer_filter_data.unwrap();
-                let message_filter: Box<dyn MessageFilter> = Box::new(ExpressionMessageFilter::new(
+                let message_filter: ArcMessageFilter = Arc::new(ExpressionMessageFilter::new(
                     Some(subscription_data.clone()),
                     Some(consumer_filter_data),
                     Arc::new(self.broker_runtime_inner.consumer_filter_manager().clone()),
@@ -458,7 +458,6 @@ where
         };
         let pop_time = get_current_millis();
 
-        let message_filter = message_filter.map(Arc::new);
         let mut rest_num = 0; // remaining number of messages to be fetched
         if need_retry && !request_header.order.unwrap_or(false) {
             rest_num = if need_retry_v1 {
@@ -701,7 +700,7 @@ where
         revive_qid: i32,
         channel: Channel,
         pop_time: u64,
-        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+        message_filter: Option<ArcMessageFilter>,
         start_offset_info: &mut String,
         msg_offset_info: &mut String,
         order_count_info: &mut str,
@@ -741,7 +740,7 @@ where
         revive_qid: i32,
         channel: Channel,
         pop_time: u64,
-        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+        message_filter: Option<ArcMessageFilter>,
         start_offset_info: &mut String,
         msg_offset_info: &mut String,
         order_count_info: &mut str,
@@ -785,7 +784,7 @@ where
         revive_qid: i32,
         channel: Channel,
         pop_time: u64,
-        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+        message_filter: Option<ArcMessageFilter>,
         start_offset_info: &mut String,
         msg_offset_info: &mut String,
         order_count_info: &mut str,
