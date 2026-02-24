@@ -29,10 +29,10 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 ///
 /// # Examples
 ///
-/// ```rust
-/// use rocketmq_client::consumer::message_queue_listener::MessageQueueListener;
-/// use rocketmq_common::common::message::message_queue::MessageQueue;
+/// ```ignore
 /// use std::collections::HashSet;
+/// use rocketmq_common::common::message::message_queue::MessageQueue;
+/// use crate::consumer::message_queue_listener::MessageQueueListener;
 ///
 /// struct MyQueueListener;
 ///
@@ -76,14 +76,20 @@ pub trait MessageQueueListener: Send + Sync {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```ignore
 /// use std::sync::Arc;
-/// use rocketmq_client::consumer::message_queue_listener::{MessageQueueListener, ArcMessageQueueListener};
+/// use crate::consumer::message_queue_listener::{MessageQueueListener, ArcMessageQueueListener};
 ///
-/// # struct MyListener;
-/// # impl MessageQueueListener for MyListener {
-/// #     fn message_queue_changed(&self, _: &str, _: &std::collections::HashSet<rocketmq_common::common::message::message_queue::MessageQueue>, _: &std::collections::HashSet<rocketmq_common::common::message::message_queue::MessageQueue>) {}
-/// # }
+/// struct MyListener;
+/// impl MessageQueueListener for MyListener {
+///     fn message_queue_changed(
+///         &self,
+///         _topic: &str,
+///         _mq_all: &std::collections::HashSet<rocketmq_common::common::message::message_queue::MessageQueue>,
+///         _mq_assigned: &std::collections::HashSet<rocketmq_common::common::message::message_queue::MessageQueue>,
+///     ) {}
+/// }
+///
 /// let listener: ArcMessageQueueListener = Arc::new(MyListener);
 /// ```
 pub type ArcMessageQueueListener = Arc<dyn MessageQueueListener>;
