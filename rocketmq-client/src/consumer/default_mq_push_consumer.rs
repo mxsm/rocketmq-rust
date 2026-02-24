@@ -30,10 +30,6 @@ use crate::base::client_config::ClientConfig;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::default_mq_push_consumer_builder::DefaultMQPushConsumerBuilder;
-use crate::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
-use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
-use crate::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
-use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 use crate::consumer::listener::message_listener::MessageListener;
 use crate::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
 use crate::consumer::listener::message_listener_orderly::MessageListenerOrderly;
@@ -458,15 +454,6 @@ impl MQPushConsumer for DefaultMQPushConsumer {
         todo!()
     }
 
-    fn register_message_listener_concurrently_fn<MLCFN>(&mut self, message_listener: MLCFN)
-    where
-        MLCFN: Fn(Vec<MessageExt>, ConsumeConcurrentlyContext) -> rocketmq_error::RocketMQResult<ConsumeConcurrentlyStatus>
-            + Send
-            + Sync,
-    {
-        todo!()
-    }
-
     fn register_message_listener_concurrently<ML>(&mut self, message_listener: ML)
     where
         ML: MessageListenerConcurrently + Send + Sync + 'static,
@@ -480,15 +467,6 @@ impl MQPushConsumer for DefaultMQPushConsumer {
             .as_mut()
             .unwrap()
             .register_message_listener(self.consumer_config.message_listener.clone());
-    }
-
-    async fn register_message_listener_orderly_fn<MLOFN>(&mut self, message_listener: MLOFN)
-    where
-        MLOFN: Fn(Vec<MessageExt>, ConsumeOrderlyContext) -> rocketmq_error::RocketMQResult<ConsumeOrderlyStatus>
-            + Send
-            + Sync,
-    {
-        todo!()
     }
 
     fn register_message_listener_orderly<ML>(&mut self, message_listener: ML)

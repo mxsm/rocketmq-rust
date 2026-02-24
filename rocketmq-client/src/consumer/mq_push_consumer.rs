@@ -13,12 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_common::common::message::message_ext::MessageExt;
 
-use crate::consumer::listener::consume_concurrently_context::ConsumeConcurrentlyContext;
-use crate::consumer::listener::consume_concurrently_status::ConsumeConcurrentlyStatus;
-use crate::consumer::listener::consume_orderly_context::ConsumeOrderlyContext;
-use crate::consumer::listener::consume_orderly_status::ConsumeOrderlyStatus;
 use crate::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
 use crate::consumer::listener::message_listener_orderly::MessageListenerOrderly;
 use crate::consumer::message_selector::MessageSelector;
@@ -47,12 +42,6 @@ pub trait MQPushConsumer: MQConsumer {
     /// # Type Parameters
     ///
     /// * `MLC` - The type of the message listener closure.
-    fn register_message_listener_concurrently_fn<MLCFN>(&mut self, message_listener: MLCFN)
-    where
-        MLCFN: Fn(Vec<MessageExt>, ConsumeConcurrentlyContext) -> rocketmq_error::RocketMQResult<ConsumeConcurrentlyStatus>
-            + Send
-            + Sync;
-
     fn register_message_listener_concurrently<ML>(&mut self, message_listener: ML)
     where
         ML: MessageListenerConcurrently + Send + Sync + 'static;
@@ -66,12 +55,6 @@ pub trait MQPushConsumer: MQConsumer {
     /// # Type Parameters
     ///
     /// * `MLO` - The type of the message listener closure.
-    async fn register_message_listener_orderly_fn<MLOFN>(&mut self, message_listener: MLOFN)
-    where
-        MLOFN: Fn(Vec<MessageExt>, ConsumeOrderlyContext) -> rocketmq_error::RocketMQResult<ConsumeOrderlyStatus>
-            + Send
-            + Sync;
-
     fn register_message_listener_orderly<ML>(&mut self, message_listener: ML)
     where
         ML: MessageListenerOrderly + Send + Sync + 'static;
