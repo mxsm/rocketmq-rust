@@ -94,6 +94,7 @@ use crate::config::flush_disk_type::FlushDiskType;
 use crate::config::message_store_config::MessageStoreConfig;
 use crate::config::store_path_config_helper::get_store_path_batch_consume_queue;
 use crate::config::store_path_config_helper::get_store_path_consume_queue_ext;
+use crate::filter::ArcMessageFilter;
 use crate::filter::MessageFilter;
 use crate::ha::general_ha_service::GeneralHAService;
 use crate::ha::ha_service::HAService;
@@ -841,7 +842,7 @@ impl MessageStore for LocalFileMessageStore {
         queue_id: i32,
         offset: i64,
         max_msg_nums: i32,
-        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+        message_filter: Option<ArcMessageFilter>,
     ) -> Option<GetMessageResult> {
         self.get_message_with_size_limit(
             group,
@@ -863,7 +864,7 @@ impl MessageStore for LocalFileMessageStore {
         offset: i64,
         max_msg_nums: i32,
         max_total_msg_size: i32,
-        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+        message_filter: Option<ArcMessageFilter>,
     ) -> Option<GetMessageResult> {
         if self.shutdown.load(Ordering::Relaxed) {
             warn!("message store has shutdown, so getMessage is forbidden");

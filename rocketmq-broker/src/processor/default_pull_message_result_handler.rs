@@ -43,7 +43,7 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::filter::MessageFilter;
+use rocketmq_store::filter::ArcMessageFilter;
 use rocketmq_store::message_store::local_file_message_store::LocalFileMessageStore;
 use rocketmq_store::stats::broker_stats_manager::BrokerStatsManager;
 use rocketmq_store::stats::stats_type::StatsType;
@@ -95,7 +95,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
         subscription_data: SubscriptionData,
         subscription_group_config: &SubscriptionGroupConfig,
         broker_allow_suspend: bool,
-        message_filter: Arc<Box<dyn MessageFilter>>,
+        message_filter: ArcMessageFilter,
         mut response: RemotingCommand,
         mut mapping_context: TopicQueueMappingContext,
         _begin_time_mills: u64,

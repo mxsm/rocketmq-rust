@@ -48,7 +48,7 @@ use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::GetMessageStatus;
 use rocketmq_store::base::message_store::MessageStore;
-use rocketmq_store::filter::MessageFilter;
+use rocketmq_store::filter::ArcMessageFilter;
 use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
@@ -465,16 +465,16 @@ where
         &self,
         subscription_data: &rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData,
         consumer_filter_data: Option<ConsumerFilterData>,
-    ) -> Arc<Box<dyn MessageFilter>> {
+    ) -> ArcMessageFilter {
         // TODO: Consider optimizing consumer_filter_manager clone - Arc wrapper might be better
         if self.broker_runtime_inner.broker_config().filter_support_retry {
-            Arc::new(Box::new(ExpressionForRetryMessageFilter))
+            Arc::new(ExpressionForRetryMessageFilter)
         } else {
-            Arc::new(Box::new(ExpressionMessageFilter::new(
+            Arc::new(ExpressionMessageFilter::new(
                 Some(subscription_data.clone()),
                 consumer_filter_data,
                 Arc::new(self.broker_runtime_inner.consumer_filter_manager().clone()),
-            )))
+            ))
         }
     }
 }

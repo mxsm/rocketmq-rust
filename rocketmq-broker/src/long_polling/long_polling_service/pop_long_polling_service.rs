@@ -32,7 +32,7 @@ use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::consume_queue::cq_ext_unit::CqExtUnit;
-use rocketmq_store::filter::MessageFilter;
+use rocketmq_store::filter::ArcMessageFilter;
 use tokio::select;
 use tokio::sync::Notify;
 use tracing::error;
@@ -375,7 +375,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
         remoting_command: &mut RemotingCommand,
         request_header: PollingHeader,
         subscription_data: Option<SubscriptionData>,
-        message_filter: Option<Arc<Box<dyn MessageFilter>>>,
+        message_filter: Option<ArcMessageFilter>,
     ) -> PollingResult {
         //this method may be need to optimize
         if request_header.get_poll_time() <= 0 {
