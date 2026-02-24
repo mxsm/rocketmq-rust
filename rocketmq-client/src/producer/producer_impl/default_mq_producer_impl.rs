@@ -87,7 +87,7 @@ use crate::producer::request_response_future::RequestResponseFuture;
 use crate::producer::send_callback::SendMessageCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::send_status::SendStatus;
-use crate::producer::transaction_listener::TransactionListener;
+use crate::producer::transaction_listener::ArcTransactionListener;
 use crate::producer::transaction_send_result::TransactionSendResult;
 use tokio::task::JoinHandle;
 
@@ -266,7 +266,7 @@ pub struct DefaultMQProducerImpl {
     semaphore_async_send_num: Arc<Semaphore>,
     semaphore_async_send_size: Arc<Semaphore>,
     default_mqproducer_impl_inner: Option<WeakArcMut<DefaultMQProducerImpl>>,
-    transaction_listener: Option<Arc<Box<dyn TransactionListener>>>,
+    transaction_listener: Option<ArcTransactionListener>,
 }
 
 #[allow(unused_must_use)]
@@ -2190,7 +2190,7 @@ impl DefaultMQProducerImpl {
         self.default_mqproducer_impl_inner = Some(default_mqproducer_impl_inner);
     }
 
-    pub fn set_transaction_listener(&mut self, transaction_listener: Arc<Box<dyn TransactionListener>>) {
+    pub fn set_transaction_listener(&mut self, transaction_listener: ArcTransactionListener) {
         self.transaction_listener = Some(transaction_listener);
     }
 }
@@ -2210,7 +2210,7 @@ impl MQProducerInner for DefaultMQProducerImpl {
         true
     }
 
-    fn get_check_listener(&self) -> Option<Arc<Box<dyn TransactionListener>>> {
+    fn get_check_listener(&self) -> Option<ArcTransactionListener> {
         self.transaction_listener.clone()
     }
 
@@ -2235,8 +2235,9 @@ impl MQProducerInner for DefaultMQProducerImpl {
         let broker_addr = broker_addr.clone();
         let group = self.producer_config.producer_group().clone();
 
-        // Spawn independent task without storing handle (matches Java's executor.submit behavior)
-        tokio::spawn(async move {
+        // Use spawn_blocking to avoid blocking Tokio worker threads (matches Java's ExecutorService
+        // behavior)
+        tokio::task::spawn_blocking(move || {
             let mut unique_key = msg.property(&CheetahString::from_static_str(
                 MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX,
             ));
@@ -2244,7 +2245,7 @@ impl MQProducerInner for DefaultMQProducerImpl {
                 unique_key = Some(msg.msg_id.clone());
             }
 
-            // Check local transaction state with exception handling
+            // Check local transaction state with exception handling (synchronous execution)
             let transaction_state = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 transaction_listener.check_local_transaction(&msg)
             })) {
@@ -2258,48 +2259,53 @@ impl MQProducerInner for DefaultMQProducerImpl {
                     LocalTransactionState::Unknown
                 }
             };
-            let request_header = EndTransactionRequestHeader {
-                topic: check_request_header.topic.clone().unwrap_or_default(),
-                producer_group: CheetahString::from_string(
-                    producer_impl_inner.producer_config.producer_group().to_string(),
-                ),
-                tran_state_table_offset: check_request_header.commit_log_offset as u64,
-                commit_log_offset: check_request_header.commit_log_offset as u64,
-                commit_or_rollback: match transaction_state {
-                    LocalTransactionState::CommitMessage => MessageSysFlag::TRANSACTION_COMMIT_TYPE,
-                    LocalTransactionState::RollbackMessage => MessageSysFlag::TRANSACTION_ROLLBACK_TYPE,
-                    LocalTransactionState::Unknown => MessageSysFlag::TRANSACTION_NOT_TYPE,
-                },
-                from_transaction_check: true,
-                msg_id: unique_key.clone().unwrap_or_default(),
-                transaction_id: check_request_header.transaction_id.clone(),
-                rpc_request_header: RpcRequestHeader {
-                    broker_name: check_request_header.rpc_request_header.unwrap_or_default().broker_name,
-                    ..Default::default()
-                },
-            };
-            // Execute end transaction hook
-            producer_impl_inner.do_execute_end_transaction_hook(
-                &msg.message,
-                unique_key.as_ref().unwrap(),
-                &broker_addr,
-                transaction_state,
-                true,
-            );
 
-            // Send end transaction request with error handling
-            if let Err(e) = producer_impl_inner
-                .client_instance
-                .as_mut()
-                .unwrap()
-                .mq_client_api_impl
-                .as_mut()
-                .unwrap()
-                .end_transaction_oneway(&broker_addr, request_header, CheetahString::from_static_str(""), 3000)
-                .await
-            {
-                tracing::error!("endTransactionOneway exception: {:?}", e);
-            }
+            // Switch back to async context for network I/O
+            let handle = tokio::runtime::Handle::current();
+            handle.spawn(async move {
+                let request_header = EndTransactionRequestHeader {
+                    topic: check_request_header.topic.clone().unwrap_or_default(),
+                    producer_group: CheetahString::from_string(
+                        producer_impl_inner.producer_config.producer_group().to_string(),
+                    ),
+                    tran_state_table_offset: check_request_header.commit_log_offset as u64,
+                    commit_log_offset: check_request_header.commit_log_offset as u64,
+                    commit_or_rollback: match transaction_state {
+                        LocalTransactionState::CommitMessage => MessageSysFlag::TRANSACTION_COMMIT_TYPE,
+                        LocalTransactionState::RollbackMessage => MessageSysFlag::TRANSACTION_ROLLBACK_TYPE,
+                        LocalTransactionState::Unknown => MessageSysFlag::TRANSACTION_NOT_TYPE,
+                    },
+                    from_transaction_check: true,
+                    msg_id: unique_key.clone().unwrap_or_default(),
+                    transaction_id: check_request_header.transaction_id.clone(),
+                    rpc_request_header: RpcRequestHeader {
+                        broker_name: check_request_header.rpc_request_header.unwrap_or_default().broker_name,
+                        ..Default::default()
+                    },
+                };
+                // Execute end transaction hook
+                producer_impl_inner.do_execute_end_transaction_hook(
+                    &msg.message,
+                    unique_key.as_ref().unwrap(),
+                    &broker_addr,
+                    transaction_state,
+                    true,
+                );
+
+                // Send end transaction request with error handling
+                if let Err(e) = producer_impl_inner
+                    .client_instance
+                    .as_mut()
+                    .unwrap()
+                    .mq_client_api_impl
+                    .as_mut()
+                    .unwrap()
+                    .end_transaction_oneway(&broker_addr, request_header, CheetahString::from_static_str(""), 3000)
+                    .await
+                {
+                    tracing::error!("endTransactionOneway exception: {:?}", e);
+                }
+            });
         });
     }
 

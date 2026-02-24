@@ -25,6 +25,7 @@ use crate::base::client_config::ClientConfig;
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::produce_accumulator::ProduceAccumulator;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
+use crate::producer::transaction_listener::ArcTransactionListener;
 use crate::producer::transaction_listener::TransactionListener;
 use crate::producer::transaction_mq_producer::TransactionMQProducer;
 use crate::producer::transaction_mq_producer::TransactionProducerConfig;
@@ -55,7 +56,10 @@ pub struct TransactionMQProducerBuilder {
     compress_level: Option<i32>,
     compress_type: Option<CompressionType>,
     compressor: Option<&'static (dyn Compressor + Send + Sync)>,
-    transaction_listener: Option<Arc<Box<dyn TransactionListener>>>,
+    transaction_listener: Option<ArcTransactionListener>,
+    check_thread_pool_min_size: Option<u32>,
+    check_thread_pool_max_size: Option<u32>,
+    check_request_hold_max: Option<u32>,
     check_runtime: Option<Arc<RocketMQRuntime>>,
 }
 
@@ -86,6 +90,9 @@ impl TransactionMQProducerBuilder {
             compress_type: None,
             compressor: None,
             transaction_listener: None,
+            check_thread_pool_min_size: None,
+            check_thread_pool_max_size: None,
+            check_request_hold_max: None,
             check_runtime: None,
         }
     }
@@ -216,7 +223,33 @@ impl TransactionMQProducerBuilder {
     }
 
     pub fn transaction_listener(mut self, transaction_listener: impl TransactionListener) -> Self {
-        self.transaction_listener = Some(Arc::new(Box::new(transaction_listener)));
+        self.transaction_listener = Some(Arc::new(transaction_listener));
+        self
+    }
+
+    /// Set maximum size of transaction check thread pool
+    ///
+    /// Note: When using default Tokio Runtime with spawn_blocking, this serves as a reference.
+    /// To control actual thread count, configure the Runtime:
+    /// ```ignore
+    /// tokio::runtime::Builder::new_multi_thread()
+    ///     .max_blocking_threads(100)
+    ///     .build()
+    /// ```
+    pub fn check_thread_pool_max_size(mut self, size: u32) -> Self {
+        self.check_thread_pool_max_size = Some(size);
+        self
+    }
+
+    /// Set minimum size of transaction check thread pool
+    pub fn check_thread_pool_min_size(mut self, size: u32) -> Self {
+        self.check_thread_pool_min_size = Some(size);
+        self
+    }
+
+    /// Set maximum capacity of transaction check request queue
+    pub fn check_request_hold_max(mut self, size: u32) -> Self {
+        self.check_request_hold_max = Some(size);
         self
     }
 
@@ -304,9 +337,9 @@ impl TransactionMQProducerBuilder {
         }
         let transaction_producer_config = TransactionProducerConfig {
             transaction_listener: self.transaction_listener,
-            check_thread_pool_min_size: 0,
-            check_thread_pool_max_size: 0,
-            check_request_hold_max: 0,
+            check_thread_pool_min_size: self.check_thread_pool_min_size.unwrap_or(1),
+            check_thread_pool_max_size: self.check_thread_pool_max_size.unwrap_or(1),
+            check_request_hold_max: self.check_request_hold_max.unwrap_or(2000),
         };
         TransactionMQProducer::new(transaction_producer_config, mq_producer)
     }
