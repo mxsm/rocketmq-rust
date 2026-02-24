@@ -25,7 +25,7 @@ use crate::base::client_config::ClientConfig;
 use crate::consumer::allocate_message_queue_strategy::AllocateMessageQueueStrategy;
 use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::default_mq_push_consumer::DefaultMQPushConsumer;
-use crate::consumer::message_queue_listener::MessageQueueListener;
+use crate::consumer::message_queue_listener::ArcMessageQueueListener;
 use crate::trace::trace_dispatcher::TraceDispatcher;
 
 #[derive(Default)]
@@ -38,7 +38,7 @@ pub struct DefaultMQPushConsumerBuilder {
     allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
     subscription: Option<ArcMut<HashMap<CheetahString, CheetahString>>>,
 
-    message_queue_listener: Option<Arc<Box<dyn MessageQueueListener>>>,
+    message_queue_listener: Option<ArcMessageQueueListener>,
 
     consume_thread_min: Option<u32>,
     consume_thread_max: Option<u32>,
@@ -121,10 +121,7 @@ impl DefaultMQPushConsumerBuilder {
     }
 
     #[inline]
-    pub fn message_queue_listener(
-        mut self,
-        message_queue_listener: Option<Arc<Box<dyn MessageQueueListener>>>,
-    ) -> Self {
+    pub fn message_queue_listener(mut self, message_queue_listener: Option<ArcMessageQueueListener>) -> Self {
         self.message_queue_listener = message_queue_listener;
         self
     }
