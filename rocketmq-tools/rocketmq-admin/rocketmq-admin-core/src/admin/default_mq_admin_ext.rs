@@ -1261,8 +1261,8 @@ impl MQAdminExt for DefaultMQAdminExt {
         unimplemented!("query_message not implemented yet")
     }
 
-    async fn get_broker_ha_status(&self, _broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<HARuntimeInfo> {
-        unimplemented!("get_broker_ha_status not implemented yet")
+    async fn get_broker_ha_status(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<HARuntimeInfo> {
+        self.default_mqadmin_ext_impl.get_broker_ha_status(broker_addr).await
     }
 
     async fn get_in_sync_state_data(

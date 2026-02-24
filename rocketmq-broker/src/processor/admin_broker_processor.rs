@@ -17,6 +17,7 @@ use crate::processor::admin_broker_processor::batch_mq_handler::BatchMqHandler;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 use crate::processor::admin_broker_processor::broker_epoch_cache_handler::BrokerEpochCacheHandler;
 use crate::processor::admin_broker_processor::consumer_request_handler::ConsumerRequestHandler;
+use crate::processor::admin_broker_processor::get_broker_ha_status_handler::GetBrokerHaStatusHandler;
 use crate::processor::admin_broker_processor::get_user_request_handler::GetUserRequestHandler;
 use crate::processor::admin_broker_processor::list_users_request_handler::ListUsersRequestHandler;
 use crate::processor::admin_broker_processor::message_related_handler::MessageRelatedHandler;
@@ -44,6 +45,7 @@ mod batch_mq_handler;
 mod broker_config_request_handler;
 mod broker_epoch_cache_handler;
 mod consumer_request_handler;
+mod get_broker_ha_status_handler;
 mod get_user_request_handler;
 mod list_users_request_handler;
 mod message_related_handler;
@@ -79,6 +81,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     list_users_request_handler: ListUsersRequestHandler<MS>,
     get_user_request_handler: GetUserRequestHandler<MS>,
     update_cold_data_flow_ctr_group_config_request_handler: UpdateColdDataFlowCtrGroupConfigRequestHandler<MS>,
+    get_broker_ha_status_handler: GetBrokerHaStatusHandler<MS>,
 }
 
 impl<MS> RequestProcessor for AdminBrokerProcessor<MS>
@@ -122,6 +125,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
         let get_user_request_handler = GetUserRequestHandler::new(broker_runtime_inner.clone());
         let update_cold_data_flow_ctr_group_config_request_handler =
             UpdateColdDataFlowCtrGroupConfigRequestHandler::new(broker_runtime_inner.clone());
+        let get_broker_ha_status_handler = GetBrokerHaStatusHandler::new(broker_runtime_inner.clone());
 
         AdminBrokerProcessor {
             topic_request_handler,
@@ -142,6 +146,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             list_users_request_handler,
             get_user_request_handler,
             update_cold_data_flow_ctr_group_config_request_handler,
+            get_broker_ha_status_handler,
         }
     }
 }
@@ -327,7 +332,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .update_broker_ha_info(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::GetBrokerHaStatus => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::GetBrokerHaStatus => {
+                self.get_broker_ha_status_handler
+                    .get_broker_ha_status(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::ResetMasterFlushOffset => {
                 self.reset_master_flusg_offset_handler
                     .reset_master_flush_offset(channel, ctx, request_code, request)

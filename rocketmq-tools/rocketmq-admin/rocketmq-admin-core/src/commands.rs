@@ -351,6 +351,11 @@ impl CommandExecute for ClassificationTablePrint {
                 remark: "Fetch sync state set for target brokers.",
             },
             Command {
+                category: "HA",
+                command: "haStatus",
+                remark: "Fetch ha runtime status data.",
+            },
+            Command {
                 category: "NameServer",
                 command: "addWritePerm",
                 remark: "Add write perm of broker in all name server.",

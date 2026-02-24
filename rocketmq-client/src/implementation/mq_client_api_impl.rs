@@ -74,6 +74,7 @@ use rocketmq_remoting::protocol::body::broker_replicas_info::BrokerReplicasInfo;
 use rocketmq_remoting::protocol::body::check_client_request_body::CheckClientRequestBody;
 use rocketmq_remoting::protocol::body::epoch_entry_cache::EpochEntryCache;
 use rocketmq_remoting::protocol::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody;
+use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
 use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
 use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
@@ -2607,6 +2608,32 @@ impl MQClientAPIImpl {
                     Err(mq_client_err!(
                         "get_broker_epoch_cache response body is empty".to_string()
                     ))
+                }
+            }
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string())
+            )),
+        }
+    }
+
+    pub async fn get_broker_ha_status(
+        &self,
+        broker_addr: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<HARuntimeInfo> {
+        let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerHaStatus);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                if let Some(body) = response.body() {
+                    serde_json::from_slice(body)
+                        .map_err(|e| mq_client_err!(format!("decode HARuntimeInfo failed: {}", e)))
+                } else {
+                    Err(mq_client_err!("get_broker_ha_status response body is empty".to_string()))
                 }
             }
             _ => Err(mq_client_err!(

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod get_sync_state_set_sub_command;
+mod ha_status_sub_command;
 
 use std::sync::Arc;
 
@@ -21,6 +22,7 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::ha_commands::get_sync_state_set_sub_command::GetSyncStateSetSubCommand;
+use crate::commands::ha_commands::ha_status_sub_command::HAStatusSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
@@ -31,12 +33,20 @@ pub enum HACommands {
         long_about = None,
     )]
     GetSyncStateSet(GetSyncStateSetSubCommand),
+
+    #[command(
+        name = "haStatus",
+        about = "Fetch ha runtime status data.",
+        long_about = None,
+    )]
+    HaStatus(HAStatusSubCommand),
 }
 
 impl CommandExecute for HACommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
             HACommands::GetSyncStateSet(value) => value.execute(rpc_hook).await,
+            HACommands::HaStatus(value) => value.execute(rpc_hook).await,
         }
     }
 }
