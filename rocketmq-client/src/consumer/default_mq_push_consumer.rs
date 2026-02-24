@@ -33,7 +33,7 @@ use crate::consumer::default_mq_push_consumer_builder::DefaultMQPushConsumerBuil
 use crate::consumer::listener::message_listener::MessageListener;
 use crate::consumer::listener::message_listener_concurrently::MessageListenerConcurrently;
 use crate::consumer::listener::message_listener_orderly::MessageListenerOrderly;
-use crate::consumer::message_queue_listener::MessageQueueListener;
+use crate::consumer::message_queue_listener::ArcMessageQueueListener;
 use crate::consumer::message_selector::MessageSelector;
 use crate::consumer::mq_consumer::MQConsumer;
 use crate::consumer::mq_push_consumer::MQPushConsumer;
@@ -55,7 +55,7 @@ pub struct ConsumerConfig {
     //this field will be removed in a certain version after April 5, 2020
     pub(crate) subscription: ArcMut<HashMap<CheetahString, CheetahString>>,
     pub(crate) message_listener: Option<ArcMut<MessageListener>>,
-    pub(crate) message_queue_listener: Option<Arc<Box<dyn MessageQueueListener>>>,
+    pub(crate) message_queue_listener: Option<ArcMessageQueueListener>,
     pub(crate) consume_thread_min: u32,
     pub(crate) consume_thread_max: u32,
     pub(crate) adjust_thread_pool_nums_threshold: u64,
@@ -111,7 +111,7 @@ impl ConsumerConfig {
         &self.message_listener
     }*/
 
-    /*    pub fn message_queue_listener(&self) -> &Option<Arc<Box<dyn MessageQueueListener>>> {
+    /*    pub fn message_queue_listener(&self) -> &Option<ArcMessageQueueListener> {
         &self.message_queue_listener
     }*/
 
@@ -249,7 +249,7 @@ impl ConsumerConfig {
         self.message_listener = message_listener;
     }*/
 
-    pub fn set_message_queue_listener(&mut self, message_queue_listener: Option<Arc<Box<dyn MessageQueueListener>>>) {
+    pub fn set_message_queue_listener(&mut self, message_queue_listener: Option<ArcMessageQueueListener>) {
         self.message_queue_listener = message_queue_listener;
     }
 
