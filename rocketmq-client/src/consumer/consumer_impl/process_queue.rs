@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -27,8 +29,8 @@ use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::body::process_queue_info::ProcessQueueInfo;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::RocketMQTokioRwLock;
-use std::sync::LazyLock;
 use tokio::sync::RwLock;
+use tracing::info;
 
 use crate::consumer::consumer_impl::default_mq_push_consumer_impl::DefaultMQPushConsumerImpl;
 use crate::consumer::consumer_impl::PULL_MAX_IDLE_TIME;
@@ -47,14 +49,28 @@ pub static REBALANCE_LOCK_INTERVAL: LazyLock<u64> = LazyLock::new(|| {
         .unwrap_or(20000)
 });
 
+struct ProcessQueueStore {
+    msg_tree_map: BTreeMap<i64, ArcMut<MessageExt>>,
+    consuming_msg_orderly_tree_map: BTreeMap<i64, ArcMut<MessageExt>>,
+    queue_offset_max: i64,
+}
+
+impl ProcessQueueStore {
+    fn new() -> Self {
+        ProcessQueueStore {
+            msg_tree_map: BTreeMap::new(),
+            consuming_msg_orderly_tree_map: BTreeMap::new(),
+            queue_offset_max: 0,
+        }
+    }
+}
+
 pub struct ProcessQueue {
-    pub(crate) msg_tree_map: Arc<RwLock<std::collections::BTreeMap<i64, ArcMut<MessageExt>>>>,
-    pub(crate) consuming_msg_orderly_tree_map: Arc<RwLock<std::collections::BTreeMap<i64, ArcMut<MessageExt>>>>,
+    store: RwLock<ProcessQueueStore>,
     pub(crate) consume_lock: Arc<RocketMQTokioRwLock<()>>,
 
-    msg_count: AtomicU64,
+    msg_count: AtomicI64,
     msg_size: AtomicU64,
-    queue_offset_max: AtomicI64,
     msg_acc_cnt: AtomicI64,
     try_unlock_times: AtomicI64,
 
@@ -77,13 +93,11 @@ impl ProcessQueue {
     pub fn new() -> Self {
         let now = get_current_millis();
         ProcessQueue {
-            msg_tree_map: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
-            consuming_msg_orderly_tree_map: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
+            store: RwLock::new(ProcessQueueStore::new()),
             consume_lock: Arc::new(RocketMQTokioRwLock::new(())),
 
-            msg_count: AtomicU64::new(0),
+            msg_count: AtomicI64::new(0),
             msg_size: AtomicU64::new(0),
-            queue_offset_max: AtomicI64::new(0),
             msg_acc_cnt: AtomicI64::new(0),
             try_unlock_times: AtomicI64::new(0),
 
@@ -100,19 +114,19 @@ impl ProcessQueue {
 
 impl ProcessQueue {
     pub(crate) fn set_dropped(&self, dropped: bool) {
-        self.dropped.store(dropped, std::sync::atomic::Ordering::Release);
+        self.dropped.store(dropped, Ordering::Release);
     }
 
     pub(crate) fn is_dropped(&self) -> bool {
-        self.dropped.load(std::sync::atomic::Ordering::Acquire)
+        self.dropped.load(Ordering::Acquire)
     }
 
     pub(crate) fn get_last_lock_timestamp(&self) -> u64 {
-        self.last_lock_timestamp.load(std::sync::atomic::Ordering::Acquire)
+        self.last_lock_timestamp.load(Ordering::Acquire)
     }
 
     pub(crate) fn set_locked(&self, locked: bool) {
-        self.locked.store(locked, std::sync::atomic::Ordering::Release);
+        self.locked.store(locked, Ordering::Release);
     }
 
     pub(crate) fn is_pull_expired(&self) -> bool {
@@ -128,26 +142,28 @@ impl ProcessQueue {
     }
 
     pub(crate) async fn clean_expired_msg(&self, push_consumer: Option<ArcMut<DefaultMQPushConsumerImpl>>) {
-        if push_consumer.is_none() {
-            return;
-        }
-        let mut push_consumer = push_consumer.unwrap();
+        let mut push_consumer = match push_consumer {
+            Some(pc) => pc,
+            None => return,
+        };
 
         if push_consumer.is_consume_orderly() {
             return;
         }
-        let loop_ = 16.min(self.msg_tree_map.read().await.len());
+
+        let loop_ = 16.min(self.store.read().await.msg_tree_map.len());
         for _ in 0..loop_ {
             let msg = {
-                let msg_tree_map = self.msg_tree_map.read().await;
-                if !msg_tree_map.is_empty() {
-                    let value = msg_tree_map.first_key_value().unwrap().1;
+                let store = self.store.read().await;
+                if let Some((_, value)) = store.msg_tree_map.first_key_value() {
                     let consume_start_time_stamp = MessageAccessor::get_consume_start_time_stamp(value.as_ref());
-                    if let Some(consume_start_time_stamp) = consume_start_time_stamp {
-                        if get_current_millis() - consume_start_time_stamp.parse::<u64>().unwrap()
-                            > push_consumer.consumer_config.consume_timeout * 1000 * 60
-                        {
-                            Some(value.clone())
+                    if let Some(ts_str) = consume_start_time_stamp {
+                        if let Ok(ts) = ts_str.parse::<u64>() {
+                            if get_current_millis() - ts > push_consumer.consumer_config.consume_timeout * 1000 * 60 {
+                                Some(value.clone())
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         }
@@ -158,19 +174,33 @@ impl ProcessQueue {
                     None
                 }
             };
-            if msg.is_none() {
-                break;
-            }
 
-            let mut msg = msg.unwrap();
+            let mut msg = match msg {
+                Some(m) => m,
+                None => break,
+            };
+
             let msg_inner = msg.as_mut();
-            msg_inner.set_topic(push_consumer.client_config.with_namespace(msg_inner.topic()));
+            let topic = push_consumer.client_config.with_namespace(msg_inner.topic());
+            let queue_id = msg_inner.queue_id();
+            let msg_id = msg_inner.msg_id().to_string();
+            let store_host = format!("{:?}", msg_inner.store_host());
+            let queue_offset = msg_inner.queue_offset;
+            msg_inner.set_topic(topic);
+            let topic_name = msg_inner.topic().to_string();
             let _ = push_consumer
                 .send_message_back_with_broker_name(msg_inner, 3, None, None)
                 .await;
-            let msg_tree_map = self.msg_tree_map.write().await;
-            if !msg_tree_map.is_empty() && msg.queue_offset == *msg_tree_map.first_key_value().unwrap().0 {
-                drop(msg_tree_map);
+            info!(
+                "send expire msg back. topic={}, msgId={}, storeHost={}, queueId={}, queueOffset={}",
+                topic_name, msg_id, store_host, queue_id, queue_offset
+            );
+
+            let should_remove = {
+                let store = self.store.read().await;
+                !store.msg_tree_map.is_empty() && queue_offset == *store.msg_tree_map.first_key_value().unwrap().0
+            };
+            if should_remove {
                 self.remove_message(&[msg]).await;
             }
         }
@@ -178,15 +208,14 @@ impl ProcessQueue {
 
     pub(crate) async fn put_message(&self, messages: Vec<ArcMut<MessageExt>>) -> bool {
         let mut dispatch_to_consume = false;
-        let mut msg_tree_map = self.msg_tree_map.write().await;
-        let mut valid_msg_cnt = 0;
+        let mut store = self.store.write().await;
+        let mut valid_msg_cnt = 0i64;
 
-        let acc_total = if !messages.is_empty() {
-            let message_ext = messages.last().unwrap();
+        let acc_total = if let Some(last_msg) = messages.last() {
             if let Some(property) =
-                message_ext.property(&CheetahString::from_static_str(MessageConst::PROPERTY_MAX_OFFSET))
+                last_msg.property(&CheetahString::from_static_str(MessageConst::PROPERTY_MAX_OFFSET))
             {
-                property.parse::<i64>().unwrap() - message_ext.queue_offset
+                property.parse::<i64>().unwrap_or(0) - last_msg.queue_offset
             } else {
                 0
             }
@@ -195,127 +224,128 @@ impl ProcessQueue {
         };
 
         for message in messages {
-            if msg_tree_map.insert(message.queue_offset, message.clone()).is_none() {
+            if store
+                .msg_tree_map
+                .insert(message.queue_offset, message.clone())
+                .is_none()
+            {
                 valid_msg_cnt += 1;
-                self.queue_offset_max
-                    .fetch_max(message.queue_offset, std::sync::atomic::Ordering::AcqRel);
-                self.msg_size
-                    .fetch_add(message.body().as_ref().unwrap().len() as u64, Ordering::AcqRel);
+                if message.queue_offset > store.queue_offset_max {
+                    store.queue_offset_max = message.queue_offset;
+                }
+                let body_len = message.body().map_or(0, |b| b.len()) as u64;
+                self.msg_size.fetch_add(body_len, Ordering::AcqRel);
             }
         }
         self.msg_count.fetch_add(valid_msg_cnt, Ordering::AcqRel);
-        if !msg_tree_map.is_empty() && !self.consuming.load(Ordering::Acquire) {
+        if !store.msg_tree_map.is_empty() && !self.consuming.load(Ordering::Acquire) {
             dispatch_to_consume = true;
             self.consuming.store(true, Ordering::Release);
         }
         if acc_total > 0 {
-            self.msg_acc_cnt.store(acc_total, std::sync::atomic::Ordering::Release);
+            self.msg_acc_cnt.store(acc_total, Ordering::Release);
         }
         dispatch_to_consume
     }
 
     pub(crate) async fn get_max_span(&self) -> u64 {
-        let msg_tree_map = self.msg_tree_map.read().await;
-        if msg_tree_map.is_empty() {
+        let store = self.store.read().await;
+        if store.msg_tree_map.is_empty() {
             return 0;
         }
-        let first = msg_tree_map.first_key_value().unwrap();
-        let last = msg_tree_map.last_key_value().unwrap();
+        let first = store.msg_tree_map.first_key_value().unwrap();
+        let last = store.msg_tree_map.last_key_value().unwrap();
         (last.0 - first.0) as u64
     }
 
     pub(crate) async fn remove_message(&self, messages: &[ArcMut<MessageExt>]) -> i64 {
         let now = get_current_millis();
-        let mut msg_tree_map = self.msg_tree_map.write().await;
+        let mut store = self.store.write().await;
 
-        if msg_tree_map.is_empty() {
+        self.last_consume_timestamp.store(now, Ordering::Release);
+
+        if store.msg_tree_map.is_empty() {
             return -1;
         }
 
-        let mut result = self.queue_offset_max.load(Ordering::Acquire) + 1;
-        let mut removed_cnt = 0u64;
+        let mut result = store.queue_offset_max + 1;
+        let mut removed_cnt = 0i64;
 
         for message in messages {
-            if let Some(_prev) = msg_tree_map.remove(&message.queue_offset) {
+            if store.msg_tree_map.remove(&message.queue_offset).is_some() {
                 removed_cnt += 1;
-                if let Some(body) = message.body() {
-                    self.msg_size.fetch_sub(body.len() as u64, Ordering::AcqRel);
+                let body_len = message.body().map_or(0, |b| b.len()) as u64;
+                if body_len > 0 {
+                    self.msg_size.fetch_sub(body_len, Ordering::AcqRel);
                 }
             }
         }
 
         if removed_cnt > 0 {
-            let current_count = self.msg_count.fetch_sub(removed_cnt, Ordering::AcqRel);
-            if current_count == removed_cnt {
+            let prev = self.msg_count.fetch_sub(removed_cnt, Ordering::AcqRel);
+            if prev == removed_cnt {
                 self.msg_size.store(0, Ordering::Release);
             }
         }
 
-        self.last_consume_timestamp.store(now, Ordering::Release);
-
-        if !msg_tree_map.is_empty() {
-            result = *msg_tree_map.first_key_value().unwrap().0;
+        if !store.msg_tree_map.is_empty() {
+            result = *store.msg_tree_map.first_key_value().unwrap().0;
         }
 
         result
     }
 
     pub(crate) async fn rollback(&self) {
-        let mut msg_tree_map = self.msg_tree_map.write().await;
-        let mut consuming_msg_orderly_tree_map = self.consuming_msg_orderly_tree_map.write().await;
-        consuming_msg_orderly_tree_map.iter().for_each(|(k, v)| {
-            msg_tree_map.insert(*k, v.clone());
-        });
-        consuming_msg_orderly_tree_map.clear();
+        let mut store = self.store.write().await;
+        let mut consuming = std::mem::take(&mut store.consuming_msg_orderly_tree_map);
+        store.msg_tree_map.append(&mut consuming);
     }
 
     pub(crate) async fn commit(&self) -> i64 {
-        let mut consuming_msg_orderly_tree_map = self.consuming_msg_orderly_tree_map.write().await;
-        let key_value = consuming_msg_orderly_tree_map.last_key_value();
-        let offset = if let Some((key, _)) = key_value { *key + 1 } else { -1 };
+        let mut store = self.store.write().await;
+        let offset = store
+            .consuming_msg_orderly_tree_map
+            .last_key_value()
+            .map_or(-1, |(k, _)| *k + 1);
 
-        let prev_count = self
-            .msg_count
-            .fetch_sub(consuming_msg_orderly_tree_map.len() as u64, Ordering::AcqRel);
+        let consumed_count = store.consuming_msg_orderly_tree_map.len() as i64;
+        let prev_count = self.msg_count.fetch_sub(consumed_count, Ordering::AcqRel);
 
-        if prev_count == consuming_msg_orderly_tree_map.len() as u64 {
+        if prev_count == consumed_count {
             self.msg_size.store(0, Ordering::Release);
         } else {
-            for message in consuming_msg_orderly_tree_map.values() {
-                self.msg_size
-                    .fetch_sub(message.body().as_ref().unwrap().len() as u64, Ordering::AcqRel);
+            for message in store.consuming_msg_orderly_tree_map.values() {
+                let body_len = message.body().map_or(0, |b| b.len()) as u64;
+                if body_len > 0 {
+                    self.msg_size.fetch_sub(body_len, Ordering::AcqRel);
+                }
             }
         }
-        consuming_msg_orderly_tree_map.clear();
+        store.consuming_msg_orderly_tree_map.clear();
         offset
     }
 
     pub(crate) async fn make_message_to_consume_again(&self, messages: &[ArcMut<MessageExt>]) {
-        let mut consuming_msg_orderly_tree_map = self.consuming_msg_orderly_tree_map.write().await;
-        let mut msg_tree_map = self.msg_tree_map.write().await;
+        let mut store = self.store.write().await;
         for message in messages {
-            consuming_msg_orderly_tree_map.remove(&message.queue_offset);
-            msg_tree_map.insert(message.queue_offset, message.clone());
+            store.consuming_msg_orderly_tree_map.remove(&message.queue_offset);
+            store.msg_tree_map.insert(message.queue_offset, message.clone());
         }
     }
 
     pub(crate) async fn take_messages(&self, batch_size: u32) -> Vec<ArcMut<MessageExt>> {
         let mut messages = Vec::with_capacity(batch_size as usize);
         let now = get_current_millis();
-
-        let mut msg_tree_map = self.msg_tree_map.write().await;
-        let mut consuming_map = self.consuming_msg_orderly_tree_map.write().await;
+        let mut store = self.store.write().await;
 
         self.last_consume_timestamp.store(now, Ordering::Release);
 
-        if !msg_tree_map.is_empty() {
-            for _ in 0..batch_size {
-                if let Some((offset, message)) = msg_tree_map.pop_first() {
-                    consuming_map.insert(offset, message.clone());
-                    messages.push(message);
-                } else {
-                    break;
-                }
+        for _ in 0..batch_size {
+            if let Some((offset, message)) = store.msg_tree_map.pop_first() {
+                store.consuming_msg_orderly_tree_map.insert(offset, message.clone());
+                messages.push(message);
+            } else {
+                break;
             }
         }
 
@@ -327,42 +357,45 @@ impl ProcessQueue {
     }
 
     pub(crate) async fn contains_message(&self, message_ext: &MessageExt) -> bool {
-        let msg_tree_map = self.msg_tree_map.read().await;
-        msg_tree_map.contains_key(&message_ext.queue_offset)
+        self.store
+            .read()
+            .await
+            .msg_tree_map
+            .contains_key(&message_ext.queue_offset)
     }
 
     pub(crate) async fn clear(&self) {
-        self.msg_tree_map.write().await.clear();
-        self.consuming_msg_orderly_tree_map.write().await.clear();
+        let mut store = self.store.write().await;
+        store.msg_tree_map.clear();
+        store.consuming_msg_orderly_tree_map.clear();
+        store.queue_offset_max = 0;
         self.msg_count.store(0, Ordering::Release);
         self.msg_size.store(0, Ordering::Release);
-        self.queue_offset_max.store(0, Ordering::Release);
     }
 
     pub(crate) async fn fill_process_queue_info(&self, info: &mut ProcessQueueInfo) {
-        let msg_tree_map = self.msg_tree_map.read().await;
-        let consuming_map = self.consuming_msg_orderly_tree_map.read().await;
+        let store = self.store.read().await;
 
-        if !msg_tree_map.is_empty() {
-            if let Some((min_offset, _)) = msg_tree_map.first_key_value() {
+        if !store.msg_tree_map.is_empty() {
+            if let Some((min_offset, _)) = store.msg_tree_map.first_key_value() {
                 info.cached_msg_min_offset = *min_offset as u64;
             }
-            if let Some((max_offset, _)) = msg_tree_map.last_key_value() {
+            if let Some((max_offset, _)) = store.msg_tree_map.last_key_value() {
                 info.cached_msg_max_offset = *max_offset as u64;
             }
-            info.cached_msg_count = msg_tree_map.len() as u32;
+            info.cached_msg_count = store.msg_tree_map.len() as u32;
         }
 
         info.cached_msg_size_in_mib = (self.msg_size.load(Ordering::Acquire) / (1024 * 1024)) as u32;
 
-        if !consuming_map.is_empty() {
-            if let Some((min_offset, _)) = consuming_map.first_key_value() {
+        if !store.consuming_msg_orderly_tree_map.is_empty() {
+            if let Some((min_offset, _)) = store.consuming_msg_orderly_tree_map.first_key_value() {
                 info.transaction_msg_min_offset = *min_offset as u64;
             }
-            if let Some((max_offset, _)) = consuming_map.last_key_value() {
+            if let Some((max_offset, _)) = store.consuming_msg_orderly_tree_map.last_key_value() {
                 info.transaction_msg_max_offset = *max_offset as u64;
             }
-            info.transaction_msg_count = consuming_map.len() as u32;
+            info.transaction_msg_count = store.consuming_msg_orderly_tree_map.len() as u32;
         }
 
         info.locked = self.locked.load(Ordering::Acquire);
@@ -373,31 +406,39 @@ impl ProcessQueue {
         info.last_consume_timestamp = self.last_consume_timestamp.load(Ordering::Acquire);
     }
 
+    /// Returns `Some((min_offset, max_offset))` of the pending message tree, or `None` if empty.
+    pub(crate) async fn get_offset_span(&self) -> Option<(i64, i64)> {
+        let store = self.store.read().await;
+        if store.msg_tree_map.is_empty() {
+            return None;
+        }
+        let min = *store.msg_tree_map.first_key_value().unwrap().0;
+        let max = *store.msg_tree_map.last_key_value().unwrap().0;
+        Some((min, max))
+    }
+
     pub(crate) fn set_last_pull_timestamp(&self, last_pull_timestamp: u64) {
-        self.last_pull_timestamp
-            .store(last_pull_timestamp, std::sync::atomic::Ordering::Release);
+        self.last_pull_timestamp.store(last_pull_timestamp, Ordering::Release);
     }
 
     pub(crate) fn set_last_lock_timestamp(&self, last_lock_timestamp: u64) {
-        self.last_lock_timestamp
-            .store(last_lock_timestamp, std::sync::atomic::Ordering::Release);
+        self.last_lock_timestamp.store(last_lock_timestamp, Ordering::Release);
     }
 
     pub fn msg_count(&self) -> u64 {
-        self.msg_count.load(std::sync::atomic::Ordering::Acquire)
+        self.msg_count.load(Ordering::Acquire).max(0) as u64
     }
 
     pub(crate) fn msg_size(&self) -> u64 {
-        self.msg_size.load(std::sync::atomic::Ordering::Acquire)
+        self.msg_size.load(Ordering::Acquire)
     }
 
     pub(crate) fn is_locked(&self) -> bool {
-        self.locked.load(std::sync::atomic::Ordering::Acquire)
+        self.locked.load(Ordering::Acquire)
     }
 
     pub(crate) async fn has_temp_message(&self) -> bool {
-        let msg_tree_map = self.msg_tree_map.read().await;
-        !msg_tree_map.is_empty()
+        !self.store.read().await.msg_tree_map.is_empty()
     }
 
     pub(crate) fn get_last_pull_timestamp(&self) -> u64 {
@@ -487,11 +528,11 @@ mod tests {
 
         assert_eq!(taken.len(), 5);
 
-        let consuming_map = pq.consuming_msg_orderly_tree_map.read().await;
-        assert_eq!(consuming_map.len(), 5);
+        let store = pq.store.read().await;
+        assert_eq!(store.consuming_msg_orderly_tree_map.len(), 5);
 
         for msg in &taken {
-            assert!(consuming_map.contains_key(&msg.queue_offset));
+            assert!(store.consuming_msg_orderly_tree_map.contains_key(&msg.queue_offset));
         }
     }
 
@@ -590,15 +631,15 @@ mod tests {
         let taken = pq.take_messages(5).await;
         assert_eq!(taken.len(), 5);
 
-        let msg_tree_map_len = pq.msg_tree_map.read().await.len();
+        let msg_tree_map_len = pq.store.read().await.msg_tree_map.len();
         assert_eq!(msg_tree_map_len, 5);
 
         pq.rollback().await;
 
-        let msg_tree_map_len_after = pq.msg_tree_map.read().await.len();
+        let msg_tree_map_len_after = pq.store.read().await.msg_tree_map.len();
         assert_eq!(msg_tree_map_len_after, 10);
 
-        let consuming_map_len = pq.consuming_msg_orderly_tree_map.read().await.len();
+        let consuming_map_len = pq.store.read().await.consuming_msg_orderly_tree_map.len();
         assert_eq!(consuming_map_len, 0);
     }
 
@@ -618,7 +659,7 @@ mod tests {
         assert_eq!(offset, 5);
         assert_eq!(pq.msg_count(), 5);
 
-        let consuming_map_len = pq.consuming_msg_orderly_tree_map.read().await.len();
+        let consuming_map_len = pq.store.read().await.consuming_msg_orderly_tree_map.len();
         assert_eq!(consuming_map_len, 0);
     }
 
@@ -706,10 +747,10 @@ mod tests {
         assert_eq!(pq.msg_count(), 0);
         assert_eq!(pq.msg_size(), 0);
 
-        let msg_tree_map_len = pq.msg_tree_map.read().await.len();
+        let msg_tree_map_len = pq.store.read().await.msg_tree_map.len();
         assert_eq!(msg_tree_map_len, 0);
 
-        let consuming_map_len = pq.consuming_msg_orderly_tree_map.read().await.len();
+        let consuming_map_len = pq.store.read().await.consuming_msg_orderly_tree_map.len();
         assert_eq!(consuming_map_len, 0);
     }
 
@@ -759,7 +800,7 @@ mod tests {
 
         pq.put_message(msgs).await;
 
-        let max_offset = pq.queue_offset_max.load(Ordering::Acquire);
+        let max_offset = pq.store.read().await.queue_offset_max;
         assert_eq!(max_offset, 9);
     }
 
