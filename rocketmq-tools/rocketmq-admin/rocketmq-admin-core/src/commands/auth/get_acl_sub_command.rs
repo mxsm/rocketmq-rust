@@ -236,7 +236,7 @@ fn print_acls(acls: &[AclInfo]) {
 
 #[cfg(test)]
 mod tests {
-    use crate::commands::auth_commands::get_acl_sub_command::GetAclSubCommand;
+    use crate::commands::auth::get_acl_sub_command::GetAclSubCommand;
     use clap::Parser;
 
     #[test]

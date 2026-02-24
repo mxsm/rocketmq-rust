@@ -20,7 +20,7 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
-use crate::commands::export_commands::export_metadata_sub_command::ExportMetadataSubCommand;
+use crate::commands::export::export_metadata_sub_command::ExportMetadataSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod get_sync_state_set_sub_command;
-mod ha_status_sub_command;
+mod cluster_list_sub_command;
+mod cluster_send_msg_rt_sub_command;
 
 use std::sync::Arc;
 
@@ -21,32 +21,32 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
-use crate::commands::ha_commands::get_sync_state_set_sub_command::GetSyncStateSetSubCommand;
-use crate::commands::ha_commands::ha_status_sub_command::HAStatusSubCommand;
+use crate::commands::cluster::cluster_list_sub_command::ClusterListSubCommand;
+use crate::commands::cluster::cluster_send_msg_rt_sub_command::ClusterSendMsgRTSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
-pub enum HACommands {
+pub enum ClusterCommands {
     #[command(
-        name = "getSyncStateSet",
-        about = "Fetch syncStateSet for target brokers.",
+        name = "clusterList",
+        about = "List cluster infos.",
         long_about = None,
     )]
-    GetSyncStateSet(GetSyncStateSetSubCommand),
+    ClusterList(ClusterListSubCommand),
 
     #[command(
-        name = "haStatus",
-        about = "Fetch ha runtime status data.",
+        name = "clusterRT",
+        about = "List All clusters Message Send RT.",
         long_about = None,
     )]
-    HaStatus(HAStatusSubCommand),
+    ClusterRT(ClusterSendMsgRTSubCommand),
 }
 
-impl CommandExecute for HACommands {
+impl CommandExecute for ClusterCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
-            HACommands::GetSyncStateSet(value) => value.execute(rpc_hook).await,
-            HACommands::HaStatus(value) => value.execute(rpc_hook).await,
+            ClusterCommands::ClusterList(value) => value.execute(rpc_hook).await,
+            ClusterCommands::ClusterRT(value) => value.execute(rpc_hook).await,
         }
     }
 }

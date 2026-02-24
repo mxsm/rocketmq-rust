@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod consumer_connection_sub_command;
-mod producer_connection_sub_command;
+mod get_sync_state_set_sub_command;
+mod ha_status_sub_command;
 
 use std::sync::Arc;
 
@@ -21,27 +21,32 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
-use crate::commands::connection_commands::consumer_connection_sub_command::ConsumerConnectionSubCommand;
-use crate::commands::connection_commands::producer_connection_sub_command::ProducerConnectionSubCommand;
+use crate::commands::ha::get_sync_state_set_sub_command::GetSyncStateSetSubCommand;
+use crate::commands::ha::ha_status_sub_command::HAStatusSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
-pub enum ConnectionCommands {
+pub enum HACommands {
     #[command(
-        name = "consumerConnection",
-        about = "Query consumer's socket connection, client version and subscription"
+        name = "getSyncStateSet",
+        about = "Fetch syncStateSet for target brokers.",
+        long_about = None,
     )]
-    ConsumerConnection(ConsumerConnectionSubCommand),
+    GetSyncStateSet(GetSyncStateSetSubCommand),
 
-    #[command(name = "producerConnection", about = "Query producer's connection")]
-    ProducerConnection(ProducerConnectionSubCommand),
+    #[command(
+        name = "haStatus",
+        about = "Fetch ha runtime status data.",
+        long_about = None,
+    )]
+    HaStatus(HAStatusSubCommand),
 }
 
-impl CommandExecute for ConnectionCommands {
+impl CommandExecute for HACommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
-            ConnectionCommands::ConsumerConnection(cmd) => cmd.execute(rpc_hook).await,
-            ConnectionCommands::ProducerConnection(cmd) => cmd.execute(rpc_hook).await,
+            HACommands::GetSyncStateSet(value) => value.execute(rpc_hook).await,
+            HACommands::HaStatus(value) => value.execute(rpc_hook).await,
         }
     }
 }

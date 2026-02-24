@@ -261,7 +261,7 @@ async fn update_cluster(
 #[cfg(test)]
 mod tests {
 
-    use crate::commands::auth_commands::update_acl_sub_command::UpdateAclSubCommand;
+    use crate::commands::auth::update_acl_sub_command::UpdateAclSubCommand;
     use clap::Parser;
 
     #[test]
