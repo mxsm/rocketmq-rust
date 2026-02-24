@@ -124,7 +124,9 @@ impl RebalancePushImpl {
 
         let force_unlock =
             pq.is_dropped() && (get_current_millis() > pq.get_last_lock_timestamp() + *UNLOCK_DELAY_TIME_MILLS);
-        let consume_lock = pq.consume_lock.try_write_timeout(Duration::from_millis(500)).await;
+        let consume_lock = tokio::time::timeout(Duration::from_millis(500), pq.consume_lock.write())
+            .await
+            .ok();
         if force_unlock || consume_lock.is_some() {
             let Some(offset_store) = default_mqpush_consumer_impl.offset_store.as_mut() else {
                 error!("Offset store not initialized");

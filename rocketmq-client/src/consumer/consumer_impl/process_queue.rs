@@ -28,7 +28,6 @@ use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::TimeUtils::get_current_millis;
 use rocketmq_remoting::protocol::body::process_queue_info::ProcessQueueInfo;
 use rocketmq_rust::ArcMut;
-use rocketmq_rust::RocketMQTokioRwLock;
 use tokio::sync::RwLock;
 use tracing::info;
 
@@ -67,7 +66,7 @@ impl ProcessQueueStore {
 
 pub struct ProcessQueue {
     store: RwLock<ProcessQueueStore>,
-    pub(crate) consume_lock: Arc<RocketMQTokioRwLock<()>>,
+    pub(crate) consume_lock: Arc<RwLock<()>>,
 
     msg_count: AtomicI64,
     msg_size: AtomicU64,
@@ -94,7 +93,7 @@ impl ProcessQueue {
         let now = get_current_millis();
         ProcessQueue {
             store: RwLock::new(ProcessQueueStore::new()),
-            consume_lock: Arc::new(RocketMQTokioRwLock::new(())),
+            consume_lock: Arc::new(RwLock::new(())),
 
             msg_count: AtomicI64::new(0),
             msg_size: AtomicU64::new(0),
