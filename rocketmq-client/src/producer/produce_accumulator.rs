@@ -390,7 +390,7 @@ impl AggregateKey {
             topic: message.topic().clone(),
             mq: None,
             wait_store_msg_ok: message.is_wait_store_msg_ok(),
-            tag: message.get_tags(),
+            tag: message.tags(),
         }
     }
 
@@ -399,7 +399,7 @@ impl AggregateKey {
             topic: message.topic().clone(),
             mq,
             wait_store_msg_ok: message.is_wait_store_msg_ok(),
-            tag: message.get_tags(),
+            tag: message.tags(),
         }
     }
 

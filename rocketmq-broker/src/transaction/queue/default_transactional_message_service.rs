@@ -912,12 +912,12 @@ where
             debug!(
                 "Topic: {} tags: {:?}, OpOffset: {}, HalfOffset: {}",
                 op_message_ext.topic(),
-                op_message_ext.get_tags(),
+                op_message_ext.tags(),
                 op_message_ext.queue_offset(),
                 queue_offset_body
             );
 
-            if op_message_ext.get_tags() == Some(CheetahString::from_static_str(TransactionalMessageUtil::REMOVE_TAG)) {
+            if op_message_ext.tags() == Some(CheetahString::from_static_str(TransactionalMessageUtil::REMOVE_TAG)) {
                 let offset_array: Vec<&str> = queue_offset_body
                     .split(TransactionalMessageUtil::OFFSET_SEPARATOR)
                     .collect();

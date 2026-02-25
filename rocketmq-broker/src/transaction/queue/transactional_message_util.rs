@@ -63,7 +63,7 @@ impl TransactionalMessageUtil {
         }
         msg_inner.set_flag(msg_ext.get_flag());
         msg_inner.tags_code =
-            MessageExtBrokerInner::tags_string_to_tags_code(msg_inner.get_tags().unwrap_or_default().as_str());
+            MessageExtBrokerInner::tags_string_to_tags_code(msg_inner.tags().unwrap_or_default().as_str());
         msg_inner.message_ext_inner.set_born_timestamp(msg_ext.born_timestamp);
         msg_inner.message_ext_inner.set_born_host(msg_ext.born_host);
 

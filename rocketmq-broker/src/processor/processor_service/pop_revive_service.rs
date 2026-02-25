@@ -121,7 +121,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
             msg_inner.set_body(bytes);
         }
         msg_inner.message_ext_inner.queue_id = 0;
-        if let Some(tags) = message_ext.get_tags() {
+        if let Some(tags) = message_ext.tags() {
             msg_inner.set_tags(tags);
         } else {
             MessageAccessor::set_properties(&mut msg_inner, HashMap::new());
@@ -470,7 +470,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
             }
             let size = message_exts.as_ref().unwrap().len();
             for message_ext in message_exts.unwrap() {
-                if PopAckConstants::CK_TAG == message_ext.get_tags().unwrap_or_default() {
+                if PopAckConstants::CK_TAG == message_ext.tags().unwrap_or_default() {
                     // let raw = String::from_utf8(message_ext.get_body().to_vec()).unwrap();
                     if self.broker_runtime_inner.broker_config().enable_pop_log {
                         info!(
@@ -523,7 +523,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                     if first_rt == 0 {
                         first_rt = point.get_revive_time() as u64;
                     }
-                } else if PopAckConstants::ACK_TAG == message_ext.get_tags().unwrap_or_default() {
+                } else if PopAckConstants::ACK_TAG == message_ext.tags().unwrap_or_default() {
                     // Safely decode ACK message body
                     let body = match message_ext.get_body() {
                         Some(body) => body,
@@ -572,7 +572,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                             first_rt = mock_point_map.get(&merge_key).unwrap().get_revive_time() as u64;
                         }
                     }
-                } else if PopAckConstants::BATCH_ACK_TAG == message_ext.get_tags().unwrap_or_default() {
+                } else if PopAckConstants::BATCH_ACK_TAG == message_ext.tags().unwrap_or_default() {
                     //let raw = String::from_utf8(message_ext.get_body().to_vec()).unwrap();
                     if self.broker_runtime_inner.broker_config().enable_pop_log {
                         info!(

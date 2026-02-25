@@ -586,7 +586,7 @@ impl<MS: MessageStore> ScheduleMessageService<MS> {
         let topic_filter_type = message_single::parse_topic_filter_type(inner.sys_flag());
         let tags_code = MessageExtBrokerInner::tags_string2tags_code(
             &topic_filter_type,
-            inner.get_tags().as_ref().unwrap_or(&CheetahString::empty()),
+            inner.tags().as_ref().unwrap_or(&CheetahString::empty()),
         );
         inner.tags_code = tags_code;
         inner.properties_string = MessageDecoder::message_properties_to_string(inner.get_properties());

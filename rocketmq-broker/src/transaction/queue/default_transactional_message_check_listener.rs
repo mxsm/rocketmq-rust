@@ -174,7 +174,7 @@ fn to_message_ext_broker_inner(topic_config: &TopicConfig, msg_ext: &MessageExt)
     inner.set_flag(msg_ext.get_flag());
     MessageAccessor::set_properties(&mut inner, msg_ext.get_properties().clone());
     inner.properties_string = MessageDecoder::message_properties_to_string(msg_ext.get_properties());
-    inner.tags_code = MessageExtBrokerInner::tags_string_to_tags_code(msg_ext.get_tags().unwrap_or_default().as_str());
+    inner.tags_code = MessageExtBrokerInner::tags_string_to_tags_code(msg_ext.tags().unwrap_or_default().as_str());
     inner.message_ext_inner.queue_id = 0;
     inner.message_ext_inner.sys_flag = msg_ext.sys_flag();
     inner.message_ext_inner.born_timestamp = msg_ext.born_timestamp;
@@ -209,7 +209,7 @@ mod tests {
         );
         assert_eq!(
             result.tags_code,
-            MessageExtBrokerInner::tags_string_to_tags_code(msg_ext.get_tags().unwrap_or_default().as_str())
+            MessageExtBrokerInner::tags_string_to_tags_code(msg_ext.tags().unwrap_or_default().as_str())
         );
         assert_eq!(result.message_ext_inner.queue_id, result.message_ext_inner.queue_id);
         assert_eq!(result.message_ext_inner.sys_flag, msg_ext.sys_flag());

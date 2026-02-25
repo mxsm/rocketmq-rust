@@ -996,7 +996,7 @@ impl DefaultMQPushConsumerImpl {
                 if !subscription_data.tags_set.is_empty() && !subscription_data.class_filter_mode {
                     let mut msg_vec_again = Vec::with_capacity(msg_vec.len());
                     for msg in msg_vec {
-                        if let Some(ref tag) = msg.get_tags() {
+                        if let Some(ref tag) = msg.tags() {
                             if subscription_data.tags_set.contains(tag.as_str()) {
                                 msg_vec_again.push(msg);
                             }
