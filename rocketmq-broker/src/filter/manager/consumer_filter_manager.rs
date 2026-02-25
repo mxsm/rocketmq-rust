@@ -99,20 +99,6 @@ impl ConsumerFilterManager {
         consumer_filter_data.set_expression_type(type_);
         consumer_filter_data.set_client_version(client_version);
 
-        /*        let filter_factory = FilterFactory;
-                match filter_factory.get(&type_).compile(&expression) {
-                    Ok(compiled_expression) => {
-                        consumer_filter_data.set_compiled_expression(compiled_expression);
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "parse error: expr={}, topic={}, group={}, error={}",
-                            expression, topic, consumer_group, e
-                        );
-                        return None;
-                    }
-                }
-        */
         Some(consumer_filter_data)
     }
 
