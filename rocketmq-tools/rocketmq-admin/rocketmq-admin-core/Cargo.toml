@@ -49,6 +49,7 @@ tracing              = { workspace = true }
 cheetah-string = { workspace = true }
 chrono         = "0.4"
 clap           = { version = "4.5.60", features = ["derive"] }
+rocksdb        = "0.24"
 clap_complete  = "4.5"
 tabled         = { version = "0.20.0", features = ["derive"] }
 futures        = "0.3.32"

@@ -3442,6 +3442,7 @@ dependencies = [
  "rocketmq-error",
  "rocketmq-remoting",
  "rocketmq-rust",
+ "rocksdb",
  "serde",
  "serde_json",
  "serde_yaml",

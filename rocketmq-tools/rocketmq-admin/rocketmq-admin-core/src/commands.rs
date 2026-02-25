@@ -365,6 +365,12 @@ impl CommandExecute for ClassificationTablePrint {
                 remark: "Export metadata.",
             },
             Command {
+                category: "Export",
+                command: "exportMetadataInRocksDB",
+                remark: "Export RocksDB kv config (topics/subscriptionGroups). Recommend to use [mqadmin \
+                         rocksDBConfigToJson]",
+            },
+            Command {
                 category: "HA",
                 command: "getSyncStateSet",
                 remark: "Fetch sync state set for target brokers.",

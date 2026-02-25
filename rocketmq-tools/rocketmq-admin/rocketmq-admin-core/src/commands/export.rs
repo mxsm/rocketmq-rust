@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod export_configs_sub_command;
+mod export_metadata_in_rocks_db_sub_command;
 mod export_metadata_sub_command;
 
 use std::sync::Arc;
@@ -22,6 +23,7 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::export::export_configs_sub_command::ExportConfigsSubCommand;
+use crate::commands::export::export_metadata_in_rocks_db_sub_command::ExportMetadataInRocksDBSubCommand;
 use crate::commands::export::export_metadata_sub_command::ExportMetadataSubCommand;
 use crate::commands::CommandExecute;
 
@@ -35,6 +37,13 @@ pub enum ExportCommands {
     ExportConfigs(ExportConfigsSubCommand),
 
     #[command(
+        name = "exportMetadataInRocksDB",
+        about = "Export RocksDB kv config (topics/subscriptionGroups). Recommend to use [mqadmin rocksDBConfigToJson]",
+        long_about = None,
+    )]
+    ExportMetadataInRocksDB(ExportMetadataInRocksDBSubCommand),
+
+    #[command(
         name = "exportMetadata",
         about = "Export metadata.",
         long_about = None,
@@ -46,6 +55,7 @@ impl CommandExecute for ExportCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
             ExportCommands::ExportConfigs(cmd) => cmd.execute(rpc_hook).await,
+            ExportCommands::ExportMetadataInRocksDB(cmd) => cmd.execute(rpc_hook).await,
             ExportCommands::ExportMetadata(cmd) => cmd.execute(rpc_hook).await,
         }
     }
