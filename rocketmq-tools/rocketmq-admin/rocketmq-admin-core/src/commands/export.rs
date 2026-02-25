@@ -15,6 +15,7 @@
 mod export_configs_sub_command;
 mod export_metadata_in_rocks_db_sub_command;
 mod export_metadata_sub_command;
+mod export_pop_record_sub_command;
 
 use std::sync::Arc;
 
@@ -25,6 +26,7 @@ use rocketmq_remoting::runtime::RPCHook;
 use crate::commands::export::export_configs_sub_command::ExportConfigsSubCommand;
 use crate::commands::export::export_metadata_in_rocks_db_sub_command::ExportMetadataInRocksDBSubCommand;
 use crate::commands::export::export_metadata_sub_command::ExportMetadataSubCommand;
+use crate::commands::export::export_pop_record_sub_command::ExportPopRecordSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
@@ -49,6 +51,13 @@ pub enum ExportCommands {
         long_about = None,
     )]
     ExportMetadata(ExportMetadataSubCommand),
+
+    #[command(
+        name = "exportPopRecord",
+        about = "Export pop consumer records.",
+        long_about = None,
+    )]
+    ExportPopRecord(ExportPopRecordSubCommand),
 }
 
 impl CommandExecute for ExportCommands {
@@ -57,6 +66,7 @@ impl CommandExecute for ExportCommands {
             ExportCommands::ExportConfigs(cmd) => cmd.execute(rpc_hook).await,
             ExportCommands::ExportMetadataInRocksDB(cmd) => cmd.execute(rpc_hook).await,
             ExportCommands::ExportMetadata(cmd) => cmd.execute(rpc_hook).await,
+            ExportCommands::ExportPopRecord(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }
