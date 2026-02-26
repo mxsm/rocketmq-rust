@@ -485,9 +485,7 @@ impl ConsumeRequest {
         let mut invisible_time = 0u64;
 
         if let Some(first) = msgs.first() {
-            if let Some(extra_info) =
-                first.property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK))
-            {
+            if let Some(extra_info) = first.property(&CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK)) {
                 let extra_info_strs = ExtraInfoUtil::split(&extra_info);
                 if let Ok(pt) = ExtraInfoUtil::get_pop_time(&extra_info_strs) {
                     pop_time = pt as u64;
@@ -520,10 +518,7 @@ impl ConsumeRequest {
         get_current_millis().saturating_sub(self.pop_time) >= self.invisible_time
     }
 
-    pub async fn run(
-        mut self,
-        mut consume_message_concurrently_service: ArcMut<ConsumeMessagePopConcurrentlyService>,
-    ) {
+    pub async fn run(mut self, mut consume_message_concurrently_service: ArcMut<ConsumeMessagePopConcurrentlyService>) {
         if consume_message_concurrently_service.stopped.load(Ordering::Acquire) {
             warn!(
                 "run, service stopped, discard consume request for {}",
