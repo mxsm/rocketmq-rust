@@ -1370,10 +1370,12 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn get_parent_topic_info(
         &self,
-        _broker_addr: CheetahString,
-        _topic: CheetahString,
+        broker_addr: CheetahString,
+        topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<GetParentTopicInfoResponseBody> {
-        unimplemented!("get_parent_topic_info not implemented yet")
+        self.default_mqadmin_ext_impl
+            .get_parent_topic_info(broker_addr, topic)
+            .await
     }
 
     async fn get_lite_topic_info(
