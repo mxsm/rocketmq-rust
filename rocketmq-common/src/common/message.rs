@@ -187,7 +187,7 @@ pub trait MessageTrait: Any + Display + Debug {
     ///
     /// # Returns
     ///
-    /// An `Option<&String>` containing the reference of the tags if they exist, otherwise `None`.
+    /// An `Option<&CheetahString>` containing a reference to the tags if they exist, otherwise `None`.
     fn gets_tags_ref(&self) -> Option<&CheetahString> {
         self.property_ref(&CheetahString::from_static_str(MessageConst::PROPERTY_TAGS))
     }
