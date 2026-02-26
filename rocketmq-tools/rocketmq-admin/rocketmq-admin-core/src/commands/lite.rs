@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod get_broker_lite_info_sub_command;
+mod get_lite_client_info_sub_command;
 mod trigger_lite_dispatch_sub_command;
 
 use std::sync::Arc;
@@ -22,6 +23,7 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::lite::get_broker_lite_info_sub_command::GetBrokerLiteInfoSubCommand;
+use crate::commands::lite::get_lite_client_info_sub_command::GetLiteClientInfoSubCommand;
 use crate::commands::lite::trigger_lite_dispatch_sub_command::TriggerLiteDispatchSubCommand;
 use crate::commands::CommandExecute;
 
@@ -35,6 +37,13 @@ pub enum LiteCommands {
     GetBrokerLiteInfo(GetBrokerLiteInfoSubCommand),
 
     #[command(
+        name = "getLiteClientInfo",
+        about = "Get lite client info.",
+        long_about = None,
+    )]
+    GetLiteClientInfo(GetLiteClientInfoSubCommand),
+
+    #[command(
         name = "triggerLiteDispatch",
         about = "Trigger Lite Dispatch.",
         long_about = None,
@@ -46,6 +55,7 @@ impl CommandExecute for LiteCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
             LiteCommands::GetBrokerLiteInfo(cmd) => cmd.execute(rpc_hook).await,
+            LiteCommands::GetLiteClientInfo(cmd) => cmd.execute(rpc_hook).await,
             LiteCommands::TriggerLiteDispatch(cmd) => cmd.execute(rpc_hook).await,
         }
     }
