@@ -356,6 +356,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Export",
+                command: "exportConfigs",
+                remark: "Export configs",
+            },
+            Command {
+                category: "Export",
                 command: "exportMetadata",
                 remark: "Export metadata.",
             },

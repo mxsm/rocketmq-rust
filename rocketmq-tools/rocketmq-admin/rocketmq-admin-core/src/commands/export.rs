@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod export_configs_sub_command;
 mod export_metadata_sub_command;
 
 use std::sync::Arc;
@@ -20,11 +21,19 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
+use crate::commands::export::export_configs_sub_command::ExportConfigsSubCommand;
 use crate::commands::export::export_metadata_sub_command::ExportMetadataSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
 pub enum ExportCommands {
+    #[command(
+        name = "exportConfigs",
+        about = "Export configs.",
+        long_about = None,
+    )]
+    ExportConfigs(ExportConfigsSubCommand),
+
     #[command(
         name = "exportMetadata",
         about = "Export metadata.",
@@ -36,6 +45,7 @@ pub enum ExportCommands {
 impl CommandExecute for ExportCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
+            ExportCommands::ExportConfigs(cmd) => cmd.execute(rpc_hook).await,
             ExportCommands::ExportMetadata(cmd) => cmd.execute(rpc_hook).await,
         }
     }
