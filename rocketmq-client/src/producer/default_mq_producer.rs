@@ -129,7 +129,7 @@ impl ProducerConfig {
     pub fn create_topic_key(&self) -> &CheetahString {
         &self.create_topic_key
     }
-
+    #[inline]
     pub fn default_topic_queue_nums(&self) -> u32 {
         self.default_topic_queue_nums
     }
