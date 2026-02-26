@@ -730,10 +730,8 @@ impl BrokerOuterAPI {
             .invoke_request(None, request, timeout_millis)
             .await?;
         match ResponseCode::from(response.code()) {
-            ResponseCode::TopicNotExist => {
-                if allow_topic_not_exist {
-                    warn!("get Topic [{}] RouteInfoFromNameServer is not exist value", topic);
-                }
+            ResponseCode::TopicNotExist if allow_topic_not_exist => {
+                warn!("get Topic [{}] RouteInfoFromNameServer is not exist value", topic);
             }
             ResponseCode::Success => {
                 if let Some(body) = response.body() {

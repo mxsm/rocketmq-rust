@@ -83,8 +83,8 @@ impl MockRebalanceImpl {
         let to_remove: Vec<MessageQueue> = {
             let process_queue_table = self.process_queue_table.read().await;
             process_queue_table
-                .iter()
-                .filter_map(|(mq, _pq)| {
+                .keys()
+                .filter_map(|mq| {
                     if !topics.contains(mq.topic_str()) {
                         Some(mq.clone())
                     } else {

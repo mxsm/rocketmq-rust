@@ -251,8 +251,8 @@ where
         let to_remove: Vec<MessageQueue> = {
             let process_queue_table = self.process_queue_table.read().await;
             process_queue_table
-                .iter()
-                .filter_map(|(mq, _pq)| {
+                .keys()
+                .filter_map(|mq| {
                     if !topics.contains(mq.topic_str()) {
                         Some(mq.clone())
                     } else {
@@ -282,8 +282,8 @@ where
         let pop_to_remove: Vec<MessageQueue> = {
             let pop_process_queue_table = self.pop_process_queue_table.read().await;
             pop_process_queue_table
-                .iter()
-                .filter_map(|(mq, _pq)| {
+                .keys()
+                .filter_map(|mq| {
                     if !topics.contains(mq.topic_str()) {
                         Some(mq.clone())
                     } else {
