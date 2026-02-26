@@ -1399,12 +1399,14 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn get_lite_group_info(
         &self,
-        _broker_addr: CheetahString,
-        _group: CheetahString,
-        _lite_topic: CheetahString,
-        _top_k: i32,
+        broker_addr: CheetahString,
+        group: CheetahString,
+        lite_topic: CheetahString,
+        top_k: i32,
     ) -> rocketmq_error::RocketMQResult<GetLiteGroupInfoResponseBody> {
-        unimplemented!("get_lite_group_info not implemented yet")
+        self.default_mqadmin_ext_impl
+            .get_lite_group_info(broker_addr, group, lite_topic, top_k)
+            .await
     }
 
     async fn export_rocksdb_config_to_json(
