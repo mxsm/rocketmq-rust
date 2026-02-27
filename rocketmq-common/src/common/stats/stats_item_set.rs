@@ -48,16 +48,12 @@ impl StatsItemSet {
     }
 
     /// Add value to the stats item identified by key.
-    ///
-    /// Equivalent to Java `addValue(key, incValue, incTimes)`.
     pub fn add_value(&self, stats_key: &str, inc_value: impl Into<i64>, inc_times: impl Into<i64>) {
         let item = self.get_or_create_stats_item(stats_key);
         item.add(inc_value.into() as u64, inc_times.into() as u64);
     }
 
     /// Add RT (Response Time) value for latency metrics.
-    ///
-    /// Equivalent to Java `addRTValue(key, incValue, incTimes)`.
     pub fn add_rt_value(&self, stats_key: &str, inc_value: impl Into<i64>, inc_times: impl Into<i64>) {
         self.add_value(stats_key, inc_value.into(), inc_times.into());
     }
@@ -116,18 +112,12 @@ impl StatsItemSet {
     }
 
     /// Delete all items whose key starts with `prefix` followed immediately by `separator`.
-    ///
-    /// Equivalent to Java `delValueByPrefixKey(statsKey, separator)`: retains only keys where
-    /// `key.starts_with(statsKey + separator)` is false.
     pub fn del_value_by_prefix_key(&self, prefix: &str, separator: &str) {
         let match_prefix = format!("{}{}", prefix, separator);
         self.items.retain(|k, _| !k.starts_with(&match_prefix));
     }
 
     /// Delete all items whose key ends with `separator` followed immediately by `suffix`.
-    ///
-    /// Equivalent to Java `delValueBySuffixKey(statsKey, separator)`: retains only keys where
-    /// `key.endsWith(separator + statsKey)` is false.
     pub fn del_value_by_suffix_key(&self, suffix: &str, separator: &str) {
         let match_suffix = format!("{}{}", separator, suffix);
         self.items.retain(|k, _| !k.ends_with(&match_suffix));
@@ -151,8 +141,6 @@ impl StatsItemSet {
     }
 
     /// Evict items that have not been updated for longer than `max_idle_minutes`.
-    ///
-    /// Equivalent to Java `cleanResource(maxStatsIdleTimeInMinutes)`.
     pub fn clean_resource(&self, max_idle_minutes: u64) {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
