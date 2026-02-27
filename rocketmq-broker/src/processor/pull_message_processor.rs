@@ -227,9 +227,7 @@ where
         let phy_queue_offset = mapping_item.compute_physical_queue_offset(global_offset);
         request_header.queue_id = phy_queue_id;
         request_header.queue_offset = phy_queue_offset;
-        if mapping_item.check_if_end_offset_decided()
-        /* && request_header.max_msg_nums.is_some() */
-        {
+        if mapping_item.check_if_end_offset_decided() {
             request_header.max_msg_nums = std::cmp::min(
                 (mapping_item.end_offset - mapping_item.start_offset) as i32,
                 request_header.max_msg_nums,

@@ -733,6 +733,7 @@ impl BrokerOuterAPI {
             ResponseCode::TopicNotExist if allow_topic_not_exist => {
                 warn!("get Topic [{}] RouteInfoFromNameServer is not exist value", topic);
             }
+            ResponseCode::TopicNotExist => {}
             ResponseCode::Success => {
                 if let Some(body) = response.body() {
                     let topic_route_data = TopicRouteData::decode(body).unwrap();
