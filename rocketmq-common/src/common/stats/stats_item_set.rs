@@ -50,16 +50,16 @@ impl StatsItemSet {
     /// Add value to the stats item identified by key.
     ///
     /// Equivalent to Java `addValue(key, incValue, incTimes)`.
-    pub fn add_value(&self, stats_key: &str, inc_value: i64, inc_times: i64) {
+    pub fn add_value(&self, stats_key: &str, inc_value: impl Into<i64>, inc_times: impl Into<i64>) {
         let item = self.get_or_create_stats_item(stats_key);
-        item.add(inc_value as u64, inc_times as u64);
+        item.add(inc_value.into() as u64, inc_times.into() as u64);
     }
 
     /// Add RT (Response Time) value for latency metrics.
     ///
     /// Equivalent to Java `addRTValue(key, incValue, incTimes)`.
-    pub fn add_rt_value(&self, stats_key: &str, inc_value: i64, inc_times: i64) {
-        self.add_value(stats_key, inc_value, inc_times);
+    pub fn add_rt_value(&self, stats_key: &str, inc_value: impl Into<i64>, inc_times: impl Into<i64>) {
+        self.add_value(stats_key, inc_value.into(), inc_times.into());
     }
 
     /// Get statistics snapshot for the last minute
