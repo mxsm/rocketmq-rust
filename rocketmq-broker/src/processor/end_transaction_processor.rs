@@ -487,7 +487,7 @@ fn end_message_transaction(msg_ext: &mut MessageExt) -> MessageExtBrokerInner {
         } else {
             TopicFilterType::SingleTag
         };
-    let tags_code_value = if let Some(tags) = msg_ext.get_tags() {
+    let tags_code_value = if let Some(tags) = msg_ext.tags() {
         MessageExtBrokerInner::tags_string2tags_code(&topic_filter_type, tags.as_str())
     } else {
         0

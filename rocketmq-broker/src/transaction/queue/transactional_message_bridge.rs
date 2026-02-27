@@ -318,7 +318,7 @@ where
         let mut inner = MessageExtBrokerInner {
             message_ext_inner: msg_ext.clone(),
             properties_string: message_decoder::message_properties_to_string(msg_ext.get_properties()),
-            tags_code: MessageExtBrokerInner::tags_string_to_tags_code(msg_ext.get_tags().unwrap_or_default().as_str()),
+            tags_code: MessageExtBrokerInner::tags_string_to_tags_code(msg_ext.tags().unwrap_or_default().as_str()),
             encoded_buff: None,
             encode_completed: false,
             version: Default::default(),
@@ -331,14 +331,10 @@ where
     fn make_op_message_inner(&self, message: Message, message_queue: &MessageQueue) -> MessageExtBrokerInner {
         let mut msg_inner = MessageExtBrokerInner::default();
         msg_inner.message_ext_inner.message = message;
-        //msg_inner.set_topic(message.get_topic().to_owned());
-        //msg_inner.set_body(message.get_body().expect("message body is empty").clone());
         msg_inner.message_ext_inner.queue_id = message_queue.queue_id();
-        //msg_inner.set_tags(message.get_tags().unwrap_or_default());
         msg_inner.tags_code =
-            MessageExtBrokerInner::tags_string_to_tags_code(msg_inner.get_tags().unwrap_or_default().as_str());
+            MessageExtBrokerInner::tags_string_to_tags_code(msg_inner.tags().unwrap_or_default().as_str());
         msg_inner.message_ext_inner.sys_flag = 0;
-        //MessageAccessor::set_properties(&mut msg_inner, message.get_properties().clone());
         msg_inner.properties_string = MessageDecoder::message_properties_to_string(msg_inner.get_properties());
 
         msg_inner.message_ext_inner.born_timestamp = get_current_millis() as i64;
