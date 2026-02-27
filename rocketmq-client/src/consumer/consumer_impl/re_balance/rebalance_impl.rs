@@ -387,9 +387,13 @@ where
             if sub_rebalance_impl.is_none() {
                 return false;
             }
+            let mq_all = {
+                let table = self.topic_subscribe_info_table.read().await;
+                table.get(topic.as_str()).cloned().unwrap_or_default()
+            };
             sub_rebalance_impl
                 .unwrap()
-                .message_queue_changed(topic, &HashSet::new(), &mq_set)
+                .message_queue_changed(topic, &mq_all, &mq_set)
                 .await;
         }
         let set = self.get_working_message_queue(topic).await;
@@ -668,8 +672,8 @@ where
                     if !pop_process_queue_table.contains_key(mq) {
                         let pq = rebalance_impl.create_pop_process_queue();
                         let pre = pop_process_queue_table.insert(mq.clone(), Arc::new(pq.clone()));
-                        if pre.is_none() {
-                            info!("doRebalance, {:?}, mq already exists, {}", self.consumer_group, mq);
+                        if pre.is_some() {
+                            info!("doRebalance, {:?}, mq pop already exists, {}", self.consumer_group, mq);
                         } else {
                             info!("doRebalance, {:?}, add a new pop mq, {}", self.consumer_group, mq);
                             let request = PopRequest::new(
@@ -801,7 +805,16 @@ where
                 sub_rebalance_impl.remove_dirty_offset(mq).await;
                 let pq = Arc::new(sub_rebalance_impl.create_process_queue());
                 pq.set_locked(true);
-                let next_offset = sub_rebalance_impl.compute_pull_from_where(mq).await;
+                let next_offset = sub_rebalance_impl.compute_pull_from_where_with_exception(mq).await;
+                if next_offset.is_err() {
+                    info!(
+                        "doRebalance, {:?}, compute offset failed, {}",
+                        self.consumer_group,
+                        mq.topic_str()
+                    );
+                    continue;
+                }
+                let next_offset = next_offset.unwrap();
                 if next_offset >= 0 {
                     if process_queue_table.insert(mq.clone(), pq.clone()).is_none() {
                         info!(
@@ -844,17 +857,20 @@ where
     async fn rebalance_by_topic(&mut self, topic: &CheetahString, is_order: bool) -> bool {
         match self.message_model.unwrap() {
             MessageModel::Broadcasting => {
-                let topic_sub_cloned = self.topic_subscribe_info_table.clone();
-                let topic_subscribe_info_table = topic_sub_cloned.read().await;
-                let mq_set = topic_subscribe_info_table.get(topic);
-                if let Some(mq_set) = mq_set {
+                // Clone the mq_set snapshot under the read lock, then drop the lock before
+                // any async work to avoid holding it across await points.
+                let mq_set_opt: Option<HashSet<MessageQueue>> = {
+                    let table = self.topic_subscribe_info_table.read().await;
+                    table.get(topic).cloned()
+                };
+                if let Some(mq_set) = mq_set_opt {
                     let changed = self
-                        .update_process_queue_table_in_rebalance(topic, mq_set, is_order)
+                        .update_process_queue_table_in_rebalance(topic, &mq_set, is_order)
                         .await;
                     if changed {
                         let sub_rebalance_impl = self.sub_rebalance_impl.as_mut().unwrap();
                         if let Some(mut sub_rebalance_impl) = sub_rebalance_impl.upgrade() {
-                            sub_rebalance_impl.message_queue_changed(topic, mq_set, mq_set).await;
+                            sub_rebalance_impl.message_queue_changed(topic, &mq_set, &mq_set).await;
                         }
                     }
                     mq_set.eq(&self.get_working_message_queue(topic).await)
@@ -1011,7 +1027,7 @@ where
                     for mq in &locked_mq {
                         if let Some(pq) = process_queue_table.get(mq) {
                             pq.set_locked(true);
-                            pq.set_last_pull_timestamp(current_millis());
+                            pq.set_last_lock_timestamp(current_millis());
                         }
                     }
                     let lock_ok = locked_mq.contains(mq);
@@ -1091,58 +1107,6 @@ where
             })
             .collect::<Vec<_>>();
         futures::future::join_all(map).await;
-
-        /*        for (broker_name, mqs) in broker_mqs {
-            if mqs.is_empty() {
-                continue;
-            }
-            let client = self.client_instance.as_mut().unwrap();
-            let find_broker_result = client
-                .find_broker_address_in_subscribe(broker_name.as_str(), mix_all::MASTER_ID, true)
-                .await;
-            if let Some(find_broker_result) = find_broker_result {
-                let request_body = LockBatchRequestBody {
-                    consumer_group: Some(self.consumer_group.clone().unwrap()),
-                    client_id: Some(client.client_id.clone()),
-                    mq_set: mqs.clone(),
-                    ..Default::default()
-                };
-                let result = client
-                    .mq_client_api_impl
-                    .as_mut()
-                    .unwrap()
-                    .lock_batch_mq(find_broker_result.broker_addr.as_str(), request_body, 1_000)
-                    .await;
-                match result {
-                    Ok(lock_okmqset) => {
-                        let process_queue_table = self.process_queue_table.read().await;
-                        for mq in &mqs {
-                            if let Some(pq) = process_queue_table.get(mq) {
-                                if lock_okmqset.contains(mq) {
-                                    if pq.is_locked() {
-                                        info!(
-                                            "the message queue locked OK, Group: {:?} {}",
-                                            self.consumer_group, mq
-                                        );
-                                    }
-                                    pq.set_locked(true);
-                                    pq.set_last_lock_timestamp(current_millis());
-                                } else {
-                                    pq.set_locked(false);
-                                    warn!(
-                                        "the message queue locked Failed, Group: {:?} {}",
-                                        self.consumer_group, mq
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("lockBatchMQ exception {}", e);
-                    }
-                }
-            }
-        }*/
     }
 
     pub async fn unlock_all(&mut self, oneway: bool) {
@@ -1189,16 +1153,22 @@ where
     async fn build_process_queue_table_by_broker_name(
         &self,
     ) -> HashMap<CheetahString /* brokerName */, HashSet<MessageQueue>> {
-        let mut result = HashMap::new();
-        let process_queue_table = self.process_queue_table.read().await;
+        // Collect a snapshot under the read lock (no async calls while holding the lock).
+        let snapshot: Vec<MessageQueue> = {
+            let process_queue_table = self.process_queue_table.read().await;
+            process_queue_table
+                .iter()
+                .filter(|(_, pq)| !pq.is_dropped())
+                .map(|(mq, _)| mq.clone())
+                .collect()
+        };
+        // Resolve broker names outside the lock to avoid holding it during async I/O.
         let client = self.client_instance.as_ref().unwrap();
-        for (mq, pq) in process_queue_table.iter() {
-            if pq.is_dropped() {
-                continue;
-            }
-            let broker_name = client.get_broker_name_from_message_queue(mq).await;
-            let entry = result.entry(broker_name).or_insert(HashSet::new());
-            entry.insert(mq.to_owned());
+        let mut result = HashMap::new();
+        for mq in snapshot {
+            let broker_name = client.get_broker_name_from_message_queue(&mq).await;
+            let entry = result.entry(broker_name).or_insert_with(HashSet::new);
+            entry.insert(mq);
         }
         result
     }
