@@ -1235,33 +1235,6 @@ impl<MS: MessageStore> PutResultProcess<MS> {
         }
 
         self
-        /*let this = Arc::new(self);
-        let this_clone = Arc::clone(&this);
-
-        // Handle the future completion
-        tokio::spawn(async move {
-            if let Some(mut future) = this_clone.future.clone() {
-                match future.await {
-                    Ok(result) => {
-                        this_clone.handle_result(result);
-                    }
-                    Err(e) => {
-                        error!(
-                            "ScheduleMessageService put message exceptionally, info: {}",
-                            this_clone,
-                        );
-                        this_clone.on_exception();
-                    }
-                }
-            }
-        });
-
-        // Unwrap the Arc to return self
-        // This is safe because we're the only owner at this point
-        match Arc::try_unwrap(this) {
-            Ok(this) => this,
-            Err(_) => panic!("Failed to unwrap Arc in then_process"),
-        }*/
     }
 
     /// Handle the result of a put operation
