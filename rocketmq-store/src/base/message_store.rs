@@ -27,7 +27,7 @@ use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
 use rocketmq_common::common::system_clock::SystemClock;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 
 use crate::base::allocate_mapped_file_service::AllocateMappedFileService;
 use crate::base::commit_log_dispatcher::CommitLogDispatcher;
@@ -316,7 +316,7 @@ pub trait MessageStoreInner: Sync + 'static {
     /// Return the current timestamp of the store.
     #[inline(always)]
     fn now(&self) -> u64 {
-        get_current_millis()
+        current_millis()
     }
 
     /// Delete topic's consume queue file and unused stats.

@@ -19,7 +19,7 @@ use chrono::NaiveDateTime;
 use chrono::TimeZone;
 use clap::Parser;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
@@ -38,7 +38,7 @@ const TIMESTAMP_FORMAT: &str = "%Y-%m-%d#%H:%M:%S:%3f";
 fn parse_timestamp(s: &str) -> RocketMQResult<u64> {
     let s = s.trim();
     if s.eq_ignore_ascii_case("now") {
-        return Ok(get_current_millis());
+        return Ok(current_millis());
     }
     // Try parsing as plain milliseconds integer first.
     if let Ok(ms) = s.parse::<u64>() {
@@ -239,7 +239,7 @@ impl CommandExecute for ResetOffsetByTimeSubCommand {
         let mut admin = DefaultMQAdminExt::new();
         admin
             .client_config_mut()
-            .set_instance_name(get_current_millis().to_string().into());
+            .set_instance_name(current_millis().to_string().into());
 
         if let Some(addr) = &self.common_args.namesrv_addr {
             admin.set_namesrv_addr(addr.trim());

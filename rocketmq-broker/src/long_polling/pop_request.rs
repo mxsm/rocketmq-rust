@@ -18,7 +18,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
@@ -78,7 +78,7 @@ impl PopRequest {
     }
 
     pub fn is_timeout(&self) -> bool {
-        let now = get_current_millis();
+        let now = current_millis();
         now > (self.expired - 50)
     }
 

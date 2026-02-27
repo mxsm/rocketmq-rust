@@ -17,7 +17,7 @@ use std::fmt::Display;
 use std::sync::atomic::AtomicU64;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 
 use crate::protocol::DataVersion;
 
@@ -92,7 +92,7 @@ impl Default for Metric {
     fn default() -> Self {
         Metric {
             count: AtomicU64::new(0),
-            time_stamp: get_current_millis(),
+            time_stamp: current_millis(),
         }
     }
 }

@@ -19,7 +19,7 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -186,7 +186,7 @@ where
             .add_ext_field(MessageConst::PROPERTY_MSG_REGION, region_id.as_str())
             .add_ext_field(MessageConst::PROPERTY_TRACE_SWITCH, trace_on.to_string());
 
-        if get_current_millis() < start_timstamp {
+        if current_millis() < start_timstamp {
             return response
                 .set_code(ResponseCode::SystemError)
                 .set_remark(format!("broker unable to service, until, {start_timstamp}"));
@@ -452,7 +452,7 @@ where
         // Add PROPERTY_PUSH_REPLY_TIME to message properties BEFORE building header
         msg.put_property(
             CheetahString::from_static_str(MessageConst::PROPERTY_PUSH_REPLY_TIME),
-            CheetahString::from_string(get_current_millis().to_string()),
+            CheetahString::from_string(current_millis().to_string()),
         );
 
         // Build reply message request header with properties (including PROPERTY_PUSH_REPLY_TIME)
@@ -523,7 +523,7 @@ where
         ReplyMessageRequestHeader {
             born_host,
             store_host,
-            store_timestamp: get_current_millis() as i64,
+            store_timestamp: current_millis() as i64,
             producer_group: request_header.producer_group.clone(),
             topic: request_header.topic.clone(),
             default_topic: request_header.default_topic.clone(),

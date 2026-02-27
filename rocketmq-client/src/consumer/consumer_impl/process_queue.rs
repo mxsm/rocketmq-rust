@@ -25,7 +25,7 @@ use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::body::process_queue_info::ProcessQueueInfo;
 use rocketmq_rust::ArcMut;
 use tokio::sync::RwLock;
@@ -90,7 +90,7 @@ impl Default for ProcessQueue {
 
 impl ProcessQueue {
     pub fn new() -> Self {
-        let now = get_current_millis();
+        let now = current_millis();
         ProcessQueue {
             store: RwLock::new(ProcessQueueStore::new()),
             consume_lock: Arc::new(RwLock::new(())),
@@ -129,11 +129,11 @@ impl ProcessQueue {
     }
 
     pub(crate) fn is_pull_expired(&self) -> bool {
-        (get_current_millis() - self.last_pull_timestamp.load(Ordering::Acquire)) > *PULL_MAX_IDLE_TIME
+        (current_millis() - self.last_pull_timestamp.load(Ordering::Acquire)) > *PULL_MAX_IDLE_TIME
     }
 
     pub(crate) fn is_lock_expired(&self) -> bool {
-        (get_current_millis() - self.last_lock_timestamp.load(Ordering::Acquire)) > *REBALANCE_LOCK_MAX_LIVE_TIME
+        (current_millis() - self.last_lock_timestamp.load(Ordering::Acquire)) > *REBALANCE_LOCK_MAX_LIVE_TIME
     }
 
     pub(crate) fn inc_try_unlock_times(&self) {
@@ -158,7 +158,7 @@ impl ProcessQueue {
                     let consume_start_time_stamp = MessageAccessor::get_consume_start_time_stamp(value.as_ref());
                     if let Some(ts_str) = consume_start_time_stamp {
                         if let Ok(ts) = ts_str.parse::<u64>() {
-                            if get_current_millis() - ts > push_consumer.consumer_config.consume_timeout * 1000 * 60 {
+                            if current_millis() - ts > push_consumer.consumer_config.consume_timeout * 1000 * 60 {
                                 Some(value.clone())
                             } else {
                                 None
@@ -258,7 +258,7 @@ impl ProcessQueue {
     }
 
     pub(crate) async fn remove_message(&self, messages: &[ArcMut<MessageExt>]) -> i64 {
-        let now = get_current_millis();
+        let now = current_millis();
         let mut store = self.store.write().await;
 
         self.last_consume_timestamp.store(now, Ordering::Release);
@@ -334,7 +334,7 @@ impl ProcessQueue {
 
     pub(crate) async fn take_messages(&self, batch_size: u32) -> Vec<ArcMut<MessageExt>> {
         let mut messages = Vec::with_capacity(batch_size as usize);
-        let now = get_current_millis();
+        let now = current_millis();
         let mut store = self.store.write().await;
 
         self.last_consume_timestamp.store(now, Ordering::Release);
@@ -696,7 +696,7 @@ mod tests {
         assert!(consume_ts > 0);
         assert!(lock_ts > 0);
 
-        let new_ts = get_current_millis() + 1000;
+        let new_ts = current_millis() + 1000;
         pq.set_last_pull_timestamp(new_ts);
         assert_eq!(pq.get_last_pull_timestamp(), new_ts);
 

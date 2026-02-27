@@ -15,7 +15,7 @@
 use std::fmt::Display;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
@@ -52,7 +52,7 @@ pub struct PopMessageRequestHeader {
 
 impl PopMessageRequestHeader {
     pub fn is_timeout_too_much(&self) -> bool {
-        get_current_millis() as i64 - self.born_time as i64 - self.poll_time as i64 > 500
+        current_millis() as i64 - self.born_time as i64 - self.poll_time as i64 > 500
     }
 }
 

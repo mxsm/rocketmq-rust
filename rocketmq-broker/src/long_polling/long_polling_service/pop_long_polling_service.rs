@@ -24,7 +24,7 @@ use crossbeam_skiplist::SkipSet;
 use dashmap::DashMap;
 use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerContext;
@@ -101,7 +101,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                     }
                 }
 
-                if this.last_clean_time == 0 || get_current_millis() - this.last_clean_time > 5 * 60 * 1000 {
+                if this.last_clean_time == 0 || current_millis() - this.last_clean_time > 5 * 60 * 1000 {
                     this.mut_from_ref().clean_unused_resource();
                 }
             }
@@ -211,7 +211,7 @@ impl<MS: MessageStore, RP: RequestProcessor + Sync + 'static> PopLongPollingServ
                 self.polling_map.remove(&key);
             }
         }
-        self.last_clean_time = get_current_millis();
+        self.last_clean_time = current_millis();
     }
 
     pub fn notify_message_arriving(

@@ -18,7 +18,7 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
@@ -54,7 +54,7 @@ impl ConsumerGroupInfo {
             consume_type,
             message_model,
             consume_from_where,
-            last_update_timestamp: get_current_millis(),
+            last_update_timestamp: current_millis(),
         }
     }
 
@@ -66,7 +66,7 @@ impl ConsumerGroupInfo {
             consume_type: ConsumeType::ConsumePassively,
             message_model: MessageModel::Clustering,
             consume_from_where: ConsumeFromWhere::ConsumeFromLastOffset,
-            last_update_timestamp: get_current_millis(),
+            last_update_timestamp: current_millis(),
         }
     }
 
@@ -158,7 +158,7 @@ impl ConsumerGroupInfo {
                 );
                 *info_old = info_new;
             }
-            info_old.set_last_update_timestamp(get_current_millis());
+            info_old.set_last_update_timestamp(current_millis());
         } else {
             self.channel_info_table
                 .insert(info_new.channel().clone(), info_new.clone());
@@ -170,7 +170,7 @@ impl ConsumerGroupInfo {
             updated = true;
         }
 
-        self.last_update_timestamp = get_current_millis();
+        self.last_update_timestamp = current_millis();
 
         updated
     }
@@ -212,7 +212,7 @@ impl ConsumerGroupInfo {
                 true
             }
         });
-        self.last_update_timestamp = get_current_millis();
+        self.last_update_timestamp = current_millis();
         updated
     }
 

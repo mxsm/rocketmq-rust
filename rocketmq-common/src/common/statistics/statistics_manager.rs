@@ -24,7 +24,7 @@ use tokio::time::interval;
 use crate::common::statistics::statistics_item::StatisticsItem;
 use crate::common::statistics::statistics_item_state_getter::StatisticsItemStateGetter;
 use crate::common::statistics::statistics_kind_meta::StatisticsKindMeta;
-use crate::TimeUtils::get_current_millis;
+use crate::TimeUtils::current_millis;
 
 type StatsTable = Arc<RwLock<HashMap<String, HashMap<String, Arc<StatisticsItem>>>>>;
 
@@ -94,7 +94,7 @@ impl StatisticsManager {
 
                     for item in tmp_item_map.values() {
                         let last_time_stamp = item.last_timestamp();
-                        if get_current_millis() - last_time_stamp > Self::MAX_IDLE_TIME
+                        if current_millis() - last_time_stamp > Self::MAX_IDLE_TIME
                             && (statistics_item_state_getter.is_none()
                                 || !statistics_item_state_getter.as_ref().unwrap().online(item))
                         {

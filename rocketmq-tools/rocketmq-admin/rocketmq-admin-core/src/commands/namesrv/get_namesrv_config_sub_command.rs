@@ -18,7 +18,7 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use clap::Parser;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 use tabled::settings::object::Rows;
@@ -68,7 +68,7 @@ impl CommandExecute for GetNamesrvConfigSubCommand {
             return Ok(());
         }
         let mut admin = DefaultMQAdminExt::new();
-        admin.client_config_mut().instance_name = get_current_millis().to_string().into();
+        admin.client_config_mut().instance_name = current_millis().to_string().into();
 
         let server_list = self.parse_server_list();
         if let Some(server_list) = server_list {

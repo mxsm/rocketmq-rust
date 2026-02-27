@@ -28,7 +28,7 @@ use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::TopicRequestHeader;
 use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageRequestHeader;
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
@@ -410,7 +410,7 @@ impl PullAPIWrapper {
             };
             if poll {
                 request_header.poll_time = timeout;
-                request_header.born_time = get_current_millis();
+                request_header.born_time = current_millis();
             }
             self.client_instance
                 .mq_client_api_impl

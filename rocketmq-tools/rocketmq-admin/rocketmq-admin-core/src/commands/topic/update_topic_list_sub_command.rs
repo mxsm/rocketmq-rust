@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::common::config::TopicConfig;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
@@ -52,7 +52,7 @@ impl CommandExecute for UpdateTopicListSubCommand {
         let mut default_mq_admin_ext = DefaultMQAdminExt::new();
         default_mq_admin_ext
             .client_config_mut()
-            .set_instance_name(get_current_millis().to_string().into());
+            .set_instance_name(current_millis().to_string().into());
         default_mq_admin_ext.start().await?;
 
         if !self.file.is_file() {

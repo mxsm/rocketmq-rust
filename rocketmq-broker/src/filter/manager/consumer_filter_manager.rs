@@ -18,7 +18,7 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_filter::utils::bloom_filter::BloomFilter;
 use rocketmq_store::config::message_store_config::MessageStoreConfig;
 
@@ -93,7 +93,7 @@ impl ConsumerFilterManager {
         let mut consumer_filter_data = ConsumerFilterData::default();
         consumer_filter_data.set_topic(topic);
         consumer_filter_data.set_consumer_group(consumer_group);
-        consumer_filter_data.set_born_time(get_current_millis());
+        consumer_filter_data.set_born_time(current_millis());
         consumer_filter_data.set_dead_time(0);
         consumer_filter_data.set_expression(expression);
         consumer_filter_data.set_expression_type(type_);

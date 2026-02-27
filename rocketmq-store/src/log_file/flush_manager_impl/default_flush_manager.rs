@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
 use tokio::sync::Notify;
@@ -253,7 +253,7 @@ impl FlushRealTimeService {
                 let flush_physic_queue_thorough_interval = message_store_config.flush_commit_log_thorough_interval;
                 //let mut print_flush_progress = false;
 
-                let current_time_millis = get_current_millis();
+                let current_time_millis = current_millis();
                 if current_time_millis >= last_flush_timestamp + flush_physic_queue_thorough_interval as u64 {
                     last_flush_timestamp = current_time_millis;
                     flush_physic_queue_least_pages = 0;
@@ -316,7 +316,7 @@ impl CommitRealTimeService {
                 let commit_data_thorough_interval = message_store_config.commit_commit_log_thorough_interval;
                 //let mut print_flush_progress = false;
 
-                let begin = get_current_millis();
+                let begin = current_millis();
                 if begin >= last_commit_timestamp + commit_data_thorough_interval {
                     last_commit_timestamp = begin;
                     commit_data_least_pages = 0;
@@ -324,7 +324,7 @@ impl CommitRealTimeService {
 
                 let result = mapped_file_queue.commit(commit_data_least_pages);
                 if !result {
-                    last_commit_timestamp = get_current_millis();
+                    last_commit_timestamp = current_millis();
                     if let Some(flush_manager) = flush_manager.as_ref().unwrap().upgrade() {
                         flush_manager.wake_up_flush();
                     }

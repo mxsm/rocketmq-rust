@@ -22,7 +22,7 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::TopicFilterType;
 use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -216,7 +216,7 @@ where
                             metrics.inc_commit_messages(&topic, 1);
 
                             // Record transaction finish latency (in seconds)
-                            let commit_latency_secs = (get_current_millis() - born_timestamp) / 1000;
+                            let commit_latency_secs = (current_millis() - born_timestamp) / 1000;
                             metrics.record_transaction_finish_latency(&topic, commit_latency_secs);
                         }
 
@@ -298,7 +298,7 @@ where
             MessageConst::PROPERTY_CHECK_IMMUNITY_TIME_IN_SECONDS,
         )) {
             if !check_immunity_time_str.is_empty() {
-                let value_of_current_minus_born = get_current_millis() - (message_ext.born_timestamp as u64);
+                let value_of_current_minus_born = current_millis() - (message_ext.born_timestamp as u64);
                 let check_immunity_time = TransactionalMessageUtil::get_immunity_time(
                     &check_immunity_time_str,
                     self.broker_runtime_inner.broker_config().transaction_timeout,

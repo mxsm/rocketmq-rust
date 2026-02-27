@@ -39,7 +39,7 @@ use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::FileUtils;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::DataVersion;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_rust::ArcMut;
@@ -880,7 +880,7 @@ impl<MS: MessageStore> DeliverDelayedMessageTimerTask<MS> {
             }
 
             // Check if it's time to deliver the message
-            let now = get_current_millis() as i64;
+            let now = current_millis() as i64;
             let deliver_timestamp = self.correct_deliver_timestamp(now, tags_code);
 
             let curr_offset = cq_unit.queue_offset;

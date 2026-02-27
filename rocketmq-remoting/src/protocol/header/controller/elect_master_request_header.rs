@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_macros::RequestHeaderCodecV2;
 use serde::Deserialize;
 use serde::Serialize;
@@ -61,7 +61,7 @@ impl Default for ElectMasterRequestHeader {
             broker_name: CheetahString::new(),
             broker_id: 0,
             designate_elect: false,
-            invoke_time: get_current_millis(),
+            invoke_time: current_millis(),
         }
     }
 }

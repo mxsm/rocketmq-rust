@@ -27,7 +27,7 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::body::cm_result::CMResult;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
@@ -378,7 +378,7 @@ impl ConsumeMessagePopConcurrentlyService {
             .pop_delay_level
             .as_ref();
         let delay_time = delay_level_table[delay_level_table.len() - 1] * 1000 * 2;
-        let msg_delay_time = get_current_millis() - message.born_timestamp as u64;
+        let msg_delay_time = current_millis() - message.born_timestamp as u64;
         if msg_delay_time > delay_time as u64 {
             warn!("Consume too many times, ack message async. message {}", message);
             self.default_mqpush_consumer_impl
@@ -515,7 +515,7 @@ impl ConsumeRequest {
         if self.msgs.is_empty() || self.pop_time == 0 || self.invisible_time == 0 {
             return true;
         }
-        get_current_millis().saturating_sub(self.pop_time) >= self.invisible_time
+        current_millis().saturating_sub(self.pop_time) >= self.invisible_time
     }
 
     pub async fn run(mut self, mut consume_message_concurrently_service: ArcMut<ConsumeMessagePopConcurrentlyService>) {
@@ -573,7 +573,7 @@ impl ConsumeRequest {
             for msg in self.msgs.iter_mut() {
                 MessageAccessor::set_consume_start_time_stamp(
                     msg.as_mut(),
-                    CheetahString::from_string(get_current_millis().to_string()),
+                    CheetahString::from_string(current_millis().to_string()),
                 );
             }
         }

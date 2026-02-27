@@ -20,7 +20,7 @@ use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::common::FAQUrl;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -628,7 +628,7 @@ where
         broker_allow_suspend: bool,
         broker_allow_flow_ctr_suspend: bool,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let begin_time_mills = get_current_millis();
+        let begin_time_mills = current_millis();
         let mut response = RemotingCommand::create_response_command();
         response.set_opaque_mut(request.opaque());
         let mut request_header = request

@@ -18,7 +18,7 @@ use std::fmt;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
-use crate::TimeUtils::get_current_millis;
+use crate::TimeUtils::current_millis;
 
 /// Accumulator and timestamp structure for tracking cold read operations
 ///
@@ -45,7 +45,7 @@ impl AccAndTimeStamp {
     /// # Returns
     /// A new AccAndTimeStamp instance with current timestamp
     pub fn new(cold_acc: u64) -> Self {
-        let current_time = get_current_millis();
+        let current_time = current_millis();
         Self {
             cold_acc: AtomicU64::new(cold_acc),
             last_cold_read_time_millis: AtomicU64::new(current_time),
@@ -123,7 +123,7 @@ impl AccAndTimeStamp {
     /// Update the last cold read timestamp to the current time
     #[inline]
     pub fn update_last_cold_read_time(&self) {
-        self.set_last_cold_read_time_millis(get_current_millis());
+        self.set_last_cold_read_time_millis(current_millis());
     }
 
     /// Get the creation timestamp of this structure

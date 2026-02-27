@@ -31,7 +31,7 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_common::common::server::config::ServerConfig;
 use rocketmq_common::common::statistics::state_getter::StateGetter;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::compute_next_morning_time_millis;
 use rocketmq_remoting::base::channel_event_listener::ChannelEventListener;
 use rocketmq_remoting::code::request_code::RequestCode;
@@ -226,7 +226,7 @@ impl BrokerRuntime {
             broker_attached_plugins: vec![],
             transactional_message_service: None,
             slave_synchronize: None,
-            last_sync_time_ms: AtomicU64::new(get_current_millis()),
+            last_sync_time_ms: AtomicU64::new(current_millis()),
             broker_pre_online_service: None,
             min_broker_id_in_group: AtomicU64::new(0),
             min_broker_addr_in_group: Default::default(),
@@ -786,7 +786,7 @@ impl BrokerRuntime {
 
     #[allow(clippy::incompatible_msrv)]
     async fn initialize_scheduled_tasks(&mut self) {
-        let initial_delay = compute_next_morning_time_millis() - get_current_millis();
+        let initial_delay = compute_next_morning_time_millis() - current_millis();
         let period = Duration::from_secs(24 * 60 * 60);
         let broker_stats_ = self.inner.clone();
         self.scheduled_task_manager.add_fixed_rate_task_async(
@@ -888,13 +888,11 @@ impl BrokerRuntime {
                     Duration::from_secs(10),
                     Duration::from_secs(3),
                     async move |_ctx| {
-                        if get_current_millis() - inner_clone.last_sync_time_ms.load(Ordering::Relaxed) > 10_000 {
+                        if current_millis() - inner_clone.last_sync_time_ms.load(Ordering::Relaxed) > 10_000 {
                             if let Some(slave_synchronize) = &inner_clone.slave_synchronize {
                                 slave_synchronize.sync_all().await;
                             }
-                            inner_clone
-                                .last_sync_time_ms
-                                .store(get_current_millis(), Ordering::Relaxed);
+                            inner_clone.last_sync_time_ms.store(current_millis(), Ordering::Relaxed);
                         }
                         if inner_clone.message_store_config.timer_wheel_enable {
                             if let Some(slave_synchronize) = &inner_clone.slave_synchronize {
@@ -1060,7 +1058,7 @@ impl BrokerRuntime {
 
     pub async fn start(&mut self) {
         self.inner.should_start_time.store(
-            (get_current_millis() as i64 + self.inner.message_store_config.disappear_time_after_start) as u64,
+            (current_millis() as i64 + self.inner.message_store_config.disappear_time_after_start) as u64,
             Ordering::Release,
         );
         if self.inner.message_store_config.total_replicas > 1 && self.inner.broker_config.enable_slave_acting_master {
@@ -1087,7 +1085,7 @@ impl BrokerRuntime {
         self.scheduled_task_manager
             .add_fixed_rate_task_async(initial_delay, period, async move |_ctx| {
                 let start_time = broker_runtime_inner.should_start_time.load(Ordering::Relaxed);
-                if get_current_millis() < start_time {
+                if current_millis() < start_time {
                     info!("Register to namesrv after {}", start_time);
                     return Ok(());
                 }

@@ -17,7 +17,7 @@ use std::sync::Arc;
 use clap::Parser;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::common::mq_version::RocketMqVersion;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
@@ -42,7 +42,7 @@ impl CommandExecute for ProducerConnectionSubCommand {
 
         default_mq_admin_ext
             .client_config_mut()
-            .set_instance_name(get_current_millis().to_string().into());
+            .set_instance_name(current_millis().to_string().into());
 
         default_mq_admin_ext.start().await?;
 

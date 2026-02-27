@@ -23,7 +23,7 @@ use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::utils::util_all;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
@@ -123,7 +123,7 @@ impl RebalancePushImpl {
         };
 
         let force_unlock =
-            pq.is_dropped() && (get_current_millis() > pq.get_last_lock_timestamp() + *UNLOCK_DELAY_TIME_MILLS);
+            pq.is_dropped() && (current_millis() > pq.get_last_lock_timestamp() + *UNLOCK_DELAY_TIME_MILLS);
         let consume_lock = tokio::time::timeout(Duration::from_millis(500), pq.consume_lock.write())
             .await
             .ok();
@@ -163,7 +163,7 @@ impl Rebalance for RebalancePushImpl {
             warn!("Subscription data not found for topic: {}", topic);
             return;
         };
-        let new_version = get_current_millis() as i64;
+        let new_version = current_millis() as i64;
         info!(
             "{} Rebalance changed, also update version: {}, {}",
             topic, subscription_data.sub_version, new_version
@@ -610,7 +610,7 @@ async fn lock_all_impl(
                                             info!("the message queue locked OK, Group: {:?} {}", consumer_group, mq);
                                         }
                                         pq.set_locked(true);
-                                        pq.set_last_lock_timestamp(get_current_millis());
+                                        pq.set_last_lock_timestamp(current_millis());
                                     } else {
                                         pq.set_locked(false);
                                         warn!("the message queue locked Failed, Group: {:?} {}", consumer_group, mq);

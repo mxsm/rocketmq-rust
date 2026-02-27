@@ -20,7 +20,7 @@ use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::common::FAQUrl;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -195,7 +195,7 @@ where
                 .await;
         }
         // add new ck
-        let now = get_current_millis();
+        let now = current_millis();
         let revive_qid = ExtraInfoUtil::get_revive_qid(extra_info.as_slice())?;
         let ck_result = self
             .append_check_point(
@@ -270,7 +270,7 @@ where
         inner.set_body(Bytes::from(ack_msg.encode()?));
         inner.message_ext_inner.queue_id = rq_id;
         inner.set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
-        inner.message_ext_inner.born_timestamp = get_current_millis() as i64;
+        inner.message_ext_inner.born_timestamp = current_millis() as i64;
         inner.message_ext_inner.born_host = self.broker_runtime_inner.store_host();
         inner.message_ext_inner.store_host = self.broker_runtime_inner.store_host();
         let deliver_time_ms = ExtraInfoUtil::get_pop_time(extra_info)? + ExtraInfoUtil::get_invisible_time(extra_info)?;
@@ -329,7 +329,7 @@ where
         inner.set_body(Bytes::from(ck.encode()?));
         inner.message_ext_inner.queue_id = revive_qid;
         inner.set_tags(CheetahString::from_static_str(PopAckConstants::ACK_TAG));
-        inner.message_ext_inner.born_timestamp = get_current_millis() as i64;
+        inner.message_ext_inner.born_timestamp = current_millis() as i64;
         inner.message_ext_inner.born_host = self.broker_runtime_inner.store_host();
         inner.message_ext_inner.store_host = self.broker_runtime_inner.store_host();
         let deliver_time_ms = ck.get_revive_time() - PopAckConstants::ACK_TIME_INTERVAL;
@@ -393,7 +393,7 @@ where
         if old_offset > request_header.offset {
             return Ok(Some(RemotingCommand::create_response_command()));
         }
-        let next_visible_time = get_current_millis() + request_header.invisible_time as u64;
+        let next_visible_time = current_millis() + request_header.invisible_time as u64;
         self.broker_runtime_inner
             .consumer_order_info_manager()
             .update_next_visible_time(

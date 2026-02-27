@@ -29,7 +29,7 @@ use rocketmq_error::RocketMQResult;
 
 use crate::common::mq_version::RocketMqVersion;
 use crate::common::mq_version::CURRENT_VERSION;
-use crate::TimeUtils::get_current_millis;
+use crate::TimeUtils::current_millis;
 
 /// Global HTTP client with connection pool
 /// Reuses connections across requests for better performance
@@ -401,7 +401,7 @@ impl HttpTinyClient {
             format!("application/x-www-form-urlencoded;charset={encoding}"),
         );
 
-        let timestamp = get_current_millis();
+        let timestamp = current_millis();
         request_builder = request_builder.header("Metaq-Client-RequestTS", timestamp.to_string());
 
         Ok(request_builder)

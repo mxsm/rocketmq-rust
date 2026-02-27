@@ -340,7 +340,7 @@ impl Default for DataVersion {
 
 impl DataVersion {
     pub fn new() -> Self {
-        let timestamp = time_utils::get_current_millis() as i64;
+        let timestamp = time_utils::current_millis() as i64;
 
         DataVersion {
             state_version: 0,
@@ -400,7 +400,7 @@ impl DataVersion {
     }
 
     pub fn next_version_with(&mut self, state_version: i64) {
-        self.timestamp = time_utils::get_current_millis() as i64;
+        self.timestamp = time_utils::current_millis() as i64;
         self.state_version = state_version;
         self.counter.fetch_add(1, Ordering::SeqCst);
     }

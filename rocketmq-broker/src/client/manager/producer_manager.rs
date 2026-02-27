@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::connection::ConnectionState;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::producer_info::ProducerInfo;
@@ -214,7 +214,7 @@ impl ProducerManager {
             // Check if this channel is already registered
             if let Some(mut existing_info) = channel_table.get_mut(client_channel_info.channel()) {
                 // Update timestamp for existing producer
-                existing_info.set_last_update_timestamp(get_current_millis());
+                existing_info.set_last_update_timestamp(current_millis());
                 return;
             }
 
@@ -338,7 +338,7 @@ impl ProducerManager {
     /// Producers that haven't sent heartbeat for more than CHANNEL_EXPIRED_TIMEOUT (120 seconds)
     /// will be removed.
     pub fn scan_not_active_channel(&self) {
-        let current_time = get_current_millis();
+        let current_time = current_millis();
 
         // Collect all expired channels without holding locks during modification
         // Structure: (group_name, channel, client_info)

@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 use std::fmt::Display;
 
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 
@@ -133,7 +133,7 @@ impl ConsumerRunningInfo {
 
         let push = matches!(prev.consume_type, ConsumeType::ConsumePassively);
 
-        let start_for_a_while = (get_current_millis() - prev.prop_consumer_start_timestamp) > (1000 * 60 * 2);
+        let start_for_a_while = (current_millis() - prev.prop_consumer_start_timestamp) > (1000 * 60 * 2);
 
         if push && start_for_a_while {
             let mut prev = prev.clone();
@@ -165,7 +165,7 @@ impl ConsumerRunningInfo {
                             "{} {} can't lock for a while, {}ms\n",
                             client_id,
                             k,
-                            get_current_millis() - v.last_lock_timestamp
+                            current_millis() - v.last_lock_timestamp
                         ));
                     } else if v.droped && v.try_unlock_times > 0 {
                         sb.push_str(&format!(
@@ -174,7 +174,7 @@ impl ConsumerRunningInfo {
                         ));
                     }
                 } else {
-                    let diff = get_current_millis() - v.last_consume_timestamp;
+                    let diff = current_millis() - v.last_consume_timestamp;
 
                     if diff > (1000 * 60) && v.cached_msg_count > 0 {
                         sb.push_str(&format!(

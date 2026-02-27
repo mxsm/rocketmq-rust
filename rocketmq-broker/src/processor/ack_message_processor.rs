@@ -23,7 +23,7 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_common::common::pop_ack_constants::PopAckConstants;
 use rocketmq_common::common::FAQUrl;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
@@ -420,7 +420,7 @@ where
                 CheetahString::from(PopMessageProcessor::<MS>::gen_ack_unique_id(ack_msg as &dyn AckMessage)),
             );
         }
-        inner.message_ext_inner.born_timestamp = get_current_millis() as i64;
+        inner.message_ext_inner.born_timestamp = current_millis() as i64;
         inner.message_ext_inner.store_host = self.broker_runtime_inner.store_host();
         inner.message_ext_inner.born_host = self.broker_runtime_inner.store_host();
         inner.set_delay_time_ms((pop_time + invisible_time) as u64);

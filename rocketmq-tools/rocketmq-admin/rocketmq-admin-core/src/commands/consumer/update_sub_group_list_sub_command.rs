@@ -18,7 +18,7 @@ use std::sync::Arc;
 use clap::ArgGroup;
 use clap::Parser;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
@@ -81,7 +81,7 @@ impl CommandExecute for UpdateSubGroupListSubCommand {
         };
         default_mq_admin_ext
             .client_config_mut()
-            .set_instance_name(get_current_millis().to_string().into());
+            .set_instance_name(current_millis().to_string().into());
 
         MQAdminExt::start(&mut default_mq_admin_ext).await.map_err(|e| {
             RocketMQError::Internal(format!(

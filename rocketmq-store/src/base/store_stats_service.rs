@@ -26,7 +26,7 @@ use parking_lot::Mutex;
 use parking_lot::RwLock;
 use rocketmq_common::common::broker::broker_config::BrokerIdentity;
 use rocketmq_common::common::system_clock::SystemClock;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use tracing::error;
 
 const FREQUENCY_OF_SAMPLING: u64 = 1000;
@@ -103,12 +103,12 @@ impl StoreStatsService {
             transferred_msg_count_list: Mutex::new(LinkedList::new()),
             put_message_distribute_time: Arc::new((0..13).map(|_| AtomicUsize::new(0)).collect()),
             last_put_message_distribute_time: Arc::new((0..13).map(|_| AtomicUsize::new(0)).collect()),
-            message_store_boot_timestamp: get_current_millis(),
+            message_store_boot_timestamp: current_millis(),
             put_message_entire_time_max: Arc::new(AtomicUsize::new(0)),
             get_message_entire_time_max: Arc::new(AtomicUsize::new(0)),
             dispatch_max_buffer: Arc::new(AtomicUsize::new(0)),
             sampling_lock: Mutex::new(()),
-            last_print_timestamp: get_current_millis(),
+            last_print_timestamp: current_millis(),
             broker_identity,
         }
     }

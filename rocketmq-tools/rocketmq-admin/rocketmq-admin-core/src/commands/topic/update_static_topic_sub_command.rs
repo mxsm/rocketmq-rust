@@ -18,7 +18,7 @@ use cheetah_string::CheetahString;
 use clap::Parser;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::FileUtils::file_to_string;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_utils::TopicQueueMappingUtils;
@@ -73,7 +73,7 @@ impl UpdateStaticTopicSubCommand {
         let mut default_mq_admin_ext = DefaultMQAdminExt::new();
         default_mq_admin_ext
             .client_config_mut()
-            .set_instance_name(get_current_millis().to_string().into());
+            .set_instance_name(current_millis().to_string().into());
         if let Some(addr) = &self.common_args.namesrv_addr {
             default_mq_admin_ext.set_namesrv_addr(addr.trim());
         }
@@ -124,7 +124,7 @@ impl CommandExecute for UpdateStaticTopicSubCommand {
         let mut default_mq_admin_ext = DefaultMQAdminExt::new();
         default_mq_admin_ext
             .client_config_mut()
-            .set_instance_name(get_current_millis().to_string().into());
+            .set_instance_name(current_millis().to_string().into());
         if let Some(addr) = &self.common_args.namesrv_addr {
             default_mq_admin_ext.set_namesrv_addr(addr.trim());
         }
@@ -172,7 +172,7 @@ impl CommandExecute for UpdateStaticTopicSubCommand {
             .parse::<i32>()
             .map_err(|_e| RocketMQError::Internal("queue num parse to i32 failed".to_string()))?;
 
-        let mut max_epoch_and_num = (get_current_millis(), queue_num);
+        let mut max_epoch_and_num = (current_millis(), queue_num);
         if !broker_config_map.is_empty() {
             let new_max_epoch_and_num = TopicQueueMappingUtils::check_name_epoch_num_consistence(
                 &CheetahString::from(topic),

@@ -26,7 +26,7 @@ use bytes::Bytes;
 use bytes::BytesMut;
 use futures_util::SinkExt;
 use futures_util::StreamExt;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::WeakArcMut;
 use tokio::net::tcp::OwnedReadHalf;
@@ -347,7 +347,7 @@ impl ReadSocketService {
             buffer: BytesMut::with_capacity(READ_MAX_BUFFER_SIZE),
             process_position: 0,
             message_store_config,
-            last_read_timestamp: AtomicU64::new(get_current_millis()),
+            last_read_timestamp: AtomicU64::new(current_millis()),
             connection,
         })
     }
@@ -372,7 +372,7 @@ impl ReadSocketService {
                     break;
                 }
                 Some(Ok(OffsetFrame(offset))) => {
-                    self.last_read_timestamp.store(get_current_millis(), Ordering::Relaxed);
+                    self.last_read_timestamp.store(current_millis(), Ordering::Relaxed);
                     self.slave_ack_offset.store(offset, Ordering::Relaxed);
 
                     if self.slave_request_offset.load(Ordering::Acquire) < 0 {
@@ -387,7 +387,7 @@ impl ReadSocketService {
                 }
             }
 
-            let current_time = get_current_millis();
+            let current_time = current_millis();
             let last_read = self.last_read_timestamp.load(Ordering::Relaxed);
             let interval = current_time - last_read;
 
@@ -528,8 +528,8 @@ impl WriteSocketService {
             next_transfer_from_where,
             message_store_config,
             connection,
-            last_write_timestamp: AtomicU64::new(get_current_millis()),
-            last_print_timestamp: AtomicU64::new(get_current_millis()),
+            last_write_timestamp: AtomicU64::new(current_millis()),
+            last_print_timestamp: AtomicU64::new(current_millis()),
             byte_buffer_header: BytesMut::with_capacity(TRANSFER_HEADER_SIZE),
             last_write_over: AtomicBool::new(true),
         })
@@ -611,7 +611,7 @@ impl WriteSocketService {
         }
 
         if self.last_write_over.load(Ordering::Relaxed) {
-            let current_time = get_current_millis();
+            let current_time = current_millis();
             let last_write = self.last_write_timestamp.load(Ordering::Relaxed);
             let interval = current_time - last_write;
 
@@ -655,7 +655,7 @@ impl WriteSocketService {
 
             let can_transfer_max_bytes = self.flow_monitor.can_transfer_max_byte_num();
             if size > can_transfer_max_bytes as usize {
-                let current_time = get_current_millis();
+                let current_time = current_millis();
                 let last_print = self.last_print_timestamp.load(Ordering::Relaxed);
 
                 if current_time - last_print > 1000 {
@@ -690,7 +690,7 @@ impl WriteSocketService {
         let bytes = self.byte_buffer_header.split().freeze();
         self.writer.send(bytes).await?;
 
-        self.last_write_timestamp.store(get_current_millis(), Ordering::Relaxed);
+        self.last_write_timestamp.store(current_millis(), Ordering::Relaxed);
         self.flow_monitor
             .add_byte_count_transferred(TRANSFER_HEADER_SIZE as i64);
         self.last_write_over.store(true, Ordering::Relaxed);
@@ -716,7 +716,7 @@ impl WriteSocketService {
             warn!("No data to send for offset {}", offset);
         }
 
-        self.last_write_timestamp.store(get_current_millis(), Ordering::Relaxed);
+        self.last_write_timestamp.store(current_millis(), Ordering::Relaxed);
         self.flow_monitor
             .add_byte_count_transferred((TRANSFER_HEADER_SIZE + size) as i64);
         self.last_write_over.store(true, Ordering::Relaxed);

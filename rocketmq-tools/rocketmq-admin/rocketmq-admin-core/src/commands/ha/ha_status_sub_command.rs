@@ -17,7 +17,7 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use clap::Parser;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::time_millis_to_human_string2;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
@@ -63,7 +63,7 @@ impl CommandExecute for HAStatusSubCommand {
         let mut default_mqadmin_ext = DefaultMQAdminExt::new();
         default_mqadmin_ext
             .client_config_mut()
-            .set_instance_name(get_current_millis().to_string().into());
+            .set_instance_name(current_millis().to_string().into());
 
         let operation_result = async {
             MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {

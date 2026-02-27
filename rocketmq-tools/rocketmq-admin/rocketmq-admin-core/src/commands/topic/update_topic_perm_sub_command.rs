@@ -19,7 +19,7 @@ use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
@@ -82,7 +82,7 @@ impl CommandExecute for UpdateTopicPermSubCommand {
         let mut default_mqadmin_ext = DefaultMQAdminExt::new();
         default_mqadmin_ext
             .client_config_mut()
-            .set_instance_name(get_current_millis().to_string().into());
+            .set_instance_name(current_millis().to_string().into());
         let operation_result = async {
             MQAdminExt::start(&mut default_mqadmin_ext).await.map_err(|e| {
                 RocketMQError::Internal(format!("UpdateTopicPermSubCommand: Failed to start MQAdminExt: {}", e))
