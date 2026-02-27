@@ -202,14 +202,10 @@ impl ConsumeMessagePopOrderlyService {
             Vec::new()
         };
 
-        let mut new_msg = Message::builder()
-            .topic(&retry_topic)
-            .body(body)
-            .build_unchecked();
+        let mut new_msg = Message::builder().topic(&retry_topic).body(body).build_unchecked();
 
         MessageAccessor::set_properties(&mut new_msg, msg.properties().clone());
-        let origin_msg_id =
-            MessageAccessor::get_origin_message_id(msg).unwrap_or(msg.msg_id.clone());
+        let origin_msg_id = MessageAccessor::get_origin_message_id(msg).unwrap_or(msg.msg_id.clone());
         MessageAccessor::set_origin_message_id(&mut new_msg, origin_msg_id);
         new_msg.set_flag(msg.get_flag());
         MessageAccessor::put_property(
@@ -589,9 +585,7 @@ impl ConsumeRequest {
             Err(e) => {
                 error!(
                     "consume_message task panicked: {:?}, Group: {}, MQ: {}",
-                    e,
-                    consume_message_pop_orderly_service.consumer_group,
-                    self.message_queue
+                    e, consume_message_pop_orderly_service.consumer_group, self.message_queue
                 );
                 (
                     Ok(ConsumeOrderlyStatus::SuspendCurrentQueueAMoment),
