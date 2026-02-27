@@ -134,7 +134,7 @@ impl RebalancePushImpl {
             };
             offset_store.persist(mq).await;
             offset_store.remove_offset(mq).await;
-            pq.set_locked(true);
+            pq.set_locked(false);
             self.unlock(mq, true).await;
             return true;
         } else {
@@ -171,26 +171,28 @@ impl Rebalance for RebalancePushImpl {
         subscription_data.sub_version = new_version;
         drop(subscription_inner);
 
-        let process_queue_table = self.rebalance_impl_inner.process_queue_table.read().await;
-        let current_queue_count = process_queue_table.len();
+        let current_queue_count = {
+            let process_queue_table = self.rebalance_impl_inner.process_queue_table.read().await;
+            process_queue_table.len()
+        };
         if current_queue_count != 0 {
             let pull_threshold_for_topic = self.consumer_config.pull_threshold_for_topic;
             if pull_threshold_for_topic != -1 {
                 let new_val = 1.max(pull_threshold_for_topic / current_queue_count as i32);
                 info!(
                     "The pullThresholdForQueue is changed from {} to {}",
-                    pull_threshold_for_topic, new_val
+                    self.consumer_config.pull_threshold_for_queue, new_val
                 );
-                self.consumer_config.pull_threshold_for_topic = new_val;
+                self.consumer_config.pull_threshold_for_queue = new_val as u32;
             }
             let pull_threshold_size_for_topic = self.consumer_config.pull_threshold_size_for_topic;
             if pull_threshold_size_for_topic != -1 {
                 let new_val = 1.max(pull_threshold_size_for_topic / current_queue_count as i32);
                 info!(
                     "The pullThresholdSizeForQueue is changed from {} to {}",
-                    pull_threshold_size_for_topic, new_val
+                    self.consumer_config.pull_threshold_size_for_queue, new_val
                 );
-                self.consumer_config.pull_threshold_size_for_topic = new_val;
+                self.consumer_config.pull_threshold_size_for_queue = new_val as u32;
             }
         }
 
@@ -546,6 +548,26 @@ impl Rebalance for RebalancePushImpl {
             "Destroying RebalancePushImpl for consumer group: {:?}",
             self.rebalance_impl_inner.consumer_group
         );
+        // Mark all process queues as dropped and clear the tables.
+        // Use try_write to avoid blocking; shutdown callers are expected to drain tasks first.
+        if let Ok(mut table) = self.rebalance_impl_inner.process_queue_table.try_write() {
+            for pq in table.values() {
+                pq.set_dropped(true);
+            }
+            table.clear();
+        } else {
+            warn!("destroy: could not acquire write lock on process_queue_table; queues may not be dropped cleanly");
+        }
+        if let Ok(mut pop_table) = self.rebalance_impl_inner.pop_process_queue_table.try_write() {
+            for pq in pop_table.values() {
+                pq.set_dropped(true);
+            }
+            pop_table.clear();
+        } else {
+            warn!(
+                "destroy: could not acquire write lock on pop_process_queue_table; queues may not be dropped cleanly"
+            );
+        }
     }
 }
 
