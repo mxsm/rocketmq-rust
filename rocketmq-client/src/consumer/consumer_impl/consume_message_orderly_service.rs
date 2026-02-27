@@ -284,6 +284,7 @@ impl ConsumeMessageOrderlyService {
         context: &ConsumeOrderlyContext,
         consume_request: &mut ConsumeRequest,
     ) -> bool {
+        let msg_count = msgs.len() as u64;
         let (continue_consume, commit_offset) = if context.is_auto_commit() {
             match status {
                 ConsumeOrderlyStatus::Success => (true, consume_request.process_queue.commit().await),
@@ -340,6 +341,28 @@ impl ConsumeMessageOrderlyService {
                 }
             }
         };
+
+        // Update per-topic/group consume throughput counters based on the orderly consume result.
+        if let Some(impl_) = self.default_mqpush_consumer_impl.as_ref() {
+            if let Some(client_instance) = impl_.client_instance.as_ref() {
+                let mgr = client_instance.consumer_stats_manager();
+                let topic = consume_request.message_queue.topic().as_str();
+                let group = self.consumer_group.as_str();
+                let is_ok = if context.is_auto_commit() {
+                    matches!(
+                        status,
+                        ConsumeOrderlyStatus::Success | ConsumeOrderlyStatus::Rollback | ConsumeOrderlyStatus::Commit
+                    )
+                } else {
+                    matches!(status, ConsumeOrderlyStatus::Success)
+                };
+                if is_ok {
+                    mgr.inc_consume_ok_tps(group, topic, msg_count);
+                } else if matches!(status, ConsumeOrderlyStatus::SuspendCurrentQueueAMoment) {
+                    mgr.inc_consume_failed_tps(group, topic, msg_count);
+                }
+            }
+        }
 
         if commit_offset >= 0 && !consume_request.process_queue.is_dropped() {
             let mut default_mqpush_consumer_impl = self.default_mqpush_consumer_impl.as_ref().unwrap().clone();
@@ -728,6 +751,14 @@ impl ConsumeRequest {
                         status == ConsumeOrderlyStatus::Success || status == ConsumeOrderlyStatus::Commit;
                     consume_message_context.as_mut().unwrap().status = status.to_string().into();
                     default_mqpush_consumer_impl.execute_hook_after(&mut consume_message_context);
+                }
+                // Record message consume round-trip time.
+                if let Some(client_instance) = default_mqpush_consumer_impl.client_instance.as_ref() {
+                    client_instance.consumer_stats_manager().inc_consume_rt(
+                        consume_message_orderly_service_inner.consumer_group.as_str(),
+                        self.message_queue.topic().as_str(),
+                        consume_rt,
+                    );
                 }
                 let continue_consume = consume_message_orderly_service_inner
                     .process_consume_result(

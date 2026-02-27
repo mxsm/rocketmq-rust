@@ -121,6 +121,28 @@ impl ConsumeMessageConcurrentlyService {
             }
         }
 
+        // Update per-topic/group consume throughput counters, split by ack index.
+        if let Some(impl_) = self.default_mqpush_consumer_impl.as_ref() {
+            if let Some(client_instance) = impl_.client_instance.as_ref() {
+                let mgr = client_instance.consumer_stats_manager();
+                let topic = consume_request.message_queue.topic().as_str();
+                let group = self.consumer_group.as_str();
+                let total = consume_request.msgs.len() as u64;
+                match status {
+                    ConsumeConcurrentlyStatus::ConsumeSuccess => {
+                        let ok = (ack_index + 1).max(0) as u64;
+                        mgr.inc_consume_ok_tps(group, topic, ok);
+                        if total > ok {
+                            mgr.inc_consume_failed_tps(group, topic, total - ok);
+                        }
+                    }
+                    ConsumeConcurrentlyStatus::ReconsumeLater => {
+                        mgr.inc_consume_failed_tps(group, topic, total);
+                    }
+                }
+            }
+        }
+
         match self.consumer_config.message_model {
             MessageModel::Broadcasting => {
                 for i in ((ack_index + 1) as usize)..consume_request.msgs.len() {
@@ -533,6 +555,15 @@ impl ConsumeRequest {
             cmc.success = s == ConsumeConcurrentlyStatus::ConsumeSuccess;
             cmc.access_channel = Some(default_mqpush_consumer_impl.client_config.access_channel);
             default_mqpush_consumer_impl.execute_hook_after(&mut consume_message_context);
+        }
+
+        // Record message consume round-trip time.
+        if let Some(client_instance) = default_mqpush_consumer_impl.client_instance.as_ref() {
+            client_instance.consumer_stats_manager().inc_consume_rt(
+                self.consumer_group.as_str(),
+                self.message_queue.topic().as_str(),
+                consume_rt,
+            );
         }
 
         if self.process_queue.is_dropped() {
