@@ -44,15 +44,9 @@ impl ConsumerStatsManager {
     /// Creates a new `ConsumerStatsManager` with all metric sets initialised.
     pub fn new() -> Self {
         Self {
-            topic_and_group_consume_ok_tps: StatsItemSet::new(
-                TOPIC_AND_GROUP_CONSUME_OK_TPS.to_string(),
-            ),
-            topic_and_group_consume_rt: StatsItemSet::new(
-                TOPIC_AND_GROUP_CONSUME_RT.to_string(),
-            ),
-            topic_and_group_consume_failed_tps: StatsItemSet::new(
-                TOPIC_AND_GROUP_CONSUME_FAILED_TPS.to_string(),
-            ),
+            topic_and_group_consume_ok_tps: StatsItemSet::new(TOPIC_AND_GROUP_CONSUME_OK_TPS.to_string()),
+            topic_and_group_consume_rt: StatsItemSet::new(TOPIC_AND_GROUP_CONSUME_RT.to_string()),
+            topic_and_group_consume_failed_tps: StatsItemSet::new(TOPIC_AND_GROUP_CONSUME_FAILED_TPS.to_string()),
             topic_and_group_pull_tps: StatsItemSet::new(TOPIC_AND_GROUP_PULL_TPS.to_string()),
             topic_and_group_pull_rt: StatsItemSet::new(TOPIC_AND_GROUP_PULL_RT.to_string()),
         }
@@ -97,30 +91,20 @@ impl ConsumerStatsManager {
     /// Returns a point-in-time [`ConsumeStatus`] snapshot for the given
     /// consumer group and topic.
     ///
-    /// - Pull / consume RT uses the per-minute average; consume RT falls back
-    ///   to the per-hour average when the per-minute window is empty.
+    /// - Pull / consume RT uses the per-minute average; consume RT falls back to the per-hour
+    ///   average when the per-minute window is empty.
     /// - `consume_failed_msgs` accumulates the per-hour sum of failed messages.
     pub fn consume_status(&self, group: &str, topic: &str) -> ConsumeStatus {
         let key = stats_key(topic, group);
 
-        let pull_rt = self
-            .topic_and_group_pull_rt
-            .get_stats_data_in_minute(&key)
-            .get_avgpt();
+        let pull_rt = self.topic_and_group_pull_rt.get_stats_data_in_minute(&key).get_avgpt();
 
-        let pull_tps = self
-            .topic_and_group_pull_tps
-            .get_stats_data_in_minute(&key)
-            .get_tps();
+        let pull_tps = self.topic_and_group_pull_tps.get_stats_data_in_minute(&key).get_tps();
 
         let consume_rt = {
-            let minute = self
-                .topic_and_group_consume_rt
-                .get_stats_data_in_minute(&key);
+            let minute = self.topic_and_group_consume_rt.get_stats_data_in_minute(&key);
             if minute.get_sum() == 0 {
-                self.topic_and_group_consume_rt
-                    .get_stats_data_in_hour(&key)
-                    .get_avgpt()
+                self.topic_and_group_consume_rt.get_stats_data_in_hour(&key).get_avgpt()
             } else {
                 minute.get_avgpt()
             }
