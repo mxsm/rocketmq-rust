@@ -391,6 +391,11 @@ impl CommandExecute for ClassificationTablePrint {
                 remark: "Get broker lite info.",
             },
             Command {
+                category: "Lite",
+                command: "triggerLiteDispatch",
+                remark: "Trigger Lite Dispatch.",
+            },
+            Command {
                 category: "NameServer",
                 command: "addWritePerm",
                 remark: "Add write perm of broker in all name server.",
