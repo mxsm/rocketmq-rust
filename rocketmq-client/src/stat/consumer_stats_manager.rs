@@ -52,40 +52,101 @@ impl ConsumerStatsManager {
         }
     }
 
-    /// Starts the stats manager. Currently a no-op.
-    pub fn start(&self) {}
+    /// Starts background sampling tasks.
+    ///
+    /// Spawns three Tokio tasks that advance the sliding-window snapshots used
+    /// by [`consume_status`](Self::consume_status):
+    ///
+    /// - every 10 s  → `cs_list_minute` (drives per-minute stats)
+    /// - every 10 min → `cs_list_hour`   (drives per-hour stats)
+    /// - every 1 h   → `cs_list_day`    (drives per-day stats)
+    pub fn start(&self) {
+        // 10-second tick — drives cs_list_minute on each StatsItem.
+        let sets_sec = [
+            self.topic_and_group_consume_ok_tps.clone(),
+            self.topic_and_group_consume_rt.clone(),
+            self.topic_and_group_consume_failed_tps.clone(),
+            self.topic_and_group_pull_tps.clone(),
+            self.topic_and_group_pull_rt.clone(),
+        ];
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+            loop {
+                interval.tick().await;
+                for set in &sets_sec {
+                    set.sampling_in_seconds();
+                }
+            }
+        });
 
-    /// Shuts down the stats manager. Currently a no-op.
+        // 10-minute tick — drives cs_list_hour on each StatsItem.
+        let sets_min = [
+            self.topic_and_group_consume_ok_tps.clone(),
+            self.topic_and_group_consume_rt.clone(),
+            self.topic_and_group_consume_failed_tps.clone(),
+            self.topic_and_group_pull_tps.clone(),
+            self.topic_and_group_pull_rt.clone(),
+        ];
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10 * 60));
+            loop {
+                interval.tick().await;
+                for set in &sets_min {
+                    set.sampling_in_minutes();
+                }
+            }
+        });
+
+        // 1-hour tick — drives cs_list_day on each StatsItem.
+        let sets_hour = [
+            self.topic_and_group_consume_ok_tps.clone(),
+            self.topic_and_group_consume_rt.clone(),
+            self.topic_and_group_consume_failed_tps.clone(),
+            self.topic_and_group_pull_tps.clone(),
+            self.topic_and_group_pull_rt.clone(),
+        ];
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                interval.tick().await;
+                for set in &sets_hour {
+                    set.sampling_in_hours();
+                }
+            }
+        });
+    }
+
+    /// Shuts down the stats manager.
     pub fn shutdown(&self) {}
 
     /// Records a single pull response-time observation in milliseconds.
     pub fn inc_pull_rt(&self, group: &str, topic: &str, rt: u64) {
         self.topic_and_group_pull_rt
-            .add_rt_value(&stats_key(topic, group), rt as i32, 1);
+            .add_rt_value(&stats_key(topic, group), rt as i64, 1);
     }
 
     /// Records `msgs` messages successfully pulled in one batch.
     pub fn inc_pull_tps(&self, group: &str, topic: &str, msgs: u64) {
         self.topic_and_group_pull_tps
-            .add_value(&stats_key(topic, group), msgs as i32, 1);
+            .add_value(&stats_key(topic, group), msgs as i64, 1);
     }
 
     /// Records a single consume response-time observation in milliseconds.
     pub fn inc_consume_rt(&self, group: &str, topic: &str, rt: u64) {
         self.topic_and_group_consume_rt
-            .add_rt_value(&stats_key(topic, group), rt as i32, 1);
+            .add_rt_value(&stats_key(topic, group), rt as i64, 1);
     }
 
     /// Records `msgs` messages consumed successfully in one batch.
     pub fn inc_consume_ok_tps(&self, group: &str, topic: &str, msgs: u64) {
         self.topic_and_group_consume_ok_tps
-            .add_value(&stats_key(topic, group), msgs as i32, 1);
+            .add_value(&stats_key(topic, group), msgs as i64, 1);
     }
 
     /// Records `msgs` messages that failed consumption in one batch.
     pub fn inc_consume_failed_tps(&self, group: &str, topic: &str, msgs: u64) {
         self.topic_and_group_consume_failed_tps
-            .add_value(&stats_key(topic, group), msgs as i32, 1);
+            .add_value(&stats_key(topic, group), msgs as i64, 1);
     }
 
     /// Returns a point-in-time [`ConsumeStatus`] snapshot for the given
@@ -197,9 +258,10 @@ mod tests {
         assert_eq!(status.consume_failed_msgs, 0);
     }
 
-    #[test]
-    fn start_and_shutdown_are_no_ops() {
+    #[tokio::test]
+    async fn start_launches_background_tasks() {
         let mgr = make_manager();
+        // Verifies start() does not panic in a Tokio runtime context.
         mgr.start();
         mgr.shutdown();
     }

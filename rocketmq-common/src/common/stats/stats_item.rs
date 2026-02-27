@@ -16,9 +16,6 @@ use std::collections::LinkedList;
 use std::fmt;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
 use std::time::SystemTime;
 
 use parking_lot::Mutex;
@@ -28,40 +25,55 @@ use crate::common::stats::call_snapshot::CallSnapshot;
 use crate::common::stats::stats_snapshot::StatsSnapshot;
 
 pub struct StatsItem {
-    value: Arc<AtomicU64>,
-    times: Arc<AtomicU64>,
-    cs_list_minute: Arc<Mutex<LinkedList<CallSnapshot>>>,
-    cs_list_hour: Arc<Mutex<LinkedList<CallSnapshot>>>,
-    cs_list_day: Arc<Mutex<LinkedList<CallSnapshot>>>,
+    value: AtomicU64,
+    times: AtomicU64,
+    cs_list_minute: Mutex<LinkedList<CallSnapshot>>,
+    cs_list_hour: Mutex<LinkedList<CallSnapshot>>,
+    cs_list_day: Mutex<LinkedList<CallSnapshot>>,
+    last_update_timestamp: AtomicU64,
     stats_name: String,
     stats_key: String,
 }
 
 impl StatsItem {
     pub fn new(stats_name: &str, stats_key: &str) -> Self {
+        let now_ms = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
         StatsItem {
-            value: Arc::new(AtomicU64::new(0)),
-            times: Arc::new(AtomicU64::new(0)),
-            cs_list_minute: Arc::new(Mutex::new(LinkedList::new())),
-            cs_list_hour: Arc::new(Mutex::new(LinkedList::new())),
-            cs_list_day: Arc::new(Mutex::new(LinkedList::new())),
+            value: AtomicU64::new(0),
+            times: AtomicU64::new(0),
+            cs_list_minute: Mutex::new(LinkedList::new()),
+            cs_list_hour: Mutex::new(LinkedList::new()),
+            cs_list_day: Mutex::new(LinkedList::new()),
+            last_update_timestamp: AtomicU64::new(now_ms),
             stats_name: stats_name.to_string(),
             stats_key: stats_key.to_string(),
         }
     }
 
-    /// Atomically increments the value by delta and increments times by 1.
-    ///
-    /// # Arguments
-    /// * `delta` - The amount to add to the value counter
-    ///
-    /// # Thread Safety
-    /// This method is lock-free and safe to call from multiple threads concurrently.
-    /// Uses `Ordering::Relaxed` as no synchronization with other variables is required.
+    /// Atomically increments the value by `delta` and the times counter by 1.
     #[inline]
     pub fn increment(&self, delta: u64) {
-        self.value.fetch_add(delta, Ordering::Relaxed);
-        self.times.fetch_add(1, Ordering::Relaxed);
+        self.add(delta, 1);
+    }
+
+    /// Atomically adds `value_delta` to the value counter and `times_delta` to the times counter.
+    ///
+    /// Also records the current wall-clock millisecond as the last-update timestamp, which is
+    /// used by idle-entry eviction in [`StatsItemSet::clean_resource`].
+    #[inline]
+    pub fn add(&self, value_delta: u64, times_delta: u64) {
+        self.value.fetch_add(value_delta, Ordering::Relaxed);
+        self.times.fetch_add(times_delta, Ordering::Relaxed);
+        self.last_update_timestamp.store(
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            Ordering::Relaxed,
+        );
     }
 
     /// Returns the current accumulated value.
@@ -75,16 +87,21 @@ impl StatsItem {
     }
 
     /// Returns the current accumulated times (call count).
-    ///
-    /// # Thread Safety
-    /// This method uses `Ordering::Relaxed` for optimal performance.
-    /// The returned value is a snapshot at the time of the call.
     #[inline]
     pub fn get_times(&self) -> u64 {
         self.times.load(Ordering::Relaxed)
     }
 
-    pub fn compute_stats_data(cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>) -> StatsSnapshot {
+    /// Returns the wall-clock timestamp (milliseconds since UNIX epoch) of the last
+    /// [`add`](Self::add) or [`increment`](Self::increment) call.
+    ///
+    /// A value of `0` means the item has never been written to.
+    #[inline]
+    pub fn get_last_update_timestamp(&self) -> u64 {
+        self.last_update_timestamp.load(Ordering::Relaxed)
+    }
+
+    pub fn compute_stats_data(cs_list: &Mutex<LinkedList<CallSnapshot>>) -> StatsSnapshot {
         let mut stats_snapshot = StatsSnapshot::new();
         let cs_list = cs_list.lock();
         if !cs_list.is_empty() {
@@ -107,40 +124,40 @@ impl StatsItem {
     }
 
     pub fn get_stats_data_in_minute(&self) -> StatsSnapshot {
-        Self::compute_stats_data(Arc::clone(&self.cs_list_minute))
+        Self::compute_stats_data(&self.cs_list_minute)
     }
 
     pub fn get_stats_data_in_hour(&self) -> StatsSnapshot {
-        Self::compute_stats_data(Arc::clone(&self.cs_list_hour))
+        Self::compute_stats_data(&self.cs_list_hour)
     }
 
     pub fn get_stats_data_in_day(&self) -> StatsSnapshot {
-        Self::compute_stats_data(Arc::clone(&self.cs_list_day))
+        Self::compute_stats_data(&self.cs_list_day)
     }
 
-    /// Perform second-level sampling
+    /// Advances the second-level window; must be called every ~10 s.
     pub fn sampling_in_seconds(&self) {
         let current_value = self.value.load(Ordering::Relaxed);
         let current_times = self.times.load(Ordering::Relaxed);
-        Self::sampling_in_seconds_internal(Arc::clone(&self.cs_list_minute), current_value, current_times);
+        Self::sampling_in_seconds_internal(&self.cs_list_minute, current_value, current_times);
     }
 
-    /// Perform minute-level sampling
+    /// Advances the minute-level window; must be called every ~10 min.
     pub fn sampling_in_minutes_level(&self) {
         let current_value = self.value.load(Ordering::Relaxed);
         let current_times = self.times.load(Ordering::Relaxed);
-        Self::sampling_in_minutes(Arc::clone(&self.cs_list_hour), current_value, current_times);
+        Self::sampling_in_minutes(&self.cs_list_hour, current_value, current_times);
     }
 
-    /// Perform hour-level sampling
+    /// Advances the hour-level window; must be called every ~1 h.
     pub fn sampling_in_hour_level(&self) {
         let current_value = self.value.load(Ordering::Relaxed);
         let current_times = self.times.load(Ordering::Relaxed);
-        Self::sampling_in_hour(Arc::clone(&self.cs_list_day), current_value, current_times);
+        Self::sampling_in_hour(&self.cs_list_day, current_value, current_times);
     }
 
     pub fn sampling_in_seconds_internal(
-        cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>,
+        cs_list: &Mutex<LinkedList<CallSnapshot>>,
         current_value: u64,
         current_times: u64,
     ) {
@@ -169,7 +186,7 @@ impl StatsItem {
         }
     }
 
-    pub fn sampling_in_minutes(cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>, current_value: u64, current_times: u64) {
+    pub fn sampling_in_minutes(cs_list: &Mutex<LinkedList<CallSnapshot>>, current_value: u64, current_times: u64) {
         let mut cs_list = cs_list.lock();
         if cs_list.is_empty() {
             cs_list.push_back(CallSnapshot::new(
@@ -195,7 +212,7 @@ impl StatsItem {
         }
     }
 
-    pub fn sampling_in_hour(cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>, current_value: u64, current_times: u64) {
+    pub fn sampling_in_hour(cs_list: &Mutex<LinkedList<CallSnapshot>>, current_value: u64, current_times: u64) {
         let mut cs_list = cs_list.lock();
         if cs_list.is_empty() {
             cs_list.push_back(CallSnapshot::new(
@@ -221,7 +238,7 @@ impl StatsItem {
         }
     }
 
-    pub fn print_at_minutes(stats_name: &str, stats_key: &str, cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>) {
+    pub fn print_at_minutes(stats_name: &str, stats_key: &str, cs_list: &Mutex<LinkedList<CallSnapshot>>) {
         let ss = Self::compute_stats_data(cs_list);
         info!(
             "[{}] [{}] Stats In One Minute, {}",
@@ -231,7 +248,7 @@ impl StatsItem {
         );
     }
 
-    pub fn print_at_hour(stats_name: &str, stats_key: &str, cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>) {
+    pub fn print_at_hour(stats_name: &str, stats_key: &str, cs_list: &Mutex<LinkedList<CallSnapshot>>) {
         let ss = Self::compute_stats_data(cs_list);
         info!(
             "[{}] [{}] Stats In One Hour, {}",
@@ -241,7 +258,7 @@ impl StatsItem {
         );
     }
 
-    pub fn print_at_day(stats_name: &str, stats_key: &str, cs_list: Arc<Mutex<LinkedList<CallSnapshot>>>) {
+    pub fn print_at_day(stats_name: &str, stats_key: &str, cs_list: &Mutex<LinkedList<CallSnapshot>>) {
         let ss = Self::compute_stats_data(cs_list);
         info!(
             "[{}] [{}] Stats In One Day, {}",
@@ -261,7 +278,6 @@ impl StatsItem {
     }
 
     pub fn compute_next_minutes_time_millis() -> u64 {
-        // Compute the next minute boundary from the current time
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
@@ -270,7 +286,6 @@ impl StatsItem {
     }
 
     pub fn compute_next_hour_time_millis() -> u64 {
-        // Compute the next hour boundary from the current time
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
@@ -279,7 +294,6 @@ impl StatsItem {
     }
 
     pub fn compute_next_morning_time_millis() -> u64 {
-        // Compute the next day boundary from the current time
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
@@ -314,16 +328,19 @@ mod tests {
         assert_eq!(stats_item.times.load(Ordering::Relaxed), 0);
         assert_eq!(stats_item.stats_name, "TestName");
         assert_eq!(stats_item.stats_key, "TestKey");
+        // last_update_timestamp is set to creation time, not zero
+        assert!(stats_item.get_last_update_timestamp() > 0);
     }
 
     #[test]
     fn compute_stats_data_returns_correct_snapshot() {
-        let cs_list = Arc::new(Mutex::new(LinkedList::new()));
-        let mut cs_list1 = cs_list.lock();
-        cs_list1.push_back(CallSnapshot::new(1000, 10, 100));
-        cs_list1.push_back(CallSnapshot::new(2000, 20, 200));
-        drop(cs_list1);
-        let snapshot = StatsItem::compute_stats_data(Arc::clone(&cs_list));
+        let cs_list = Mutex::new(LinkedList::new());
+        {
+            let mut list = cs_list.lock();
+            list.push_back(CallSnapshot::new(1000, 10, 100));
+            list.push_back(CallSnapshot::new(2000, 20, 200));
+        }
+        let snapshot = StatsItem::compute_stats_data(&cs_list);
         assert_eq!(snapshot.get_sum(), 100);
         assert_eq!(snapshot.get_tps(), 100.0);
         assert_eq!(snapshot.get_times(), 10);
@@ -389,7 +406,6 @@ mod tests {
             handles.push(handle);
         }
 
-        // Wait for all threads
         for handle in handles {
             handle.join().unwrap();
         }
@@ -403,15 +419,12 @@ mod tests {
     fn test_sampling_captures_current_values() {
         let stats = StatsItem::new("test", "key");
 
-        // Increment some values
         stats.increment(100);
         stats.increment(200);
         stats.increment(300);
 
-        // Perform manual sampling
         stats.sampling_in_seconds();
 
-        // Verify snapshot contains non-zero values
         let snapshot = stats.get_stats_data_in_minute();
         assert!(snapshot.get_sum() > 0, "Snapshot should capture incremented value");
         assert!(snapshot.get_times() > 0, "Snapshot should capture times");
@@ -419,7 +432,7 @@ mod tests {
 
     #[test]
     fn test_tps_and_avgpt_calculation() {
-        let cs_list = Arc::new(Mutex::new(LinkedList::new()));
+        let cs_list = Mutex::new(LinkedList::new());
 
         // Add snapshots with known values
         // t=0ms: 0 calls, value=0
@@ -430,7 +443,7 @@ mod tests {
             list.push_back(CallSnapshot::new(1000, 10, 500));
         }
 
-        let snapshot = StatsItem::compute_stats_data(Arc::clone(&cs_list));
+        let snapshot = StatsItem::compute_stats_data(&cs_list);
 
         // TPS = (500 - 0) * 1000 / (1000 - 0) = 500
         assert_eq!(snapshot.get_tps(), 500.0);
@@ -487,7 +500,7 @@ mod tests {
 
     #[test]
     fn test_zero_times_avgpt_calculation() {
-        let cs_list = Arc::new(Mutex::new(LinkedList::new()));
+        let cs_list = Mutex::new(LinkedList::new());
 
         // Add snapshots with same times (delta = 0)
         {
@@ -496,7 +509,7 @@ mod tests {
             list.push_back(CallSnapshot::new(1000, 5, 200));
         }
 
-        let snapshot = StatsItem::compute_stats_data(Arc::clone(&cs_list));
+        let snapshot = StatsItem::compute_stats_data(&cs_list);
 
         // When times_diff is 0, avgpt should be 0.0 (not division by zero)
         assert_eq!(snapshot.get_avgpt(), 0.0);

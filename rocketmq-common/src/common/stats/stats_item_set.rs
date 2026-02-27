@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use dashmap::DashMap;
 
@@ -21,7 +22,7 @@ use crate::common::stats::stats_snapshot::StatsSnapshot;
 
 /// Manages a collection of StatsItem instances indexed by key
 /// Each StatsItemSet represents one statistics category (e.g., TOPIC_PUT_NUMS)
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct StatsItemSet {
     stats_name: String,
     items: Arc<DashMap<String, Arc<StatsItem>>>,
@@ -37,23 +38,28 @@ impl StatsItemSet {
 
     /// Get or create a StatsItem for the given key
     pub fn get_or_create_stats_item(&self, key: &str) -> Arc<StatsItem> {
+        if let Some(item) = self.items.get(key) {
+            return Arc::clone(&*item);
+        }
         self.items
             .entry(key.to_string())
             .or_insert_with(|| Arc::new(StatsItem::new(&self.stats_name, key)))
             .clone()
     }
 
-    /// Add value to the stats item identified by key
-    pub fn add_value(&self, stats_key: &str, inc_value: i32, inc_times: i32) {
+    /// Add value to the stats item identified by key.
+    ///
+    /// Equivalent to Java `addValue(key, incValue, incTimes)`.
+    pub fn add_value(&self, stats_key: &str, inc_value: impl Into<i64>, inc_times: impl Into<i64>) {
         let item = self.get_or_create_stats_item(stats_key);
-        for _ in 0..inc_times {
-            item.increment(inc_value as u64);
-        }
+        item.add(inc_value.into() as u64, inc_times.into() as u64);
     }
 
-    /// Add RT (Response Time) value for latency metrics
-    pub fn add_rt_value(&self, stats_key: &str, inc_value: i32, inc_times: i32) {
-        self.add_value(stats_key, inc_value, inc_times);
+    /// Add RT (Response Time) value for latency metrics.
+    ///
+    /// Equivalent to Java `addRTValue(key, incValue, incTimes)`.
+    pub fn add_rt_value(&self, stats_key: &str, inc_value: impl Into<i64>, inc_times: impl Into<i64>) {
+        self.add_value(stats_key, inc_value.into(), inc_times.into());
     }
 
     /// Get statistics snapshot for the last minute
@@ -77,10 +83,30 @@ impl StatsItemSet {
         self.items.get(stats_key).map(|entry| entry.clone())
     }
 
-    /// Sample all items in this set
+    /// Sample all items into their second-level window (`cs_list_minute`).
+    ///
+    /// Must be called every ~10 seconds by a background task.
+    pub fn sampling_in_seconds(&self) {
+        for entry in self.items.iter() {
+            entry.value().sampling_in_seconds();
+        }
+    }
+
+    /// Sample all items into their minute-level window (`cs_list_hour`).
+    ///
+    /// Must be called every ~10 minutes by a background task.
     pub fn sampling_in_minutes(&self) {
         for entry in self.items.iter() {
-            let _snapshot = entry.value().get_stats_data_in_minute();
+            entry.value().sampling_in_minutes_level();
+        }
+    }
+
+    /// Sample all items into their hour-level window (`cs_list_day`).
+    ///
+    /// Must be called every ~1 hour by a background task.
+    pub fn sampling_in_hours(&self) {
+        for entry in self.items.iter() {
+            entry.value().sampling_in_hour_level();
         }
     }
 
@@ -89,28 +115,22 @@ impl StatsItemSet {
         self.items.remove(key);
     }
 
-    /// Delete all items whose key starts with prefix followed by separator
-    /// e.g., delValueByPrefixKey("TopicA", "@") deletes "TopicA@queue0", "TopicA@queue1"
+    /// Delete all items whose key starts with `prefix` followed immediately by `separator`.
+    ///
+    /// Equivalent to Java `delValueByPrefixKey(statsKey, separator)`: retains only keys where
+    /// `key.starts_with(statsKey + separator)` is false.
     pub fn del_value_by_prefix_key(&self, prefix: &str, separator: &str) {
-        self.items.retain(|k, _| {
-            if let Some(pos) = k.find(separator) {
-                !k[..pos].starts_with(prefix)
-            } else {
-                true
-            }
-        });
+        let match_prefix = format!("{}{}", prefix, separator);
+        self.items.retain(|k, _| !k.starts_with(&match_prefix));
     }
 
-    /// Delete all items whose key ends with suffix preceded by separator
-    /// e.g., delValueBySuffixKey("GroupA", "@") deletes "TopicA@GroupA", "TopicB@GroupA"
+    /// Delete all items whose key ends with `separator` followed immediately by `suffix`.
+    ///
+    /// Equivalent to Java `delValueBySuffixKey(statsKey, separator)`: retains only keys where
+    /// `key.endsWith(separator + statsKey)` is false.
     pub fn del_value_by_suffix_key(&self, suffix: &str, separator: &str) {
-        self.items.retain(|k, _| {
-            if let Some(pos) = k.rfind(separator) {
-                !k[pos + separator.len()..].starts_with(suffix)
-            } else {
-                true
-            }
-        });
+        let match_suffix = format!("{}{}", separator, suffix);
+        self.items.retain(|k, _| !k.ends_with(&match_suffix));
     }
 
     /// Delete all items whose key contains infix surrounded by separator
@@ -128,5 +148,18 @@ impl StatsItemSet {
     /// Clear all items
     pub fn clear(&self) {
         self.items.clear();
+    }
+
+    /// Evict items that have not been updated for longer than `max_idle_minutes`.
+    ///
+    /// Equivalent to Java `cleanResource(maxStatsIdleTimeInMinutes)`.
+    pub fn clean_resource(&self, max_idle_minutes: u64) {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let threshold_ms = max_idle_minutes * 60 * 1000;
+        self.items
+            .retain(|_, v| now.saturating_sub(v.get_last_update_timestamp()) <= threshold_ms);
     }
 }
