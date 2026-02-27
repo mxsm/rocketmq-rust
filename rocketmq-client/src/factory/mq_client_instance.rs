@@ -63,6 +63,7 @@ use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::default_mq_producer::ProducerConfig;
 use crate::producer::producer_impl::mq_producer_inner::MQProducerInnerImpl;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
+use crate::stat::consumer_stats_manager::ConsumerStatsManager;
 
 const LOCK_TIMEOUT_MILLIS: u64 = 3000;
 
@@ -104,6 +105,7 @@ pub struct MQClientInstance {
     broker_heartbeat_fingerprint_table: BrokerHeartbeatFingerprintTable,
     /// HeartbeatV2: Set of brokers that support V2 protocol
     broker_support_v2_heartbeat_set: BrokerSupportV2HeartbeatSet,
+    consumer_stats_manager: ConsumerStatsManager,
 }
 
 impl MQClientInstance {
@@ -155,6 +157,7 @@ impl MQClientInstance {
             scheduled_task_manager: ScheduledTaskManager::new(),
             broker_heartbeat_fingerprint_table,
             broker_support_v2_heartbeat_set,
+            consumer_stats_manager: ConsumerStatsManager::new(),
         });
 
         // Clone instance first to avoid borrow checker issues
@@ -223,6 +226,11 @@ impl MQClientInstance {
         instance
     }
 
+    /// Returns a reference to the [`ConsumerStatsManager`] held by this instance.
+    pub fn consumer_stats_manager(&self) -> &ConsumerStatsManager {
+        &self.consumer_stats_manager
+    }
+
     pub fn re_balance_immediately(&self) {
         self.rebalance_service.wakeup();
     }
@@ -276,6 +284,8 @@ impl MQClientInstance {
                     .unwrap()
                     .start_with_factory(false)
                     .await?;
+                // Start consumer stats manager
+                self.consumer_stats_manager.start();
                 info!("the client factory[{}] start OK", self.client_id);
                 self.service_state = ServiceState::Running;
             }
