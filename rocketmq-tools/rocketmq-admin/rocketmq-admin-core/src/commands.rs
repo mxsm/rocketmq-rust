@@ -371,6 +371,11 @@ impl CommandExecute for ClassificationTablePrint {
                          rocksDBConfigToJson]",
             },
             Command {
+                category: "Export",
+                command: "exportPopRecord",
+                remark: "Export pop consumer records.",
+            },
+            Command {
                 category: "HA",
                 command: "getSyncStateSet",
                 remark: "Fetch sync state set for target brokers.",
