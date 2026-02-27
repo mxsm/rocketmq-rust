@@ -564,7 +564,9 @@ impl Rebalance for RebalancePushImpl {
             }
             pop_table.clear();
         } else {
-            warn!("destroy: could not acquire write lock on pop_process_queue_table; queues may not be dropped cleanly");
+            warn!(
+                "destroy: could not acquire write lock on pop_process_queue_table; queues may not be dropped cleanly"
+            );
         }
     }
 }
