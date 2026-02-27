@@ -80,6 +80,7 @@ mod hook;
 pub mod implementation;
 mod latency;
 pub mod producer;
+pub mod stat;
 mod trace;
 mod types;
 pub mod utils;

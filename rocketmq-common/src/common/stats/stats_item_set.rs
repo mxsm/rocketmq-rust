@@ -64,6 +64,14 @@ impl StatsItemSet {
             .unwrap_or_default()
     }
 
+    /// Get statistics snapshot for the last hour
+    pub fn get_stats_data_in_hour(&self, stats_key: &str) -> StatsSnapshot {
+        self.items
+            .get(stats_key)
+            .map(|item| item.get_stats_data_in_hour())
+            .unwrap_or_default()
+    }
+
     /// Get a StatsItem by key
     pub fn get_stats_item(&self, stats_key: &str) -> Option<Arc<StatsItem>> {
         self.items.get(stats_key).map(|entry| entry.clone())
