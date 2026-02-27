@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use bytes::Bytes;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -47,7 +47,7 @@ impl<MS: MessageStore> SubscriptionGroupHandler<MS> {
         _request_code: RequestCode,
         request: &mut RemotingCommand,
     ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
-        let start_time = get_current_millis() as i64;
+        let start_time = current_millis() as i64;
 
         let mut response = RemotingCommand::create_response_command();
 
@@ -62,7 +62,7 @@ impl<MS: MessageStore> SubscriptionGroupHandler<MS> {
                 .update_subscription_group_config(config)
         }
         response.set_code_ref(ResponseCode::Success);
-        let execution_time = get_current_millis() as i64 - start_time;
+        let execution_time = current_millis() as i64 - start_time;
 
         if let Ok(config) = config.as_ref() {
             info!(

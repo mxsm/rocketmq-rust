@@ -18,7 +18,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::ArcMut;
 use rocketmq_rust::Shutdown;
 use tokio::select;
@@ -229,14 +229,14 @@ impl RebalanceService {
             let mut last_rebalance_timestamp = tokio::time::Instant::now();
             let min_interval = config.min_interval();
             let mut real_wait_interval = config.wait_interval();
-            info!("RebalanceService started, timestamp={}", get_current_millis());
+            info!("RebalanceService started, timestamp={}", current_millis());
             loop {
                 select! {
                     _ = notify.notified() => {
                         info!("RebalanceService wakeup triggered");
                     }
                     _ = shutdown.recv() => {
-                        info!("RebalanceService shutdown signal received, timestamp={}", get_current_millis());
+                        info!("RebalanceService shutdown signal received, timestamp={}", current_millis());
                         started_clone.store(false, Ordering::SeqCst);
                         return;
                     }
@@ -258,7 +258,7 @@ impl RebalanceService {
                     let balanced = match instance.do_rebalance().await {
                         Ok(result) => {
                             success_count_clone.fetch_add(1, Ordering::Relaxed);
-                            last_success_ts.store(get_current_millis(), Ordering::Relaxed);
+                            last_success_ts.store(current_millis(), Ordering::Relaxed);
                             result
                         }
                         Err(e) => {
@@ -266,7 +266,7 @@ impl RebalanceService {
                             error!(
                                 "RebalanceService: do_rebalance error: {:?}, timestamp={}",
                                 e,
-                                get_current_millis()
+                                current_millis()
                             );
                             false // Treat as unbalanced on exception, retry with min interval
                         }
@@ -289,7 +289,7 @@ impl RebalanceService {
                         balanced,
                         duration_ms,
                         next_interval.as_millis(),
-                        get_current_millis()
+                        current_millis()
                     );
 
                     real_wait_interval = next_interval;
@@ -367,7 +367,7 @@ impl RebalanceService {
             return true;
         }
 
-        let now = get_current_millis();
+        let now = current_millis();
         now - last_success < max_idle_ms
     }
 

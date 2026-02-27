@@ -18,7 +18,7 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use clap::Parser;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
@@ -61,7 +61,7 @@ impl CommandExecute for ClusterListSubCommand {
 
         default_mq_admin_ext
             .client_config_mut()
-            .set_instance_name(get_current_millis().to_string().into());
+            .set_instance_name(current_millis().to_string().into());
 
         let print_interval = self.interval.map(|i| i * 1000);
         let cluster_name = self
@@ -342,7 +342,7 @@ async fn print_cluster_base_info(
 
                 if !earliest_message_time_stamp.is_empty() {
                     if let Ok(ts) = earliest_message_time_stamp.parse::<u64>() {
-                        let mills = get_current_millis() - ts;
+                        let mills = current_millis() - ts;
                         hour = mills as f64 / 1000.0 / 60.0 / 60.0;
                     }
                 }

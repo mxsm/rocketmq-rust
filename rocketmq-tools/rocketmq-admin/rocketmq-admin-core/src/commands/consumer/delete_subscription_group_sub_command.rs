@@ -18,7 +18,7 @@ use clap::Parser;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::common::mix_all::get_dlq_topic;
 use rocketmq_common::common::mix_all::get_retry_topic;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
@@ -139,7 +139,7 @@ impl CommandExecute for DeleteSubscriptionGroupSubCommand {
         let mut admin_ext = DefaultMQAdminExt::new();
         admin_ext
             .client_config_mut()
-            .set_instance_name(get_current_millis().to_string().into());
+            .set_instance_name(current_millis().to_string().into());
 
         if let Some(addr) = &self.common_args.namesrv_addr {
             admin_ext.set_namesrv_addr(addr.trim());

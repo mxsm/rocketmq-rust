@@ -27,7 +27,7 @@ use dashmap::DashMap;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::message::MessageTrait;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex;
 
@@ -464,7 +464,7 @@ impl MessageAccumulation {
             aggregate_key,
             messages_size: Arc::new(AtomicI32::new(0)),
             count: 0,
-            create_time: get_current_millis(),
+            create_time: current_millis(),
             completion_notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
@@ -478,7 +478,7 @@ impl MessageAccumulation {
         }
 
         // Condition 2: Time threshold
-        let elapsed = get_current_millis() - self.create_time;
+        let elapsed = current_millis() - self.create_time;
         if elapsed >= hold_ms {
             return true;
         }

@@ -18,7 +18,7 @@ use cheetah_string::CheetahString;
 use clap::Parser;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::FileUtils::string_to_file;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
 
@@ -64,7 +64,7 @@ impl CommandExecute for ConsumerStatusSubCommand {
 
         default_mq_admin_ext
             .client_config_mut()
-            .set_instance_name(get_current_millis().to_string().into());
+            .set_instance_name(current_millis().to_string().into());
 
         if let Some(namesrv) = &self.namesrv_addr {
             default_mq_admin_ext.set_namesrv_addr(namesrv.trim());
@@ -91,7 +91,7 @@ impl CommandExecute for ConsumerStatusSubCommand {
             }
         } else {
             let mut i = 1;
-            let now = get_current_millis();
+            let now = current_millis();
             let mut cri_table = BTreeMap::new();
             println!("#Index #ClientId #Version #ConsumerRunningInfoFile");
             for conn in cc.get_connection_set() {

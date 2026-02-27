@@ -22,7 +22,7 @@ use std::sync::atomic::Ordering::Acquire;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::body::pop_process_queue_info::PopProcessQueueInfo;
 
 use crate::consumer::consumer_impl::PULL_MAX_IDLE_TIME;
@@ -46,7 +46,7 @@ impl Hash for PopProcessQueue {
 impl Default for PopProcessQueue {
     fn default() -> Self {
         PopProcessQueue {
-            last_pop_timestamp: Arc::new(AtomicU64::new(get_current_millis())),
+            last_pop_timestamp: Arc::new(AtomicU64::new(current_millis())),
             wait_ack_counter: Arc::new(AtomicUsize::new(0)),
             dropped: Arc::new(AtomicBool::new(false)),
         }
@@ -108,7 +108,7 @@ impl PopProcessQueue {
 
     #[inline]
     pub(crate) fn is_pull_expired(&self) -> bool {
-        let current_time = get_current_millis();
+        let current_time = current_millis();
         current_time.saturating_sub(self.last_pop_timestamp.load(Acquire)) > *PULL_MAX_IDLE_TIME
     }
 }

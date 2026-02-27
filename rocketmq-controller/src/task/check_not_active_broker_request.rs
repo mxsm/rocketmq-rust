@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -24,7 +24,7 @@ pub struct CheckNotActiveBrokerRequest {
 impl Default for CheckNotActiveBrokerRequest {
     fn default() -> Self {
         Self {
-            check_time_millis: get_current_millis(),
+            check_time_millis: current_millis(),
         }
     }
 }

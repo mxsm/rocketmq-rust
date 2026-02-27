@@ -31,7 +31,7 @@ use cheetah_string::CheetahString;
 use memmap2::MmapMut;
 use rocketmq_common::common::message::message_batch::MessageExtBatch;
 use rocketmq_common::common::message::message_ext_broker_inner::MessageExtBrokerInner;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::ensure_dir_ok;
 use rocketmq_rust::ArcMut;
 use tracing::debug;
@@ -557,7 +557,7 @@ impl MappedFile for DefaultMappedFile {
                         };
 
                         if flush_result > 0 {
-                            self.last_flush_time.store(get_current_millis(), Ordering::Relaxed);
+                            self.last_flush_time.store(current_millis(), Ordering::Relaxed);
 
                             if let Some(metrics) = &self.metrics {
                                 let flush_duration = flush_start.elapsed();

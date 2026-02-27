@@ -22,7 +22,7 @@ use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::body::cm_result::CMResult;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
@@ -432,7 +432,7 @@ impl ConsumeRequest {
         let mut status = None;
 
         if !self.msgs.is_empty() {
-            let start_ts = CheetahString::from_string(get_current_millis().to_string());
+            let start_ts = CheetahString::from_string(current_millis().to_string());
             for msg in self.msgs.iter_mut() {
                 MessageAccessor::set_consume_start_time_stamp(msg.as_mut(), start_ts.clone());
             }

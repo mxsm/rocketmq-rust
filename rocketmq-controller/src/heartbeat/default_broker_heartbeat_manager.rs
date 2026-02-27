@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dashmap::DashMap;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_rust::ArcMut;
 use tokio::task::JoinHandle;
@@ -111,7 +111,7 @@ impl DefaultBrokerHeartbeatManager {
     ) {
         info!("start scanNotActiveBroker");
 
-        let now_millis = get_current_millis();
+        let now_millis = current_millis();
         let mut to_remove = Vec::new();
 
         // Collect brokers to remove

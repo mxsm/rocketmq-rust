@@ -16,7 +16,7 @@ use std::cmp::Ordering;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 
 use crate::base::access_channel::AccessChannel;
 use crate::trace::trace_bean::TraceBean;
@@ -41,7 +41,7 @@ impl TraceContext {
     pub fn new() -> Self {
         TraceContext {
             trace_type: None,
-            time_stamp: get_current_millis(),
+            time_stamp: current_millis(),
             region_id: CheetahString::new(),
             region_name: CheetahString::new(),
             group_name: CheetahString::new(),
@@ -95,7 +95,7 @@ impl std::fmt::Display for TraceContext {
 mod tests {
     use cheetah_string::CheetahString;
     use rocketmq_common::common::message::message_client_id_setter::MessageClientIDSetter;
-    use rocketmq_common::TimeUtils::get_current_millis;
+    use rocketmq_common::TimeUtils::current_millis;
 
     use super::*;
 
@@ -119,7 +119,7 @@ mod tests {
     fn trace_context_with_values() {
         let trace_context = TraceContext {
             trace_type: Some(TraceType::Pub),
-            time_stamp: get_current_millis(),
+            time_stamp: current_millis(),
             region_id: CheetahString::from("region_id"),
             region_name: CheetahString::from("region_name"),
             group_name: CheetahString::from("group_name"),

@@ -18,7 +18,7 @@ use std::hash::Hasher;
 
 use cheetah_string::CheetahString;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -46,7 +46,7 @@ impl Default for SubscriptionData {
             sub_string: CheetahString::new(),
             tags_set: BTreeSet::new(),
             code_set: BTreeSet::new(),
-            sub_version: get_current_millis() as i64,
+            sub_version: current_millis() as i64,
             expression_type: CheetahString::from_static_str(ExpressionType::TAG),
             filter_class_source: CheetahString::new(),
         }
@@ -77,9 +77,9 @@ mod tests {
 
     #[test]
     fn subscription_data_default() {
-        let before = get_current_millis() as i64;
+        let before = current_millis() as i64;
         let data = SubscriptionData::default();
-        let after = get_current_millis() as i64;
+        let after = current_millis() as i64;
 
         assert!(!data.class_filter_mode);
         assert!(data.topic.is_empty());

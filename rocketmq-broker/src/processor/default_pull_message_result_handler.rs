@@ -25,7 +25,7 @@ use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::code::response_code::RemotingSysResponseCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -191,7 +191,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                         request_header.queue_id,
                     );
                     // Record group get latency
-                    let latency = (get_current_millis() - _begin_time_mills) as i32;
+                    let latency = (current_millis() - _begin_time_mills) as i32;
                     self.broker_runtime_inner.broker_stats_manager().inc_group_get_latency(
                         request_header.consumer_group.as_str(),
                         request_header.topic.as_str(),
@@ -239,7 +239,7 @@ impl<MS: MessageStore> PullMessageResultHandler for DefaultPullMessageResultHand
                         channel,
                         ctx,
                         polling_time_mills,
-                        get_current_millis(),
+                        current_millis(),
                         offset,
                         subscription_data,
                         message_filter,
@@ -369,7 +369,7 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
 
         // Record disk fall behind time
         if store_timestamp > 0 {
-            let fall_behind_time = get_current_millis() as i64 - store_timestamp;
+            let fall_behind_time = current_millis() as i64 - store_timestamp;
             self.broker_runtime_inner
                 .broker_stats_manager()
                 .record_disk_fall_behind_time(group, topic, queue_id, fall_behind_time);

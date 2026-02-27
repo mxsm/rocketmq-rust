@@ -22,7 +22,7 @@ use cheetah_string::CheetahString;
 use parking_lot::RwLock;
 use rocketmq_common::common::message::MessageConst;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::time_millis_to_human_string;
 use tracing::error;
 use tracing::info;
@@ -392,7 +392,7 @@ impl IndexService {
                 "{}{}{}",
                 self.store_path,
                 std::path::MAIN_SEPARATOR,
-                time_millis_to_human_string(get_current_millis() as i64)
+                time_millis_to_human_string(current_millis() as i64)
             );
 
             let new_index_file = Arc::new(IndexFile::new(

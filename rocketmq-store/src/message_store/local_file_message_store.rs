@@ -64,7 +64,7 @@ use rocketmq_common::CleanupPolicyUtils::get_delete_policy;
 use rocketmq_common::CleanupPolicyUtils::get_delete_policy_arc_mut;
 use rocketmq_common::FileUtils::string_to_file;
 use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::ensure_dir_ok;
 use rocketmq_error::RocketMQResult;
 use rocketmq_rust::ArcMut;
@@ -1550,7 +1550,7 @@ impl MessageStore for LocalFileMessageStore {
 
     fn is_os_page_cache_busy(&self) -> bool {
         let begin = self.commit_log.begin_time_in_lock().load(Ordering::Relaxed);
-        let diff = get_current_millis() - begin;
+        let diff = current_millis() - begin;
         diff < 10000000 && diff > self.message_store_config.os_page_cache_busy_timeout_mills
     }
 

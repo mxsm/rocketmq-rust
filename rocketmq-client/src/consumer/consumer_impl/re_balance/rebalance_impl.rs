@@ -23,7 +23,7 @@ use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_common::common::mix_all;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
 use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_remoting::protocol::filter::filter_api::FilterAPI;
@@ -1011,7 +1011,7 @@ where
                     for mq in &locked_mq {
                         if let Some(pq) = process_queue_table.get(mq) {
                             pq.set_locked(true);
-                            pq.set_last_pull_timestamp(get_current_millis());
+                            pq.set_last_pull_timestamp(current_millis());
                         }
                     }
                     let lock_ok = locked_mq.contains(mq);
@@ -1071,7 +1071,7 @@ where
                                                 );
                                             }
                                             pq.set_locked(true);
-                                            pq.set_last_lock_timestamp(get_current_millis());
+                                            pq.set_last_lock_timestamp(current_millis());
                                         } else {
                                             pq.set_locked(false);
                                             warn!(
@@ -1126,7 +1126,7 @@ where
                                         );
                                     }
                                     pq.set_locked(true);
-                                    pq.set_last_lock_timestamp(get_current_millis());
+                                    pq.set_last_lock_timestamp(current_millis());
                                 } else {
                                     pq.set_locked(false);
                                     warn!(

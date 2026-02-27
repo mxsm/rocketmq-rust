@@ -19,7 +19,7 @@ use rocketmq_client_rust::base::client_config::ClientConfig;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_common::common::message::message_single::Message;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
@@ -73,7 +73,7 @@ pub struct SendMsgStatusSubCommand {
 
 impl CommandExecute for SendMsgStatusSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        let instance_name = format!("PID_SMSC_{}", get_current_millis());
+        let instance_name = format!("PID_SMSC_{}", current_millis());
         let mut client_config = ClientConfig::default();
         client_config.set_instance_name(instance_name.into());
 
@@ -102,10 +102,10 @@ impl CommandExecute for SendMsgStatusSubCommand {
         }
 
         for _i in 0..self.count {
-            let begin = get_current_millis();
+            let begin = current_millis();
             match producer.send(build_message(broker_name, self.message_size)).await {
                 Ok(result) => {
-                    let rt = get_current_millis() - begin;
+                    let rt = current_millis() - begin;
                     println!(
                         "rt={}ms, SendResult={}",
                         rt,

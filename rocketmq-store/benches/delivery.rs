@@ -15,17 +15,17 @@
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 
 pub static A: std::sync::LazyLock<Vec<i32>> = std::sync::LazyLock::new(|| vec![1; 64]);
 
 pub fn delivery1() -> i32 {
-    let a = A.get((get_current_millis() % 64) as usize);
+    let a = A.get((current_millis() % 64) as usize);
     *a.unwrap()
 }
 
 pub fn delivery2() -> i32 {
-    let a = A.get((get_current_millis() & 63) as usize);
+    let a = A.get((current_millis() & 63) as usize);
     *a.unwrap()
 }
 

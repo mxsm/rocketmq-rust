@@ -62,7 +62,7 @@ impl PullCallback for DefaultPullCallback {
             PullStatus::Found => {
                 let prev_request_offset = pull_request.next_offset;
                 pull_request.set_next_offset(pull_result_ext.pull_result.next_begin_offset as i64);
-                /*let pull_rt = get_current_millis() - begin_timestamp.elapsed().as_millis() as u64;
+                /*let pull_rt = current_millis() - begin_timestamp.elapsed().as_millis() as u64;
                 self.client_instance.as_mut().unwrap().*/
                 let mut first_msg_offset = i64::MAX;
                 if pull_result_ext

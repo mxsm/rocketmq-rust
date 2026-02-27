@@ -24,7 +24,7 @@ use std::sync::Arc;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::mix_all;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::clients::RemotingClient;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -713,7 +713,7 @@ impl RouteInfoManagerV2 {
         let broker_addr_info = Arc::new(BrokerAddrInfo::new(cluster_name, broker_addr));
 
         let timeout = timeout_millis.unwrap_or(DEFAULT_BROKER_CHANNEL_EXPIRED_TIME);
-        let current_time = get_current_millis();
+        let current_time = current_millis();
 
         let live_info = BrokerLiveInfo::new(
             current_time,
@@ -1554,7 +1554,7 @@ impl RouteInfoManagerV2 {
     /// - This reduces lock contention on the global route tables
     pub fn scan_not_active_broker(&self) -> RouteResult<usize> {
         debug!("start scanNotActiveBroker");
-        let current_time = get_current_millis();
+        let current_time = current_millis();
 
         // Get expired brokers by checking heartbeat timeout
         let expired_brokers = self.broker_live_table.get_expired_brokers(current_time);

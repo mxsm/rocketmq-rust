@@ -31,7 +31,7 @@ use crate::common::message::message_single::Message;
 use crate::common::message::MessageConst;
 use crate::common::message::MessageTrait;
 use crate::utils::util_all;
-use crate::TimeUtils::get_current_millis;
+use crate::TimeUtils::current_millis;
 use crate::UtilAll::bytes_to_string;
 use crate::UtilAll::write_int;
 use crate::UtilAll::write_short;
@@ -56,7 +56,7 @@ static FIX_STRING: LazyLock<Vec<char>> = LazyLock::new(|| {
 });
 
 pub fn create_fake_ip() -> Vec<u8> {
-    get_current_millis().to_be_bytes()[4..].to_vec()
+    current_millis().to_be_bytes()[4..].to_vec()
 }
 
 pub struct MessageClientIDSetter;
@@ -85,7 +85,7 @@ impl MessageClientIDSetter {
         let mut sb = vec!['\0'; *LEN * 2];
         sb[..FIX_STRING.len()].copy_from_slice(&FIX_STRING);
 
-        let current = get_current_millis() as i64;
+        let current = current_millis() as i64;
         if current >= *NEXT_START_TIME.lock() {
             Self::set_start_time(current);
         }

@@ -73,17 +73,16 @@ pub trait ReferenceResource: Send + Sync {
     /// # Parameters
     /// * `interval_forcibly` - The interval in milliseconds to forcibly shut down the resource.
     fn shutdown(&self, interval_forcibly: u64) {
-        use rocketmq_common::TimeUtils::get_current_millis;
+        use rocketmq_common::TimeUtils::current_millis;
 
         if self.base().available.load(Ordering::Acquire) {
             self.base().available.store(false, Ordering::Release);
             self.base()
                 .first_shutdown_timestamp
-                .store(get_current_millis(), Ordering::Release);
+                .store(current_millis(), Ordering::Release);
             self.release();
         } else if self.get_ref_count() > 0 {
-            let elapsed =
-                get_current_millis().saturating_sub(self.base().first_shutdown_timestamp.load(Ordering::Acquire));
+            let elapsed = current_millis().saturating_sub(self.base().first_shutdown_timestamp.load(Ordering::Acquire));
 
             if elapsed >= interval_forcibly {
                 let current_count = self.get_ref_count();

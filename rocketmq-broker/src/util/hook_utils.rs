@@ -29,7 +29,7 @@ use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::utils::queue_type_utils::QueueTypeUtils;
 use rocketmq_common::MessageDecoder::message_properties_to_string;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_result::PutMessageResult;
 use rocketmq_store::base::message_status_enum::PutMessageStatus;
@@ -235,9 +235,9 @@ impl HookUtils {
     ) -> Option<PutMessageResult> {
         let delay_level = msg.message_ext_inner.message.get_delay_time_level();
         let deliver_ms = match msg.property(MessageConst::PROPERTY_TIMER_DELAY_SEC) {
-            Some(delay_sec) => get_current_millis() + delay_sec.parse::<u64>().unwrap() * 1000,
+            Some(delay_sec) => current_millis() + delay_sec.parse::<u64>().unwrap() * 1000,
             None => match msg.property(MessageConst::PROPERTY_TIMER_DELAY_MS) {
-                Some(delay_ms) => get_current_millis() + delay_ms.parse::<u64>().unwrap(),
+                Some(delay_ms) => current_millis() + delay_ms.parse::<u64>().unwrap(),
                 None => match msg.property(MessageConst::PROPERTY_TIMER_DELIVER_MS) {
                     Some(deliver_ms) => deliver_ms.parse::<u64>().unwrap(),
                     None => return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerMsgIllegal)),
@@ -245,8 +245,8 @@ impl HookUtils {
             },
         };
 
-        if deliver_ms > get_current_millis() {
-            if delay_level <= 0 && deliver_ms - get_current_millis() > message_store_config.timer_max_delay_sec * 1000 {
+        if deliver_ms > current_millis() {
+            if delay_level <= 0 && deliver_ms - current_millis() > message_store_config.timer_max_delay_sec * 1000 {
                 return Some(PutMessageResult::new_default(PutMessageStatus::WheelTimerMsgIllegal));
             }
 

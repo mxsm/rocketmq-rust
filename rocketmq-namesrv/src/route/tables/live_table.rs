@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::net::channel::ChannelId;
 use rocketmq_remoting::protocol::DataVersion;
@@ -368,7 +368,7 @@ impl BrokerLiveTable {
     /// * `broker_addr_info` - BrokerAddrInfo containing cluster name and broker address
     pub fn update_last_update_timestamp_by_addr_info(&self, broker_addr_info: &BrokerAddrInfo) {
         if let Some(mut entry) = self.inner.get_mut(broker_addr_info) {
-            let current_time = get_current_millis();
+            let current_time = current_millis();
             let old_info = entry.value();
             let new_info = BrokerLiveInfo {
                 last_update_timestamp: current_time,

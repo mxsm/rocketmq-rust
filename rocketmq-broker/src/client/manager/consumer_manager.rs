@@ -22,7 +22,7 @@ use cheetah_string::CheetahString;
 use dashmap::DashMap;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
@@ -511,7 +511,7 @@ impl ConsumerManager {
 
             // Find expired subscriptions
             for subscription_data in subscription_table.iter() {
-                let diff = get_current_millis() as i64 - subscription_data.sub_version;
+                let diff = current_millis() as i64 - subscription_data.sub_version;
                 if diff > self.subscription_expired_timeout as i64 {
                     topics_to_remove.push(subscription_data.key().clone());
                 }
@@ -550,7 +550,7 @@ impl ConsumerManager {
             // Collect expired channels
             let mut channels_to_remove = Vec::new();
             for client_channel_info in channel_info_table.iter() {
-                let diff = get_current_millis() as i64 - client_channel_info.last_update_timestamp() as i64;
+                let diff = current_millis() as i64 - client_channel_info.last_update_timestamp() as i64;
 
                 if diff > self.channel_expired_timeout as i64 {
                     warn!(

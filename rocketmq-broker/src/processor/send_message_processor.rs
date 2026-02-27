@@ -1377,7 +1377,7 @@ where
         send_message_context.queue_id(Some(request_header.queue_id));
         send_message_context.broker_region_id(CheetahString::from_string(region_id.clone()));
         send_message_context.born_time_stamp(request_header.born_timestamp);
-        send_message_context.request_time_stamp(TimeUtils::get_current_millis() as i64);
+        send_message_context.request_time_stamp(TimeUtils::current_millis() as i64);
 
         if let Some(owner) = request.ext_fields() {
             if let Some(value) = owner.get(BrokerStatsManager::COMMERCIAL_OWNER) {

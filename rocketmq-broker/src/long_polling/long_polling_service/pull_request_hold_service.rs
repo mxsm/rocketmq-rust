@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use rocketmq_store::consume_queue::cq_ext_unit::CqExtUnit;
@@ -183,7 +183,7 @@ where
                         }
                     }
 
-                    if get_current_millis() >= (request.suspend_timestamp() + request.timeout_millis()) {
+                    if current_millis() >= (request.suspend_timestamp() + request.timeout_millis()) {
                         let pull_message_this = self.pull_message_processor.clone();
                         self.pull_message_processor.execute_request_when_wakeup(
                             pull_message_this,

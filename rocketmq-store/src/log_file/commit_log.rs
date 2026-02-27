@@ -46,7 +46,7 @@ use rocketmq_common::MessageDecoder::string_to_message_properties;
 use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_POSITION;
 use rocketmq_common::MessageDecoder::MESSAGE_MAGIC_CODE_V2;
 use rocketmq_common::MessageDecoder::SYSFLAG_POSITION;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_common::UtilAll::time_millis_to_human_string;
 use rocketmq_rust::ArcMut;
 use tokio::time::Instant;
@@ -411,7 +411,7 @@ impl CommitLog {
     }
 
     pub async fn put_messages(&mut self, mut msg_batch: MessageExtBatch) -> PutMessageResult {
-        msg_batch.message_ext_broker_inner.message_ext_inner.store_timestamp = get_current_millis() as i64;
+        msg_batch.message_ext_broker_inner.message_ext_inner.store_timestamp = current_millis() as i64;
         let tran_type = MessageSysFlag::get_transaction_value(msg_batch.message_ext_broker_inner.sys_flag());
         if MessageSysFlag::TRANSACTION_NOT_TYPE != tran_type {
             return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);
@@ -466,10 +466,10 @@ impl CommitLog {
 
         let _put_message_lock = self.put_message_lock.lock().await;
         self.begin_time_in_lock
-            .store(time_utils::get_current_millis(), std::sync::atomic::Ordering::Release);
+            .store(time_utils::current_millis(), std::sync::atomic::Ordering::Release);
         let start_time = Instant::now();
         // Here settings are stored timestamp, in order to ensure an orderly global
-        msg_batch.message_ext_broker_inner.message_ext_inner.store_timestamp = time_utils::get_current_millis() as i64;
+        msg_batch.message_ext_broker_inner.message_ext_inner.store_timestamp = time_utils::current_millis() as i64;
 
         if mapped_file.is_none() || mapped_file.as_ref().unwrap().is_full() {
             mapped_file = self.mapped_file_queue.get_last_mapped_file_mut_start_offset(0, true);
@@ -646,7 +646,7 @@ impl CommitLog {
         };
 
         let _put_message_lock = self.put_message_lock.lock().await;
-        let begin_lock_timestamp = time_utils::get_current_millis();
+        let begin_lock_timestamp = time_utils::current_millis();
         self.begin_time_in_lock
             .store(begin_lock_timestamp, std::sync::atomic::Ordering::Release);
         let start_time = Instant::now();

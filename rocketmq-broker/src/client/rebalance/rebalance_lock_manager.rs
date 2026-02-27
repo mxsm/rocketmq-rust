@@ -20,7 +20,7 @@ use std::sync::LazyLock;
 
 use parking_lot::RwLock;
 use rocketmq_common::common::message::message_queue::MessageQueue;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use tracing::info;
 use tracing::warn;
 
@@ -68,7 +68,7 @@ impl RebalanceLockManager {
                     mq.clone(),
                     LockEntry {
                         client_id: client_id.to_string(),
-                        last_update_timestamp: AtomicI64::new(get_current_millis() as i64),
+                        last_update_timestamp: AtomicI64::new(current_millis() as i64),
                     },
                 );
                 info!(
@@ -82,7 +82,7 @@ impl RebalanceLockManager {
                 if lock_entry.is_locked(client_id) {
                     lock_entry
                         .last_update_timestamp
-                        .store(get_current_millis() as i64, std::sync::atomic::Ordering::Relaxed);
+                        .store(current_millis() as i64, std::sync::atomic::Ordering::Relaxed);
                     return true;
                 }
 
@@ -92,7 +92,7 @@ impl RebalanceLockManager {
                     lock_entry.client_id = client_id.to_string();
                     lock_entry
                         .last_update_timestamp
-                        .store(get_current_millis() as i64, std::sync::atomic::Ordering::Relaxed);
+                        .store(current_millis() as i64, std::sync::atomic::Ordering::Relaxed);
                     warn!(
                         "RebalanceLockManager#tryLock: try to lock a expired message queue, group={}, mq={:?}, old \
                          client id={}, new client id={}",
@@ -136,13 +136,13 @@ impl RebalanceLockManager {
                     );
                     LockEntry {
                         client_id: client_id.to_string(),
-                        last_update_timestamp: AtomicI64::new(get_current_millis() as i64),
+                        last_update_timestamp: AtomicI64::new(current_millis() as i64),
                     }
                 });
                 if lock_entry.is_locked(client_id) {
                     lock_entry
                         .last_update_timestamp
-                        .store(get_current_millis() as i64, std::sync::atomic::Ordering::Relaxed);
+                        .store(current_millis() as i64, std::sync::atomic::Ordering::Relaxed);
                     lock_mqs.insert(mq);
                     continue;
                 }
@@ -151,7 +151,7 @@ impl RebalanceLockManager {
                     lock_entry.client_id = client_id.to_string();
                     lock_entry
                         .last_update_timestamp
-                        .store(get_current_millis() as i64, std::sync::atomic::Ordering::Relaxed);
+                        .store(current_millis() as i64, std::sync::atomic::Ordering::Relaxed);
                     warn!(
                         "RebalanceLockManager#tryLockBatch: try to lock a expired message queue, group={} mq={:?}, \
                          old client id={}, new client id={}",
@@ -214,7 +214,7 @@ impl RebalanceLockManager {
                 if locked {
                     lock_entry
                         .last_update_timestamp
-                        .store(get_current_millis() as i64, std::sync::atomic::Ordering::Relaxed);
+                        .store(current_millis() as i64, std::sync::atomic::Ordering::Relaxed);
                 }
                 return locked;
             }
@@ -231,7 +231,7 @@ struct LockEntry {
 impl LockEntry {
     #[inline]
     pub fn is_expired(&self) -> bool {
-        let now = get_current_millis() as i64;
+        let now = current_millis() as i64;
         let last_update_timestamp = self.last_update_timestamp.load(std::sync::atomic::Ordering::Relaxed);
         (now - last_update_timestamp) > *REBALANCE_LOCK_MAX_LIVE_TIME
     }

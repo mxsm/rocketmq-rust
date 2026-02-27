@@ -20,7 +20,7 @@ use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::utils::util_all;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::runtime::RPCHook;
@@ -359,7 +359,7 @@ impl Default for ConsumerConfig {
             message_model: MessageModel::Clustering,
             consume_from_where: ConsumeFromWhere::ConsumeFromLastOffset,
             consume_timestamp: Some(CheetahString::from_string(util_all::time_millis_to_human_string3(
-                (get_current_millis() - (1000 * 60 * 30)) as i64,
+                (current_millis() - (1000 * 60 * 30)) as i64,
             ))),
             allocate_message_queue_strategy: Some(Arc::new(AllocateMessageQueueAveragely)),
             subscription: ArcMut::new(HashMap::new()),

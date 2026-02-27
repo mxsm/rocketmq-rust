@@ -145,13 +145,12 @@ where
 
         for entry in self.fault_item_table.iter() {
             let (name, fault_item) = (entry.key(), entry.value());
-            if get_current_millis() as i64 - (fault_item.check_stamp.load(std::sync::atomic::Ordering::Relaxed) as i64)
-                < 0
+            if current_millis() as i64 - (fault_item.check_stamp.load(std::sync::atomic::Ordering::Relaxed) as i64) < 0
             {
                 continue;
             }
             fault_item.check_stamp.store(
-                get_current_millis() + self.detect_interval as u64,
+                current_millis() + self.detect_interval as u64,
                 std::sync::atomic::Ordering::Release,
             );
 
@@ -209,7 +208,7 @@ use std::hash::Hash;
 use std::sync::atomic::AtomicBool;
 
 use cheetah_string::CheetahString;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::ArcMut;
 use tracing::info;
 
@@ -238,7 +237,7 @@ impl FaultItem {
     }
 
     pub fn update_not_available_duration(&self, not_available_duration: u64) {
-        let now = get_current_millis();
+        let now = current_millis();
         if not_available_duration > 0
             && now + not_available_duration > self.start_timestamp.load(std::sync::atomic::Ordering::Relaxed)
         {
@@ -259,7 +258,7 @@ impl FaultItem {
     }
 
     pub fn is_available(&self) -> bool {
-        let now = get_current_millis();
+        let now = current_millis();
         now >= self.start_timestamp.load(std::sync::atomic::Ordering::Relaxed)
     }
 

@@ -34,7 +34,7 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
@@ -337,7 +337,7 @@ where
         msg_inner.message_ext_inner.sys_flag = 0;
         msg_inner.properties_string = MessageDecoder::message_properties_to_string(msg_inner.get_properties());
 
-        msg_inner.message_ext_inner.born_timestamp = get_current_millis() as i64;
+        msg_inner.message_ext_inner.born_timestamp = current_millis() as i64;
         msg_inner.message_ext_inner.born_host = self.store_host;
         msg_inner.message_ext_inner.store_host = self.store_host;
         msg_inner.set_wait_store_msg_ok(false);

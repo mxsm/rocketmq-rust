@@ -38,7 +38,7 @@ use rocketmq_common::utils::crc32_utils;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::clients::rocketmq_tokio_client::RocketmqDefaultClient;
 use rocketmq_remoting::clients::RemotingClient;
@@ -791,7 +791,7 @@ impl BrokerOuterAPI {
             commit_offset: 0,
             suspend_timeout_millis: 0,
             subscription: Some(CheetahString::from_static_str(SubscriptionData::SUB_ALL)),
-            sub_version: get_current_millis() as i64,
+            sub_version: current_millis() as i64,
             expression_type: Some(CheetahString::from_static_str(ExpressionType::TAG)),
             max_msg_bytes: Some(i32::MAX),
             topic_request: Some(TopicRequestHeader {

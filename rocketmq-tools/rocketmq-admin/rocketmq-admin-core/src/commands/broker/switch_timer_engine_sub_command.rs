@@ -18,7 +18,7 @@ use clap::ArgGroup;
 use clap::Parser;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::common::message::MessageConst;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
@@ -60,7 +60,7 @@ impl CommandExecute for SwitchTimerEngineSubCommand {
         };
         default_mqadmin_ext
             .client_config_mut()
-            .set_instance_name(get_current_millis().to_string().into());
+            .set_instance_name(current_millis().to_string().into());
 
         let engine_type = self.engine_type.trim().to_string();
         if engine_type.is_empty()

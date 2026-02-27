@@ -44,7 +44,7 @@ use rocketmq_common::utils::correlation_id_util::CorrelationIdUtil;
 use rocketmq_common::MessageAccessor::MessageAccessor;
 use rocketmq_common::MessageDecoder;
 use rocketmq_common::RecallMessageHandle;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::ClientErr;
 use rocketmq_error::RocketmqError::RemotingTooMuchRequestError;
 use rocketmq_remoting::protocol::header::check_transaction_state_request_header::CheckTransactionStateRequestHeader;
@@ -1212,7 +1212,7 @@ impl DefaultMQProducerImpl {
             default_topic_queue_nums: self.producer_config.default_topic_queue_nums() as i32,
             queue_id: mq.queue_id(),
             sys_flag,
-            born_timestamp: get_current_millis() as i64,
+            born_timestamp: current_millis() as i64,
             flag: msg.get_flag(),
             properties: Some(MessageDecoder::message_properties_to_string(msg.get_properties())),
             reconsume_times: Some(0),
@@ -2755,7 +2755,7 @@ where
         default_topic_queue_nums: producer_config.default_topic_queue_nums() as i32,
         queue_id: mq.queue_id(),
         sys_flag: 0,
-        born_timestamp: get_current_millis() as i64,
+        born_timestamp: current_millis() as i64,
         flag: msg.get_flag(),
         properties: Some(MessageDecoder::message_properties_to_string(msg.get_properties())),
         reconsume_times: Some(0),

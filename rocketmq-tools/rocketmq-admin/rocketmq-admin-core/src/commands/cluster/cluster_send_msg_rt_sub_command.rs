@@ -23,7 +23,7 @@ use rocketmq_client_rust::base::client_config::ClientConfig;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_common::common::message::message_single::Message;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
@@ -107,14 +107,14 @@ impl CommandExecute for ClusterSendMsgRTSubCommand {
 
         default_mq_admin_ext
             .client_config_mut()
-            .set_instance_name(get_current_millis().to_string().into());
+            .set_instance_name(current_millis().to_string().into());
 
-        let instance_name = format!("PID_ClusterRTCommand_{}", get_current_millis());
+        let instance_name = format!("PID_ClusterRTCommand_{}", current_millis());
         let mut client_config = ClientConfig::default();
         client_config.set_instance_name(instance_name.into());
 
         let mut builder = DefaultMQProducer::builder()
-            .producer_group(get_current_millis().to_string())
+            .producer_group(current_millis().to_string())
             .client_config(client_config);
         if let Some(ref hook) = rpc_hook {
             builder = builder.rpc_hook(hook.clone());
@@ -178,7 +178,7 @@ impl CommandExecute for ClusterSendMsgRTSubCommand {
                         let mut fail_count: u64 = 0;
 
                         for i in 0..self.amount {
-                            let start = get_current_millis();
+                            let start = current_millis();
                             match producer.send(msg.clone()).await {
                                 Ok(_) => {
                                     success_count += 1;
@@ -187,7 +187,7 @@ impl CommandExecute for ClusterSendMsgRTSubCommand {
                                     fail_count += 1;
                                 }
                             }
-                            let end = get_current_millis();
+                            let end = current_millis();
 
                             if i != 0 {
                                 elapsed += end - start;

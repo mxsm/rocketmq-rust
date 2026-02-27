@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cheetah_string::CheetahString;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::LanguageCode;
 
@@ -33,7 +33,7 @@ impl ClientChannelInfo {
             client_id,
             language,
             version,
-            last_update_timestamp: get_current_millis(),
+            last_update_timestamp: current_millis(),
         }
     }
 

@@ -39,7 +39,7 @@ use rocketmq_common::common::TopicFilterType;
 use rocketmq_common::utils::data_converter::DataConverter;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
 use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::get_message_result::GetMessageResult;
 use rocketmq_store::base::message_status_enum::AppendMessageStatus;
@@ -318,7 +318,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                     break;
                 }
 
-                if get_current_millis() < this.broker_runtime_inner.should_start_time().load(Relaxed) {
+                if current_millis() < this.broker_runtime_inner.should_start_time().load(Relaxed) {
                     info!(
                         "PopReviveService Ready to run after {}",
                         this.broker_runtime_inner.should_start_time().load(Relaxed)
@@ -366,12 +366,12 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 let mut delay = 0;
                 if let Some(ref sort_list) = consume_revive_obj.sort_list {
                     if !sort_list.is_empty() {
-                        delay = (get_current_millis() - (sort_list[0].get_revive_time() as u64)) / 1000;
+                        delay = (current_millis() - (sort_list[0].get_revive_time() as u64)) / 1000;
                         this.current_revive_message_timestamp = sort_list[0].get_revive_time();
                         slow = 1;
                     }
                 } else {
-                    this.current_revive_message_timestamp = get_current_millis() as i64;
+                    this.current_revive_message_timestamp = current_millis() as i64;
                 }
                 if this.broker_runtime_inner.broker_config().enable_pop_log {
                     info!(
@@ -400,7 +400,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
     async fn consume_revive_message(&self, consume_revive_obj: &mut ConsumeReviveObj) {
         let map = &mut consume_revive_obj.map;
         let mut mock_point_map = HashMap::new();
-        let _start_scan_time = get_current_millis();
+        let _start_scan_time = current_millis();
         let mut end_time = 0;
         let consume_offset = self.broker_runtime_inner.consumer_offset_manager().query_offset(
             &CheetahString::from_static_str(PopAckConstants::REVIVE_GROUP),
@@ -436,11 +436,11 @@ impl<MS: MessageStore> PopReviveService<MS> {
                     .map(|timer_store| (timer_store.get_dequeue_behind(), timer_store.get_enqueue_behind()))
                     .unwrap_or((0, 0));
                 if end_time != 0
-                    && get_current_millis() - end_time > (3 * PopAckConstants::SECOND) as u64
+                    && current_millis() - end_time > (3 * PopAckConstants::SECOND) as u64
                     && timer_delay <= 0
                     && commit_log_delay <= 0
                 {
-                    end_time = get_current_millis();
+                    end_time = current_millis();
                 }
                 if self.broker_runtime_inner.broker_config().enable_pop_log {
                     info!(
@@ -464,7 +464,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 no_msg_count = 0;
             }
 
-            if get_current_millis() > self.broker_runtime_inner.broker_config().revive_scan_time {
+            if current_millis() > self.broker_runtime_inner.broker_config().revive_scan_time {
                 info!("reviveQueueId={}, scan timeout", self.queue_id);
                 break;
             }
@@ -649,7 +649,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         merge_key: &CheetahString,
         mock_point_map: &mut HashMap<CheetahString, PopCheckPoint>,
     ) -> bool {
-        let now = get_current_millis();
+        let now = current_millis();
         let ack_wait_time = now - message_ext.get_deliver_time_ms();
         let revive_ack_wait_ms = self.broker_runtime_inner.broker_config().revive_ack_wait_ms;
         if ack_wait_time > revive_ack_wait_ms {
@@ -753,7 +753,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                     let len = inflight_map.len();
 
                     // Find first timeout request
-                    let now = get_current_millis();
+                    let now = current_millis();
                     let timeout = inflight_map
                         .iter()
                         .find(|(_, (timestamp, completed))| {
@@ -843,7 +843,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
         new_ck.add_diff(0);
         new_ck.set_re_put_times(Some(CheetahString::from_string((re_put_times + 1).to_string())));
 
-        if old_ck.get_revive_time() <= get_current_millis() as i64 {
+        if old_ck.get_revive_time() <= current_millis() as i64 {
             let interval_index = if re_put_times >= self.ck_rewrite_intervals_in_seconds.len() as i32 {
                 self.ck_rewrite_intervals_in_seconds.len() - 1
             } else {
@@ -876,7 +876,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
             );
             return;
         }
-        let now = get_current_millis() as i64;
+        let now = current_millis() as i64;
         this.inflight_revive_request_map
             .lock()
             .await
@@ -994,7 +994,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
             .get_max_offset_in_queue(&self.revive_topic, self.queue_id);
         let revive_offset = self.revive_offset.load(Ordering::Acquire);
         if max_offset - revive_offset > 1 {
-            let now = get_current_millis() as i64;
+            let now = current_millis() as i64;
             return std::cmp::max(0, now - self.current_revive_message_timestamp);
         }
         0
@@ -1087,7 +1087,7 @@ mod tests {
     use rocketmq_common::common::key_builder::KeyBuilder;
     use rocketmq_common::common::mix_all;
     use rocketmq_common::common::pop_ack_constants::PopAckConstants;
-    use rocketmq_common::TimeUtils::get_current_millis;
+    use rocketmq_common::TimeUtils::current_millis;
     use rocketmq_store::pop::ack_msg::AckMsg;
     use rocketmq_store::pop::pop_check_point::PopCheckPoint;
 
@@ -1320,7 +1320,7 @@ mod tests {
         });
 
         // Reader task: polls flag until it becomes true
-        let start = get_current_millis();
+        let start = current_millis();
         loop {
             if flag.load(Ordering::Acquire) {
                 break;
@@ -1328,7 +1328,7 @@ mod tests {
             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
             // Timeout after 1 second
-            if get_current_millis() - start > 1000 {
+            if current_millis() - start > 1000 {
                 panic!("Flag was never set to true - visibility issue!");
             }
         }

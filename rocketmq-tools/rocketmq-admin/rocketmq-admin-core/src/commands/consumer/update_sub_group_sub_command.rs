@@ -19,7 +19,7 @@ use cheetah_string::CheetahString;
 use clap::Parser;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::common::attribute::attribute_parser::AttributeParser;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::subscription::group_retry_policy::GroupRetryPolicy;
@@ -131,7 +131,7 @@ impl CommandExecute for UpdateSubGroupSubCommand {
         let mut default_mqadmin_ext = DefaultMQAdminExt::new();
         default_mqadmin_ext
             .client_config_mut()
-            .set_instance_name(get_current_millis().to_string().into());
+            .set_instance_name(current_millis().to_string().into());
 
         let operation_result = async {
             use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;

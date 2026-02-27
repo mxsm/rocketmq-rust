@@ -22,7 +22,7 @@ use std::ops::Deref;
 use cheetah_string::CheetahString;
 use rocketmq_common::common::config_manager::ConfigManager;
 use rocketmq_common::utils::serde_json_utils::SerdeJsonUtils;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
 use serde::Deserialize;
@@ -348,7 +348,7 @@ impl OrderInfo {
         if self.invisible_time.is_none() || self.invisible_time.unwrap_or(0) == 0 {
             self.invisible_time = Some(current_invisible_time);
         }
-        let current_time = get_current_millis();
+        let current_time = current_millis();
         for (i, _) in (0..num).enumerate() {
             if self.is_not_ack(i) {
                 let mut next_visible_time = self.pop_time + self.invisible_time.unwrap_or(0);
@@ -372,7 +372,7 @@ impl OrderInfo {
         if self.offset_list.is_empty() {
             return None;
         }
-        let current_time = get_current_millis();
+        let current_time = current_millis();
         for i in 0..self.offset_list.len() {
             if self.is_not_ack(i) {
                 if self.invisible_time.is_none() || self.invisible_time.unwrap_or(0) == 0 {

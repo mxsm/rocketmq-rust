@@ -33,7 +33,7 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::DEFAULT_CONSUMER_GROUP;
 use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 use rocketmq_common::MessageAccessor::MessageAccessor;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::ClientErr;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
@@ -696,7 +696,7 @@ impl DefaultMQPushConsumerImpl {
             info!("the pop request[{}] is dropped.", pop_request);
             return;
         }
-        process_queue.set_last_pop_timestamp(get_current_millis());
+        process_queue.set_last_pop_timestamp(current_millis());
 
         if let Err(e) = self.make_sure_state_ok() {
             warn!("pop_message exception, consumer state not ok {}", e);
@@ -780,7 +780,7 @@ impl DefaultMQPushConsumerImpl {
             info!("the pull request[{}] is dropped.", pull_request);
             return;
         }
-        pull_request.process_queue.set_last_pull_timestamp(get_current_millis());
+        pull_request.process_queue.set_last_pull_timestamp(current_millis());
         if let Err(e) = self.make_sure_state_ok() {
             warn!("pullMessage exception, consumer state not ok {}", e);
             self.execute_pull_request_later(pull_request, self.pull_time_delay_mills_when_exception);

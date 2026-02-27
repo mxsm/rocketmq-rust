@@ -30,7 +30,7 @@ use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_common::common::mix_all;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::heartbeat::consumer_data::ConsumerData;
@@ -135,7 +135,7 @@ impl MQClientInstance {
         let mut instance = ArcMut::new(MQClientInstance {
             client_config: shared_config,
             client_id,
-            boot_timestamp: get_current_millis(),
+            boot_timestamp: current_millis(),
             producer_table,
             consumer_table,
             admin_ext_table,
