@@ -508,7 +508,9 @@ impl MQPushConsumer for DefaultMQPushConsumer {
     }
 
     async fn unsubscribe(&mut self, topic: &str) {
-        todo!()
+        if let Some(ref mut default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
+            default_mqpush_consumer_impl.unsubscribe(topic).await;
+        }
     }
 
     async fn suspend(&mut self) {

@@ -1388,6 +1388,16 @@ impl DefaultMQPushConsumerImpl {
             )
             .await
     }
+
+    pub async fn unsubscribe(&mut self, topic: &str) {
+        let mut write_guard = self
+            .rebalance_impl
+            .rebalance_impl_inner
+            .subscription_inner
+            .write()
+            .await;
+        write_guard.remove(topic);
+    }
 }
 
 impl MQConsumerInner for DefaultMQPushConsumerImpl {
