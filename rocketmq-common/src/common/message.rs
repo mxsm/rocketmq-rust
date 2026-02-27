@@ -182,6 +182,16 @@ pub trait MessageTrait: Any + Display + Debug {
         self.property(&CheetahString::from_static_str(MessageConst::PROPERTY_TAGS))
     }
 
+    /// Retrieves the reference of the tag associated with the message
+    ///
+    /// # Returns
+    ///
+    /// An `Option<&CheetahString>` containing a reference to the tags if they exist, otherwise
+    /// `None`.
+    fn get_tags_ref(&self) -> Option<&CheetahString> {
+        self.property_ref(&CheetahString::from_static_str(MessageConst::PROPERTY_TAGS))
+    }
+
     /// Sets the tags for the message.
     ///
     /// # Arguments

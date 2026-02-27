@@ -59,8 +59,8 @@ impl GetNamesrvConfigCommand {
 
         // Flatten the map for display (assuming only one nameserver or merging all configs)
         let config: std::collections::HashMap<String, String> = config_map
-            .into_iter()
-            .flat_map(|(_, configs)| configs.into_iter().map(|(k, v)| (k.to_string(), v.to_string())))
+            .into_values()
+            .flat_map(|configs| configs.into_iter().map(|(k, v)| (k.to_string(), v.to_string())))
             .collect();
 
         // Format and display output

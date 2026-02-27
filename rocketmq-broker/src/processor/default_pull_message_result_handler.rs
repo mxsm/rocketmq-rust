@@ -436,17 +436,15 @@ impl<MS: MessageStore> DefaultPullMessageResultHandler<MS> {
                     context.rcv_msg_size = get_message_result.buffer_total_size();
                     context.commercial_rcv_msg_num = get_message_result.msg_count4_commercial();
                 }
-                ResponseCode::PullNotFound => {
-                    if !broker_allow_suspend {
-                        context.commercial_rcv_stats = StatsType::RcvEpolls;
-                        context.commercial_rcv_times = 1;
-                        context.commercial_owner = owner;
+                ResponseCode::PullNotFound if !broker_allow_suspend => {
+                    context.commercial_rcv_stats = StatsType::RcvEpolls;
+                    context.commercial_rcv_times = 1;
+                    context.commercial_owner = owner;
 
-                        context.rcv_stat = StatsType::RcvEpolls;
-                        context.rcv_msg_num = 0;
-                        context.rcv_msg_size = 0;
-                        context.commercial_rcv_msg_num = 0;
-                    }
+                    context.rcv_stat = StatsType::RcvEpolls;
+                    context.rcv_msg_num = 0;
+                    context.rcv_msg_size = 0;
+                    context.commercial_rcv_msg_num = 0;
                 }
                 ResponseCode::PullRetryImmediately | ResponseCode::PullOffsetMoved => {
                     context.commercial_rcv_stats = StatsType::RcvEpolls;
