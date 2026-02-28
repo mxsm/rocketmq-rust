@@ -22,59 +22,89 @@ use crate::consumer::message_queue_listener::MessageQueueListener;
 use crate::consumer::message_selector::MessageSelector;
 use crate::consumer::topic_message_queue_change_listener::TopicMessageQueueChangeListener;
 
+/// A consumer that pulls messages from brokers on demand, providing explicit control over
+/// fetch timing, offset management, and queue assignment.
+///
+/// Unlike the push consumer, the caller drives message retrieval through [`poll`] or
+/// [`poll_with_timeout`], and may manage offsets manually when auto-commit is disabled.
+/// Queue assignment can be controlled either by subscribing to topics (broker-side rebalance)
+/// or by calling [`assign`] directly (client-controlled assignment).
+///
+/// All methods are asynchronous and do not block the calling thread.
+///
+/// [`poll`]: LitePullConsumerLocal::poll
+/// [`poll_with_timeout`]: LitePullConsumerLocal::poll_with_timeout
+/// [`assign`]: LitePullConsumerLocal::assign
 #[trait_variant::make(LitePullConsumer: Send)]
 pub trait LitePullConsumerLocal: Sync {
-    /// Starts the LitePullConsumer.
+    /// Starts the consumer and establishes connections to the broker and name server.
     ///
-    /// # Returns
+    /// This function does not block the calling thread.
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    /// # Errors
+    ///
+    /// Returns an error if the consumer is already running, if required configuration is
+    /// invalid, or if the connection to the name server cannot be established.
     async fn start(&self) -> rocketmq_error::RocketMQResult<()>;
 
-    /// Shuts down the LitePullConsumer.
+    /// Shuts down the consumer and releases all associated resources.
+    ///
+    /// This function does not block the calling thread. After shutdown, the consumer
+    /// cannot be restarted.
     async fn shutdown(&self);
 
-    /// Checks if the LitePullConsumer is running.
+    /// Returns whether the consumer is currently in the running state.
     ///
-    /// # Returns
-    ///
-    /// * `bool` - `true` if the consumer is running, `false` otherwise.
+    /// This function does not block the calling thread.
     async fn is_running(&self) -> bool;
 
-    /// Subscribes to a topic.
+    /// Subscribes to the specified topic using the default subscription expression.
+    ///
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
     /// * `topic` - The name of the topic to subscribe to.
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    /// Returns an error if the topic name is invalid or if the subscription cannot be
+    /// registered with the broker.
     async fn subscribe(&self, topic: &str) -> rocketmq_error::RocketMQResult<()>;
 
-    /// Subscribes to a topic with a subscription expression.
+    /// Subscribes to the specified topic with a tag-based or SQL-based filter expression.
+    ///
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
     /// * `topic` - The name of the topic to subscribe to.
-    /// * `sub_expression` - The subscription expression.
+    /// * `sub_expression` - A tag expression (e.g. `"TagA || TagB"`) or SQL-92 predicate. Pass
+    ///   `"*"` to receive all messages.
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    /// Returns an error if the topic name is invalid, the expression cannot be parsed,
+    /// or the subscription cannot be registered with the broker.
     async fn subscribe_with_expression(&self, topic: &str, sub_expression: &str) -> rocketmq_error::RocketMQResult<()>;
 
-    /// Subscribes to a topic with a subscription expression and a message queue listener.
+    /// Subscribes to the specified topic with a filter expression and a queue-change listener.
+    ///
+    /// The listener is invoked whenever the set of assigned [`MessageQueue`]s changes for
+    /// this topic due to rebalance.
+    ///
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
     /// * `topic` - The name of the topic to subscribe to.
-    /// * `sub_expression` - The subscription expression.
-    /// * `listener` - The message queue listener.
+    /// * `sub_expression` - A tag expression or SQL-92 predicate. Pass `"*"` for all messages.
+    /// * `listener` - A [`MessageQueueListener`] notified on queue assignment changes.
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    /// Returns an error if the topic name is invalid, the expression cannot be parsed,
+    /// or the subscription cannot be registered with the broker.
     async fn subscribe_with_listener<MQL>(
         &self,
         topic: &str,
@@ -84,188 +114,278 @@ pub trait LitePullConsumerLocal: Sync {
     where
         MQL: MessageQueueListener;
 
-    /// Subscribes to a topic with a message selector.
+    /// Subscribes to the specified topic using a [`MessageSelector`] for server-side filtering.
+    ///
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
     /// * `topic` - The name of the topic to subscribe to.
-    /// * `selector` - The message selector.
+    /// * `selector` - The filter selector. Pass `None` to receive all messages.
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    /// Returns an error if the topic name is invalid, the selector expression is rejected
+    /// by the broker, or the subscription cannot be registered.
     async fn subscribe_with_selector(
         &self,
         topic: &str,
         selector: Option<MessageSelector>,
     ) -> rocketmq_error::RocketMQResult<()>;
-    /// Unsubscribes from a topic.
+
+    /// Removes the subscription for the specified topic.
+    ///
+    /// Messages for this topic will no longer be fetched after the next rebalance cycle.
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
     /// * `topic` - The name of the topic to unsubscribe from.
     async fn unsubscribe(&self, topic: &str);
 
-    /// Retrieves the current assignment of message queues.
+    /// Returns the set of [`MessageQueue`]s currently assigned to this consumer.
     ///
-    /// # Returns
+    /// This function does not block the calling thread.
     ///
-    /// * `rocketmq_error::RocketMQResult<HashSet<MessageQueue>>` - A set of assigned message queues
-    ///   or an error.
+    /// # Errors
+    ///
+    /// Returns an error if the consumer is not in the running state.
     async fn assignment(&self) -> rocketmq_error::RocketMQResult<HashSet<MessageQueue>>;
 
-    /// Assigns a list of message queues to the consumer.
+    /// Manually assigns the given [`MessageQueue`]s to this consumer, bypassing broker rebalance.
+    ///
+    /// Any previously assigned queues not present in `message_queues` are removed.
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
-    /// * `message_queues` - A vector of `MessageQueue` instances to assign.
+    /// * `message_queues` - The complete set of queues to assign to this consumer.
     async fn assign(&self, message_queues: Vec<MessageQueue>);
 
-    /// Sets the subscription expression for an assigned topic.
+    /// Sets the subscription filter expression applied when fetching from manually assigned queues.
+    ///
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
-    /// * `topic` - The name of the topic.
-    /// * `sub_expression` - The subscription expression.
+    /// * `topic` - The topic for which the filter expression applies.
+    /// * `sub_expression` - A tag expression or SQL-92 predicate used to filter messages.
     async fn set_sub_expression_for_assign(&self, topic: &str, sub_expression: &str);
 
-    /// Polls for messages.
+    /// Populates `sub_expression_map` with the filter selector for each subscribed topic,
+    /// providing the subscription metadata required for heartbeat payloads.
     ///
-    /// # Returns
+    /// This function does not block the calling thread.
     ///
-    /// * `Vec<MessageExt>` - A vector of polled messages.
+    /// # Arguments
+    ///
+    /// * `sub_expression_map` - Output map from topic name to its [`MessageSelector`]. Entries are
+    ///   inserted for every topic that has an active subscription with a selector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the subscription metadata cannot be retrieved.
+    async fn build_subscriptions_for_heartbeat(
+        &self,
+        sub_expression_map: &mut HashMap<String, MessageSelector>,
+    ) -> rocketmq_error::RocketMQResult<()>;
+
+    /// Fetches the next batch of messages using the default poll timeout.
+    ///
+    /// Returns an empty vector if no messages are available within the timeout period.
+    /// This function does not block the calling thread.
     async fn poll(&self) -> Vec<MessageExt>;
 
-    /// Polls for messages with a timeout.
+    /// Fetches the next batch of messages, waiting up to `timeout` milliseconds.
+    ///
+    /// Returns an empty vector if no messages are available before the timeout expires.
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
-    /// * `timeout` - The timeout duration in milliseconds.
-    ///
-    /// # Returns
-    ///
-    /// * `Vec<MessageExt>` - A vector of polled messages.
+    /// * `timeout` - Maximum time to wait for messages, in milliseconds.
     async fn poll_with_timeout(&self, timeout: u64) -> Vec<MessageExt>;
 
-    /// Seeks to a specific offset in a message queue.
+    /// Seeks the fetch position of the specified [`MessageQueue`] to the given offset.
+    ///
+    /// The next [`poll`] invocation will return messages starting from `offset`.
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
-    /// * `message_queue` - The message queue to seek.
-    /// * `offset` - The offset to seek to.
+    /// * `message_queue` - The queue whose fetch position is to be updated.
+    /// * `offset` - The target offset. Must be within the queue's valid range.
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    /// Returns an error if the queue is not currently assigned to this consumer,
+    /// or if the specified offset is out of the valid range.
+    ///
+    /// [`poll`]: LitePullConsumerLocal::poll
     async fn seek(&self, message_queue: &MessageQueue, offset: i64) -> rocketmq_error::RocketMQResult<()>;
 
-    /// Pauses message consumption for the specified message queues.
+    /// Suspends message fetching for the specified [`MessageQueue`]s.
+    ///
+    /// Paused queues are excluded from subsequent [`poll`] results until [`resume`] is called.
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
-    /// * `message_queues` - A vector of `MessageQueue` instances to pause.
+    /// * `message_queues` - The queues to pause.
+    ///
+    /// [`poll`]: LitePullConsumerLocal::poll
+    /// [`resume`]: LitePullConsumerLocal::resume
     async fn pause(&self, message_queues: Vec<MessageQueue>);
 
-    /// Resumes message consumption for the specified message queues.
+    /// Resumes message fetching for the specified [`MessageQueue`]s.
+    ///
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
-    /// * `message_queues` - A vector of `MessageQueue` instances to resume.
+    /// * `message_queues` - The queues to resume.
     async fn resume(&self, message_queues: Vec<MessageQueue>);
 
-    /// Checks if auto-commit is enabled.
+    /// Returns whether automatic offset commit is enabled.
     ///
-    /// # Returns
-    ///
-    /// * `bool` - `true` if auto-commit is enabled, `false` otherwise.
+    /// This function does not block the calling thread.
     async fn is_auto_commit(&self) -> bool;
 
-    /// Sets the auto-commit mode.
+    /// Enables or disables automatic offset commit.
+    ///
+    /// When auto-commit is enabled, offsets are committed periodically without explicit calls
+    /// to [`commit`] or [`commit_sync`]. When disabled, the caller is responsible for committing
+    /// offsets.
+    ///
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
-    /// * `auto_commit` - `true` to enable auto-commit, `false` to disable it.
+    /// * `auto_commit` - `true` to enable automatic offset commit; `false` to disable it.
+    ///
+    /// [`commit`]: LitePullConsumerLocal::commit
+    /// [`commit_sync`]: LitePullConsumerLocal::commit_sync
     async fn set_auto_commit(&self, auto_commit: bool);
 
-    /// Fetches the message queues for a topic.
+    /// Queries the broker for all [`MessageQueue`]s belonging to the specified topic.
+    ///
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
-    /// * `topic` - The name of the topic.
+    /// * `topic` - The name of the topic to query.
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// * `rocketmq_error::RocketMQResult<Vec<MessageQueue>>` - A vector of message queues or an
-    ///   error.
+    /// Returns an error if the topic does not exist, if the name server is unreachable,
+    /// or if the consumer is not in the running state.
     async fn fetch_message_queues(&self, topic: &str) -> rocketmq_error::RocketMQResult<Vec<MessageQueue>>;
-    /// Retrieves the offset for a given timestamp in a message queue.
+
+    /// Queries the broker for the offset corresponding to the given timestamp in a queue.
+    ///
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
-    /// * `message_queue` - The message queue to query.
-    /// * `timestamp` - The timestamp to query the offset for.
+    /// * `message_queue` - The queue to query.
+    /// * `timestamp` - The Unix timestamp in milliseconds. The broker returns the offset of the
+    ///   first message stored at or after this timestamp.
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// * `rocketmq_error::RocketMQResult<i64>` - The offset corresponding to the given timestamp or
-    ///   an error.
+    /// Returns an error if the queue is not found on the broker or the query fails.
     async fn offset_for_timestamp(
         &self,
         message_queue: &MessageQueue,
         timestamp: u64,
     ) -> rocketmq_error::RocketMQResult<i64>;
 
-    /// Commits the current offsets synchronously.
+    /// Commits all consumed offsets and waits for the broker to acknowledge the operation.
+    ///
+    /// This function does not block the calling thread.
+    ///
+    /// # Deprecation
+    ///
+    /// This method is deprecated. The name implies synchronous behavior, but the underlying
+    /// implementation relies on a background thread to commit offsets rather than committing
+    /// synchronously. Use [`commit`] instead.
+    ///
+    /// [`commit`]: LitePullConsumerLocal::commit
     async fn commit_sync(&self);
 
-    /// Commits the provided offsets synchronously.
+    /// Commits the provided offsets and optionally persists them to the broker.
+    ///
+    /// This function does not block the calling thread.
+    ///
+    /// # Deprecation
+    ///
+    /// This method is deprecated. The name implies synchronous behavior, but the underlying
+    /// implementation relies on a background thread to commit offsets rather than committing
+    /// synchronously. Use [`commit_with_map`] instead.
     ///
     /// # Arguments
     ///
-    /// * `offset_map` - A map of message queues to offsets.
-    /// * `persist` - Whether to persist the offsets.
+    /// * `offset_map` - A map from [`MessageQueue`] to the offset to commit.
+    /// * `persist` - When `true`, the committed offsets are persisted to the broker immediately.
+    ///
+    /// [`commit_with_map`]: LitePullConsumerLocal::commit_with_map
     async fn commit_sync_with_map(&self, offset_map: HashMap<MessageQueue, i64>, persist: bool);
 
-    /// Commits the current offsets.
+    /// Commits all consumed offsets asynchronously.
+    ///
+    /// This function does not block the calling thread. The commit is performed in the
+    /// background; use [`commit_sync`] if acknowledgment is required before proceeding.
+    ///
+    /// [`commit_sync`]: LitePullConsumerLocal::commit_sync
     async fn commit(&self);
 
-    /// Commits the provided offsets.
+    /// Commits the provided offsets asynchronously, optionally persisting them to the broker.
+    ///
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
-    /// * `offset_map` - A map of message queues to offsets.
-    /// * `persist` - Whether to persist the offsets.
+    /// * `offset_map` - A map from [`MessageQueue`] to the offset to commit.
+    /// * `persist` - When `true`, the committed offsets are persisted to the broker.
     async fn commit_with_map(&self, offset_map: HashMap<MessageQueue, i64>, persist: bool);
 
-    /// Commits the offsets for the provided message queues.
+    /// Commits the offsets for the specified subset of assigned queues.
+    ///
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
-    /// * `message_queues` - A set of message queues to commit offsets for.
-    /// * `persist` - Whether to persist the offsets.
+    /// * `message_queues` - The queues whose current offsets are to be committed.
+    /// * `persist` - When `true`, the committed offsets are persisted to the broker.
     async fn commit_with_set(&self, message_queues: HashSet<MessageQueue>, persist: bool);
 
-    /// Retrieves the committed offset for a message queue.
+    /// Returns the last committed offset for the specified [`MessageQueue`].
+    ///
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
-    /// * `message_queue` - The message queue to query.
+    /// * `message_queue` - The queue to query.
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// * `rocketmq_error::RocketMQResult<i64>` - The committed offset or an error.
+    /// Returns an error if the queue is not assigned to this consumer or if the offset
+    /// cannot be retrieved from the offset store.
     async fn committed(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<i64>;
 
-    /// Registers a listener for changes to the message queues of a topic.
+    /// Registers a listener that is notified when the set of [`MessageQueue`]s for a topic changes.
+    ///
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
-    /// * `topic` - The name of the topic.
-    /// * `listener` - The listener to register.
+    /// * `topic` - The topic to monitor for queue changes.
+    /// * `listener` - A [`TopicMessageQueueChangeListener`] invoked when the queue set changes.
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    /// Returns an error if a listener is already registered for the given topic, or if the
+    /// registration fails due to an internal error.
     async fn register_topic_message_queue_change_listener<TL>(
         &self,
         topic: &str,
@@ -274,32 +394,43 @@ pub trait LitePullConsumerLocal: Sync {
     where
         TL: TopicMessageQueueChangeListener;
 
-    /// Updates the name server address.
+    /// Updates the name server address used for topic route discovery.
+    ///
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
-    /// * `name_server_address` - The new name server address.
+    /// * `name_server_address` - The new semicolon-separated name server address list.
     async fn update_name_server_address(&self, name_server_address: &str);
 
-    /// Seeks to the beginning of a message queue.
+    /// Seeks the fetch position of the specified [`MessageQueue`] to its earliest available offset.
+    ///
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
-    /// * `message_queue` - The message queue to seek.
+    /// * `message_queue` - The queue to seek to the beginning.
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    /// Returns an error if the queue is not assigned to this consumer or if the earliest
+    /// offset cannot be retrieved from the broker.
     async fn seek_to_begin(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<()>;
 
-    /// Seeks to the end of a message queue.
+    /// Seeks the fetch position of the specified [`MessageQueue`] to its latest available offset.
+    ///
+    /// The next [`poll`] call will return only messages published after this point.
+    /// This function does not block the calling thread.
     ///
     /// # Arguments
     ///
-    /// * `message_queue` - The message queue to seek.
+    /// * `message_queue` - The queue to seek to the end.
     ///
-    /// # Returns
+    /// # Errors
     ///
-    /// * `rocketmq_error::RocketMQResult<()>` - An empty result indicating success or failure.
+    /// Returns an error if the queue is not assigned to this consumer or if the latest
+    /// offset cannot be retrieved from the broker.
+    ///
+    /// [`poll`]: LitePullConsumerLocal::poll
     async fn seek_to_end(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<()>;
 }
