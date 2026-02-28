@@ -83,6 +83,7 @@ use crate::consumer::store::remote_broker_offset_store::RemoteBrokerOffsetStore;
 use crate::factory::mq_client_instance::MQClientInstance;
 use crate::hook::consume_message_context::ConsumeMessageContext;
 use crate::hook::consume_message_hook::ConsumeMessageHook;
+use crate::hook::consume_message_hook::ConsumeMessageHookArc;
 use crate::hook::filter_message_context::FilterMessageContext;
 use crate::hook::filter_message_hook::FilterMessageHook;
 use crate::implementation::communication_mode::CommunicationMode;
@@ -107,7 +108,7 @@ pub struct DefaultMQPushConsumerImpl {
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     pub(crate) rebalance_impl: ArcMut<RebalancePushImpl>,
     filter_message_hook_list: Vec<Arc<dyn FilterMessageHook + Send + Sync>>,
-    consume_message_hook_list: Vec<Arc<Box<dyn ConsumeMessageHook + Send + Sync>>>,
+    consume_message_hook_list: Vec<ConsumeMessageHookArc>,
     rpc_hook: Option<Arc<dyn RPCHook>>,
     service_state: ArcMut<ServiceState>,
     pub(crate) client_instance: Option<ArcMut<MQClientInstance>>,
@@ -609,8 +610,9 @@ impl DefaultMQPushConsumerImpl {
         Ok(())
     }
 
-    pub fn register_consume_message_hook(&mut self, hook: impl ConsumeMessageHook) {
-        unimplemented!("registerConsumeMessageHook");
+    pub fn register_consume_message_hook(&mut self, hook: impl ConsumeMessageHook + Send + Sync + 'static) {
+        self.consume_message_hook_list
+            .push(Arc::new(hook) as ConsumeMessageHookArc);
     }
 
     pub fn register_message_listener(&mut self, message_listener: Option<ArcMut<MessageListener>>) {
