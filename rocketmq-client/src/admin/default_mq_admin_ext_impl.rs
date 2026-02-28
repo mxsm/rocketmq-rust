@@ -1676,12 +1676,14 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         &self,
         broker_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<GetBrokerLiteInfoResponseBody> {
-        self.client_instance
-            .as_ref()
-            .unwrap()
-            .get_mq_client_api_impl()
-            .get_broker_lite_info(&broker_addr, self.timeout_millis.as_millis() as u64)
-            .await
+        if let Some(ref mq_client_instance) = self.client_instance {
+            mq_client_instance
+                .get_mq_client_api_impl()
+                .get_broker_lite_info(&broker_addr, self.timeout_millis.as_millis() as u64)
+                .await
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn get_parent_topic_info(
@@ -1699,11 +1701,23 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
 
     async fn get_lite_topic_info(
         &self,
-        _broker_addr: CheetahString,
-        _parent_topic: CheetahString,
-        _lite_topic: CheetahString,
+        broker_addr: CheetahString,
+        parent_topic: CheetahString,
+        lite_topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<GetLiteTopicInfoResponseBody> {
-        unimplemented!("get_lite_topic_info not implemented yet")
+        if let Some(ref mq_client_instance) = self.client_instance {
+            mq_client_instance
+                .get_mq_client_api_impl()
+                .get_lite_topic_info(
+                    &broker_addr,
+                    &parent_topic,
+                    &lite_topic,
+                    self.timeout_millis.as_millis() as u64,
+                )
+                .await
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn get_lite_client_info(
