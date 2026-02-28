@@ -18,6 +18,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
+use crate::TimeUtils::current_millis;
 use parking_lot::Mutex;
 use tracing::info;
 
@@ -37,17 +38,13 @@ pub struct StatsItem {
 
 impl StatsItem {
     pub fn new(stats_name: &str, stats_key: &str) -> Self {
-        let now_ms = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
         StatsItem {
             value: AtomicU64::new(0),
             times: AtomicU64::new(0),
             cs_list_minute: Mutex::new(LinkedList::new()),
             cs_list_hour: Mutex::new(LinkedList::new()),
             cs_list_day: Mutex::new(LinkedList::new()),
-            last_update_timestamp: AtomicU64::new(now_ms),
+            last_update_timestamp: AtomicU64::new(current_millis()),
             stats_name: stats_name.to_string(),
             stats_key: stats_key.to_string(),
         }
@@ -67,13 +64,7 @@ impl StatsItem {
     pub fn add(&self, value_delta: u64, times_delta: u64) {
         self.value.fetch_add(value_delta, Ordering::Relaxed);
         self.times.fetch_add(times_delta, Ordering::Relaxed);
-        self.last_update_timestamp.store(
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
-            Ordering::Relaxed,
-        );
+        self.last_update_timestamp.store(current_millis(), Ordering::Relaxed);
     }
 
     /// Returns the current accumulated value.
@@ -163,24 +154,9 @@ impl StatsItem {
     ) {
         let mut cs_list = cs_list.lock();
         if cs_list.is_empty() {
-            cs_list.push_back(CallSnapshot::new(
-                SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64
-                    - 10 * 1000,
-                0,
-                0,
-            ));
+            cs_list.push_back(CallSnapshot::new(current_millis() - 10 * 1000, 0, 0));
         }
-        cs_list.push_back(CallSnapshot::new(
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as u64,
-            current_times,
-            current_value,
-        ));
+        cs_list.push_back(CallSnapshot::new(current_millis(), current_times, current_value));
         if cs_list.len() > 7 {
             cs_list.pop_front();
         }
@@ -189,24 +165,9 @@ impl StatsItem {
     pub fn sampling_in_minutes(cs_list: &Mutex<LinkedList<CallSnapshot>>, current_value: u64, current_times: u64) {
         let mut cs_list = cs_list.lock();
         if cs_list.is_empty() {
-            cs_list.push_back(CallSnapshot::new(
-                SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64
-                    - 10 * 60 * 1000,
-                0,
-                0,
-            ));
+            cs_list.push_back(CallSnapshot::new(current_millis() - 10 * 60 * 1000, 0, 0));
         }
-        cs_list.push_back(CallSnapshot::new(
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as u64,
-            current_times,
-            current_value,
-        ));
+        cs_list.push_back(CallSnapshot::new(current_millis(), current_times, current_value));
         if cs_list.len() > 7 {
             cs_list.pop_front();
         }
@@ -215,24 +176,9 @@ impl StatsItem {
     pub fn sampling_in_hour(cs_list: &Mutex<LinkedList<CallSnapshot>>, current_value: u64, current_times: u64) {
         let mut cs_list = cs_list.lock();
         if cs_list.is_empty() {
-            cs_list.push_back(CallSnapshot::new(
-                SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64
-                    - 60 * 60 * 1000,
-                0,
-                0,
-            ));
+            cs_list.push_back(CallSnapshot::new(current_millis() - 60 * 60 * 1000, 0, 0));
         }
-        cs_list.push_back(CallSnapshot::new(
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as u64,
-            current_times,
-            current_value,
-        ));
+        cs_list.push_back(CallSnapshot::new(current_millis(), current_times, current_value));
         if cs_list.len() > 25 {
             cs_list.pop_front();
         }
@@ -278,26 +224,15 @@ impl StatsItem {
     }
 
     pub fn compute_next_minutes_time_millis() -> u64 {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-        (now / 60000 + 1) * 60000
+        (current_millis() / 60000 + 1) * 60000
     }
 
     pub fn compute_next_hour_time_millis() -> u64 {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-        (now / 3600000 + 1) * 3600000
+        (current_millis() / 3600000 + 1) * 3600000
     }
 
     pub fn compute_next_morning_time_millis() -> u64 {
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let now = current_millis();
         let current_day = now / (24 * 3600000);
         (current_day + 1) * 24 * 3600000
     }
