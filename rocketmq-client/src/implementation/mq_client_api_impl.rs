@@ -76,6 +76,7 @@ use rocketmq_remoting::protocol::body::check_client_request_body::CheckClientReq
 use rocketmq_remoting::protocol::body::epoch_entry_cache::EpochEntryCache;
 use rocketmq_remoting::protocol::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody;
 use rocketmq_remoting::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
+use rocketmq_remoting::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
 use rocketmq_remoting::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
@@ -99,6 +100,7 @@ use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTran
 use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
 use rocketmq_remoting::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader;
+use rocketmq_remoting::protocol::header::get_lite_topic_info_request_header::GetLiteTopicInfoRequestHeader;
 use rocketmq_remoting::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
 use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
@@ -625,6 +627,33 @@ impl MQClientAPIImpl {
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
                 return GetLiteGroupInfoResponseBody::decode(body.as_ref());
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn get_lite_topic_info(
+        &self,
+        addr: &CheetahString,
+        parent_topic: &CheetahString,
+        lite_topic: &CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<GetLiteTopicInfoResponseBody> {
+        let request_header = GetLiteTopicInfoRequestHeader {
+            parent_topic: parent_topic.clone(),
+            lite_topic: lite_topic.clone(),
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::GetLiteTopicInfo, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return GetLiteTopicInfoResponseBody::decode(body.as_ref());
             }
         }
         Err(mq_client_err!(

@@ -1380,11 +1380,13 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn get_lite_topic_info(
         &self,
-        _broker_addr: CheetahString,
-        _parent_topic: CheetahString,
-        _lite_topic: CheetahString,
+        broker_addr: CheetahString,
+        parent_topic: CheetahString,
+        lite_topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<GetLiteTopicInfoResponseBody> {
-        unimplemented!("get_lite_topic_info not implemented yet")
+        self.default_mqadmin_ext_impl
+            .get_lite_topic_info(broker_addr, parent_topic, lite_topic)
+            .await
     }
 
     async fn get_lite_client_info(

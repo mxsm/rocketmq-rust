@@ -42,6 +42,7 @@ pub mod get_consumer_running_info_request_header;
 pub mod get_consumer_status_request_header;
 pub mod get_earliest_msg_storetime_response_header;
 pub mod get_lite_group_info_request_header;
+pub mod get_lite_topic_info_request_header;
 pub mod get_max_offset_request_header;
 pub mod get_max_offset_response_header;
 pub mod get_meta_data_response_header;
