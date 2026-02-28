@@ -513,12 +513,16 @@ impl MQPushConsumer for DefaultMQPushConsumer {
         }
     }
 
-    async fn suspend(&mut self) {
-        todo!()
+    async fn suspend(&self) {
+        if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
+            default_mqpush_consumer_impl.suspend().await;
+        }
     }
 
-    async fn resume(&mut self) {
-        todo!()
+    async fn resume(&self) {
+        if let Some(ref default_mqpush_consumer_impl) = self.default_mqpush_consumer_impl {
+            default_mqpush_consumer_impl.resume().await;
+        }
     }
 }
 
