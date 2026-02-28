@@ -63,7 +63,8 @@ type TopicSubscribeInfoTable = Arc<RwLock<HashMap<TopicName, HashSet<MessageQueu
 
 /// Subscription metadata for each topic, including filter expressions and
 /// subscription version. Shared with [`MQClientInstance`] for heartbeat generation.
-type SubscriptionInnerTable = Arc<RwLock<HashMap<TopicName, SubscriptionData>>>;
+/// Uses [`DashMap`] for lock-free concurrent access without async overhead.
+type SubscriptionInnerTable = Arc<DashMap<TopicName, SubscriptionData>>;
 
 /// Topics for which the broker returned a valid queue-assignment result,
 /// indicating broker-side rebalance is active for those topics.
@@ -135,7 +136,7 @@ where
             process_queue_table: Arc::new(RwLock::new(HashMap::with_capacity(64))),
             pop_process_queue_table: Arc::new(RwLock::new(HashMap::with_capacity(64))),
             topic_subscribe_info_table: Arc::new(RwLock::new(HashMap::with_capacity(64))),
-            subscription_inner: Arc::new(RwLock::new(HashMap::with_capacity(64))),
+            subscription_inner: Arc::new(DashMap::with_capacity(64)),
             consumer_group,
             message_model,
             allocate_message_queue_strategy,
@@ -147,32 +148,30 @@ where
     }
 
     #[inline]
-    pub async fn put_subscription_data(&self, topic: &CheetahString, subscription_data: SubscriptionData) {
-        let mut subscription_inner = self.subscription_inner.write().await;
-        subscription_inner.insert(topic.clone(), subscription_data);
+    pub fn put_subscription_data(&self, topic: &CheetahString, subscription_data: SubscriptionData) {
+        self.subscription_inner.insert(topic.clone(), subscription_data);
     }
 
     #[inline]
-    pub async fn remove_subscription_data(&self, topic: &CheetahString) {
-        let mut subscription_inner = self.subscription_inner.write().await;
-        subscription_inner.remove(topic);
+    pub fn remove_subscription_data(&self, topic: &CheetahString) {
+        self.subscription_inner.remove(topic);
     }
 
     #[inline]
     pub async fn do_rebalance(&mut self, is_order: bool) -> bool {
         let mut balanced = true;
-        let sub_table = self.subscription_inner.read().await;
-        if !sub_table.is_empty() {
-            let topics = sub_table.keys().cloned().collect::<Vec<CheetahString>>();
-            drop(sub_table);
-            for topic in &topics {
-                if !self.client_rebalance(topic) && self.try_query_assignment(topic).await {
-                    if !self.get_rebalance_result_from_broker(topic, is_order).await {
-                        balanced = false;
-                    }
-                } else if !self.rebalance_by_topic(topic, is_order).await {
+        let topics = self
+            .subscription_inner
+            .iter()
+            .map(|e| e.key().clone())
+            .collect::<Vec<CheetahString>>();
+        for topic in &topics {
+            if !self.client_rebalance(topic) && self.try_query_assignment(topic).await {
+                if !self.get_rebalance_result_from_broker(topic, is_order).await {
                     balanced = false;
                 }
+            } else if !self.rebalance_by_topic(topic, is_order).await {
+                balanced = false;
             }
         }
         self.truncate_message_queue_not_my_topic().await;
@@ -292,9 +291,7 @@ where
     }
 
     async fn truncate_message_queue_not_my_topic(&self) {
-        let sub_table = self.subscription_inner.read().await;
-        let topics: HashSet<CheetahString> = sub_table.keys().cloned().collect();
-        drop(sub_table);
+        let topics: HashSet<CheetahString> = self.subscription_inner.iter().map(|e| e.key().clone()).collect();
 
         // Snapshot queues to remove under the read lock; state modification uses the write lock below.
         let to_remove: Vec<MessageQueue> = {
@@ -494,7 +491,7 @@ where
                     &CheetahString::from_static_str(SubscriptionData::SUB_ALL),
                 );
                 if let Ok(subscription_data) = subscription_data {
-                    self.put_subscription_data(&retry_topic, subscription_data).await;
+                    self.put_subscription_data(&retry_topic, subscription_data);
                 }
             } else if !mq2pop_assignment.is_empty() && mq2push_assignment.is_empty() {
                 // Assignment switched from push-mode to pop-mode; unsubscribe from the pop retry topic.
@@ -503,7 +500,7 @@ where
                     self.consumer_group.as_ref().unwrap().as_ref(),
                     false,
                 ));
-                self.remove_subscription_data(&retry_topic).await;
+                self.remove_subscription_data(&retry_topic);
             }
         }
         let mut remove_queue_map = HashMap::with_capacity(64);

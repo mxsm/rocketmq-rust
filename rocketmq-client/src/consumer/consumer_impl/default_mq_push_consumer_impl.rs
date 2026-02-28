@@ -17,7 +17,6 @@ use std::error::Error;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::thread;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
@@ -49,7 +48,6 @@ use rocketmq_remoting::rpc::rpc_request_header::RpcRequestHeader;
 use rocketmq_remoting::rpc::topic_request_header::TopicRequestHeader;
 use rocketmq_remoting::runtime::RPCHook;
 use rocketmq_rust::ArcMut;
-use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 use tracing::error;
 use tracing::info;
@@ -399,14 +397,14 @@ impl DefaultMQPushConsumerImpl {
     }
 
     async fn update_topic_subscribe_info_when_subscription_changed(&mut self) {
-        // if DO_NOT_UPDATE_TOPIC_SUBSCRIBE_INFO_WHEN_SUBSCRIPTION_CHANGED {
-        //     return;
-        // }
-        let sub_table = self.rebalance_impl.get_subscription_inner();
-        let sub_table_inner = sub_table.read().await;
-        let keys = sub_table_inner.keys().clone();
+        let keys = self
+            .rebalance_impl
+            .get_subscription_inner()
+            .iter()
+            .map(|e| e.key().clone())
+            .collect::<Vec<_>>();
         let client = self.client_instance.as_mut().unwrap();
-        for topic in keys {
+        for topic in &keys {
             client.update_topic_route_info_from_name_server_topic(topic).await;
         }
     }
@@ -583,8 +581,7 @@ impl DefaultMQPushConsumerImpl {
                     )))
                 })?;
                 self.rebalance_impl
-                    .put_subscription_data(topic.clone(), subscription_data)
-                    .await;
+                    .put_subscription_data(topic.clone(), subscription_data);
             }
         }
         if self.message_listener.is_none() {
@@ -606,8 +603,7 @@ impl DefaultMQPushConsumerImpl {
                     )))
                 })?;
                 self.rebalance_impl
-                    .put_subscription_data(retry_topic, subscription_data)
-                    .await;
+                    .put_subscription_data(retry_topic, subscription_data);
             }
         }
         Ok(())
@@ -631,9 +627,7 @@ impl DefaultMQPushConsumerImpl {
             return Err(mq_client_err!(format!("buildSubscriptionData exception, {}", e)));
         }
         let subscription_data = subscription_data.unwrap();
-        self.rebalance_impl
-            .put_subscription_data(topic, subscription_data)
-            .await;
+        self.rebalance_impl.put_subscription_data(topic, subscription_data);
         if let Some(ref mut client_instance) = self.client_instance {
             client_instance.send_heartbeat_to_all_broker_with_lock().await;
         }
@@ -721,10 +715,8 @@ impl DefaultMQPushConsumerImpl {
         let subscription_data = self
             .rebalance_impl
             .get_subscription_inner()
-            .read()
-            .await
             .get(pop_request.get_message_queue().topic())
-            .cloned();
+            .map(|v| v.value().clone());
         if subscription_data.is_none() {
             self.execute_pop_request_later(pop_request, self.pull_time_delay_mills_when_exception);
             warn!("find the consumer's subscription failed");
@@ -908,8 +900,7 @@ impl DefaultMQPushConsumerImpl {
         }
         let message_queue = pull_request.get_message_queue().clone();
         let inner = self.rebalance_impl.get_subscription_inner();
-        let guard = inner.read().await;
-        let subscription_data = guard.get(message_queue.topic_str()).cloned();
+        let subscription_data = inner.get(message_queue.topic_str()).map(|v| v.value().clone());
 
         if subscription_data.is_none() {
             error!(
@@ -1390,13 +1381,10 @@ impl DefaultMQPushConsumerImpl {
     }
 
     pub async fn unsubscribe(&mut self, topic: &str) {
-        let mut write_guard = self
-            .rebalance_impl
+        self.rebalance_impl
             .rebalance_impl_inner
             .subscription_inner
-            .write()
-            .await;
-        write_guard.remove(topic);
+            .remove(topic);
     }
 
     pub async fn suspend(&self) {
@@ -1435,17 +1423,12 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
     }
 
     fn subscriptions(&self) -> HashSet<SubscriptionData> {
-        let inner = self.rebalance_impl.rebalance_impl_inner.subscription_inner.clone();
-
-        let handle = Handle::current();
-        thread::spawn(move || {
-            handle.block_on(async move {
-                let inner = inner.read().await;
-                inner.values().cloned().collect()
-            })
-        })
-        .join()
-        .unwrap()
+        self.rebalance_impl
+            .rebalance_impl_inner
+            .subscription_inner
+            .iter()
+            .map(|e| e.value().clone())
+            .collect()
     }
 
     async fn do_rebalance(&self) {
@@ -1496,9 +1479,7 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
     }
 
     async fn update_topic_subscribe_info(&self, topic: CheetahString, info: &HashSet<MessageQueue>) {
-        let sub_table = self.rebalance_impl.get_subscription_inner();
-        let sub_table_inner = sub_table.read().await;
-        if sub_table_inner.contains_key(&topic) {
+        if self.rebalance_impl.get_subscription_inner().contains_key(&topic) {
             let mut guard = self
                 .rebalance_impl
                 .rebalance_impl_inner
@@ -1510,10 +1491,7 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
     }
 
     async fn is_subscribe_topic_need_update(&self, topic: &str) -> bool {
-        let sub_table = self.rebalance_impl.get_subscription_inner();
-        let sub_table_inner = sub_table.read().await;
-        if sub_table_inner.contains_key(topic) {
-            drop(sub_table_inner);
+        if self.rebalance_impl.get_subscription_inner().contains_key(topic) {
             let guard = self
                 .rebalance_impl
                 .rebalance_impl_inner
