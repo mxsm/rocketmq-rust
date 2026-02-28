@@ -130,11 +130,14 @@ use rocketmq_remoting::protocol::header::recall_message_request_header::RecallMe
 use rocketmq_remoting::protocol::header::recall_message_response_header::RecallMessageResponseHeader;
 use rocketmq_remoting::protocol::header::reset_master_flush_offset_header::ResetMasterFlushOffsetHeader;
 
+use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_remoting::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
 use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::update_user_request_header::UpdateUserRequestHeader;
 use rocketmq_remoting::protocol::headers::client::GetConsumerConnectionListRequestHeader;
+use rocketmq_remoting::protocol::headers::view::SearchOffsetRequestHeader;
+use rocketmq_remoting::protocol::headers::view::SearchOffsetResponseHeader;
 use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
@@ -2121,6 +2124,63 @@ impl MQClientAPIImpl {
             let response_header = response
                 .decode_command_custom_header::<GetMaxOffsetResponseHeader>()
                 .expect("decode error");
+            return Ok(response_header.offset);
+        }
+        Err(client_broker_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string()),
+            addr.to_string()
+        ))
+    }
+
+    /// Searches for the queue offset whose store timestamp is closest to `timestamp`.
+    ///
+    /// When `boundary_type` is [`BoundaryType::Lower`], the returned offset is the earliest one
+    /// whose store timestamp is greater than or equal to `timestamp`.  When
+    /// [`BoundaryType::Upper`], the latest such offset is returned.
+    ///
+    /// Mirrors `MQClientAPIImpl.searchOffset` in the Java implementation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the broker returns a non-success response code or is unreachable.
+    pub async fn search_offset_by_timestamp(
+        &mut self,
+        addr: &str,
+        message_queue: &MessageQueue,
+        timestamp: i64,
+        boundary_type: BoundaryType,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<i64> {
+        let request_header = SearchOffsetRequestHeader {
+            topic: message_queue.topic().clone(),
+            queue_id: message_queue.queue_id(),
+            timestamp,
+            boundary_type,
+            topic_request_header: Some(TopicRequestHeader {
+                rpc_request_header: Some(RpcRequestHeader {
+                    broker_name: Some(message_queue.broker_name().clone()),
+                    ..Default::default()
+                }),
+                lo: None,
+            }),
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::SearchOffsetByTimestamp, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(
+                Some(&mix_all::broker_vip_channel(
+                    self.client_config.vip_channel_enabled,
+                    addr,
+                )),
+                request,
+                timeout_millis,
+            )
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            let response_header = response
+                .decode_command_custom_header::<SearchOffsetResponseHeader>()
+                .expect("decode SearchOffsetResponseHeader error");
             return Ok(response_header.offset);
         }
         Err(client_broker_err!(

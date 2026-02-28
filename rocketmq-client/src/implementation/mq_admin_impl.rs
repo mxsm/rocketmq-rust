@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
@@ -112,7 +113,41 @@ impl MQAdminImpl {
         Err(mq_client_err!(format!("The broker[{}] not exist", mq.broker_name())))
     }
 
+    /// Searches for the queue offset whose store timestamp is closest to `timestamp`.
+    ///
+    /// Defaults to [`BoundaryType::Lower`], returning the earliest offset whose store
+    /// timestamp is greater than or equal to `timestamp`, matching the behaviour of
+    /// `MQAdminImpl.searchOffset(MessageQueue, long)` in the Java implementation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the broker address cannot be resolved or the remote call fails.
     pub async fn search_offset(&mut self, mq: &MessageQueue, timestamp: u64) -> rocketmq_error::RocketMQResult<i64> {
-        unimplemented!("search_offset is not implemented yet")
+        let client = self
+            .client
+            .as_mut()
+            .ok_or_else(|| RocketMQError::not_initialized("MQClientInstance"))?;
+        let broker_name = client.get_broker_name_from_message_queue(mq).await;
+        let mut broker_addr = client.find_broker_address_in_publish(broker_name.as_ref());
+        if broker_addr.is_none() {
+            client.update_topic_route_info_from_name_server_topic(mq.topic()).await;
+            let broker_name = client.get_broker_name_from_message_queue(mq).await;
+            broker_addr = client.find_broker_address_in_publish(broker_name.as_ref());
+        }
+        if let Some(ref broker_addr) = broker_addr {
+            return client
+                .mq_client_api_impl
+                .as_mut()
+                .ok_or_else(|| RocketMQError::not_initialized("MQClientAPIImpl"))?
+                .search_offset_by_timestamp(
+                    broker_addr,
+                    mq,
+                    timestamp as i64,
+                    BoundaryType::Lower,
+                    self.timeout_millis,
+                )
+                .await;
+        }
+        Err(mq_client_err!(format!("The broker[{}] not exist", mq.broker_name())))
     }
 }
