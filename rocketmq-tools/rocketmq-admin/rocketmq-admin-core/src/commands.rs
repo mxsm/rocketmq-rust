@@ -392,6 +392,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Lite",
+                command: "getLiteClientInfo",
+                remark: "Get lite client info.",
+            },
+            Command {
+                category: "Lite",
                 command: "triggerLiteDispatch",
                 remark: "Trigger Lite Dispatch.",
             },
