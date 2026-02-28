@@ -1677,11 +1677,6 @@ impl MessageStore for LocalFileMessageStore {
         self.consume_queue_store.as_any()
     }
 
-    /*fn get_queue_store(&self) -> &Box<dyn ConsumeQueueStoreTrait> {
-        /*&self.consume_queue_store as &Box<dyn ConsumeQueueStoreTrait>*/
-        unimplemented!("get_queue_store")
-    }*/
-
     fn is_sync_disk_flush(&self) -> bool {
         self.message_store_config.flush_disk_type == FlushDiskType::SyncFlush
     }
