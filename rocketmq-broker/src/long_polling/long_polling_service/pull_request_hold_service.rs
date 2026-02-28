@@ -110,10 +110,6 @@ where
             }
             let topic = CheetahString::from(key_parts[0]);
             let queue_id = key_parts[1].parse::<i32>().unwrap();
-            /*info!(
-                "check hold request, topic: {}, queue_id: {}",
-                topic, queue_id
-            );*/
             let max_offset = self
                 .broker_runtime_inner
                 .message_store()
