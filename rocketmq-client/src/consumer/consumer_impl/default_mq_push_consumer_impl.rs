@@ -106,7 +106,7 @@ pub struct DefaultMQPushConsumerImpl {
     pub(crate) client_config: ArcMut<ClientConfig>,
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     pub(crate) rebalance_impl: ArcMut<RebalancePushImpl>,
-    filter_message_hook_list: Vec<Arc<Box<dyn FilterMessageHook + Send + Sync>>>,
+    filter_message_hook_list: Vec<Arc<dyn FilterMessageHook + Send + Sync>>,
     consume_message_hook_list: Vec<Arc<Box<dyn ConsumeMessageHook + Send + Sync>>>,
     rpc_hook: Option<Arc<dyn RPCHook>>,
     service_state: ArcMut<ServiceState>,
