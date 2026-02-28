@@ -18,6 +18,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rocketmq_common::common::key_builder::KeyBuilder;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -58,8 +59,8 @@ pub(crate) struct RebalanceImpl<R> {
     pub(crate) allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
     pub(crate) client_instance: Option<ArcMut<MQClientInstance>>,
     pub(crate) sub_rebalance_impl: Option<WeakArcMut<R>>,
-    pub(crate) topic_broker_rebalance: Arc<RwLock<HashMap<CheetahString, CheetahString>>>,
-    pub(crate) topic_client_rebalance: Arc<RwLock<HashMap<CheetahString, CheetahString>>>,
+    pub(crate) topic_broker_rebalance: Arc<DashMap<CheetahString, CheetahString>>,
+    pub(crate) topic_client_rebalance: Arc<DashMap<CheetahString, CheetahString>>,
 }
 
 impl<R> RebalanceImpl<R>
@@ -82,8 +83,8 @@ where
             allocate_message_queue_strategy,
             client_instance: mqclient_instance,
             sub_rebalance_impl: None,
-            topic_broker_rebalance: Arc::new(RwLock::new(HashMap::with_capacity(64))),
-            topic_client_rebalance: Arc::new(RwLock::new(HashMap::with_capacity(64))),
+            topic_broker_rebalance: Arc::new(DashMap::with_capacity(64)),
+            topic_client_rebalance: Arc::new(DashMap::with_capacity(64)),
         }
     }
 
@@ -171,19 +172,13 @@ where
         };
 
         // Check topic_client_rebalance
-        {
-            let topic_client_rebalance = self.topic_client_rebalance.read().await;
-            if topic_client_rebalance.contains_key(topic) {
-                return false;
-            }
+        if self.topic_client_rebalance.contains_key(topic) {
+            return false;
         }
 
         // Check topic_broker_rebalance
-        {
-            let topic_broker_rebalance = self.topic_broker_rebalance.read().await;
-            if topic_broker_rebalance.contains_key(topic) {
-                return true;
-            }
+        if self.topic_broker_rebalance.contains_key(topic) {
+            return true;
         }
 
         // Get strategy name
@@ -211,8 +206,7 @@ where
                 .await
             {
                 Ok(_) => {
-                    let mut topic_broker_rebalance = self.topic_broker_rebalance.write().await;
-                    topic_broker_rebalance.insert(topic.clone(), topic.clone());
+                    self.topic_broker_rebalance.insert(topic.clone(), topic.clone());
                     return true;
                 }
                 Err(e) => match e {
@@ -224,8 +218,7 @@ where
                     }
                     _ => {
                         error!("tryQueryAssignment error for topic: {}, error: {}", topic, e);
-                        let mut topic_client_rebalance = self.topic_client_rebalance.write().await;
-                        topic_client_rebalance.insert(topic.clone(), topic.clone());
+                        self.topic_client_rebalance.insert(topic.clone(), topic.clone());
                         return false;
                     }
                 },
@@ -237,8 +230,7 @@ where
             "tryQueryAssignment exhausted all retries for topic: {}, falling back to client rebalance",
             topic
         );
-        let mut topic_client_rebalance = self.topic_client_rebalance.write().await;
-        topic_client_rebalance.insert(topic.clone(), topic.clone());
+        self.topic_client_rebalance.insert(topic.clone(), topic.clone());
         false
     }
 
@@ -308,12 +300,8 @@ where
             }
         }
 
-        let mut topic_client_rebalance = self.topic_client_rebalance.write().await;
-        topic_client_rebalance.retain(|topic, _| topics.contains(topic));
-        drop(topic_client_rebalance);
-
-        let mut topic_broker_rebalance = self.topic_broker_rebalance.write().await;
-        topic_broker_rebalance.retain(|topic, _| topics.contains(topic));
+        self.topic_client_rebalance.retain(|topic, _| topics.contains(topic));
+        self.topic_broker_rebalance.retain(|topic, _| topics.contains(topic));
     }
 
     /// Retrieves the rebalance result from the broker for a given topic.
