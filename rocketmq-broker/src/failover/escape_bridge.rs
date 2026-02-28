@@ -396,14 +396,7 @@ where
         if self.broker_runtime_inner.broker_config().broker_identity.broker_name == broker_name {
             async move {
                 let result = message_store
-                    .get_message(
-                        &inner_consumer_group_name,
-                        &topic,
-                        queue_id,
-                        offset,
-                        1,
-                        None,
-                    )
+                    .get_message(&inner_consumer_group_name, &topic, queue_id, offset, 1, None)
                     .await;
                 if result.is_none() {
                     warn!(
@@ -419,10 +412,7 @@ where
                     let need_retry = status.unwrap() == GetMessageStatus::OffsetFoundNull;
                     warn!(
                         "Can not get msg, topic {}, offset {}, queueId {}, needRetry {},",
-                        topic,
-                        offset,
-                        queue_id,
-                        need_retry,
+                        topic, offset, queue_id, need_retry,
                     );
                     return (None, "Can not get msg".to_string(), need_retry);
                 }
