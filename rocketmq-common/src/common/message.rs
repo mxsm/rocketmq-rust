@@ -326,7 +326,7 @@ pub trait MessageTrait: Any + Display + Debug {
     /// # Returns
     ///
     /// An `Option<String>` containing the buyer ID if it exists, otherwise `None`.
-    fn get_buyer_id(&self) -> Option<CheetahString> {
+    fn buyer_id(&self) -> Option<CheetahString> {
         self.property(&CheetahString::from_static_str(MessageConst::PROPERTY_BUYER_ID))
     }
 
