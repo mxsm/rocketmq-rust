@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rand::RngExt;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::message::message_decoder;
@@ -51,10 +51,10 @@ pub struct PullAPIWrapper {
     client_instance: ArcMut<MQClientInstance>,
     consumer_group: CheetahString,
     unit_mode: bool,
-    pull_from_which_node_table: ArcMut<HashMap<MessageQueue, AtomicU64>>,
+    pull_from_which_node_table: Arc<DashMap<MessageQueue, AtomicU64>>,
     connect_broker_by_user: bool,
     default_broker_id: u64,
-    filter_message_hook_list: Vec<Arc<Box<dyn FilterMessageHook + Send + Sync>>>,
+    filter_message_hook_list: Vec<Arc<dyn FilterMessageHook + Send + Sync>>,
 }
 
 impl PullAPIWrapper {
@@ -63,7 +63,7 @@ impl PullAPIWrapper {
             client_instance: mq_client_factory,
             consumer_group,
             unit_mode,
-            pull_from_which_node_table: ArcMut::new(HashMap::with_capacity(64)),
+            pull_from_which_node_table: Arc::new(DashMap::with_capacity(64)),
             connect_broker_by_user: false,
             default_broker_id: mix_all::MASTER_ID,
             filter_message_hook_list: Vec::new(),
@@ -72,18 +72,17 @@ impl PullAPIWrapper {
 
     pub fn register_filter_message_hook(
         &mut self,
-        filter_message_hook_list: Vec<Arc<Box<dyn FilterMessageHook + Send + Sync>>>,
+        filter_message_hook_list: Vec<Arc<dyn FilterMessageHook + Send + Sync>>,
     ) {
         self.filter_message_hook_list = filter_message_hook_list;
     }
 
     #[inline]
-    pub fn update_pull_from_which_node(&mut self, mq: &MessageQueue, broker_id: u64) {
-        let atomic_u64 = self
-            .pull_from_which_node_table
+    pub fn update_pull_from_which_node(&self, mq: &MessageQueue, broker_id: u64) {
+        self.pull_from_which_node_table
             .entry(mq.clone())
+            .and_modify(|v| v.store(broker_id, std::sync::atomic::Ordering::Release))
             .or_insert_with(|| AtomicU64::new(broker_id));
-        atomic_u64.store(broker_id, std::sync::atomic::Ordering::Release);
     }
 
     pub fn has_hook(&self) -> bool {
@@ -91,7 +90,7 @@ impl PullAPIWrapper {
     }
 
     pub fn process_pull_result(
-        &mut self,
+        &self,
         message_queue: &MessageQueue,
         pull_result_ext: &mut PullResultExt,
         subscription_data: &SubscriptionData,
@@ -127,7 +126,7 @@ impl PullAPIWrapper {
                 }
                 msg_vec = inner_msg_vec;
             }
-            // filter message
+            // Retain only messages whose tag appears in the subscription tag set.
             let mut msg_list_filter_again =
                 if !subscription_data.tags_set.is_empty() && !subscription_data.class_filter_mode {
                     let mut msg_vec_again = Vec::with_capacity(msg_vec.len());
@@ -151,6 +150,11 @@ impl PullAPIWrapper {
                 self.execute_hook(&context);
             }
 
+            // Resolve batch-level constants once before iterating to avoid repeated allocations.
+            let broker_name = message_queue.broker_name().clone();
+            let queue_id = message_queue.queue_id();
+            let min_offset_str = CheetahString::from_string(pull_result_ext.pull_result.min_offset.to_string());
+            let max_offset_str = CheetahString::from_string(pull_result_ext.pull_result.max_offset.to_string());
             for msg in &mut msg_list_filter_again {
                 let tra_flag = msg
                     .property(&CheetahString::from_static_str(
@@ -167,15 +171,15 @@ impl PullAPIWrapper {
                 MessageAccessor::put_property(
                     msg,
                     CheetahString::from_static_str(MessageConst::PROPERTY_MIN_OFFSET),
-                    CheetahString::from_string(pull_result_ext.pull_result.min_offset.to_string()),
+                    min_offset_str.clone(),
                 );
                 MessageAccessor::put_property(
                     msg,
                     CheetahString::from_static_str(MessageConst::PROPERTY_MAX_OFFSET),
-                    CheetahString::from_string(pull_result_ext.pull_result.max_offset.to_string()),
+                    max_offset_str.clone(),
                 );
-                msg.broker_name = CheetahString::from_string(message_queue.broker_name().to_string());
-                msg.queue_id = message_queue.queue_id();
+                msg.broker_name = broker_name.clone();
+                msg.queue_id = queue_id;
                 if let Some(offset_delta) = pull_result_ext.offset_delta {
                     msg.queue_offset += offset_delta;
                 }
@@ -183,6 +187,8 @@ impl PullAPIWrapper {
             pull_result_ext.pull_result.msg_found_list =
                 Some(msg_list_filter_again.into_iter().map(ArcMut::new).collect::<Vec<_>>());
         }
+        // Release the raw binary buffer unconditionally once processing is complete.
+        pull_result_ext.message_binary = None;
     }
 
     pub fn execute_hook(&self, context: &FilterMessageContext) {
@@ -285,25 +291,25 @@ impl PullAPIWrapper {
 
             let request_header = PullMessageRequestHeader {
                 consumer_group: self.consumer_group.clone(),
-                topic: CheetahString::from_string(mq.topic_str().to_string()),
+                topic: mq.topic().clone(),
                 queue_id: mq.queue_id(),
                 queue_offset: offset,
                 max_msg_nums: max_nums,
                 sys_flag: sys_flag_inner,
                 commit_offset,
                 suspend_timeout_millis: broker_suspend_max_time_millis,
-                subscription: Some(CheetahString::from_string(sub_expression.to_string())),
+                subscription: Some(sub_expression),
                 sub_version,
                 max_msg_bytes: Some(max_size_in_bytes),
                 request_source: None,
                 proxy_forward_client_id: None,
-                expression_type: Some(CheetahString::from_string(expression_type.to_string())),
+                expression_type: Some(expression_type),
                 topic_request: Some(TopicRequestHeader {
                     lo: None,
                     rpc: Some(RpcRequestHeader {
                         namespace: None,
                         namespaced: None,
-                        broker_name: Some(CheetahString::from_string(mq.broker_name().to_string())),
+                        broker_name: Some(mq.broker_name().clone()),
                         oneway: None,
                     }),
                 }),
@@ -341,10 +347,14 @@ impl PullAPIWrapper {
         if let Some(topic_route_data) = self.client_instance.topic_route_table.get(topic) {
             let vec = topic_route_data.value().filter_server_table.get(broker_addr);
             if let Some(vec) = vec {
+                if vec.is_empty() {
+                    return Err(mq_client_err!(format!(
+                        "Find Filter Server Failed, empty server list, Broker Addr: {broker_addr}, topic: {topic}"
+                    )));
+                }
                 return vec.get(random_num() as usize % vec.len()).map_or(
                     Err(mq_client_err!(format!(
-                        "Find Filter Server Failed, Broker Addr: {},topic:{}",
-                        broker_addr, topic
+                        "Find Filter Server Failed, Broker Addr: {broker_addr}, topic: {topic}"
                     ))),
                     |v| Ok(v.clone()),
                 );
@@ -402,7 +412,7 @@ impl PullAPIWrapper {
                     rpc: Some(RpcRequestHeader {
                         namespace: None,
                         namespaced: None,
-                        broker_name: Some(CheetahString::from_string(mq.broker_name().to_string())),
+                        broker_name: Some(mq.broker_name().clone()),
                         oneway: None,
                     }),
                 }),
@@ -415,7 +425,7 @@ impl PullAPIWrapper {
             self.client_instance
                 .mq_client_api_impl
                 .as_mut()
-                .unwrap()
+                .ok_or_else(|| mq_client_err!("MQClientAPIImpl is not initialized"))?
                 .pop_message_async(
                     mq.broker_name(),
                     &find_broker_result.broker_addr,
@@ -430,6 +440,75 @@ impl PullAPIWrapper {
                 mq.get_broker_name(),
             )))
         }
+    }
+
+    /// Overload of [`pull_kernel_impl`] without `max_size_in_bytes`; defaults to [`i32::MAX`],
+    /// matching Java's second `pullKernelImpl` overload.
+    ///
+    /// [`pull_kernel_impl`]: PullAPIWrapper::pull_kernel_impl
+    pub async fn pull_kernel_impl_default_size<PCB>(
+        &mut self,
+        mq: &MessageQueue,
+        sub_expression: CheetahString,
+        expression_type: CheetahString,
+        sub_version: i64,
+        offset: i64,
+        max_nums: i32,
+        sys_flag: i32,
+        commit_offset: i64,
+        broker_suspend_max_time_millis: u64,
+        timeout_millis: u64,
+        communication_mode: CommunicationMode,
+        pull_callback: PCB,
+    ) -> rocketmq_error::RocketMQResult<Option<PullResultExt>>
+    where
+        PCB: PullCallback + 'static,
+    {
+        self.pull_kernel_impl(
+            mq,
+            sub_expression,
+            expression_type,
+            sub_version,
+            offset,
+            max_nums,
+            i32::MAX,
+            sys_flag,
+            commit_offset,
+            broker_suspend_max_time_millis,
+            timeout_millis,
+            communication_mode,
+            pull_callback,
+        )
+        .await
+    }
+
+    /// Returns whether broker selection is driven by the user-configured
+    /// [`default_broker_id`][PullAPIWrapper::default_broker_id] rather than the recommendation
+    /// table.
+    pub fn is_connect_broker_by_user(&self) -> bool {
+        self.connect_broker_by_user
+    }
+
+    /// Sets whether to always connect to the broker identified by [`default_broker_id`] instead of
+    /// using the pull-from-which-node recommendation table.
+    ///
+    /// [`default_broker_id`]: PullAPIWrapper::default_broker_id
+    pub fn set_connect_broker_by_user(&mut self, connect_broker_by_user: bool) {
+        self.connect_broker_by_user = connect_broker_by_user;
+    }
+
+    /// Returns the default broker ID used when [`is_connect_broker_by_user`] is `true`.
+    ///
+    /// [`is_connect_broker_by_user`]: PullAPIWrapper::is_connect_broker_by_user
+    pub fn default_broker_id(&self) -> u64 {
+        self.default_broker_id
+    }
+
+    /// Sets the default broker ID to connect to when [`is_connect_broker_by_user`] is `true`.
+    ///
+    /// [`is_connect_broker_by_user`]: PullAPIWrapper::is_connect_broker_by_user
+    pub fn set_default_broker_id(&mut self, broker_id: u64) {
+        self.default_broker_id = broker_id;
     }
 }
 
