@@ -79,8 +79,8 @@ pub trait LitePullConsumerLocal: Sync {
     /// # Arguments
     ///
     /// * `topic` - The name of the topic to subscribe to.
-    /// * `sub_expression` - A tag expression (e.g. `"TagA || TagB"`) or SQL-92 predicate.
-    ///   Pass `"*"` to receive all messages.
+    /// * `sub_expression` - A tag expression (e.g. `"TagA || TagB"`) or SQL-92 predicate. Pass
+    ///   `"*"` to receive all messages.
     ///
     /// # Errors
     ///
@@ -179,8 +179,8 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// # Arguments
     ///
-    /// * `sub_expression_map` - Output map from topic name to its [`MessageSelector`].
-    ///   Entries are inserted for every topic that has an active subscription with a selector.
+    /// * `sub_expression_map` - Output map from topic name to its [`MessageSelector`]. Entries are
+    ///   inserted for every topic that has an active subscription with a selector.
     ///
     /// # Errors
     ///
