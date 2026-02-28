@@ -14,6 +14,7 @@
 
 mod get_broker_lite_info_sub_command;
 mod get_lite_client_info_sub_command;
+mod get_lite_group_info_sub_command;
 mod get_parent_topic_info_sub_command;
 mod trigger_lite_dispatch_sub_command;
 
@@ -25,6 +26,7 @@ use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::lite::get_broker_lite_info_sub_command::GetBrokerLiteInfoSubCommand;
 use crate::commands::lite::get_lite_client_info_sub_command::GetLiteClientInfoSubCommand;
+use crate::commands::lite::get_lite_group_info_sub_command::GetLiteGroupInfoSubCommand;
 use crate::commands::lite::get_parent_topic_info_sub_command::GetParentTopicInfoSubCommand;
 use crate::commands::lite::trigger_lite_dispatch_sub_command::TriggerLiteDispatchSubCommand;
 use crate::commands::CommandExecute;
@@ -46,6 +48,13 @@ pub enum LiteCommands {
     GetLiteClientInfo(GetLiteClientInfoSubCommand),
 
     #[command(
+        name = "getLiteGroupInfo",
+        about = "Get lite group info.",
+        long_about = None,
+    )]
+    GetLiteGroupInfo(GetLiteGroupInfoSubCommand),
+
+    #[command(
         name = "getParentTopicInfo",
         about = "Get parent topic info.",
         long_about = None,
@@ -65,6 +74,7 @@ impl CommandExecute for LiteCommands {
         match self {
             LiteCommands::GetBrokerLiteInfo(cmd) => cmd.execute(rpc_hook).await,
             LiteCommands::GetLiteClientInfo(cmd) => cmd.execute(rpc_hook).await,
+            LiteCommands::GetLiteGroupInfo(cmd) => cmd.execute(rpc_hook).await,
             LiteCommands::GetParentTopicInfo(cmd) => cmd.execute(rpc_hook).await,
             LiteCommands::TriggerLiteDispatch(cmd) => cmd.execute(rpc_hook).await,
         }

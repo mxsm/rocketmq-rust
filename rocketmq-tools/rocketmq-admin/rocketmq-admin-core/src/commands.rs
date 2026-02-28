@@ -397,6 +397,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Lite",
+                command: "getLiteGroupInfo",
+                remark: "Get lite group info.",
+            },
+            Command {
+                category: "Lite",
                 command: "getParentTopicInfo",
                 remark: "Get parent topic info.",
             },
