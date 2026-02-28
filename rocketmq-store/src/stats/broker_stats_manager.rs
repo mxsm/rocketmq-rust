@@ -31,7 +31,7 @@ use rocketmq_common::common::stats::stats_item::StatsItem;
 use rocketmq_common::common::stats::stats_item_set::StatsItemSet;
 use rocketmq_common::common::stats::Stats;
 use rocketmq_common::common::topic::TopicValidator;
-use rocketmq_common::TimeUtils::get_current_millis;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use tokio::time::Duration;
 use tracing::info;
