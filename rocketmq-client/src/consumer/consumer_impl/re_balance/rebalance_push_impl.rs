@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cheetah_string::CheetahString;
+use dashmap::DashMap;
 use rocketmq_common::common::constant::consume_init_mode::ConsumeInitMode;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_queue::MessageQueue;
@@ -76,7 +77,7 @@ impl RebalancePushImpl {
 }
 
 impl RebalancePushImpl {
-    pub fn get_subscription_inner(&self) -> Arc<RwLock<HashMap<CheetahString, SubscriptionData>>> {
+    pub fn get_subscription_inner(&self) -> Arc<DashMap<CheetahString, SubscriptionData>> {
         self.rebalance_impl_inner.subscription_inner.clone()
     }
 
@@ -107,9 +108,10 @@ impl RebalancePushImpl {
     }
 
     #[inline]
-    pub async fn put_subscription_data(&mut self, topic: CheetahString, subscription_data: SubscriptionData) {
-        let mut subscription_inner = self.rebalance_impl_inner.subscription_inner.write().await;
-        subscription_inner.insert(topic, subscription_data);
+    pub fn put_subscription_data(&mut self, topic: CheetahString, subscription_data: SubscriptionData) {
+        self.rebalance_impl_inner
+            .subscription_inner
+            .insert(topic, subscription_data);
     }
 
     pub fn set_rebalance_impl(&mut self, rebalance_impl: WeakArcMut<RebalancePushImpl>) {
@@ -158,18 +160,18 @@ impl Rebalance for RebalancePushImpl {
         mq_all: &HashSet<MessageQueue>,
         mq_divided: &HashSet<MessageQueue>,
     ) {
-        let mut subscription_inner = self.rebalance_impl_inner.subscription_inner.write().await;
-        let Some(subscription_data) = subscription_inner.get_mut(topic) else {
-            warn!("Subscription data not found for topic: {}", topic);
-            return;
-        };
-        let new_version = current_millis() as i64;
-        info!(
-            "{} Rebalance changed, also update version: {}, {}",
-            topic, subscription_data.sub_version, new_version
-        );
-        subscription_data.sub_version = new_version;
-        drop(subscription_inner);
+        {
+            let Some(mut subscription_data) = self.rebalance_impl_inner.subscription_inner.get_mut(topic) else {
+                warn!("Subscription data not found for topic: {}", topic);
+                return;
+            };
+            let new_version = current_millis() as i64;
+            info!(
+                "{} Rebalance changed, also update version: {}, {}",
+                topic, subscription_data.sub_version, new_version
+            );
+            subscription_data.sub_version = new_version;
+        }
 
         let current_queue_count = {
             let process_queue_table = self.rebalance_impl_inner.process_queue_table.read().await;
