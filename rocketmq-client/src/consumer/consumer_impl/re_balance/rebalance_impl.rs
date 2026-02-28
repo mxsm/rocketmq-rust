@@ -45,22 +45,80 @@ use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 use crate::consumer::consumer_impl::pull_request::PullRequest;
 use crate::consumer::consumer_impl::re_balance::Rebalance;
 use crate::factory::mq_client_instance::MQClientInstance;
+use crate::types::ConsumerGroupName;
+use crate::types::TopicName;
 
 const TIMEOUT_CHECK_TIMES: u32 = 3;
 const QUERY_ASSIGNMENT_TIMEOUT: u64 = 3000;
 
+/// Maps each assigned [`MessageQueue`] to its push-mode [`ProcessQueue`].
+type ProcessQueueTable = Arc<RwLock<HashMap<MessageQueue, Arc<ProcessQueue>>>>;
+
+/// Maps each assigned [`MessageQueue`] to its pop-mode [`PopProcessQueue`].
+type PopProcessQueueTable = Arc<RwLock<HashMap<MessageQueue, Arc<PopProcessQueue>>>>;
+
+/// Maps each subscribed topic to the set of [`MessageQueue`]s known for it.
+/// Updated by [`MQClientInstance`] when topic route information changes.
+type TopicSubscribeInfoTable = Arc<RwLock<HashMap<TopicName, HashSet<MessageQueue>>>>;
+
+/// Subscription metadata for each topic, including filter expressions and
+/// subscription version. Shared with [`MQClientInstance`] for heartbeat generation.
+type SubscriptionInnerTable = Arc<RwLock<HashMap<TopicName, SubscriptionData>>>;
+
+/// Topics for which the broker returned a valid queue-assignment result,
+/// indicating broker-side rebalance is active for those topics.
+type TopicBrokerRebalanceMap = Arc<DashMap<TopicName, TopicName>>;
+
+/// Topics for which queue-assignment failed or timed out, falling back to
+/// client-side rebalance via the configured [`AllocateMessageQueueStrategy`].
+type TopicClientRebalanceMap = Arc<DashMap<TopicName, TopicName>>;
+
 pub(crate) struct RebalanceImpl<R> {
-    pub(crate) process_queue_table: Arc<RwLock<HashMap<MessageQueue, Arc<ProcessQueue>>>>,
-    pub(crate) pop_process_queue_table: Arc<RwLock<HashMap<MessageQueue, Arc<PopProcessQueue>>>>,
-    pub(crate) topic_subscribe_info_table: Arc<RwLock<HashMap<CheetahString, HashSet<MessageQueue>>>>,
-    pub(crate) subscription_inner: Arc<RwLock<HashMap<CheetahString, SubscriptionData>>>,
-    pub(crate) consumer_group: Option<CheetahString>,
+    /// Maps each assigned [`MessageQueue`] to its [`ProcessQueue`], representing
+    /// the local consumption state and flow-control counters for push-mode consumers.
+    pub(crate) process_queue_table: ProcessQueueTable,
+
+    /// Maps each assigned [`MessageQueue`] to its [`PopProcessQueue`], used when
+    /// the consumer operates in pop-mode (broker-side ack instead of pull).
+    pub(crate) pop_process_queue_table: PopProcessQueueTable,
+
+    /// Maps each subscribed topic to the full set of [`MessageQueue`]s that exist
+    /// for it on the broker. Updated by [`MQClientInstance`] on route changes.
+    pub(crate) topic_subscribe_info_table: TopicSubscribeInfoTable,
+
+    /// Subscription metadata for each topic, including filter type and expression.
+    /// Shared with [`MQClientInstance`] to build heartbeat payloads sent to brokers.
+    pub(crate) subscription_inner: SubscriptionInnerTable,
+
+    /// Name of the consumer group this rebalance instance belongs to.
+    pub(crate) consumer_group: Option<ConsumerGroupName>,
+
+    /// Message consumption model: `Clustering` (load-balanced) or `Broadcasting`
+    /// (every consumer receives all messages).
     pub(crate) message_model: Option<MessageModel>,
+
+    /// Strategy that determines how [`MessageQueue`]s are divided among the consumers
+    /// in the same group (e.g., average, consistent-hash).
     pub(crate) allocate_message_queue_strategy: Option<Arc<dyn AllocateMessageQueueStrategy>>,
+
+    /// Handle to the [`MQClientInstance`] shared by all producers and consumers with
+    /// the same `clientId`, used for broker communication and topic route queries.
     pub(crate) client_instance: Option<ArcMut<MQClientInstance>>,
+
+    /// Weak reference to the concrete rebalance implementation (e.g., `RebalancePushImpl`),
+    /// enabling abstract callbacks without creating reference cycles.
     pub(crate) sub_rebalance_impl: Option<WeakArcMut<R>>,
-    pub(crate) topic_broker_rebalance: Arc<DashMap<CheetahString, CheetahString>>,
-    pub(crate) topic_client_rebalance: Arc<DashMap<CheetahString, CheetahString>>,
+
+    /// Topics for which `queryAssignment` returned a valid broker-side assignment.
+    /// Lock-free concurrent map; entries are added on successful assignment and
+    /// removed when the topic is no longer subscribed.
+    pub(crate) topic_broker_rebalance: TopicBrokerRebalanceMap,
+
+    /// Topics for which `queryAssignment` failed or timed out, causing the client
+    /// to fall back to the local [`AllocateMessageQueueStrategy`] instead.
+    /// Lock-free concurrent map; entries are added on failure and pruned on
+    /// unsubscribe.
+    pub(crate) topic_client_rebalance: TopicClientRebalanceMap,
 }
 
 impl<R> RebalanceImpl<R>
@@ -109,7 +167,6 @@ where
             drop(sub_table);
             for topic in &topics {
                 if !self.client_rebalance(topic) && self.try_query_assignment(topic).await {
-                    //pop consumer
                     if !self.get_rebalance_result_from_broker(topic, is_order).await {
                         balanced = false;
                     }
@@ -239,7 +296,7 @@ where
         let topics: HashSet<CheetahString> = sub_table.keys().cloned().collect();
         drop(sub_table);
 
-        // Identify queues to remove with read lock only - DO NOT modify state
+        // Snapshot queues to remove under the read lock; state modification uses the write lock below.
         let to_remove: Vec<MessageQueue> = {
             let process_queue_table = self.process_queue_table.read().await;
             process_queue_table
@@ -270,7 +327,7 @@ where
             }
         }
 
-        // Same fix for pop process queue
+        // Apply the same cleanup to the pop-mode process queue table.
         let pop_to_remove: Vec<MessageQueue> = {
             let pop_process_queue_table = self.pop_process_queue_table.read().await;
             pop_process_queue_table
@@ -346,7 +403,7 @@ where
         let (mq_set, message_queue_assignments) = match message_queue_assignments {
             Ok(assignments) => {
                 if assignments.is_none() {
-                    // None means invalid result, we should skip the update logic
+                    // A null assignment set indicates an invalid broker response; skip the update.
                     return false;
                 }
                 let assignments_inner = assignments.unwrap();
@@ -426,8 +483,7 @@ where
 
         if !topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
             if mq2pop_assignment.is_empty() && !mq2push_assignment.is_empty() {
-                //pop switch to push
-                //subscribe pop retry topic
+                // Assignment switched from pop-mode to push-mode; subscribe to the pop retry topic.
                 let retry_topic = CheetahString::from(KeyBuilder::build_pop_retry_topic(
                     topic,
                     self.consumer_group.as_ref().unwrap().as_ref(),
@@ -441,8 +497,7 @@ where
                     self.put_subscription_data(&retry_topic, subscription_data).await;
                 }
             } else if !mq2pop_assignment.is_empty() && mq2push_assignment.is_empty() {
-                //push switch to pop
-                //unsubscribe pop retry topic
+                // Assignment switched from push-mode to pop-mode; unsubscribe from the pop retry topic.
                 let retry_topic = CheetahString::from(KeyBuilder::build_pop_retry_topic(
                     topic,
                     self.consumer_group.as_ref().unwrap().as_ref(),
@@ -453,8 +508,7 @@ where
         }
         let mut remove_queue_map = HashMap::with_capacity(64);
         {
-            // drop process queues no longer belong me
-
+            // Mark and collect push-mode queues no longer assigned to this consumer.
             let process_queue_table = self.process_queue_table.read().await;
             for (mq, pq) in process_queue_table.iter() {
                 if mq.topic_str() == topic {
@@ -482,7 +536,7 @@ where
         {
             if !remove_queue_map.is_empty() {
                 let mut process_queue_table = self.process_queue_table.write().await;
-                // Remove message queues no longer belong to me
+                // Remove unassigned push queues from the process queue table.
                 for (mq, pq) in remove_queue_map {
                     if let Some(mut sub_rebalance) = self.sub_rebalance_impl.as_mut().unwrap().upgrade() {
                         if sub_rebalance.remove_unnecessary_message_queue(&mq, &pq).await {
@@ -529,7 +583,7 @@ where
         {
             if !remove_queue_map.is_empty() {
                 let mut pop_process_queue_table = self.pop_process_queue_table.write().await;
-                // Remove message queues no longer belong to me
+                // Remove unassigned pop queues from the pop process queue table.
                 for (mq, pq) in remove_queue_map {
                     if let Some(mut sub_rebalance) = self.sub_rebalance_impl.as_mut().unwrap().upgrade() {
                         if sub_rebalance.remove_unnecessary_pop_message_queue(&mq, &pq) {
@@ -547,7 +601,7 @@ where
         }
 
         {
-            // add new message queue
+            // Add newly assigned message queues to the push-mode process queue table.
             let mut all_mq_locked = true;
             let mut pull_request_list = Vec::new();
             let sub_rebalance_impl = self.sub_rebalance_impl.as_mut().unwrap().upgrade();
@@ -556,7 +610,7 @@ where
             }
             let mut sub_rebalance_impl = sub_rebalance_impl.unwrap();
 
-            // First, identify queues that need locking (for ordered consumption)
+            // Identify queues that require a broker-side lock before being added.
             let queues_need_lock: Vec<_> = if is_order {
                 let process_queue_table = self.process_queue_table.read().await;
                 mq2push_assignment
@@ -569,10 +623,12 @@ where
                 vec![]
             };
 
-            // Perform locking BEFORE acquiring write lock (avoid holding lock during I/O)
+            // Acquire broker-side locks for orderly queues before taking the write lock,
+            // preventing network I/O while the write lock is held.
             let mut successfully_locked = HashSet::new();
             if is_order && !queues_need_lock.is_empty() {
-                // Get process_queue_table snapshot, then drop the lock before calling lock_with
+                // Snapshot the process queue table under the read lock; the lock is
+                // released before broker communication occurs.
                 let process_queue_table = {
                     let table = self.process_queue_table.read().await;
                     table.clone()
@@ -592,7 +648,7 @@ where
                 }
             }
 
-            // Now acquire write lock and add queues (no I/O while holding write lock)
+            // Insert new queues under the write lock; no network calls are made while the lock is held.
             let process_queue_table_clone = self.process_queue_table.clone();
             let mut process_queue_table = process_queue_table_clone.write().await;
             for (mq, assignment) in mq2push_assignment {
@@ -694,7 +750,7 @@ where
         let process_queue_table_cloned = self.process_queue_table.clone();
         {
             let process_queue_table = process_queue_table_cloned.read().await;
-            // Drop process queues no longer belong to me
+            // Mark and collect queues no longer assigned to this consumer.
             for (mq, pq) in process_queue_table.iter() {
                 if mq.topic_str() == topic {
                     if !mq_set.contains(mq) {
@@ -721,7 +777,7 @@ where
         {
             if !remove_queue_map.is_empty() {
                 let mut process_queue_table = process_queue_table_cloned.write().await;
-                // Remove message queues no longer belong to me
+                // Remove unassigned queues from the process queue table.
                 for (mq, pq) in remove_queue_map {
                     if let Some(mut sub_rebalance) = self.sub_rebalance_impl.as_mut().unwrap().upgrade() {
                         if sub_rebalance.remove_unnecessary_message_queue(&mq, &pq).await {
@@ -737,7 +793,7 @@ where
                 }
             }
         }
-        // Add new message queue
+        // Add newly assigned message queues to the process queue table.
         let mut all_mq_locked = true;
         let mut pull_request_list = Vec::new();
         let sub_rebalance_impl = self.sub_rebalance_impl.as_mut().unwrap().upgrade();
@@ -746,7 +802,7 @@ where
         }
         let mut sub_rebalance_impl = sub_rebalance_impl.unwrap();
 
-        // First, identify queues that need locking (for ordered consumption)
+        // Identify queues that require a broker-side lock before being added.
         let queues_need_lock: Vec<_> = if is_order {
             let process_queue_table = process_queue_table_cloned.read().await;
             mq_set
@@ -758,7 +814,8 @@ where
             vec![]
         };
 
-        // Perform locking BEFORE acquiring write lock (avoid holding lock during I/O)
+        // Acquire broker-side locks for orderly queues before taking the write lock,
+        // preventing network I/O while the write lock is held.
         let mut successfully_locked = HashSet::new();
         if is_order && !queues_need_lock.is_empty() {
             let process_queue_table = process_queue_table_cloned.read().await;
@@ -776,7 +833,7 @@ where
             }
         }
 
-        // Now acquire write lock and add queues (no I/O while holding write lock)
+        // Insert new queues under the write lock; no network calls are made while the lock is held.
         let mut process_queue_table = process_queue_table_cloned.write().await;
         for mq in mq_set {
             if !process_queue_table.contains_key(mq) {
@@ -845,8 +902,8 @@ where
     async fn rebalance_by_topic(&mut self, topic: &CheetahString, is_order: bool) -> bool {
         match self.message_model.unwrap() {
             MessageModel::Broadcasting => {
-                // Clone the mq_set snapshot under the read lock, then drop the lock before
-                // any async work to avoid holding it across await points.
+                // Snapshot the queue set under the read lock; the lock is released before any
+                // async operations to prevent holding it across await points.
                 let mq_set_opt: Option<HashSet<MessageQueue>> = {
                     let table = self.topic_subscribe_info_table.read().await;
                     table.get(topic).cloned()
@@ -878,7 +935,6 @@ where
                 }
             }
             MessageModel::Clustering => {
-                //get consumer id list from broker
                 let cid_all = self
                     .client_instance
                     .as_mut()
