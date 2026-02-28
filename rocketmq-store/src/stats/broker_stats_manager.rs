@@ -165,7 +165,7 @@ impl BrokerStatsManager {
 
     /// Compute delay to next minute boundary
     fn compute_initial_delay_to_next_minute() -> Duration {
-        let now = get_current_millis();
+        let now = current_millis();
 
         let next_minute = ((now / 60000) + 1) * 60000;
         let delay_ms = next_minute - now;
