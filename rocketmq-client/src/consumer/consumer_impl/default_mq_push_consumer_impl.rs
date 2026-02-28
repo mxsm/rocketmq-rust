@@ -1398,6 +1398,23 @@ impl DefaultMQPushConsumerImpl {
             .await;
         write_guard.remove(topic);
     }
+
+    pub async fn suspend(&self) {
+        self.pause.store(true, Ordering::Release);
+        info!(
+            "Suspend the consumer, instanceName={}, group={}",
+            self.client_config.instance_name, self.consumer_config.consumer_group
+        );
+    }
+
+    pub async fn resume(&self) {
+        self.pause.store(false, Ordering::Release);
+        self.do_rebalance().await;
+        info!(
+            "Resume the consumer, instanceName={}, group={}",
+            self.client_config.instance_name, self.consumer_config.consumer_group
+        );
+    }
 }
 
 impl MQConsumerInner for DefaultMQPushConsumerImpl {
@@ -1431,8 +1448,17 @@ impl MQConsumerInner for DefaultMQPushConsumerImpl {
         .unwrap()
     }
 
-    fn do_rebalance(&self) {
-        todo!()
+    async fn do_rebalance(&self) {
+        if !self.pause.load(Ordering::Acquire) {
+            let orderly = self.is_consume_orderly();
+            let rebalance = self.rebalance_impl.mut_from_ref().do_rebalance(orderly).await;
+            if !rebalance {
+                warn!(
+                    "rebalance failed, maybe the consumer was paused during rebalance. instanceName={}, group={}",
+                    self.client_config.instance_name, self.consumer_config.consumer_group
+                );
+            }
+        }
     }
 
     async fn try_rebalance(&self) -> rocketmq_error::RocketMQResult<bool> {
