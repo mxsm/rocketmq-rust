@@ -402,7 +402,6 @@ where
                         queue_id,
                         offset,
                         1,
-                        //    128 * 1024 * 1024,
                         None,
                     )
                     .await;
@@ -418,14 +417,12 @@ where
                 let mut list = decode_msg_list(result1, de_compress_body);
                 if list.is_empty() {
                     let need_retry = status.unwrap() == GetMessageStatus::OffsetFoundNull;
-                    //   && message_store.is_tiered_message_store();
                     warn!(
                         "Can not get msg, topic {}, offset {}, queueId {}, needRetry {},",
                         topic,
                         offset,
                         queue_id,
                         need_retry,
-                        //result.unwrap()
                     );
                     return (None, "Can not get msg".to_string(), need_retry);
                 }
@@ -444,8 +441,6 @@ where
         queue_id: i32,
         broker_name: &CheetahString,
     ) -> BoxFuture<'_, (Option<MessageExt>, String, bool)> {
-        /* let topic_route_info_manager = self.topic_route_info_manager.clone();
-        let broker_outer_api = self.broker_outer_api.clone();*/
         let broker_runtime_inner_ = self.broker_runtime_inner.clone();
         let inner_consumer_group_name = self.inner_consumer_group_name.clone();
         let topic = topic.clone();
