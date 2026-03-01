@@ -487,6 +487,116 @@ impl DefaultLitePullConsumerImpl {
             }
         }
     }
+
+    /// Spawns an async pull task for a message queue.
+    async fn start_pull_task(&self, mq: MessageQueue) -> RocketMQResult<()> {
+        let default_impl = self
+            .default_lite_pull_consumer_impl
+            .clone()
+            .ok_or_else(|| crate::mq_client_err!("Consumer self-reference not initialized"))?;
+        let shutdown_signal = self.shutdown_signal.clone();
+        let assigned_mq = self.assigned_message_queue.clone();
+        let mq_clone = mq.clone();
+
+        let handle = tokio::spawn(async move {
+            loop {
+                if shutdown_signal.load(Ordering::Acquire) {
+                    break;
+                }
+
+                let pq = match assigned_mq.get_process_queue(&mq_clone).await {
+                    Some(pq) if !pq.is_dropped() => pq,
+                    _ => break,
+                };
+
+                if assigned_mq.is_paused(&mq_clone).await {
+                    tokio::time::sleep(Duration::from_millis(
+                        default_impl.consumer_config.pull_time_delay_millis_when_exception,
+                    ))
+                    .await;
+                    continue;
+                }
+
+                match default_impl.pull_inner(&mq_clone, &pq).await {
+                    Ok(delay) => {
+                        if delay > 0 {
+                            tokio::time::sleep(Duration::from_millis(delay)).await;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Pull error for {:?}: {}", mq_clone, e);
+                        tokio::time::sleep(Duration::from_millis(
+                            default_impl.consumer_config.pull_time_delay_millis_when_exception,
+                        ))
+                        .await;
+                    }
+                }
+            }
+        });
+
+        self.task_handles.write().await.insert(mq, handle);
+        Ok(())
+    }
+
+    /// Core pull logic (returns delay in milliseconds).
+    async fn pull_inner(
+        &self,
+        _mq: &MessageQueue,
+        _process_queue: &Arc<crate::consumer::consumer_impl::process_queue::ProcessQueue>,
+    ) -> RocketMQResult<u64> {
+        unimplemented!("pull_inner")
+    }
+
+    /// Check all flow control conditions.
+    async fn check_flow_control(
+        &self,
+        _mq: &MessageQueue,
+        pq: &Arc<crate::consumer::consumer_impl::process_queue::ProcessQueue>,
+    ) -> RocketMQResult<Option<u64>> {
+        let config = &self.consumer_config;
+
+        // Global cache flow control
+        if config.pull_threshold_for_all > 0 {
+            let cache_msg_count = self.get_cached_message_count().await;
+            if cache_msg_count > config.pull_threshold_for_all {
+                self.consume_request_flow_control_times.fetch_add(1, Ordering::Relaxed);
+                return Ok(Some(config.pull_time_delay_millis_when_cache_flow_control));
+            }
+        }
+
+        // Per-queue message count
+        let cached_msg_count = pq.msg_count() as i64;
+        if cached_msg_count > config.pull_threshold_for_queue {
+            self.queue_flow_control_times.fetch_add(1, Ordering::Relaxed);
+            return Ok(Some(config.pull_time_delay_millis_when_cache_flow_control));
+        }
+
+        // Per-queue message size
+        let cached_msg_size = (pq.msg_size() / (1024 * 1024)) as i64;
+        if cached_msg_size > config.pull_threshold_size_for_queue as i64 {
+            self.queue_flow_control_times.fetch_add(1, Ordering::Relaxed);
+            return Ok(Some(config.pull_time_delay_millis_when_cache_flow_control));
+        }
+
+        // Offset span control
+        let max_span = pq.get_max_span().await;
+        if max_span as i64 > config.consume_max_span {
+            self.queue_max_span_flow_control_times.fetch_add(1, Ordering::Relaxed);
+            return Ok(Some(config.pull_time_delay_millis_when_cache_flow_control));
+        }
+
+        Ok(None)
+    }
+
+    /// Get total cached message count across all queues.
+    async fn get_cached_message_count(&self) -> i64 {
+        self.assigned_message_queue.total_msg_count().await
+    }
+
+    /// Get total cached message size in MiB.
+    async fn get_cached_message_size_in_mib(&self) -> i64 {
+        self.assigned_message_queue.total_msg_size_in_mib().await
+    }
 }
 
 impl MQConsumerInner for DefaultLitePullConsumerImpl {
