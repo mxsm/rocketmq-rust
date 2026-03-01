@@ -23,6 +23,7 @@ mod controller;
 mod export;
 mod ha;
 mod lite;
+mod message;
 mod namesrv;
 mod offset;
 mod target;
@@ -123,6 +124,11 @@ pub enum Commands {
     Lite(lite::LiteCommands),
 
     #[command(subcommand)]
+    #[command(about = "Message commands")]
+    #[command(name = "message")]
+    Message(message::MessageCommands),
+
+    #[command(subcommand)]
     #[command(about = "Name server commands")]
     #[command(name = "nameserver")]
     NameServer(namesrv::NameServerCommands),
@@ -152,6 +158,7 @@ impl CommandExecute for Commands {
             Commands::Export(value) => value.execute(rpc_hook).await,
             Commands::HA(value) => value.execute(rpc_hook).await,
             Commands::Lite(value) => value.execute(rpc_hook).await,
+            Commands::Message(value) => value.execute(rpc_hook).await,
             Commands::NameServer(value) => value.execute(rpc_hook).await,
             Commands::Offset(value) => value.execute(rpc_hook).await,
             Commands::Topic(value) => value.execute(rpc_hook).await,
@@ -414,6 +421,11 @@ impl CommandExecute for ClassificationTablePrint {
                 category: "Lite",
                 command: "triggerLiteDispatch",
                 remark: "Trigger Lite Dispatch.",
+            },
+            Command {
+                category: "Message",
+                command: "checkMsgSendRT",
+                remark: "Check message send response time.",
             },
             Command {
                 category: "NameServer",
