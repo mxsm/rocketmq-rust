@@ -428,6 +428,11 @@ impl CommandExecute for ClassificationTablePrint {
                 remark: "Check message send response time.",
             },
             Command {
+                category: "Message",
+                command: "decodeMessageId",
+                remark: "Decode unique message ID.",
+            },
+            Command {
                 category: "NameServer",
                 command: "addWritePerm",
                 remark: "Add write perm of broker in all name server.",

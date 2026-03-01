@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod check_msg_send_rt_sub_command;
+pub mod decode_message_id_sub_command;
 
 use std::sync::Arc;
 
@@ -21,6 +22,7 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::message::check_msg_send_rt_sub_command::CheckMsgSendRTSubCommand;
+use crate::commands::message::decode_message_id_sub_command::DecodeMessageIdSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
@@ -31,12 +33,20 @@ pub enum MessageCommands {
         long_about = None,
     )]
     CheckMsgSendRT(CheckMsgSendRTSubCommand),
+
+    #[command(
+        name = "decodeMessageId",
+        about = "Decode unique message ID.",
+        long_about = None,
+    )]
+    DecodeMessageId(DecodeMessageIdSubCommand),
 }
 
 impl CommandExecute for MessageCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
             MessageCommands::CheckMsgSendRT(value) => value.execute(rpc_hook).await,
+            MessageCommands::DecodeMessageId(value) => value.execute(rpc_hook).await,
         }
     }
 }
