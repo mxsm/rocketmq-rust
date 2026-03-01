@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
+use rocketmq_rust::ArcMut;
 
 use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 
@@ -25,7 +26,7 @@ use crate::consumer::consumer_impl::process_queue::ProcessQueue;
 #[derive(Clone)]
 pub struct LitePullConsumeRequest {
     /// Messages to be consumed.
-    pub(crate) messages: Vec<Arc<MessageExt>>,
+    pub(crate) messages: Vec<ArcMut<MessageExt>>,
 
     /// The message queue these messages belong to.
     pub(crate) message_queue: MessageQueue,
@@ -36,7 +37,11 @@ pub struct LitePullConsumeRequest {
 
 impl LitePullConsumeRequest {
     /// Creates a new consume request.
-    pub fn new(messages: Vec<Arc<MessageExt>>, message_queue: MessageQueue, process_queue: Arc<ProcessQueue>) -> Self {
+    pub fn new(
+        messages: Vec<ArcMut<MessageExt>>,
+        message_queue: MessageQueue,
+        process_queue: Arc<ProcessQueue>,
+    ) -> Self {
         Self {
             messages,
             message_queue,
@@ -45,7 +50,7 @@ impl LitePullConsumeRequest {
     }
 
     /// Returns the messages in this request.
-    pub fn messages(&self) -> &[Arc<MessageExt>] {
+    pub fn messages(&self) -> &[ArcMut<MessageExt>] {
         &self.messages
     }
 
@@ -60,7 +65,7 @@ impl LitePullConsumeRequest {
     }
 
     /// Consumes the request and returns its components.
-    pub fn into_parts(self) -> (Vec<Arc<MessageExt>>, MessageQueue, Arc<ProcessQueue>) {
+    pub fn into_parts(self) -> (Vec<ArcMut<MessageExt>>, MessageQueue, Arc<ProcessQueue>) {
         (self.messages, self.message_queue, self.process_queue)
     }
 }
