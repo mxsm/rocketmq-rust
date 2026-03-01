@@ -59,7 +59,7 @@ fn bench_select_original(c: &mut Criterion) {
         MessageQueue::from_parts("test_topic", "broker-a", 2),
         MessageQueue::from_parts("test_topic", "broker-a", 3),
     ];
-    let msg = Message::builder().build().unwrap();
+    let msg = Message::builder().topic("test_topic").build().unwrap();
 
     c.bench_function("select_original", |b| {
         b.iter(|| {
@@ -77,7 +77,7 @@ fn bench_select_cached(c: &mut Criterion) {
         MessageQueue::from_parts("test_topic", "broker-a", 2),
         MessageQueue::from_parts("test_topic", "broker-a", 3),
     ];
-    let msg = Message::builder().build().unwrap();
+    let msg = Message::builder().topic("test_topic").build().unwrap();
 
     c.bench_function("select_cached", |b| {
         b.iter(|| {
