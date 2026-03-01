@@ -66,7 +66,7 @@ pub struct RebalanceLitePullImpl {
     /// optional [`MessageQueueListener`][crate::consumer::message_queue_listener::MessageQueueListener].
     pub(crate) consumer_config: ArcMut<ConsumerConfig>,
     /// The active offset storage backend, injected after the consumer starts.
-    pub(crate) offset_store: Option<OffsetStore>,
+    pub(crate) offset_store: Option<ArcMut<OffsetStore>>,
 }
 
 impl RebalanceLitePullImpl {
@@ -132,7 +132,7 @@ impl RebalanceLitePullImpl {
     }
 
     /// Sets the offset store backend used to persist and query per-queue consume offsets.
-    pub fn set_offset_store(&mut self, offset_store: OffsetStore) {
+    pub fn set_offset_store(&mut self, offset_store: ArcMut<OffsetStore>) {
         self.offset_store = Some(offset_store);
     }
 }
@@ -352,7 +352,7 @@ impl Rebalance for RebalanceLitePullImpl {
             self.remove_unnecessary_message_queue(mq, &pq).await;
             if let Some(ref consumer_group) = self.rebalance_impl_inner.consumer_group {
                 info!(
-                    "Fix Offset, {}, remove unnecessary mq, {} Dropped: {}",
+                    "Rebalance cleanup for {}, removed unnecessary mq: {}, dropped: {}",
                     consumer_group, mq, dropped
                 );
             }
