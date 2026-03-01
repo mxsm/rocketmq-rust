@@ -33,6 +33,7 @@ use rocketmq_remoting::protocol::filter::filter_api::FilterAPI;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_rust::ArcMut;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
@@ -56,6 +57,7 @@ use crate::consumer::store::read_offset_type::ReadOffsetType;
 use crate::consumer::store::remote_broker_offset_store::RemoteBrokerOffsetStore;
 use crate::consumer::topic_message_queue_change_listener::TopicMessageQueueChangeListener;
 use crate::factory::mq_client_instance::MQClientInstance;
+use crate::hook::consume_message_context::ConsumeMessageContext;
 use crate::hook::consume_message_hook::ConsumeMessageHook;
 use crate::hook::filter_message_hook::FilterMessageHook;
 use crate::implementation::mq_client_manager::MQClientManager;
@@ -771,16 +773,58 @@ impl DefaultLitePullConsumerImpl {
                 continue;
             }
 
-            let messages = request.messages;
+            let mut messages = request.messages;
             // Execute async operations without holding the lock.
             let offset = request.process_queue.remove_message(&messages).await;
             self.assigned_message_queue
                 .update_consume_offset(&request.message_queue, offset)
                 .await;
 
+            // Reset topic to remove namespace if configured
+            self.reset_topic(&mut messages);
+
+            // Execute consume message hooks if registered
             if !self.consume_message_hook_list.is_empty() {
+                let mut context = ConsumeMessageContext {
+                    consumer_group: self.consumer_config.consumer_group.clone(),
+                    msg_list: &messages,
+                    mq: Some(request.message_queue.clone()),
+                    success: false,
+                    status: CheetahString::new(),
+                    mq_trace_context: None,
+                    props: HashMap::new(),
+                    namespace: self.client_config.namespace.clone().unwrap_or_default(),
+                    access_channel: Some(self.client_config.access_channel),
+                };
+
+                // Execute hook before with panic protection
                 for hook in &self.consume_message_hook_list {
-                    // Execute consume message hooks
+                    if let Err(err) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        hook.consume_message_before(Some(&mut context));
+                    })) {
+                        tracing::error!(
+                            "consumeMessageHook {} executeHookBefore panicked: {:?}",
+                            hook.hook_name(),
+                            err
+                        );
+                    }
+                }
+
+                // Update context for successful consumption
+                context.status = CheetahString::from_static_str("CONSUME_SUCCESS");
+                context.success = true;
+
+                // Execute hook after with panic protection
+                for hook in &self.consume_message_hook_list {
+                    if let Err(err) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        hook.consume_message_after(Some(&mut context));
+                    })) {
+                        tracing::error!(
+                            "consumeMessageHook {} executeHookAfter panicked: {:?}",
+                            hook.hook_name(),
+                            err
+                        );
+                    }
                 }
             }
 
@@ -901,6 +945,30 @@ impl DefaultLitePullConsumerImpl {
     /// Returns the set of assigned message queues.
     pub async fn assignment(&self) -> HashSet<MessageQueue> {
         self.assigned_message_queue.message_queues().await
+    }
+
+    /// Registers a consume message hook for monitoring message consumption.
+    pub fn register_consume_message_hook(&mut self, hook: Arc<dyn ConsumeMessageHook + Send + Sync>) {
+        self.consume_message_hook_list.push(hook);
+    }
+
+    /// Removes namespace from message topics if namespace is configured.
+    fn reset_topic(&self, messages: &mut [ArcMut<MessageExt>]) {
+        if messages.is_empty() {
+            return;
+        }
+
+        if let Some(namespace) = &self.client_config.namespace {
+            if !namespace.is_empty() {
+                for msg in messages.iter_mut() {
+                    let topic = msg.message.topic().to_string();
+                    let topic_without_namespace =
+                        NamespaceUtil::without_namespace_with_namespace(&topic, namespace.as_str());
+                    msg.message
+                        .set_topic(CheetahString::from_string(topic_without_namespace));
+                }
+            }
+        }
     }
 
     /// Pauses consumption for the specified message queues.
