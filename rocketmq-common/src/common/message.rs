@@ -205,6 +205,11 @@ pub trait MessageTrait: Any + Display + Debug {
         self.property(&CheetahString::from_static_str(MessageConst::PROPERTY_BUYER_ID))
     }
 
+    /// Returns a reference to the buyer ID associated with the message.
+    fn buyer_id_ref(&self) -> Option<&CheetahString> {
+        self.property_ref(&CheetahString::from_static_str(MessageConst::PROPERTY_BUYER_ID))
+    }
+
     /// Sets the buyer ID for the message.
     fn set_buyer_id(&mut self, buyer_id: CheetahString) {
         self.put_property(
