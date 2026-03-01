@@ -433,6 +433,11 @@ impl CommandExecute for ClassificationTablePrint {
                 remark: "Decode unique message ID.",
             },
             Command {
+                category: "Message",
+                command: "dumpCompactionLog",
+                remark: "Parse compaction log to message.",
+            },
+            Command {
                 category: "NameServer",
                 command: "addWritePerm",
                 remark: "Add write perm of broker in all name server.",
