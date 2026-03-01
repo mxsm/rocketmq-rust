@@ -223,7 +223,8 @@ pub trait LitePullConsumerLocal: Sync {
     /// This function does not block the calling thread.
     async fn poll_zero_copy(&self) -> Vec<rocketmq_rust::ArcMut<MessageExt>>;
 
-    /// Fetches the next batch of messages without allocating owned copies, with a specified timeout.
+    /// Fetches the next batch of messages without allocating owned copies, with a specified
+    /// timeout.
     ///
     /// Behaves identically to [`poll_zero_copy()`], but waits up to `timeout` milliseconds
     /// for messages to become available.
