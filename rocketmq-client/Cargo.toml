@@ -109,6 +109,10 @@ name = "ordermessage-producer"
 path = "examples/ordermessage/ordermessage_producer.rs"
 
 [[example]]
+name = "hash-selector-producer"
+path = "examples/ordermessage/hash_selector_producer.rs"
+
+[[example]]
 name = "ordermessage-consumer"
 path = "examples/ordermessage/ordermessage_consumer.rs"
 
