@@ -105,6 +105,8 @@ use rocketmq_remoting::protocol::header::get_lite_topic_info_request_header::Get
 use rocketmq_remoting::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::get_max_offset_response_header::GetMaxOffsetResponseHeader;
 use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
+use rocketmq_remoting::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
+use rocketmq_remoting::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
 use rocketmq_remoting::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader;
 use rocketmq_remoting::protocol::header::get_user_request_headers::GetUserRequestHeader;
 use rocketmq_remoting::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
@@ -2123,6 +2125,50 @@ impl MQClientAPIImpl {
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             let response_header = response
                 .decode_command_custom_header::<GetMaxOffsetResponseHeader>()
+                .expect("decode error");
+            return Ok(response_header.offset);
+        }
+        Err(client_broker_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string()),
+            addr.to_string()
+        ))
+    }
+
+    pub async fn get_min_offset(
+        &mut self,
+        addr: &str,
+        message_queue: &MessageQueue,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<i64> {
+        let request_header = GetMinOffsetRequestHeader {
+            topic: CheetahString::from_slice(message_queue.topic_str()),
+            queue_id: message_queue.queue_id(),
+            topic_request_header: Some(TopicRequestHeader {
+                rpc_request_header: Some(RpcRequestHeader {
+                    broker_name: Some(CheetahString::from_slice(message_queue.broker_name())),
+                    ..Default::default()
+                }),
+                lo: None,
+            }),
+        };
+
+        let request = RemotingCommand::create_request_command(RequestCode::GetMinOffset, request_header);
+
+        let response = self
+            .remoting_client
+            .invoke_request(
+                Some(&mix_all::broker_vip_channel(
+                    self.client_config.vip_channel_enabled,
+                    addr,
+                )),
+                request,
+                timeout_millis,
+            )
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            let response_header = response
+                .decode_command_custom_header::<GetMinOffsetResponseHeader>()
                 .expect("decode error");
             return Ok(response_header.offset);
         }
