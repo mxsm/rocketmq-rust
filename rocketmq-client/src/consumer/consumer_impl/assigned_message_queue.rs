@@ -175,6 +175,20 @@ impl AssignedMessageQueue {
         }
         map.clear();
     }
+
+    /// Returns the total cached message count across all queues.
+    pub async fn total_msg_count(&self) -> i64 {
+        let map = self.queue_map.read().await;
+        map.values().map(|aq| aq.process_queue.msg_count() as i64).sum()
+    }
+
+    /// Returns the total cached message size in MiB across all queues.
+    pub async fn total_msg_size_in_mib(&self) -> i64 {
+        let map = self.queue_map.read().await;
+        map.values()
+            .map(|aq| (aq.process_queue.msg_size() / (1024 * 1024)) as i64)
+            .sum()
+    }
 }
 
 impl Default for AssignedMessageQueue {
