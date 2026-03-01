@@ -17,6 +17,8 @@ pub(crate) mod ack_result;
 pub(crate) mod ack_status;
 pub mod allocate_message_queue_strategy;
 pub mod consumer_impl;
+pub mod default_lite_pull_consumer;
+pub mod default_lite_pull_consumer_builder;
 pub mod default_mq_push_consumer;
 pub mod default_mq_push_consumer_builder;
 pub mod listener;

@@ -73,6 +73,23 @@ pub enum SubscriptionType {
     Assign,
 }
 
+/// Wrapper to adapt MessageQueueListener to TopicMessageQueueChangeListener.
+struct MessageQueueListenerWrapper<T: crate::consumer::message_queue_listener::MessageQueueListener> {
+    listener: T,
+}
+
+impl<T: crate::consumer::message_queue_listener::MessageQueueListener> TopicMessageQueueChangeListener
+    for MessageQueueListenerWrapper<T>
+{
+    fn on_changed(&self, topic: &str, message_queues: HashSet<MessageQueue>) {
+        // Convert HashSet for both all and assigned parameters
+        let all_set: HashSet<_> = message_queues.iter().cloned().collect();
+        let assigned_set = message_queues;
+
+        self.listener.message_queue_changed(topic, &all_set, &assigned_set);
+    }
+}
+
 /// Configuration specific to lite pull consumer.
 #[derive(Clone)]
 pub struct LitePullConsumerConfig {
@@ -615,6 +632,114 @@ impl DefaultLitePullConsumerImpl {
                 Ok(())
             }
         }
+    }
+
+    /// Returns whether the consumer is currently running.
+    pub async fn is_running(&self) -> bool {
+        matches!(*self.service_state, ServiceState::Running)
+    }
+
+    /// Subscribes to a topic with a listener for queue assignment changes.
+    pub async fn subscribe_with_listener<L>(
+        &mut self,
+        topic: impl Into<CheetahString>,
+        sub_expression: impl Into<CheetahString>,
+        listener: L,
+    ) -> RocketMQResult<()>
+    where
+        L: crate::consumer::message_queue_listener::MessageQueueListener + Send + Sync + 'static,
+    {
+        let topic = topic.into();
+        let sub_expression = sub_expression.into();
+
+        // First do the regular subscribe
+        self.subscribe(topic.clone(), sub_expression).await?;
+
+        // Then register the listener
+        let listener_arc: Arc<dyn TopicMessageQueueChangeListener + Send + Sync> =
+            Arc::new(MessageQueueListenerWrapper { listener });
+        self.register_topic_message_queue_change_listener(topic, listener_arc)
+            .await
+    }
+
+    /// Subscribes to a topic with a message selector.
+    pub async fn subscribe_with_selector(
+        &mut self,
+        topic: impl Into<CheetahString>,
+        selector: Option<crate::consumer::message_selector::MessageSelector>,
+    ) -> RocketMQResult<()> {
+        let topic = topic.into();
+
+        match selector {
+            Some(sel) => {
+                let sub_expression = sel.get_expression();
+                self.subscribe(topic, sub_expression).await
+            }
+            None => self.subscribe(topic, "*").await,
+        }
+    }
+
+    /// Checks if a message queue is paused.
+    pub async fn is_paused(&self, message_queue: &MessageQueue) -> bool {
+        self.assigned_message_queue.is_paused(message_queue).await
+    }
+
+    /// Updates the name server addresses.
+    #[allow(unused_variables)]
+    pub async fn update_name_server_address(&self, addresses: Vec<String>) {
+        // Update client config using ArcMut's interior mutability
+        let joined_addr = addresses.join(";");
+        self.client_config.mut_from_ref().set_namesrv_addr(joined_addr.into());
+
+        // Note: Client instance update will happen automatically on next request
+    }
+
+    /// Registers a listener for topic message queue changes.
+    pub async fn register_topic_message_queue_change_listener(
+        &self,
+        topic: impl Into<CheetahString>,
+        listener: Arc<dyn TopicMessageQueueChangeListener + Send + Sync>,
+    ) -> RocketMQResult<()> {
+        let topic = topic.into();
+        let mut listeners = self.topic_message_queue_change_listener_map.write().await;
+        listeners.insert(topic, listener);
+        Ok(())
+    }
+
+    /// Sets the subscription expression for a topic in assign mode.
+    pub async fn set_sub_expression_for_assign(
+        &self,
+        topic: impl Into<CheetahString>,
+        sub_expression: impl Into<CheetahString>,
+    ) {
+        let topic = topic.into();
+        let sub_expression = sub_expression.into();
+
+        let mut map = self.topic_to_sub_expression.write().await;
+        map.insert(topic, sub_expression);
+    }
+
+    /// Alias for poll with explicit timeout parameter naming.
+    pub async fn poll_with_timeout(&self, timeout_millis: u64) -> RocketMQResult<Vec<ArcMut<MessageExt>>> {
+        self.poll(timeout_millis).await
+    }
+
+    /// Builds subscription information for heartbeat.
+    pub async fn build_subscriptions_for_heartbeat(
+        &self,
+        sub_expression_map: &mut HashMap<String, crate::consumer::message_selector::MessageSelector>,
+    ) -> RocketMQResult<()> {
+        // Get subscriptions from rebalance impl
+        let subscriptions = self.rebalance_impl.get_subscription_inner();
+
+        for item in subscriptions.iter() {
+            let topic = item.key().to_string();
+            let sub_data = item.value();
+            let selector = crate::consumer::message_selector::MessageSelector::by_tag(&sub_data.sub_string);
+            sub_expression_map.insert(topic, selector);
+        }
+
+        Ok(())
     }
 
     /// Spawns an async pull task for a message queue.
@@ -1262,14 +1387,6 @@ impl DefaultLitePullConsumerImpl {
 
     /// Updates the name server address list.
     ///
-    /// # Unimplemented
-    ///
-    /// This method is marked as low priority and currently unimplemented.
-    #[allow(dead_code)]
-    pub fn update_name_server_address(&self, _addrs: impl Into<CheetahString>) {
-        todo!("update_name_server_address: Low priority method, not yet implemented")
-    }
-
     /// Returns whether auto-commit is enabled.
     ///
     /// # Unimplemented

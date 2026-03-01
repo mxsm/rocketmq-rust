@@ -112,7 +112,7 @@ pub trait LitePullConsumerLocal: Sync {
         listener: MQL,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        MQL: MessageQueueListener;
+        MQL: MessageQueueListener + 'static;
 
     /// Subscribes to the specified topic using a [`MessageSelector`] for server-side filtering.
     ///
@@ -190,20 +190,96 @@ pub trait LitePullConsumerLocal: Sync {
         sub_expression_map: &mut HashMap<String, MessageSelector>,
     ) -> rocketmq_error::RocketMQResult<()>;
 
-    /// Fetches the next batch of messages using the default poll timeout.
+    /// Fetches the next batch of messages without allocating owned copies.
+    ///
+    /// Returns `ArcMut<MessageExt>` references to messages, providing shared mutable access
+    /// without heap allocation or deep cloning. The returned references remain valid until
+    /// they are dropped. Messages that need to outlive the poll scope must be cloned explicitly.
+    ///
+    /// This method uses the default poll timeout configured for the consumer.
+    ///
+    /// # Performance
+    ///
+    /// Message contents are not copied. For workloads processing messages without long-term
+    /// storage, this eliminates allocation overhead compared to [`poll()`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let messages = consumer.poll_zero_copy().await;
+    /// for msg in &messages {
+    ///     process_message(msg);
+    /// }
+    ///
+    /// // Clone only filtered messages
+    /// let messages = consumer.poll_zero_copy().await;
+    /// let important: Vec<MessageExt> = messages.into_iter()
+    ///     .filter(|msg| is_important(msg))
+    ///     .map(|msg| (*msg).clone())
+    ///     .collect();
+    /// ```
+    ///
+    /// Returns an empty vector if no messages are available within the default timeout period.
+    /// This function does not block the calling thread.
+    async fn poll_zero_copy(&self) -> Vec<rocketmq_rust::ArcMut<MessageExt>>;
+
+    /// Fetches the next batch of messages without allocating owned copies, with a specified timeout.
+    ///
+    /// Behaves identically to [`poll_zero_copy()`], but waits up to `timeout` milliseconds
+    /// for messages to become available.
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout` - Maximum time to wait for messages, in milliseconds.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let messages = consumer.poll_with_timeout_zero_copy(1000).await;
+    /// ```
+    ///
+    /// Returns an empty vector if no messages are available before the timeout expires.
+    /// This function does not block the calling thread.
+    async fn poll_with_timeout_zero_copy(&self, timeout: u64) -> Vec<rocketmq_rust::ArcMut<MessageExt>>;
+
+    /// Fetches the next batch of messages, returning owned copies.
+    ///
+    /// Each returned message is cloned from the internal message store. The caller
+    /// owns the returned messages and may store them beyond the poll scope.
+    ///
+    /// This method uses the default poll timeout configured for the consumer.
+    ///
+    /// # Performance
+    ///
+    /// All messages are deep-cloned, including message body and properties. For a 2KB message,
+    /// each poll returning 32 messages allocates approximately 90KB. At 100 polls per second,
+    /// this results in approximately 9MB/s of allocations.
+    ///
+    /// For workloads that do not require owned messages, [`poll_zero_copy()`] avoids
+    /// this allocation overhead.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let messages = consumer.poll().await;
+    /// my_store.save(messages);
+    /// ```
     ///
     /// Returns an empty vector if no messages are available within the timeout period.
     /// This function does not block the calling thread.
     async fn poll(&self) -> Vec<MessageExt>;
 
-    /// Fetches the next batch of messages, waiting up to `timeout` milliseconds.
+    /// Fetches the next batch of messages with a specified timeout, returning owned copies.
     ///
-    /// Returns an empty vector if no messages are available before the timeout expires.
-    /// This function does not block the calling thread.
+    /// Behaves identically to [`poll()`], but waits up to `timeout` milliseconds for
+    /// messages to become available. All messages are deep-cloned.
     ///
     /// # Arguments
     ///
     /// * `timeout` - Maximum time to wait for messages, in milliseconds.
+    ///
+    /// Returns an empty vector if no messages are available before the timeout expires.
+    /// This function does not block the calling thread.
     async fn poll_with_timeout(&self, timeout: u64) -> Vec<MessageExt>;
 
     /// Seeks the fetch position of the specified [`MessageQueue`] to the given offset.
@@ -392,7 +468,7 @@ pub trait LitePullConsumerLocal: Sync {
         listener: TL,
     ) -> rocketmq_error::RocketMQResult<()>
     where
-        TL: TopicMessageQueueChangeListener;
+        TL: TopicMessageQueueChangeListener + 'static;
 
     /// Updates the name server address used for topic route discovery.
     ///
@@ -433,4 +509,37 @@ pub trait LitePullConsumerLocal: Sync {
     ///
     /// [`poll`]: LitePullConsumerLocal::poll
     async fn seek_to_end(&self, message_queue: &MessageQueue) -> rocketmq_error::RocketMQResult<()>;
+
+    /// Commits all consumed offsets for all assigned queues.
+    ///
+    /// This method commits the current consumption offset for every assigned [`MessageQueue`].
+    /// Unlike [`commit`], which commits offsets asynchronously in the background, this method
+    /// ensures all offsets are persisted to the broker.
+    ///
+    /// This function does not block the calling thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the consumer is not in the running state or if the offset
+    /// persistence fails.
+    ///
+    /// [`commit`]: LitePullConsumerLocal::commit
+    async fn commit_all(&self) -> rocketmq_error::RocketMQResult<()>;
+
+    /// Checks whether a specific [`MessageQueue`] is currently paused.
+    ///
+    /// A paused queue will not be fetched from during [`poll`] operations until it is resumed.
+    ///
+    /// This function does not block the calling thread.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_queue` - The queue to check.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the queue is paused, `false` otherwise.
+    ///
+    /// [`poll`]: LitePullConsumerLocal::poll
+    async fn is_paused(&self, message_queue: &MessageQueue) -> bool;
 }
