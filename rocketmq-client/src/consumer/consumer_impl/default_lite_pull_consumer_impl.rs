@@ -27,6 +27,7 @@ use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQResult;
+use rocketmq_remoting::protocol::filter::filter_api::FilterAPI;
 use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
@@ -44,6 +45,7 @@ use crate::consumer::consumer_impl::assigned_message_queue::AssignedMessageQueue
 use crate::consumer::consumer_impl::lite_pull_consume_request::LitePullConsumeRequest;
 use crate::consumer::consumer_impl::pull_api_wrapper::PullAPIWrapper;
 use crate::consumer::consumer_impl::re_balance::rebalance_lite_pull_impl::RebalanceLitePullImpl;
+use crate::consumer::consumer_impl::re_balance::Rebalance;
 use crate::consumer::default_mq_push_consumer::ConsumerConfig;
 use crate::consumer::mq_consumer_inner::MQConsumerInner;
 use crate::consumer::store::local_file_offset_store::LocalFileOffsetStore;
@@ -350,6 +352,128 @@ impl DefaultLitePullConsumerImpl {
         Ok(())
     }
 
+    /// Sets subscription type and validates no conflicts.
+    async fn set_subscription_type(&self, sub_type: SubscriptionType) -> RocketMQResult<()> {
+        let mut subscription_type = self.subscription_type.write().await;
+        if *subscription_type == SubscriptionType::None {
+            *subscription_type = sub_type;
+            Ok(())
+        } else if *subscription_type != sub_type {
+            Err(crate::mq_client_err!("Subscribe and assign are mutually exclusive."))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Subscribes to a topic with optional tag expression filter.
+    pub async fn subscribe(
+        &mut self,
+        topic: impl Into<CheetahString>,
+        sub_expression: impl Into<CheetahString>,
+    ) -> RocketMQResult<()> {
+        let topic = topic.into();
+        let sub_expression = sub_expression.into();
+
+        if topic.is_empty() {
+            return Err(crate::mq_client_err!("Topic cannot be empty"));
+        }
+
+        self.set_subscription_type(SubscriptionType::Subscribe).await?;
+
+        let subscription_data = FilterAPI::build_subscription_data(&topic, &sub_expression)
+            .map_err(|e| crate::mq_client_err!(format!("Failed to build subscription data: {}", e)))?;
+
+        self.rebalance_impl.put_subscription_data(topic, subscription_data);
+
+        if *self.service_state == ServiceState::Running {
+            if let Some(ref client_instance) = self.client_instance {
+                client_instance.send_heartbeat_to_all_broker_with_lock().await;
+                self.update_topic_subscribe_info_when_subscription_changed().await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Manually assigns specific message queues (ASSIGN mode).
+    pub async fn assign(&mut self, message_queues: Vec<MessageQueue>) -> RocketMQResult<()> {
+        if message_queues.is_empty() {
+            return Err(crate::mq_client_err!("Message queues cannot be empty"));
+        }
+
+        self.set_subscription_type(SubscriptionType::Assign).await?;
+
+        self.update_assigned_message_queue_for_assign(&message_queues).await;
+
+        if *self.service_state == ServiceState::Running {
+            self.update_pull_task_for_assign(&message_queues).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Updates assigned message queues for ASSIGN mode.
+    async fn update_assigned_message_queue_for_assign(&self, assigned: &[MessageQueue]) {
+        let assigned_set: HashSet<MessageQueue> = assigned.iter().cloned().collect();
+
+        let to_remove: Vec<MessageQueue> = {
+            let task_handles = self.task_handles.read().await;
+            task_handles
+                .keys()
+                .filter(|mq| !assigned_set.contains(mq))
+                .cloned()
+                .collect()
+        };
+
+        for mq in &to_remove {
+            if let Some(pq) = self.assigned_message_queue.remove(mq).await {
+                pq.set_dropped(true);
+            }
+        }
+
+        if !to_remove.is_empty() {
+            let mut task_handles = self.task_handles.write().await;
+            for mq in &to_remove {
+                task_handles.remove(mq);
+            }
+        }
+
+        for mq in assigned {
+            self.assigned_message_queue.put(mq.clone()).await;
+        }
+    }
+
+    /// Starts pull tasks for assigned queues in ASSIGN mode.
+    async fn update_pull_task_for_assign(&self, assigned: &[MessageQueue]) -> RocketMQResult<()> {
+        let to_start: Vec<MessageQueue> = {
+            let task_handles = self.task_handles.read().await;
+            assigned
+                .iter()
+                .filter(|mq| !task_handles.contains_key(mq))
+                .cloned()
+                .collect()
+        };
+
+        for mq in to_start {
+            self.start_pull_task(mq).await?;
+        }
+        Ok(())
+    }
+
+    /// Updates topic subscription info when subscription changes (SUBSCRIBE mode).
+    async fn update_topic_subscribe_info_when_subscription_changed(&mut self) -> RocketMQResult<()> {
+        let subscription_inner = self.rebalance_impl.get_subscription_inner();
+        if let Some(ref mut client_instance) = self.client_instance {
+            for entry in subscription_inner.iter() {
+                let topic = entry.key();
+                client_instance
+                    .update_topic_route_info_from_name_server_topic(topic)
+                    .await;
+            }
+        }
+        Ok(())
+    }
+
     /// Starts the lite pull consumer.
     pub async fn start(&mut self) -> RocketMQResult<()> {
         match *self.service_state {
@@ -490,6 +614,13 @@ impl DefaultLitePullConsumerImpl {
 
     /// Spawns an async pull task for a message queue.
     async fn start_pull_task(&self, mq: MessageQueue) -> RocketMQResult<()> {
+        {
+            let task_handles = self.task_handles.read().await;
+            if task_handles.contains_key(&mq) {
+                return Ok(());
+            }
+        }
+
         let default_impl = self
             .default_lite_pull_consumer_impl
             .clone()
@@ -534,7 +665,15 @@ impl DefaultLitePullConsumerImpl {
             }
         });
 
-        self.task_handles.write().await.insert(mq, handle);
+        let mut task_handles = self.task_handles.write().await;
+        match task_handles.entry(mq) {
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(handle);
+            }
+            std::collections::hash_map::Entry::Occupied(_) => {
+                handle.abort();
+            }
+        }
         Ok(())
     }
 
@@ -624,8 +763,7 @@ impl MQConsumerInner for DefaultLitePullConsumerImpl {
 
     async fn do_rebalance(&self) {
         if *self.subscription_type.read().await == SubscriptionType::Subscribe {
-            // Rebalance logic delegated to RebalanceLitePullImpl trait implementation
-            unimplemented!("do_rebalance")
+            self.rebalance_impl.mut_from_ref().do_rebalance(false).await;
         }
     }
 
@@ -640,12 +778,32 @@ impl MQConsumerInner for DefaultLitePullConsumerImpl {
     }
 
     async fn update_topic_subscribe_info(&self, topic: CheetahString, info: &HashSet<MessageQueue>) {
-        // Topic subscription updates managed by rebalance implementation
-        unimplemented!("update_topic_subscribe_info")
+        let subscription_inner = self.rebalance_impl.get_subscription_inner();
+        if subscription_inner.contains_key(&topic) {
+            self.rebalance_impl
+                .rebalance_impl_inner
+                .topic_subscribe_info_table
+                .write()
+                .await
+                .insert(topic, info.clone());
+        }
     }
 
     async fn is_subscribe_topic_need_update(&self, topic: &str) -> bool {
-        // Subscription updates determined by metadata changes
+        let subscription_inner = self.rebalance_impl.get_subscription_inner();
+
+        for entry in subscription_inner.iter() {
+            if entry.key().as_str() == topic {
+                let contains = self
+                    .rebalance_impl
+                    .rebalance_impl_inner
+                    .topic_subscribe_info_table
+                    .read()
+                    .await
+                    .contains_key(entry.key());
+                return !contains;
+            }
+        }
         false
     }
 
