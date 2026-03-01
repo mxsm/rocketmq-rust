@@ -117,7 +117,7 @@ pub trait MessageTrait: Any + Display + Debug {
     }
 
     /// Returns a reference to the tags associated with the message.
-    fn get_tags_ref(&self) -> Option<&CheetahString> {
+    fn tags_ref(&self) -> Option<&CheetahString> {
         self.property_ref(&CheetahString::from_static_str(MessageConst::PROPERTY_TAGS))
     }
 
