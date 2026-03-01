@@ -1104,6 +1104,182 @@ impl DefaultLitePullConsumerImpl {
         Err(crate::mq_client_err!("Offset store is not initialized"))
     }
 
+    /// Unsubscribes from the specified topic.
+    ///
+    /// Removes the topic subscription, stops and removes all pull tasks for the topic,
+    /// and clears assigned message queues for the topic.
+    ///
+    /// This operation can be performed regardless of the consumer state.
+    pub async fn unsubscribe(&mut self, topic: impl Into<CheetahString>) -> RocketMQResult<()> {
+        let topic = topic.into();
+
+        // Remove from rebalance_impl subscription
+        self.rebalance_impl.get_subscription_inner().remove(&topic);
+
+        // Stop and remove pull tasks for this topic
+        let mut task_handles = self.task_handles.write().await;
+        task_handles.retain(|mq, handle| {
+            if mq.topic() == topic.as_str() {
+                handle.abort();
+                false
+            } else {
+                true
+            }
+        });
+        drop(task_handles);
+
+        // Remove from assigned_message_queue
+        self.assigned_message_queue.remove_by_topic(topic.as_str()).await;
+
+        Ok(())
+    }
+
+    /// Searches for the queue offset whose store timestamp is closest to the specified timestamp.
+    ///
+    /// Returns the earliest offset whose store timestamp is greater than or equal to `timestamp`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the consumer is not in a valid state or if the broker address
+    /// cannot be resolved.
+    pub async fn search_offset(&self, mq: &MessageQueue, timestamp: u64) -> RocketMQResult<i64> {
+        self.make_sure_state_ok()?;
+
+        let mut client_instance = self
+            .client_instance
+            .as_ref()
+            .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?
+            .clone();
+
+        client_instance.mq_admin_impl.search_offset(mq, timestamp).await
+    }
+
+    /// Fetches all message queues for the specified topic.
+    ///
+    /// Returns a set of message queues with namespace removed from topic names.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the consumer is not in a valid state or if the topic route
+    /// information cannot be retrieved.
+    pub async fn fetch_message_queues(&self, topic: impl Into<CheetahString>) -> RocketMQResult<HashSet<MessageQueue>> {
+        use crate::factory::mq_client_instance::topic_route_data2topic_subscribe_info;
+
+        self.make_sure_state_ok()?;
+
+        let topic = topic.into();
+        let client_instance = self
+            .client_instance
+            .as_ref()
+            .ok_or_else(|| crate::mq_client_err!("Client instance not initialized"))?
+            .clone();
+
+        // Fetch topic route data from name server
+        let topic_route_data = client_instance
+            .mq_client_api_impl
+            .as_ref()
+            .ok_or_else(|| crate::mq_client_err!("MQClientAPIImpl not initialized"))?
+            .get_topic_route_info_from_name_server_detail(topic.as_str(), 3000, true)
+            .await?;
+
+        let topic_route_data = topic_route_data
+            .ok_or_else(|| crate::mq_client_err!(format!("No route data found for topic: {}", topic)))?;
+
+        // Convert route data to subscribe info
+        let mq_set = topic_route_data2topic_subscribe_info(topic.as_str(), &topic_route_data);
+
+        if mq_set.is_empty() {
+            return Err(crate::mq_client_err!(format!(
+                "Can not find Message Queue for this topic: {}",
+                topic
+            )));
+        }
+
+        // Parse message queues to remove namespace
+        self.parse_message_queues(&mq_set)
+    }
+
+    /// Parses message queues by removing namespace from their topic names.
+    fn parse_message_queues(&self, queue_set: &HashSet<MessageQueue>) -> RocketMQResult<HashSet<MessageQueue>> {
+        let namespace = self
+            .client_config
+            .get_namespace_v2()
+            .map(|s| s.as_str())
+            .unwrap_or_default();
+
+        let mut result = HashSet::with_capacity(queue_set.len());
+        for mq in queue_set {
+            let user_topic = NamespaceUtil::without_namespace_with_namespace(mq.topic_str(), namespace);
+            result.insert(MessageQueue::from_parts(user_topic, mq.broker_name(), mq.queue_id()));
+        }
+
+        Ok(result)
+    }
+
+    /// Returns the offset for the specified message queue at the given timestamp.
+    ///
+    /// This is an alias for `search_offset`.
+    ///
+    /// # Unimplemented
+    ///
+    /// This method is marked as low priority and currently unimplemented.
+    #[allow(dead_code)]
+    pub async fn offset_for_timestamp(&self, _mq: &MessageQueue, _timestamp: u64) -> RocketMQResult<i64> {
+        todo!("offset_for_timestamp: Low priority method, not yet implemented")
+    }
+
+    /// Returns the earliest message store time for the specified message queue.
+    ///
+    /// # Unimplemented
+    ///
+    /// This method is marked as low priority and currently unimplemented.
+    #[allow(dead_code)]
+    pub async fn earliest_msg_store_time(&self, _mq: &MessageQueue) -> RocketMQResult<i64> {
+        todo!("earliest_msg_store_time: Low priority method, not yet implemented")
+    }
+
+    /// Returns the maximum offset of the specified message queue.
+    ///
+    /// # Unimplemented
+    ///
+    /// This method is marked as low priority and currently unimplemented.
+    /// Use the private `max_offset` method internally.
+    #[allow(dead_code)]
+    pub async fn max_offset_public(&self, _mq: &MessageQueue) -> RocketMQResult<i64> {
+        todo!("max_offset_public: Low priority method, not yet implemented")
+    }
+
+    /// Returns the minimum offset of the specified message queue.
+    ///
+    /// # Unimplemented
+    ///
+    /// This method is marked as low priority and currently unimplemented.
+    /// Use the private `min_offset` method internally.
+    #[allow(dead_code)]
+    pub async fn min_offset_public(&self, _mq: &MessageQueue) -> RocketMQResult<i64> {
+        todo!("min_offset_public: Low priority method, not yet implemented")
+    }
+
+    /// Updates the name server address list.
+    ///
+    /// # Unimplemented
+    ///
+    /// This method is marked as low priority and currently unimplemented.
+    #[allow(dead_code)]
+    pub fn update_name_server_address(&self, _addrs: impl Into<CheetahString>) {
+        todo!("update_name_server_address: Low priority method, not yet implemented")
+    }
+
+    /// Returns whether auto-commit is enabled.
+    ///
+    /// # Unimplemented
+    ///
+    /// This method is marked as low priority and currently unimplemented.
+    #[allow(dead_code)]
+    pub fn is_auto_commit(&self) -> bool {
+        todo!("is_auto_commit: Low priority method, not yet implemented")
+    }
+
     async fn max_offset(&self, message_queue: &MessageQueue) -> RocketMQResult<i64> {
         self.make_sure_state_ok()?;
 

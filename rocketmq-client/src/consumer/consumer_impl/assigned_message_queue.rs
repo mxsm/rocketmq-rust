@@ -79,6 +79,22 @@ impl AssignedMessageQueue {
         })
     }
 
+    /// Removes all message queues for the specified topic and returns their process queues.
+    pub async fn remove_by_topic(&self, topic: &str) -> Vec<Arc<ProcessQueue>> {
+        let mut map = self.queue_map.write().await;
+        let mut removed_pqs = Vec::new();
+        map.retain(|mq, aq| {
+            if mq.topic() == topic {
+                aq.process_queue.set_dropped(true);
+                removed_pqs.push(aq.process_queue.clone());
+                false
+            } else {
+                true
+            }
+        });
+        removed_pqs
+    }
+
     /// Returns the process queue for the specified message queue.
     pub async fn get_process_queue(&self, mq: &MessageQueue) -> Option<Arc<ProcessQueue>> {
         let map = self.queue_map.read().await;
