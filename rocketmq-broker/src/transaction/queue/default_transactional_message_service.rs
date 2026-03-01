@@ -443,14 +443,6 @@ where
                         consume_half_offset += 1;
                         continue;
                     }
-                } else if 0 <= value_of_current_minus_born && value_of_current_minus_born < check_immunity_time {
-                    /* debug!(
-                        "New arrived, the miss offset={}, check it later checkImmunity={}, born={}",
-                        i,
-                        check_immunity_time,
-                        msg_ext.get_born_timestamp()
-                    );*/
-                    break;
                 }
 
                 // Determine if check is needed
