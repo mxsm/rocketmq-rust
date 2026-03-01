@@ -13,8 +13,6 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
@@ -33,11 +31,11 @@ use rocketmq_common::common::stats::stats_item::StatsItem;
 use rocketmq_common::common::stats::stats_item_set::StatsItemSet;
 use rocketmq_common::common::stats::Stats;
 use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_rust::schedule::simple_scheduler::ScheduledTaskManager;
 use tokio::time::Duration;
 use tracing::info;
 use tracing::warn;
-
 type TaskId = u64;
 
 pub struct BrokerStatsManager {
@@ -167,7 +165,7 @@ impl BrokerStatsManager {
 
     /// Compute delay to next minute boundary
     fn compute_initial_delay_to_next_minute() -> Duration {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let now = current_millis();
 
         let next_minute = ((now / 60000) + 1) * 60000;
         let delay_ms = next_minute - now;
