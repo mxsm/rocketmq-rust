@@ -1275,7 +1275,7 @@ mod tests {
     /// Test 5: Concurrent Access to revive_offset (Atomic Safety)
     ///
     /// Verifies that concurrent reads/writes to revive_offset are thread-safe
-    /// after the P0 fix (changed from i64 to Arc<AtomicI64>)
+    /// using Arc<AtomicI64> for atomic operations.
     #[tokio::test]
     async fn test_concurrent_revive_offset_access() {
         let revive_offset = Arc::new(AtomicI64::new(0));
