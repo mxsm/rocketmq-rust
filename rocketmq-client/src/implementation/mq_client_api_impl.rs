@@ -38,7 +38,7 @@ use crate::implementation::communication_mode::CommunicationMode;
 use crate::latency::mq_fault_strategy::MQFaultStrategy;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
 use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
-use crate::producer::send_callback::SendMessageCallback;
+use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::send_status::SendStatus;
 use cheetah_string::CheetahString;
@@ -901,7 +901,7 @@ impl MQClientAPIImpl {
         request_header: SendMessageRequestHeader,
         timeout_millis: u64,
         communication_mode: CommunicationMode,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
         instance: Option<ArcMut<MQClientInstance>>,
         retry_times_when_send_failed: u32,
@@ -1082,7 +1082,7 @@ impl MQClientAPIImpl {
         msg: &T,
         timeout_millis: u64,
         request: RemotingCommand,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
         instance: Option<ArcMut<MQClientInstance>>,
         retry_times_when_send_failed: u32,
@@ -1122,7 +1122,7 @@ impl MQClientAPIImpl {
                             producer.execute_send_message_hook_after(context);
                         }
                         let duration = (Instant::now() - begin_start_time).as_millis() as u64;
-                        send_callback.as_ref().unwrap()(Some(&result), None);
+                        send_callback.as_ref().unwrap().on_success(&result);
                         producer
                             .update_fault_item(&broker_name, duration, false, true)
                             .await;
@@ -1164,7 +1164,7 @@ impl MQClientAPIImpl {
         msg: &T,
         timeout_millis: u64,
         request: RemotingCommand,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
         instance: Option<ArcMut<MQClientInstance>>,
         retry_times_when_send_failed: u32,
@@ -1264,7 +1264,7 @@ impl MQClientAPIImpl {
         is_batch_message: bool,
         timeout_millis: u64,
         current_request: RemotingCommand,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         _topic_publish_info: Option<TopicPublishInfo>,
         _instance: Option<ArcMut<MQClientInstance>>,
         _retry_times_when_send_failed: u32,
@@ -1308,7 +1308,7 @@ impl MQClientAPIImpl {
                                 response.code(),
                                 response.remark().map_or("".to_string(), |s| s.to_string())
                             );
-                            callback(None, Some(&err_obj as &dyn std::error::Error));
+                            callback.on_exception(&err_obj as &dyn std::error::Error);
                         }
                         return;
                     }
@@ -1354,7 +1354,7 @@ impl MQClientAPIImpl {
                             .update_fault_item(current_broker_name.clone(), cost, false, true)
                             .await;
                         if let Some(callback) = send_callback {
-                            callback(Some(&send_result), None);
+                            callback.on_success(&send_result);
                         }
                     }
                     Err(_) => {
@@ -1363,7 +1363,7 @@ impl MQClientAPIImpl {
                             .await;
                         if let Some(callback) = send_callback {
                             let err_obj = mq_client_err!("decode SendMessageResponseHeader failed".to_string());
-                            callback(None, Some(&err_obj as &dyn std::error::Error));
+                            callback.on_exception(&err_obj as &dyn std::error::Error);
                         }
                     }
                 }
@@ -1374,7 +1374,7 @@ impl MQClientAPIImpl {
                     .update_fault_item(current_broker_name.clone(), cost, true, true)
                     .await;
                 if let Some(callback) = send_callback {
-                    callback(None, Some(&e as &dyn std::error::Error));
+                    callback.on_exception(&e as &dyn std::error::Error);
                 }
             }
         }
@@ -1457,7 +1457,7 @@ impl MQClientAPIImpl {
         msg: &T,
         timeout_millis: u64,
         mut request: RemotingCommand,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
         instance: Option<ArcMut<MQClientInstance>>,
         times_total: u32,

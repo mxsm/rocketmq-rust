@@ -32,7 +32,7 @@ use rocketmq_rust::ArcMut;
 use tokio::sync::Mutex;
 
 use crate::producer::default_mq_producer::DefaultMQProducer;
-use crate::producer::send_callback::SendMessageCallback;
+use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
 
 #[derive(Default)]
@@ -174,7 +174,7 @@ impl ProduceAccumulator {
         &mut self,
         message: M,
         mq: Option<MessageQueue>,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         default_mq_producer: DefaultMQProducer,
     ) -> rocketmq_error::RocketMQResult<()>
     where
@@ -360,7 +360,11 @@ impl ProduceAccumulator {
         let combined_callback = move |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
             // Invoke all registered callbacks
             for callback in &callbacks {
-                callback(result, error);
+                if let Some(result) = result {
+                    callback.on_success(result);
+                } else if let Some(error) = error {
+                    callback.on_exception(error);
+                }
             }
         };
 
@@ -441,7 +445,7 @@ impl Hash for AggregateKey {
 struct MessageAccumulation {
     default_mq_producer: ArcMut<DefaultMQProducer>,
     messages: Vec<Box<dyn MessageTrait + Send + Sync + 'static>>,
-    send_callbacks: Vec<SendMessageCallback>,
+    send_callbacks: Vec<ArcSendCallback>,
     keys: HashSet<String>,
     closed: Arc<AtomicBool>,
     send_results: Option<Vec<SendResult>>, // Stores results for sync send
@@ -489,7 +493,7 @@ impl MessageAccumulation {
     pub fn add<M: MessageTrait + Send + Sync + 'static>(
         &mut self,
         msg: M,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
     ) -> rocketmq_error::RocketMQResult<bool> {
         // Check if batch is already closed
         if self.closed.load(Ordering::Acquire) {
@@ -722,7 +726,11 @@ impl GuardForAsyncSendService {
         // Create combined callback
         let combined_callback = move |result: Option<&SendResult>, error: Option<&dyn std::error::Error>| {
             for callback in &callbacks {
-                callback(result, error);
+                if let Some(result) = result {
+                    callback.on_success(result);
+                } else if let Some(error) = error {
+                    callback.on_exception(error);
+                }
             }
         };
 

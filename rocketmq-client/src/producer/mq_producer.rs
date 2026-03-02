@@ -18,7 +18,7 @@ use cheetah_string::CheetahString;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::MessageTrait;
 
-use crate::producer::send_callback::SendMessageCallback;
+use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::transaction_send_result::TransactionSendResult;
 
@@ -349,7 +349,7 @@ pub trait MQProducer {
         msg: M,
         selector: S,
         arg: T,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
@@ -381,7 +381,7 @@ pub trait MQProducer {
         msg: M,
         selector: S,
         arg: T,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
