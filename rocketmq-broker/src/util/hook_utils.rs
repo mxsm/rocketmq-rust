@@ -348,19 +348,6 @@ impl HookUtils {
                 CheetahString::from_static_str(MessageConst::PROPERTY_WAIT_STORE_MSG_OK),
                 CheetahString::from_string(false.to_string()),
             );
-            /*            if let Err(e) = outer_api.send_message_to_specific_broker(
-                broker_addr,
-                broker_name,
-                msg,
-                "InnerSendMessageBackGroup",
-                3000,
-            ) {
-                error!(
-                    "send message back to broker {} addr {} failed: {:?}",
-                    broker_name, broker_addr, e
-                );
-                return false;
-            }*/
         }
         msg_list.clear();
         true
