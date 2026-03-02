@@ -15,6 +15,7 @@
 use std::any::Any;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::sync::Weak;
 use std::time::Instant;
 
@@ -36,12 +37,27 @@ use crate::client::consumer_group_event::ConsumerGroupEvent;
 use crate::client::consumer_group_info::ConsumerGroupInfo;
 use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
 
+/// Global mapping: Channel ID -> Set<Consumer Group>
+///
+/// This enables O(1) channel-to-group lookup for fast channel close event processing
+/// instead of O(n) traversal of all consumer groups. Only used when
+/// `enable_fast_channel_event_process` is enabled in broker configuration.
+///
+/// # Memory Management
+/// Entries are automatically cleaned up during:
+/// - Consumer group unregistration
+/// - Inactive channel scanning
+/// - Channel close events
+static CHANNEL_CONSUMER_GROUPS: LazyLock<DashMap<CheetahString, HashSet<CheetahString>>> =
+    LazyLock::new(|| DashMap::with_capacity_and_shard_amount(4096, 64));
+
 /// Manages consumer client connections and their lifecycle.
 ///
 /// This manager maintains:
 /// - Consumer group registrations and subscription relationships
 /// - Channel heartbeat status and expiration detection
 /// - Automatic cleanup of inactive consumers
+/// - Topic to consumer group reverse index for fast lookup
 ///
 /// # Thread Safety
 /// All operations are thread-safe using concurrent data structures.
@@ -50,10 +66,14 @@ pub struct ConsumerManager {
     consumer_table: Arc<DashMap<CheetahString, ConsumerGroupInfo>>,
     /// Compensation table for consumers without heartbeat
     consumer_compensation_table: Arc<DashMap<CheetahString, ConsumerGroupInfo>>,
+    /// Topic -> Set<Group> reverse index for fast topic-to-group lookup
+    topic_group_table: Arc<DashMap<CheetahString, HashSet<CheetahString>>>,
     /// Listeners notified on consumer registration/unregistration events
     consumer_ids_change_listener_list: Vec<Arc<Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>>>,
     /// Optional broker statistics manager (set once during initialization)
     broker_stats_manager: Option<Weak<BrokerStatsManager>>,
+    /// Broker configuration (used for enable_fast_channel_event_process flag)
+    broker_config: Option<Arc<BrokerConfig>>,
     /// Timeout for considering a consumer channel as expired (in milliseconds)
     channel_expired_timeout: u64,
     /// Timeout for subscription data expiration (in milliseconds)
@@ -72,10 +92,14 @@ impl ConsumerManager {
     ) -> Self {
         let consumer_ids_change_listener_list = vec![consumer_ids_change_listener];
         ConsumerManager {
-            consumer_table: Arc::new(DashMap::new()),
-            consumer_compensation_table: Arc::new(DashMap::new()),
+            // Uses 64 shards for improved concurrency under high load
+            consumer_table: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
+            consumer_compensation_table: Arc::new(DashMap::with_capacity_and_shard_amount(256, 16)),
+            // Topic-Group reverse index for fast topic-to-group lookup
+            topic_group_table: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
             consumer_ids_change_listener_list,
             broker_stats_manager: None,
+            broker_config: None,
             channel_expired_timeout: expired_timeout,
             subscription_expired_timeout: expired_timeout,
         }
@@ -92,10 +116,14 @@ impl ConsumerManager {
     ) -> Self {
         let consumer_ids_change_listener_list = vec![consumer_ids_change_listener];
         ConsumerManager {
-            consumer_table: Arc::new(DashMap::new()),
-            consumer_compensation_table: Arc::new(DashMap::new()),
+            // Uses 64 shards for improved concurrency under high load
+            consumer_table: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
+            consumer_compensation_table: Arc::new(DashMap::with_capacity_and_shard_amount(256, 16)),
+            // Topic-Group reverse index for fast topic-to-group lookup
+            topic_group_table: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
             consumer_ids_change_listener_list,
             broker_stats_manager: None,
+            broker_config: Some(broker_config.clone()),
             channel_expired_timeout: broker_config.channel_expired_timeout,
             subscription_expired_timeout: broker_config.subscription_expired_timeout,
         }
@@ -105,6 +133,17 @@ impl ConsumerManager {
 impl ConsumerManager {
     pub fn set_broker_stats_manager(&mut self, broker_stats_manager: Weak<BrokerStatsManager>) {
         self.broker_stats_manager = Some(broker_stats_manager);
+    }
+
+    /// Checks if fast channel event processing is enabled.
+    ///
+    /// When enabled, channel close events use O(1) lookup via CHANNEL_CONSUMER_GROUPS
+    /// instead of O(n) traversal of all consumer groups.
+    #[inline]
+    fn is_fast_channel_event_process_enabled(&self) -> bool {
+        self.broker_config
+            .as_ref()
+            .is_some_and(|config| config.enable_fast_channel_event_process)
     }
 
     /// Finds a consumer channel by client ID within a consumer group.
@@ -333,6 +372,37 @@ impl ConsumerManager {
             .consumer_table
             .entry(group.clone())
             .or_insert_with(|| ConsumerGroupInfo::new(group.clone(), consume_type, message_model, consume_from_where));
+
+        // Maintain topic_group_table reverse index: Topic -> Set<Group>
+        // When subscription changes, remove group from topics that are no longer subscribed
+        if update_subscription {
+            // Get old topics before update
+            let old_topics = consumer_group_info.get_subscribe_topics();
+            let new_topics: HashSet<CheetahString> = sub_list.iter().map(|s| s.topic.clone()).collect();
+
+            // Remove group from topics that are no longer subscribed
+            for old_topic in old_topics {
+                if !new_topics.contains(&old_topic) {
+                    if let Some(mut groups) = self.topic_group_table.get_mut(&old_topic) {
+                        groups.remove(group);
+                        if groups.is_empty() {
+                            drop(groups); // Release write lock before removing entry
+                            self.topic_group_table.remove(&old_topic);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add group to new topics
+        for subscription_data in sub_list.iter() {
+            let topic = &subscription_data.topic;
+            self.topic_group_table
+                .entry(topic.clone())
+                .or_default()
+                .insert(group.clone());
+        }
+
         let r1 = consumer_group_info.update_channel(
             client_channel_info.clone(),
             consume_type,
@@ -347,6 +417,15 @@ impl ConsumerManager {
                 group,
                 &[&client_channel_info as &dyn Any, &topics as &dyn Any],
             );
+
+            // Maintain Channel -> Groups mapping for fast channel close event processing
+            if self.is_fast_channel_event_process_enabled() {
+                let channel_id = client_channel_info.channel().channel_id_owned();
+                CHANNEL_CONSUMER_GROUPS
+                    .entry(channel_id)
+                    .or_default()
+                    .insert(group.clone());
+            }
         }
 
         let r2 = if update_subscription {
@@ -431,6 +510,27 @@ impl ConsumerManager {
         }
     }
 
+    /// Clears topic-group reverse index entries for a removed consumer group.
+    ///
+    /// This is a helper method called during consumer group cleanup to maintain
+    /// consistency of the topic_group_table.
+    ///
+    /// # Arguments
+    /// * `consumer_group_info` - The consumer group being removed
+    fn clear_topic_group_table(&self, consumer_group_info: &ConsumerGroupInfo) {
+        let group_name = consumer_group_info.get_group_name();
+
+        for topic in consumer_group_info.get_subscribe_topics() {
+            if let Some(mut groups) = self.topic_group_table.get_mut(&topic) {
+                groups.remove(group_name);
+                if groups.is_empty() {
+                    drop(groups); // Release write lock before removing entry
+                    self.topic_group_table.remove(&topic);
+                }
+            }
+        }
+    }
+
     /// Queries which consumer groups are consuming a topic.
     ///
     /// # Arguments
@@ -438,15 +538,14 @@ impl ConsumerManager {
     ///
     /// # Returns
     /// Set of consumer group names consuming this topic
+    ///
+    /// # Performance
+    /// This method uses reverse index lookup (topic_group_table) for efficient retrieval.
     pub fn query_topic_consume_by_who(&self, topic: &CheetahString) -> HashSet<CheetahString> {
-        let mut groups = HashSet::new();
-        for entry in self.consumer_table.iter() {
-            let (group, consumer_group_info) = (entry.key(), entry.value());
-            if consumer_group_info.find_subscription_data(topic).is_some() {
-                groups.insert(group.clone());
-            }
-        }
-        groups
+        self.topic_group_table
+            .get(topic)
+            .map(|groups| groups.clone())
+            .unwrap_or_default()
     }
 
     /// Unregisters a consumer from a consumer group.
@@ -476,16 +575,33 @@ impl ConsumerManager {
                     &consumer_group_info.get_subscribe_topics() as &dyn Any,
                 ],
             );
+
+            // Remove group from channel mapping when unregistering
+            if self.is_fast_channel_event_process_enabled() {
+                let channel_id = client_channel_info.channel().channel_id_owned();
+                if let Some(mut groups) = CHANNEL_CONSUMER_GROUPS.get_mut(&channel_id) {
+                    groups.remove(group);
+                    if groups.is_empty() {
+                        drop(groups); // Release lock before removing entry
+                        CHANNEL_CONSUMER_GROUPS.remove(&channel_id);
+                    }
+                }
+            }
         }
         let message_model = consumer_group_info.get_message_model();
         let channels = consumer_group_info.get_all_channels();
         if consumer_group_info.get_channel_info_table().is_empty() {
+            // Clone consumer_group_info for cleanup before dropping the reference
+            let group_info_clone = consumer_group_info.clone();
             drop(consumer_group_info); // Release the reference
             if self.consumer_table.remove(group).is_some() {
                 info!(
                     "unregister consumer ok, no any connection, and remove consumer group, {}",
                     group
                 );
+
+                // Clear topic_group_table when removing consumer group
+                self.clear_topic_group_table(&group_info_clone);
 
                 self.call_consumer_ids_change_listener(ConsumerGroupEvent::Unregister, group, &[]);
             }
@@ -572,8 +688,20 @@ impl ConsumerManager {
             }
 
             // Remove expired channels
-            for channel in channels_to_remove {
-                channel_info_table.remove(&channel);
+            for channel in &channels_to_remove {
+                channel_info_table.remove(channel);
+
+                // Clean up channel mapping for expired channels
+                if self.is_fast_channel_event_process_enabled() {
+                    let channel_id = channel.channel_id_owned();
+                    if let Some(mut groups) = CHANNEL_CONSUMER_GROUPS.get_mut(&channel_id) {
+                        groups.remove(&group);
+                        if groups.is_empty() {
+                            drop(groups); // Release lock before removing entry
+                            CHANNEL_CONSUMER_GROUPS.remove(&channel_id);
+                        }
+                    }
+                }
             }
 
             // If group has no channels, mark for removal
@@ -595,8 +723,12 @@ impl ConsumerManager {
 
         // Remove empty groups
         for group in groups_to_remove {
-            if self.consumer_table.remove(&group).is_some() {
-                self.call_consumer_ids_change_listener(ConsumerGroupEvent::Unregister, group.as_str(), &[]);
+            if let Some(group_info) = self.consumer_table.get(&group).map(|entry| entry.clone()) {
+                if self.consumer_table.remove(&group).is_some() {
+                    // Clear topic_group_table when removing consumer group
+                    self.clear_topic_group_table(&group_info);
+                    self.call_consumer_ids_change_listener(ConsumerGroupEvent::Unregister, group.as_str(), &[]);
+                }
             }
         }
 
@@ -617,6 +749,57 @@ impl ConsumerManager {
         let mut removed = false;
         let mut remove_list = Vec::new();
 
+        // Fast path: lookup affected groups using channel-to-group mapping
+        if self.is_fast_channel_event_process_enabled() {
+            let channel_id = channel.channel_id_owned();
+            if let Some((_, groups)) = CHANNEL_CONSUMER_GROUPS.remove(&channel_id) {
+                // Process only the groups associated with this channel
+                for group in groups {
+                    if let Some(info) = self.consumer_table.get_mut(&group) {
+                        if let Some(client_channel_info) = info.handle_channel_close_event(channel) {
+                            self.call_consumer_ids_change_listener(
+                                ConsumerGroupEvent::ClientUnregister,
+                                &group,
+                                &[
+                                    &client_channel_info as &dyn Any,
+                                    &info.get_subscribe_topics() as &dyn Any,
+                                ],
+                            );
+
+                            if info.get_channel_info_table().is_empty() {
+                                remove_list.push(group.clone());
+                            } else if !is_broadcast_mode(info.get_message_model()) {
+                                self.call_consumer_ids_change_listener(
+                                    ConsumerGroupEvent::Change,
+                                    &group,
+                                    &[&info.get_all_channels() as &dyn Any],
+                                );
+                            }
+
+                            removed = true;
+                        }
+                    }
+                }
+
+                // Process removal list
+                for group in remove_list {
+                    if let Some(group_info) = self.consumer_table.get(&group).map(|entry| entry.clone()) {
+                        if self.consumer_table.remove(&group).is_some() {
+                            info!(
+                                "unregister consumer ok, no any connection, and remove consumer group, {}",
+                                group
+                            );
+                            self.clear_topic_group_table(&group_info);
+                            self.call_consumer_ids_change_listener(ConsumerGroupEvent::Unregister, group.as_str(), &[]);
+                        }
+                    }
+                }
+
+                return removed;
+            }
+        }
+
+        // Fallback path: scan all consumer groups
         for mut entry in self.consumer_table.iter_mut() {
             let group = entry.key().clone();
             let info = entry.value_mut();
@@ -632,9 +815,8 @@ impl ConsumerManager {
 
                 if info.get_channel_info_table().is_empty() {
                     remove_list.push(group.clone());
-                }
-
-                if !is_broadcast_mode(info.get_message_model()) {
+                } else if !is_broadcast_mode(info.get_message_model()) {
+                    // Send Change event only if group still has active channels
                     self.call_consumer_ids_change_listener(
                         ConsumerGroupEvent::Change,
                         &group,
@@ -647,12 +829,16 @@ impl ConsumerManager {
         }
 
         for group in remove_list {
-            if self.consumer_table.remove(&group).is_some() {
-                info!(
-                    "unregister consumer ok, no any connection, and remove consumer group, {}",
-                    group
-                );
-                self.call_consumer_ids_change_listener(ConsumerGroupEvent::Unregister, group.as_str(), &[]);
+            if let Some(group_info) = self.consumer_table.get(&group).map(|entry| entry.clone()) {
+                if self.consumer_table.remove(&group).is_some() {
+                    info!(
+                        "unregister consumer ok, no any connection, and remove consumer group, {}",
+                        group
+                    );
+                    // Clear topic_group_table when removing consumer group
+                    self.clear_topic_group_table(&group_info);
+                    self.call_consumer_ids_change_listener(ConsumerGroupEvent::Unregister, group.as_str(), &[]);
+                }
             }
         }
 
