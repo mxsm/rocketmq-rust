@@ -13,5 +13,7 @@
 //  limitations under the License.
 
 pub mod select_message_queue_by_hash;
+pub mod select_message_queue_by_random;
 
 pub use select_message_queue_by_hash::SelectMessageQueueByHash;
+pub use select_message_queue_by_random::SelectMessageQueueByRandom;
