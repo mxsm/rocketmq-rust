@@ -474,6 +474,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Offset",
+                command: "cloneGroupOffset",
+                remark: "Clone offset from other group.",
+            },
+            Command {
+                category: "Offset",
                 command: "resetOffsetByTime",
                 remark: "Reset consumer group offsets to a specific timestamp (no restart required).",
             },
