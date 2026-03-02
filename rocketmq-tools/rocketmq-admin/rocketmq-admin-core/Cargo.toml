@@ -40,6 +40,8 @@ rocketmq-rust        = { workspace = true }
 rocketmq-client-rust = { workspace = true }
 rocketmq-error       = { workspace = true }
 
+bytes                = { workspace = true }
+
 serde.workspace      = true
 serde_json.workspace = true
 serde_yaml           = "0.9"

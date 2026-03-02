@@ -14,6 +14,7 @@
 
 pub mod check_msg_send_rt_sub_command;
 pub mod decode_message_id_sub_command;
+pub mod dump_compaction_log_sub_command;
 
 use std::sync::Arc;
 
@@ -23,6 +24,7 @@ use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::message::check_msg_send_rt_sub_command::CheckMsgSendRTSubCommand;
 use crate::commands::message::decode_message_id_sub_command::DecodeMessageIdSubCommand;
+use crate::commands::message::dump_compaction_log_sub_command::DumpCompactionLogSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
@@ -40,6 +42,13 @@ pub enum MessageCommands {
         long_about = None,
     )]
     DecodeMessageId(DecodeMessageIdSubCommand),
+
+    #[command(
+        name = "dumpCompactionLog",
+        about = "Parse compaction log to message.",
+        long_about = None,
+    )]
+    DumpCompactionLog(DumpCompactionLogSubCommand),
 }
 
 impl CommandExecute for MessageCommands {
@@ -47,6 +56,7 @@ impl CommandExecute for MessageCommands {
         match self {
             MessageCommands::CheckMsgSendRT(value) => value.execute(rpc_hook).await,
             MessageCommands::DecodeMessageId(value) => value.execute(rpc_hook).await,
+            MessageCommands::DumpCompactionLog(value) => value.execute(rpc_hook).await,
         }
     }
 }

@@ -3428,6 +3428,7 @@ version = "0.8.0"
 name = "rocketmq-admin-core"
 version = "0.8.0"
 dependencies = [
+ "bytes",
  "cheetah-string",
  "chrono",
  "clap",
