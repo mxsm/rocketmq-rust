@@ -438,6 +438,11 @@ impl CommandExecute for ClassificationTablePrint {
                 remark: "Parse compaction log to message.",
             },
             Command {
+                category: "Message",
+                command: "sendMessage",
+                remark: "Send a message.",
+            },
+            Command {
                 category: "NameServer",
                 command: "addWritePerm",
                 remark: "Add write perm of broker in all name server.",
