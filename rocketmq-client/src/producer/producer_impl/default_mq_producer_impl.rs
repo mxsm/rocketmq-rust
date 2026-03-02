@@ -84,7 +84,7 @@ use crate::producer::producer_impl::topic_publish_info::TopicPublishInfo;
 use crate::producer::request_callback::RequestCallbackFn;
 use crate::producer::request_future_holder::REQUEST_FUTURE_HOLDER;
 use crate::producer::request_response_future::RequestResponseFuture;
-use crate::producer::send_callback::SendMessageCallback;
+use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::send_status::SendStatus;
 use crate::producer::transaction_listener::ArcTransactionListener;
@@ -331,7 +331,7 @@ impl DefaultMQProducerImpl {
     pub async fn async_send_with_callback<T>(
         &mut self,
         msg: T,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
     ) -> rocketmq_error::RocketMQResult<()>
     where
         T: MessageTrait + Send + Sync,
@@ -539,7 +539,7 @@ impl DefaultMQProducerImpl {
         &mut self,
         msg: T,
         mq: MessageQueue,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
     ) -> rocketmq_error::RocketMQResult<()>
     where
         T: MessageTrait + Send + Sync,
@@ -558,7 +558,7 @@ impl DefaultMQProducerImpl {
         msg: M,
         selector: S,
         arg: T,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
@@ -585,10 +585,10 @@ impl DefaultMQProducerImpl {
         let future = async move {
             let cost_time = begin_start_time.elapsed().as_millis() as u64;
             if timeout <= cost_time {
-                send_callback_clone.as_ref().unwrap()(
-                    None,
-                    Some(&RemotingTooMuchRequestError("call timeout".to_string()) as &dyn std::error::Error),
-                );
+                send_callback_clone
+                    .as_ref()
+                    .unwrap()
+                    .on_exception(&RemotingTooMuchRequestError("call timeout".to_string()) as &dyn std::error::Error);
             }
 
             producer_impl
@@ -635,7 +635,7 @@ impl DefaultMQProducerImpl {
         selector: S,
         arg: T,
         communication_mode: CommunicationMode,
-        send_message_callback: Option<SendMessageCallback>,
+        send_message_callback: Option<ArcSendCallback>,
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
@@ -696,7 +696,7 @@ impl DefaultMQProducerImpl {
         &mut self,
         mut msg: T,
         mq: MessageQueue,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
@@ -720,27 +720,30 @@ impl DefaultMQProducerImpl {
         };
         let future = async move {
             if let Err(err) = producer_impl.make_sure_state_ok() {
-                send_callback_inner.as_ref().unwrap()(None, Some(&err as &dyn std::error::Error));
+                send_callback_inner
+                    .as_ref()
+                    .unwrap()
+                    .on_exception(&err as &dyn std::error::Error);
                 return;
             }
             if msg.topic() != mq.topic_str() {
-                send_callback_inner.as_ref().unwrap()(
-                    None,
-                    Some(&rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(format!(
+                send_callback_inner
+                    .as_ref()
+                    .unwrap()
+                    .on_exception(&rocketmq_error::RocketmqError::MQClientErr(ClientErr::new(format!(
                         "message topic [{}] is not equal with message queue topic [{}]",
                         msg.topic(),
                         mq.topic_str()
-                    ))) as &dyn std::error::Error),
-                );
+                    ))) as &dyn std::error::Error);
                 return;
             }
 
             let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
             if timeout <= cost_time {
-                send_callback_inner.as_ref().unwrap()(
-                    None,
-                    Some(&RemotingTooMuchRequestError("call timeout".to_string()) as &dyn std::error::Error),
-                );
+                send_callback_inner
+                    .as_ref()
+                    .unwrap()
+                    .on_exception(&RemotingTooMuchRequestError("call timeout".to_string()) as &dyn std::error::Error);
             }
             let result = producer_impl
                 .send_kernel_impl(
@@ -755,7 +758,10 @@ impl DefaultMQProducerImpl {
             match result {
                 Ok(_) => {}
                 Err(err) => {
-                    send_callback_inner.as_ref().unwrap()(None, Some(&err as &dyn std::error::Error));
+                    send_callback_inner
+                        .as_ref()
+                        .unwrap()
+                        .on_exception(&err as &dyn std::error::Error);
                 }
             }
         };
@@ -767,7 +773,7 @@ impl DefaultMQProducerImpl {
     pub async fn async_send_with_callback_timeout<T>(
         &mut self,
         mut msg: T,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
@@ -792,10 +798,12 @@ impl DefaultMQProducerImpl {
         let future = async move {
             let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
             if timeout <= cost_time {
-                send_callback_inner.as_ref().unwrap()(
-                    None,
-                    Some(&RemotingTooMuchRequestError("asyncSend call timeout".to_string()) as &dyn std::error::Error),
-                );
+                send_callback_inner
+                    .as_ref()
+                    .unwrap()
+                    .on_exception(
+                        &RemotingTooMuchRequestError("asyncSend call timeout".to_string()) as &dyn std::error::Error
+                    );
             }
 
             let result = producer_impl
@@ -804,7 +812,10 @@ impl DefaultMQProducerImpl {
             match result {
                 Ok(_) => {}
                 Err(err) => {
-                    send_callback_inner.as_ref().unwrap()(None, Some(&err as &dyn std::error::Error));
+                    send_callback_inner
+                        .as_ref()
+                        .unwrap()
+                        .on_exception(&err as &dyn std::error::Error);
                 }
             }
         };
@@ -816,7 +827,7 @@ impl DefaultMQProducerImpl {
     async fn execute_async_message_send<F>(
         &mut self,
         f: F,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         timeout: u64,
         begin_start_time: Instant,
         msg_len: usize,
@@ -827,93 +838,92 @@ impl DefaultMQProducerImpl {
     {
         let is_enable_backpressure_for_async_mode = self.producer_config.enable_backpressure_for_async_mode();
 
-        let (acquire_value_num, acquire_value_size) =
-            if is_enable_backpressure_for_async_mode {
-                //back pressure
-                let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
-                let is_semaphore_async_numb_acquired = (timeout - cost_time) > 0;
-                if !is_semaphore_async_numb_acquired {
-                    send_callback.as_ref().unwrap()(
-                        None,
-                        Some(&RemotingTooMuchRequestError(
-                            "send message tryAcquire semaphoreAsyncNum timeout".to_string(),
-                        ) as &dyn std::error::Error),
-                    );
-                    return Ok(());
-                }
-                let result = tokio::time::timeout(
-                    Duration::from_millis(timeout - cost_time),
-                    self.semaphore_async_send_num.acquire(),
-                )
-                .await;
-                let acquire_value_num = match result {
-                    Ok(acquire_value) => match acquire_value {
-                        Ok(value) => Some(value),
-                        Err(_) => {
-                            send_callback.as_ref().unwrap()(
-                                None,
-                                Some(&RemotingTooMuchRequestError(
-                                    "send message tryAcquire semaphoreAsyncNum timeout".to_string(),
-                                ) as &dyn std::error::Error),
-                            );
-                            return Ok(());
-                        }
-                    },
+        let (acquire_value_num, acquire_value_size) = if is_enable_backpressure_for_async_mode {
+            //back pressure
+            let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
+            let is_semaphore_async_numb_acquired = (timeout - cost_time) > 0;
+            if !is_semaphore_async_numb_acquired {
+                send_callback
+                    .as_ref()
+                    .unwrap()
+                    .on_exception(&RemotingTooMuchRequestError(
+                        "send message tryAcquire semaphoreAsyncNum timeout".to_string(),
+                    ) as &dyn std::error::Error);
+                return Ok(());
+            }
+            let result = tokio::time::timeout(
+                Duration::from_millis(timeout - cost_time),
+                self.semaphore_async_send_num.acquire(),
+            )
+            .await;
+            let acquire_value_num = match result {
+                Ok(acquire_value) => match acquire_value {
+                    Ok(value) => Some(value),
                     Err(_) => {
-                        send_callback.as_ref().unwrap()(
-                            None,
-                            Some(&RemotingTooMuchRequestError(
+                        send_callback
+                            .as_ref()
+                            .unwrap()
+                            .on_exception(&RemotingTooMuchRequestError(
                                 "send message tryAcquire semaphoreAsyncNum timeout".to_string(),
-                            ) as &dyn std::error::Error),
-                        );
+                            ) as &dyn std::error::Error);
                         return Ok(());
                     }
-                };
-
-                //message size
-                let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
-                let is_semaphore_async_size_acquired = (timeout - cost_time) > 0;
-                if !is_semaphore_async_size_acquired {
-                    send_callback.as_ref().unwrap()(
-                        None,
-                        Some(&RemotingTooMuchRequestError(
-                            "send message tryAcquire semaphoreAsyncSize timeout".to_string(),
-                        ) as &dyn std::error::Error),
-                    );
+                },
+                Err(_) => {
+                    send_callback
+                        .as_ref()
+                        .unwrap()
+                        .on_exception(&RemotingTooMuchRequestError(
+                            "send message tryAcquire semaphoreAsyncNum timeout".to_string(),
+                        ) as &dyn std::error::Error);
                     return Ok(());
                 }
-                let result = tokio::time::timeout(
-                    Duration::from_millis(timeout - cost_time),
-                    self.semaphore_async_send_size.acquire_many(msg_len as u32),
-                )
-                .await;
-                let acquire_value_size = match result {
-                    Ok(acquire_value) => match acquire_value {
-                        Ok(value) => Some(value),
-                        Err(_) => {
-                            send_callback.as_ref().unwrap()(
-                                None,
-                                Some(&RemotingTooMuchRequestError(
-                                    "send message tryAcquire semaphoreAsyncSize timeout".to_string(),
-                                ) as &dyn std::error::Error),
-                            );
-                            return Ok(());
-                        }
-                    },
+            };
+
+            //message size
+            let cost_time = (Instant::now() - begin_start_time).as_millis() as u64;
+            let is_semaphore_async_size_acquired = (timeout - cost_time) > 0;
+            if !is_semaphore_async_size_acquired {
+                send_callback
+                    .as_ref()
+                    .unwrap()
+                    .on_exception(&RemotingTooMuchRequestError(
+                        "send message tryAcquire semaphoreAsyncSize timeout".to_string(),
+                    ) as &dyn std::error::Error);
+                return Ok(());
+            }
+            let result = tokio::time::timeout(
+                Duration::from_millis(timeout - cost_time),
+                self.semaphore_async_send_size.acquire_many(msg_len as u32),
+            )
+            .await;
+            let acquire_value_size = match result {
+                Ok(acquire_value) => match acquire_value {
+                    Ok(value) => Some(value),
                     Err(_) => {
-                        send_callback.as_ref().unwrap()(
-                            None,
-                            Some(&RemotingTooMuchRequestError(
+                        send_callback
+                            .as_ref()
+                            .unwrap()
+                            .on_exception(&RemotingTooMuchRequestError(
                                 "send message tryAcquire semaphoreAsyncSize timeout".to_string(),
-                            ) as &dyn std::error::Error),
-                        );
+                            ) as &dyn std::error::Error);
                         return Ok(());
                     }
-                };
-                (acquire_value_num, acquire_value_size)
-            } else {
-                (None, None)
+                },
+                Err(_) => {
+                    send_callback
+                        .as_ref()
+                        .unwrap()
+                        .on_exception(&RemotingTooMuchRequestError(
+                            "send message tryAcquire semaphoreAsyncSize timeout".to_string(),
+                        ) as &dyn std::error::Error);
+                    return Ok(());
+                }
             };
+            (acquire_value_num, acquire_value_size)
+        } else {
+            (None, None)
+        };
         tokio::spawn(f);
         drop((acquire_value_num, acquire_value_size));
         Ok(())
@@ -923,7 +933,7 @@ impl DefaultMQProducerImpl {
         &mut self,
         msg: &mut T,
         communication_mode: CommunicationMode,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
@@ -960,7 +970,7 @@ impl DefaultMQProducerImpl {
         msg: &mut T,
         topic: &CheetahString,
         topic_publish_info: &TopicPublishInfo,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         ctx: SendContext,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
@@ -1128,7 +1138,7 @@ impl DefaultMQProducerImpl {
         msg: &mut T,
         mq: &MessageQueue,
         communication_mode: CommunicationMode,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         topic_publish_info: Option<&TopicPublishInfo>,
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>

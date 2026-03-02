@@ -22,7 +22,7 @@ use rocketmq_error::RocketMQError;
 
 use crate::producer::default_mq_producer::DefaultMQProducer;
 use crate::producer::mq_producer::MQProducer;
-use crate::producer::send_callback::SendMessageCallback;
+use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::transaction_listener::ArcTransactionListener;
 use crate::producer::transaction_listener::TransactionListener;
@@ -266,7 +266,7 @@ impl MQProducer for TransactionMQProducer {
         msg: M,
         selector: S,
         arg: T,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
@@ -283,7 +283,7 @@ impl MQProducer for TransactionMQProducer {
         msg: M,
         selector: S,
         arg: T,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where

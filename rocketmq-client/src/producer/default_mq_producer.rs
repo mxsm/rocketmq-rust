@@ -41,7 +41,7 @@ use crate::producer::default_mq_produce_builder::DefaultMQProducerBuilder;
 use crate::producer::mq_producer::MQProducer;
 use crate::producer::produce_accumulator::ProduceAccumulator;
 use crate::producer::producer_impl::default_mq_producer_impl::DefaultMQProducerImpl;
-use crate::producer::send_callback::SendMessageCallback;
+use crate::producer::send_callback::ArcSendCallback;
 use crate::producer::send_result::SendResult;
 use crate::producer::transaction_send_result::TransactionSendResult;
 use crate::trace::async_trace_dispatcher::AsyncTraceDispatcher;
@@ -598,7 +598,7 @@ impl DefaultMQProducer {
         &mut self,
         mut msg: M,
         mq: Option<MessageQueue>,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + Sync,
@@ -626,7 +626,7 @@ impl DefaultMQProducer {
         &mut self,
         mut msg: M,
         mq: Option<MessageQueue>,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
     ) -> rocketmq_error::RocketMQResult<Option<SendResult>>
     where
         M: MessageTrait + Send + std::marker::Sync + 'static,
@@ -973,7 +973,7 @@ impl MQProducer for DefaultMQProducer {
         mut msg: M,
         selector: S,
         arg: T,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
     ) -> rocketmq_error::RocketMQResult<()>
     where
         M: MessageTrait + Send + Sync,
@@ -1001,7 +1001,7 @@ impl MQProducer for DefaultMQProducer {
         mut msg: M,
         selector: S,
         arg: T,
-        send_callback: Option<SendMessageCallback>,
+        send_callback: Option<ArcSendCallback>,
         timeout: u64,
     ) -> rocketmq_error::RocketMQResult<()>
     where
