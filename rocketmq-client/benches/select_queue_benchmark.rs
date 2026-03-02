@@ -3,6 +3,7 @@ use criterion::criterion_main;
 use criterion::Criterion;
 use rocketmq_client_rust::producer::message_queue_selector::MessageQueueSelector;
 use rocketmq_client_rust::producer::queue_selector::SelectMessageQueueByHash;
+use rocketmq_client_rust::producer::queue_selector::SelectMessageQueueByRandom;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_single::Message;
 use std::cell::RefCell;
@@ -87,10 +88,26 @@ fn bench_select_cached(c: &mut Criterion) {
     });
 }
 
+fn bench_select_random(c: &mut Criterion) {
+    let selector = SelectMessageQueueByRandom;
+    let queues = vec![
+        MessageQueue::from_parts("test_topic", "broker-a", 0),
+        MessageQueue::from_parts("test_topic", "broker-a", 1),
+        MessageQueue::from_parts("test_topic", "broker-a", 2),
+        MessageQueue::from_parts("test_topic", "broker-a", 3),
+    ];
+    let msg = Message::builder().topic("test_topic").build().unwrap();
+
+    c.bench_function("select_random", |b| {
+        b.iter(|| black_box(selector.select(&queues, &msg, &())))
+    });
+}
+
 criterion_group!(
     benches,
     bench_hasher_creation,
     bench_select_original,
-    bench_select_cached
+    bench_select_cached,
+    bench_select_random
 );
 criterion_main!(benches);
