@@ -71,7 +71,7 @@ impl<MS: MessageStore> ConsumerRequestHandler<MS> {
                 let subscription_table_consumer = consumer_group_info.get_subscription_table();
                 let subscription_table = body_data.get_subscription_table_mut();
                 for key_value in subscription_table_consumer.iter() {
-                    subscription_table.insert(key_value.key().clone(), key_value.clone());
+                    subscription_table.insert(key_value.key().clone(), (**key_value.value()).clone());
                 }
 
                 for channel_info in consumer_group_info.get_channel_info_table().iter() {

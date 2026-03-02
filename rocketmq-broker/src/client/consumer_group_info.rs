@@ -32,7 +32,7 @@ use crate::client::client_channel_info::ClientChannelInfo;
 #[derive(Clone)]
 pub struct ConsumerGroupInfo {
     group_name: CheetahString,
-    subscription_table: Arc<DashMap<CheetahString, SubscriptionData>>,
+    subscription_table: Arc<DashMap<CheetahString, Arc<SubscriptionData>>>,
     channel_info_table: Arc<DashMap<Channel, ClientChannelInfo>>,
     consume_type: ConsumeType,
     message_model: MessageModel,
@@ -79,7 +79,7 @@ impl ConsumerGroupInfo {
         None
     }
 
-    pub fn get_subscription_table(&self) -> Arc<DashMap<CheetahString, SubscriptionData>> {
+    pub fn get_subscription_table(&self) -> Arc<DashMap<CheetahString, Arc<SubscriptionData>>> {
         Arc::clone(&self.subscription_table)
     }
 
@@ -188,10 +188,10 @@ impl ConsumerGroupInfo {
                         );
                     }
                     drop(old); //release lock
-                    self.subscription_table.insert(sub.topic.clone(), sub.clone());
+                    self.subscription_table.insert(sub.topic.clone(), Arc::new(sub.clone()));
                 }
             } else {
-                self.subscription_table.insert(sub.topic.clone(), sub.clone());
+                self.subscription_table.insert(sub.topic.clone(), Arc::new(sub.clone()));
                 info!(
                     "Subscription changed, add new topic, group: {} {}",
                     self.group_name, sub.topic
@@ -220,8 +220,17 @@ impl ConsumerGroupInfo {
         self.subscription_table.iter().map(|item| item.key().clone()).collect()
     }
 
-    pub fn find_subscription_data(&self, topic: &CheetahString) -> Option<SubscriptionData> {
+    /// Returns subscription data wrapped in Arc to avoid cloning.
+    /// This is the preferred method for high-frequency access.
+    pub fn find_subscription_data_arc(&self, topic: &CheetahString) -> Option<Arc<SubscriptionData>> {
         self.subscription_table.get(topic).map(|item| item.value().clone())
+    }
+
+    /// Returns cloned subscription data for backward compatibility.
+    /// Consider using `find_subscription_data_arc` to avoid cloning overhead.
+    pub fn find_subscription_data(&self, topic: &CheetahString) -> Option<SubscriptionData> {
+        self.find_subscription_data_arc(topic)
+            .map(|arc_data| (*arc_data).clone())
     }
 
     pub fn get_consume_type(&self) -> ConsumeType {
