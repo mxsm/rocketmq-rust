@@ -31,6 +31,7 @@ use tracing::warn;
 use crate::client::client_channel_info::ClientChannelInfo;
 use crate::client::producer_change_listener::ArcProducerChangeListener;
 use crate::client::producer_group_event::ProducerGroupEvent;
+use crate::types::ProducerGroupName;
 
 /// Timeout for considering a producer channel as expired (120 seconds in milliseconds)
 const CHANNEL_EXPIRED_TIMEOUT: u64 = 120_000;
@@ -48,7 +49,7 @@ const GET_AVAILABLE_CHANNEL_RETRY_COUNT: u32 = 3;
 /// All operations are thread-safe using concurrent data structures.
 pub struct ProducerManager {
     /// Group name -> (Channel -> ClientChannelInfo) mapping
-    group_channel_table: Arc<DashMap<CheetahString, DashMap<Channel, ClientChannelInfo>>>,
+    group_channel_table: Arc<DashMap<ProducerGroupName, DashMap<Channel, ClientChannelInfo>>>,
     /// Client ID -> Channel mapping for quick channel lookup by client ID
     client_channel_table: Arc<DashMap<CheetahString, Channel>>,
     /// Counter for round-robin channel selection
@@ -206,7 +207,7 @@ impl ProducerManager {
     /// # Thread Safety
     /// This method is thread-safe. Uses DashMap's atomic operations to ensure consistency.
     #[allow(clippy::mutable_key_type)]
-    pub fn register_producer(&self, group: &CheetahString, client_channel_info: &ClientChannelInfo) {
+    pub fn register_producer(&self, group: &ProducerGroupName, client_channel_info: &ClientChannelInfo) {
         // Update group_channel_table
         {
             let channel_table = self.group_channel_table.entry(group.clone()).or_default();
@@ -282,7 +283,7 @@ impl ProducerManager {
     ///
     /// # Returns
     /// An available channel from the group, or None if no healthy channel is found
-    pub fn get_available_channel(&self, group: Option<&CheetahString>) -> Option<Channel> {
+    pub fn get_available_channel(&self, group: Option<&ProducerGroupName>) -> Option<Channel> {
         let group = group?;
 
         // Collect all channels first, then release the lock
@@ -342,7 +343,7 @@ impl ProducerManager {
 
         // Collect all expired channels without holding locks during modification
         // Structure: (group_name, channel, client_info)
-        let mut expired_channels: Vec<(CheetahString, Channel, ClientChannelInfo)> = Vec::new();
+        let mut expired_channels: Vec<(ProducerGroupName, Channel, ClientChannelInfo)> = Vec::new();
 
         // Collect expired channels - only hold read locks here
         for group_entry in self.group_channel_table.iter() {
@@ -360,7 +361,7 @@ impl ProducerManager {
         // All read locks released here
 
         // Use HashSet to avoid duplicate group removals
-        let mut empty_groups: std::collections::HashSet<CheetahString> = std::collections::HashSet::new();
+        let mut empty_groups: std::collections::HashSet<ProducerGroupName> = std::collections::HashSet::new();
 
         // Remove expired channels one by one
         for (group, channel, info) in expired_channels {
@@ -426,7 +427,7 @@ impl ProducerManager {
     pub fn do_channel_close_event(&self, remote_addr: &str, channel: &Channel) -> bool {
         // Collect all groups that contain this channel
         // Structure: (group_name, client_channel_info)
-        let mut channels_to_remove: Vec<(CheetahString, ClientChannelInfo)> = Vec::new();
+        let mut channels_to_remove: Vec<(ProducerGroupName, ClientChannelInfo)> = Vec::new();
 
         // Only hold read lock during collection
         for group_entry in self.group_channel_table.iter() {
@@ -441,7 +442,7 @@ impl ProducerManager {
             return false;
         }
 
-        let mut empty_groups: std::collections::HashSet<CheetahString> = std::collections::HashSet::new();
+        let mut empty_groups: std::collections::HashSet<ProducerGroupName> = std::collections::HashSet::new();
 
         // Remove channels from their groups
         for (group, client_channel_info) in &channels_to_remove {
