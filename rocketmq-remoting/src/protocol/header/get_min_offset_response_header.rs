@@ -122,17 +122,13 @@ mod tests {
 
     #[test]
     fn get_min_offset_response_header_max_offset() {
-        let header = GetMinOffsetResponseHeader {
-            offset: i64::MAX,
-        };
+        let header = GetMinOffsetResponseHeader { offset: i64::MAX };
         assert_eq!(header.offset, i64::MAX);
     }
 
     #[test]
     fn get_min_offset_response_header_min_offset() {
-        let header = GetMinOffsetResponseHeader {
-            offset: i64::MIN,
-        };
+        let header = GetMinOffsetResponseHeader { offset: i64::MIN };
         assert_eq!(header.offset, i64::MIN);
     }
 
@@ -167,10 +163,7 @@ mod tests {
     #[test]
     fn get_min_offset_response_header_from_map_with_max_offset() {
         let mut map = HashMap::new();
-        map.insert(
-            CheetahString::from("offset"),
-            CheetahString::from(i64::MAX.to_string()),
-        );
+        map.insert(CheetahString::from("offset"), CheetahString::from(i64::MAX.to_string()));
         let header = <GetMinOffsetResponseHeader as FromMap>::from(&map).unwrap();
         assert_eq!(header.offset, i64::MAX);
     }
@@ -200,12 +193,10 @@ mod tests {
     #[test]
     fn get_min_offset_response_header_from_map_invalid_offset() {
         let mut map = HashMap::new();
-        map.insert(
-            CheetahString::from("offset"),
-            CheetahString::from("not_a_number"),
-        );
+        map.insert(CheetahString::from("offset"), CheetahString::from("not_a_number"));
         let result = <GetMinOffsetResponseHeader as FromMap>::from(&map);
-        // The macro-generated FromMap uses parse() which defaults to 0 on parse failure for non-required fields
+        // The macro-generated FromMap uses parse() which defaults to 0 on parse failure for non-required
+        // fields
         assert_eq!(result.unwrap().offset, 0);
     }
 
