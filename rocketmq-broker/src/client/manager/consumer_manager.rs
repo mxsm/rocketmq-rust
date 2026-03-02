@@ -21,6 +21,7 @@ use std::time::Instant;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use parking_lot::RwLock;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::TimeUtils::current_millis;
@@ -51,6 +52,9 @@ use crate::client::consumer_ids_change_listener::ConsumerIdsChangeListener;
 static CHANNEL_CONSUMER_GROUPS: LazyLock<DashMap<CheetahString, HashSet<CheetahString>>> =
     LazyLock::new(|| DashMap::with_capacity_and_shard_amount(4096, 64));
 
+/// Type alias for consumer change listener to reduce complexity
+type ConsumerListener = Arc<Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>>;
+
 /// Manages consumer client connections and their lifecycle.
 ///
 /// This manager maintains:
@@ -69,7 +73,8 @@ pub struct ConsumerManager {
     /// Topic -> Set<Group> reverse index for fast topic-to-group lookup
     topic_group_table: Arc<DashMap<CheetahString, HashSet<CheetahString>>>,
     /// Listeners notified on consumer registration/unregistration events
-    consumer_ids_change_listener_list: Vec<Arc<Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>>>,
+    /// Uses Arc<RwLock<Vec>> to support dynamic listener registration at runtime
+    consumer_ids_change_listener_list: Arc<RwLock<Vec<ConsumerListener>>>,
     /// Optional broker statistics manager (set once during initialization)
     broker_stats_manager: Option<Weak<BrokerStatsManager>>,
     /// Broker configuration (used for enable_fast_channel_event_process flag)
@@ -86,11 +91,8 @@ impl ConsumerManager {
     /// # Arguments
     /// * `consumer_ids_change_listener` - Listener for consumer change events
     /// * `expired_timeout` - Timeout for channel and subscription expiration (milliseconds)
-    pub fn new(
-        consumer_ids_change_listener: Arc<Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>>,
-        expired_timeout: u64,
-    ) -> Self {
-        let consumer_ids_change_listener_list = vec![consumer_ids_change_listener];
+    pub fn new(consumer_ids_change_listener: ConsumerListener, expired_timeout: u64) -> Self {
+        let consumer_ids_change_listener_list = Arc::new(RwLock::new(vec![consumer_ids_change_listener]));
         ConsumerManager {
             // Uses 64 shards for improved concurrency under high load
             consumer_table: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
@@ -111,10 +113,10 @@ impl ConsumerManager {
     /// * `consumer_ids_change_listener` - Listener for consumer change events
     /// * `broker_config` - Broker configuration containing timeout settings
     pub fn new_with_broker_stats(
-        consumer_ids_change_listener: Arc<Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>>,
+        consumer_ids_change_listener: ConsumerListener,
         broker_config: Arc<BrokerConfig>,
     ) -> Self {
-        let consumer_ids_change_listener_list = vec![consumer_ids_change_listener];
+        let consumer_ids_change_listener_list = Arc::new(RwLock::new(vec![consumer_ids_change_listener]));
         ConsumerManager {
             // Uses 64 shards for improved concurrency under high load
             consumer_table: Arc::new(DashMap::with_capacity_and_shard_amount(1024, 64)),
@@ -505,9 +507,26 @@ impl ConsumerManager {
     /// * `group` - The affected consumer group
     /// * `args` - Additional event arguments
     pub fn call_consumer_ids_change_listener(&self, event: ConsumerGroupEvent, group: &str, args: &[&dyn Any]) {
-        for listener in self.consumer_ids_change_listener_list.iter() {
+        let listeners = self.consumer_ids_change_listener_list.read();
+        for listener in listeners.iter() {
             listener.handle(event, group, args);
         }
+    }
+
+    /// Dynamically appends a new consumer change listener to the list.
+    ///
+    /// This enables runtime registration of listeners for plugin-like extensibility.
+    ///
+    /// # Arguments
+    /// * `listener` - The listener to register
+    ///
+    /// # Example
+    /// ```ignore
+    /// let custom_listener = Arc::new(Box::new(MyCustomListener::new()));
+    /// consumer_manager.append_consumer_ids_change_listener(custom_listener);
+    /// ```
+    pub fn append_consumer_ids_change_listener(&self, listener: ConsumerListener) {
+        self.consumer_ids_change_listener_list.write().push(listener);
     }
 
     /// Clears topic-group reverse index entries for a removed consumer group.
