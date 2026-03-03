@@ -17,6 +17,7 @@ pub mod hook;
 pub mod trace_bean;
 pub mod trace_constants;
 pub mod trace_context;
+pub mod trace_data_encoder;
 pub mod trace_dispatcher;
 pub mod trace_dispatcher_type;
 pub mod trace_transfer_bean;
