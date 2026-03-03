@@ -83,6 +83,7 @@ use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
 use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
 use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
+use rocketmq_remoting::protocol::body::response::get_consumer_status_body::GetConsumerStatusBody;
 use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
 use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
 use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
@@ -100,6 +101,7 @@ use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
+use rocketmq_remoting::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
 use rocketmq_remoting::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader;
 use rocketmq_remoting::protocol::header::get_lite_topic_info_request_header::GetLiteTopicInfoRequestHeader;
 use rocketmq_remoting::protocol::header::get_max_offset_request_header::GetMaxOffsetRequestHeader;
@@ -1720,6 +1722,53 @@ impl MQClientAPIImpl {
             response.remark().map_or("".to_string(), |s| s.to_string()),
             addr.to_string()
         ))
+    }
+
+    pub async fn invoke_broker_to_get_consumer_status(
+        &mut self,
+        addr: &str,
+        topic: CheetahString,
+        group: CheetahString,
+        client_addr: CheetahString,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<MessageQueue, i64>>> {
+        let request_header = GetConsumerStatusRequestHeader {
+            topic,
+            group,
+            client_addr: if client_addr.is_empty() {
+                None
+            } else {
+                Some(client_addr)
+            },
+            rpc_request_header: None,
+        };
+        let request =
+            RemotingCommand::create_request_command(RequestCode::InvokeBrokerToGetConsumerStatus, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(
+                Some(mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr).as_ref()),
+                request,
+                timeout_millis,
+            )
+            .await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                if let Some(body) = response.body() {
+                    if let Some(status_body) = GetConsumerStatusBody::decode(body) {
+                        return Ok(status_body.consumer_table);
+                    }
+                }
+                Ok(HashMap::new())
+            }
+            _ => Err(mq_client_err!(
+                response.code(),
+                format!(
+                    "invoke broker to get consumer status failed, remark={}",
+                    response.remark().map_or("".to_string(), |s| s.to_string()),
+                )
+            )),
+        }
     }
 
     pub async fn update_consumer_offset_oneway(

@@ -722,7 +722,36 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         group: CheetahString,
         client_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<MessageQueue, u64>>> {
-        todo!()
+        let topic_route_data = self.examine_topic_route_info(topic.clone()).await?;
+        if let Some(route_data) = topic_route_data {
+            if !route_data.broker_datas.is_empty() {
+                if let Some(addr) = route_data.broker_datas[0].select_broker_addr() {
+                    let result = self
+                        .client_instance
+                        .as_ref()
+                        .unwrap()
+                        .get_mq_client_api_impl()
+                        .invoke_broker_to_get_consumer_status(
+                            addr.as_str(),
+                            topic,
+                            group,
+                            client_addr,
+                            self.timeout_millis.as_millis() as u64,
+                        )
+                        .await?;
+                    let converted: HashMap<CheetahString, HashMap<MessageQueue, u64>> = result
+                        .into_iter()
+                        .map(|(k, v)| {
+                            let inner: HashMap<MessageQueue, u64> =
+                                v.into_iter().map(|(mq, off)| (mq, off as u64)).collect();
+                            (k, inner)
+                        })
+                        .collect();
+                    return Ok(converted);
+                }
+            }
+        }
+        Ok(HashMap::new())
     }
 
     async fn create_or_update_order_conf(

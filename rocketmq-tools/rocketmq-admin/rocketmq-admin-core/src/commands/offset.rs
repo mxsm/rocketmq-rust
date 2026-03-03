@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod clone_group_offset_sub_command;
+mod get_consumer_status_sub_command;
 mod reset_offset_by_time_sub_command;
 
 use std::sync::Arc;
@@ -22,6 +23,7 @@ use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::offset::clone_group_offset_sub_command::CloneGroupOffsetSubCommand;
+use crate::commands::offset::get_consumer_status_sub_command::GetConsumerStatusSubCommand;
 use crate::commands::offset::reset_offset_by_time_sub_command::ResetOffsetByTimeSubCommand;
 use crate::commands::CommandExecute;
 
@@ -33,6 +35,13 @@ pub enum OffsetCommands {
         long_about = None,
     )]
     CloneGroupOffset(CloneGroupOffsetSubCommand),
+
+    #[command(
+        name = "getConsumerStatus",
+        about = "Get consumer status from client.",
+        long_about = None
+    )]
+    GetConsumerStatus(GetConsumerStatusSubCommand),
 
     #[command(
         name = "resetOffsetByTime",
@@ -67,6 +76,7 @@ impl CommandExecute for OffsetCommands {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
         match self {
             OffsetCommands::CloneGroupOffset(cmd) => cmd.execute(rpc_hook).await,
+            OffsetCommands::GetConsumerStatus(cmd) => cmd.execute(rpc_hook).await,
             OffsetCommands::ResetOffsetByTime(cmd) => cmd.execute(rpc_hook).await,
         }
     }

@@ -479,6 +479,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Offset",
+                command: "getConsumerStatus",
+                remark: "Get consumer status from client.",
+            },
+            Command {
+                category: "Offset",
                 command: "resetOffsetByTime",
                 remark: "Reset consumer group offsets to a specific timestamp (no restart required).",
             },
