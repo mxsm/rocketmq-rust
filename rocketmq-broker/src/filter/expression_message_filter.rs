@@ -116,7 +116,8 @@ impl MessageFilter for ExpressionMessageFilter {
         let context = MessageEvaluationContext::new(&temp_properties);
         if let Some(filter) = real_filter_data.compiled_expression() {
             match filter.evaluate(&context) {
-                Ok(value) => *value.downcast_ref::<bool>().unwrap_or(&false),
+                Ok(rocketmq_filter::expression::Value::Boolean(b)) => b,
+                Ok(_) => false, // Non-boolean values are treated as false
                 Err(_) => false,
             }
         } else {
