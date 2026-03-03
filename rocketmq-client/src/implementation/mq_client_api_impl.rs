@@ -74,6 +74,7 @@ use rocketmq_remoting::protocol::body::batch_ack_message_request_body::BatchAckM
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_remoting::protocol::body::broker_replicas_info::BrokerReplicasInfo;
 use rocketmq_remoting::protocol::body::check_client_request_body::CheckClientRequestBody;
+use rocketmq_remoting::protocol::body::check_rocksdb_cqwrite_progress_response_body::CheckRocksdbCqWriteResult;
 use rocketmq_remoting::protocol::body::epoch_entry_cache::EpochEntryCache;
 use rocketmq_remoting::protocol::body::get_consumer_list_by_group_response_body::GetConsumerListByGroupResponseBody;
 use rocketmq_remoting::protocol::body::get_lite_group_info_response_body::GetLiteGroupInfoResponseBody;
@@ -92,6 +93,7 @@ use rocketmq_remoting::protocol::body::user_info::UserInfo;
 use rocketmq_remoting::protocol::header::ack_message_request_header::AckMessageRequestHeader;
 use rocketmq_remoting::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader;
 use rocketmq_remoting::protocol::header::change_invisible_time_response_header::ChangeInvisibleTimeResponseHeader;
+use rocketmq_remoting::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
 use rocketmq_remoting::protocol::header::create_user_request_header::CreateUserRequestHeader;
@@ -607,6 +609,37 @@ impl MQClientAPIImpl {
         if ResponseCode::from(response.code()) == ResponseCode::Success {
             if let Some(body) = response.get_body() {
                 return GetBrokerLiteInfoResponseBody::decode(body.as_ref());
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn check_rocksdb_cq_write_progress(
+        &self,
+        addr: &CheetahString,
+        topic: CheetahString,
+        check_store_time: i64,
+        timeout_millis: u64,
+    ) -> RocketMQResult<CheckRocksdbCqWriteResult> {
+        let request_header = CheckRocksdbCqWriteProgressRequestHeader {
+            topic,
+            check_store_time,
+            rpc: None,
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::CheckRocksdbCqWriteProgress, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                let result: CheckRocksdbCqWriteResult = serde_json::from_slice(body.as_ref()).map_err(|e| {
+                    mq_client_err!(-1, format!("Failed to deserialize CheckRocksdbCqWriteResult: {}", e))
+                })?;
+                return Ok(result);
             }
         }
         Err(mq_client_err!(

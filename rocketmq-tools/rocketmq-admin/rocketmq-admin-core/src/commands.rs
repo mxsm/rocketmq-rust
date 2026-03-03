@@ -27,6 +27,7 @@ mod message;
 mod namesrv;
 mod offset;
 mod producer;
+mod queue;
 mod target;
 mod topic;
 
@@ -145,6 +146,11 @@ pub enum Commands {
     Producer(producer::ProducerCommands),
 
     #[command(subcommand)]
+    #[command(about = "Queue commands")]
+    #[command(name = "queue")]
+    Queue(queue::QueueCommands),
+
+    #[command(subcommand)]
     #[command(about = "Topic commands")]
     Topic(topic::TopicCommands),
 
@@ -168,6 +174,7 @@ impl CommandExecute for Commands {
             Commands::NameServer(value) => value.execute(rpc_hook).await,
             Commands::Offset(value) => value.execute(rpc_hook).await,
             Commands::Producer(value) => value.execute(rpc_hook).await,
+            Commands::Queue(value) => value.execute(rpc_hook).await,
             Commands::Topic(value) => value.execute(rpc_hook).await,
             Commands::Show(value) => value.execute(rpc_hook).await,
         }
@@ -498,6 +505,11 @@ impl CommandExecute for ClassificationTablePrint {
                 category: "Producer",
                 command: "producer",
                 remark: "Query producer's instances, connection, status, etc.",
+            },
+            Command {
+                category: "Queue",
+                command: "checkRocksdbCqWriteProgress",
+                remark: "Check if rocksdb cq is same as file cq.",
             },
             Command {
                 category: "Topic",
