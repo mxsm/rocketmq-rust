@@ -565,7 +565,10 @@ impl ProducerManager {
                 .remove_if(&group, |_, map| map.is_empty())
                 .is_some()
             {
-                info!("unregister a producer group[{}] from groupChannelTable (Fast Path)", group);
+                info!(
+                    "unregister a producer group[{}] from groupChannelTable (Fast Path)",
+                    group
+                );
                 self.call_producer_change_listener(ProducerGroupEvent::GroupUnregister, &group, None);
             }
         }
