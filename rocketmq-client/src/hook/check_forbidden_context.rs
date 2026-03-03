@@ -160,3 +160,67 @@ impl<'a> fmt::Debug for CheckForbiddenContext<'a> {
             .finish()
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_equals_default() {
+        let ctx1 = CheckForbiddenContext::default();
+        let ctx2 = CheckForbiddenContext::new();
+
+        assert_eq!(ctx1.name_srv_addr, ctx2.name_srv_addr);
+        assert_eq!(ctx1.group, ctx2.group);
+        assert_eq!(ctx1.broker_addr, ctx2.broker_addr);
+        assert_eq!(ctx1.communication_mode, ctx2.communication_mode);
+        assert_eq!(ctx1.unit_mode, ctx2.unit_mode);
+    }
+
+    #[test]
+    fn test_builder_sets_single_fields() {
+        let ctx = CheckForbiddenContext::new()
+            .with_name_srv_addr("127.0.0.1:9876")
+            .with_group("test_group")
+            .with_broker_addr("127.0.0.1:10911")
+            .with_unit_mode(true);
+
+        assert_eq!(ctx.name_srv_addr.unwrap().as_str(), "127.0.0.1:9876");
+        assert_eq!(ctx.group.unwrap().as_str(), "test_group");
+        assert_eq!(ctx.broker_addr.unwrap().as_str(), "127.0.0.1:10911");
+        assert!(ctx.unit_mode);
+    }
+
+    #[test]
+    fn test_builder_does_not_override_previous_fields() {
+        let ctx = CheckForbiddenContext::new()
+            .with_group("group_a")
+            .with_name_srv_addr("ns_addr")
+            .with_group("group_b"); // override group intentionally
+
+        assert_eq!(ctx.group.unwrap().as_str(), "group_b");
+        assert_eq!(ctx.name_srv_addr.unwrap().as_str(), "ns_addr");
+    }
+
+    #[test]
+    fn test_communication_mode_assignment() {
+        let ctx = CheckForbiddenContext::new().with_communication_mode(CommunicationMode::Sync);
+
+        assert!(matches!(ctx.communication_mode, Some(CommunicationMode::Sync)));
+    }
+
+    #[test]
+    fn test_unit_mode_default_is_false() {
+        let ctx = CheckForbiddenContext::new();
+        assert!(!ctx.unit_mode);
+    }
+
+    #[test]
+    fn test_custom_arg_downcast() {
+        let mut ctx = CheckForbiddenContext::new();
+        ctx.arg = Some(Box::new(100u32));
+
+        let value = ctx.arg.as_ref().unwrap().downcast_ref::<u32>().unwrap();
+
+        assert_eq!(*value, 100);
+    }
+}
