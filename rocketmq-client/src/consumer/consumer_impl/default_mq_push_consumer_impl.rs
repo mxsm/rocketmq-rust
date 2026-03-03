@@ -1083,13 +1083,13 @@ impl DefaultMQPushConsumerImpl {
         !self.consume_message_hook_list.is_empty()
     }
 
-    pub fn execute_hook_before(&self, context: &ConsumeMessageContext) {
+    pub fn execute_hook_before(&self, context: &mut ConsumeMessageContext) {
         for hook in self.consume_message_hook_list.iter() {
             hook.consume_message_before(context);
         }
     }
 
-    pub fn execute_hook_after(&self, context: &ConsumeMessageContext) {
+    pub fn execute_hook_after(&self, context: &mut ConsumeMessageContext) {
         for hook in self.consume_message_hook_list.iter() {
             hook.consume_message_after(context);
         }

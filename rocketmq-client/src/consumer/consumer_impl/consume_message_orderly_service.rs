@@ -645,22 +645,17 @@ impl ConsumeRequest {
                 let mut consume_message_context = None;
                 let mut status = None;
                 if default_mqpush_consumer_impl.has_hook() {
-                    let queue = self.message_queue.clone();
-                    consume_message_context = Some(ConsumeMessageContext {
-                        consumer_group: self.consumer_group.clone(),
-                        msg_list: &msgs,
-                        mq: Some(queue),
-                        success: false,
-                        status: CheetahString::from_static_str(""),
-                        mq_trace_context: None,
-                        props: Default::default(),
-                        namespace: default_mqpush_consumer_impl
-                            .client_config
-                            .get_namespace()
-                            .unwrap_or_default(),
-                        access_channel: Default::default(),
-                    });
-                    default_mqpush_consumer_impl.execute_hook_before(consume_message_context.as_ref().unwrap());
+                    consume_message_context = Some(
+                        ConsumeMessageContext::new(self.consumer_group.clone(), &msgs)
+                            .with_mq(self.message_queue.clone())
+                            .with_namespace(
+                                default_mqpush_consumer_impl
+                                    .client_config
+                                    .get_namespace()
+                                    .unwrap_or_default(),
+                            ),
+                    );
+                    default_mqpush_consumer_impl.execute_hook_before(consume_message_context.as_mut().unwrap());
                 }
                 let begin_timestamp = Instant::now();
                 let mut has_exception = false;
@@ -747,10 +742,11 @@ impl ConsumeRequest {
                 }
                 if default_mqpush_consumer_impl.has_hook() {
                     let status = *status.as_ref().unwrap();
-                    consume_message_context.as_mut().unwrap().success =
-                        status == ConsumeOrderlyStatus::Success || status == ConsumeOrderlyStatus::Commit;
-                    consume_message_context.as_mut().unwrap().status = status.to_string().into();
-                    default_mqpush_consumer_impl.execute_hook_after(consume_message_context.as_ref().unwrap());
+                    let cmc = consume_message_context.as_mut().unwrap();
+                    cmc.success = status == ConsumeOrderlyStatus::Success || status == ConsumeOrderlyStatus::Commit;
+                    cmc.status = status.to_string().into();
+                    cmc.access_channel = Some(default_mqpush_consumer_impl.client_config.access_channel);
+                    default_mqpush_consumer_impl.execute_hook_after(cmc);
                 }
                 // Record message consume round-trip time.
                 if let Some(client_instance) = default_mqpush_consumer_impl.client_instance.as_ref() {

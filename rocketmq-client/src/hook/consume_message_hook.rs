@@ -53,11 +53,11 @@ pub trait ConsumeMessageHook: Send + Sync {
     fn hook_name(&self) -> &'static str;
 
     /// Invoked before message consumption begins.
-    fn consume_message_before(&self, context: &ConsumeMessageContext);
+    fn consume_message_before(&self, context: &mut ConsumeMessageContext);
 
     /// Invoked after message consumption completes.
     ///
     /// The context reflects the final consumption status, including whether
     /// the messages were consumed successfully.
-    fn consume_message_after(&self, context: &ConsumeMessageContext);
+    fn consume_message_after(&self, context: &mut ConsumeMessageContext);
 }
