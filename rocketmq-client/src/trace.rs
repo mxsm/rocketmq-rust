@@ -18,5 +18,6 @@ pub mod trace_bean;
 pub mod trace_constants;
 pub mod trace_context;
 pub mod trace_dispatcher;
+pub mod trace_transfer_bean;
 pub mod trace_type;
 pub mod trace_view;
