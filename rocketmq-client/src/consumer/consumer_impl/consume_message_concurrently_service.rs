@@ -474,7 +474,7 @@ impl ConsumeRequest {
                         .unwrap_or_default(),
                     access_channel: Default::default(),
                 });
-                default_mqpush_consumer_impl.execute_hook_before(&mut consume_message_context);
+                default_mqpush_consumer_impl.execute_hook_before(consume_message_context.as_ref().unwrap());
             }
 
             let listener = self.message_listener.clone();
@@ -554,7 +554,7 @@ impl ConsumeRequest {
             cmc.status = s.to_string().into();
             cmc.success = s == ConsumeConcurrentlyStatus::ConsumeSuccess;
             cmc.access_channel = Some(default_mqpush_consumer_impl.client_config.access_channel);
-            default_mqpush_consumer_impl.execute_hook_after(&mut consume_message_context);
+            default_mqpush_consumer_impl.execute_hook_after(consume_message_context.as_ref().unwrap());
         }
 
         // Record message consume round-trip time.

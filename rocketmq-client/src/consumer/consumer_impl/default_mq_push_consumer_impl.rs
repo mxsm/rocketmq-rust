@@ -610,7 +610,7 @@ impl DefaultMQPushConsumerImpl {
         Ok(())
     }
 
-    pub fn register_consume_message_hook(&mut self, hook: impl ConsumeMessageHook + Send + Sync + 'static) {
+    pub fn register_consume_message_hook(&mut self, hook: impl ConsumeMessageHook + 'static) {
         self.consume_message_hook_list
             .push(Arc::new(hook) as ConsumeMessageHookArc);
     }
@@ -1083,15 +1083,15 @@ impl DefaultMQPushConsumerImpl {
         !self.consume_message_hook_list.is_empty()
     }
 
-    pub fn execute_hook_before(&self, context: &mut Option<ConsumeMessageContext>) {
+    pub fn execute_hook_before(&self, context: &ConsumeMessageContext) {
         for hook in self.consume_message_hook_list.iter() {
-            hook.consume_message_before(context.as_mut());
+            hook.consume_message_before(context);
         }
     }
 
-    pub fn execute_hook_after(&self, context: &mut Option<ConsumeMessageContext>) {
+    pub fn execute_hook_after(&self, context: &ConsumeMessageContext) {
         for hook in self.consume_message_hook_list.iter() {
-            hook.consume_message_after(context.as_mut());
+            hook.consume_message_after(context);
         }
     }
 

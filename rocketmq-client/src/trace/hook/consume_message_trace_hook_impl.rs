@@ -27,15 +27,15 @@ impl ConsumeMessageTraceHookImpl {
 }
 
 impl ConsumeMessageHook for ConsumeMessageTraceHookImpl {
-    fn hook_name(&self) -> &str {
-        todo!()
+    fn hook_name(&self) -> &'static str {
+        "ConsumeMessageTraceHook"
     }
 
-    fn consume_message_before(&self, context: Option<&mut ConsumeMessageContext>) {
-        todo!()
+    fn consume_message_before(&self, _context: &ConsumeMessageContext) {
+        // TODO: Implement trace logic before consumption
     }
 
-    fn consume_message_after(&self, context: Option<&mut ConsumeMessageContext>) {
-        todo!()
+    fn consume_message_after(&self, _context: &ConsumeMessageContext) {
+        // TODO: Implement trace logic after consumption
     }
 }
