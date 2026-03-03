@@ -23,9 +23,8 @@ use rocketmq_common::common::filter::expression_type::ExpressionType;
 ///
 /// # Examples
 ///
-/// ```rust
-/// use rocketmq_client::consumer::message_selector::MessageSelector;
-///
+/// ```
+/// # use rocketmq_client_rust::consumer::message_selector::MessageSelector;
 /// // Select by tag
 /// let selector = MessageSelector::by_tag("TagA");
 ///
@@ -66,9 +65,8 @@ impl MessageSelector {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use rocketmq_client::consumer::message_selector::MessageSelector;
-    ///
+    /// ```
+    /// # use rocketmq_client_rust::consumer::message_selector::MessageSelector;
     /// let selector =
     ///     MessageSelector::by_sql("(price > 100 AND category = 'electronics') OR discount = true");
     /// ```
@@ -86,9 +84,8 @@ impl MessageSelector {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use rocketmq_client::consumer::message_selector::MessageSelector;
-    ///
+    /// ```
+    /// # use rocketmq_client_rust::consumer::message_selector::MessageSelector;
     /// // Single tag
     /// let selector = MessageSelector::by_tag("TagA");
     ///
