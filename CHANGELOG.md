@@ -39,3 +39,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **refactor(remoting):** Replace `lazy_static!` with `std::sync::LazyLock` in `remoting_command.rs` and remove `lazy_static` dependency from `rocketmq-remoting` ([#5060](https://github.com/mxsm/rocketmq-rust/issues/5060))
 - **perf(ArcMut):** Add the `#[inline]` attribute to the `mut_from_ref`, `downgrade`, and `get_inner` methods for `ArcMut`, improving performance ([#2876](https://github.com/mxsm/rocketmq-rust/pull/2876))
 - **chore(controller):** Update default controller listen address to use port 60109 ([#5527](https://github.com/mxsm/rocketmq-rust/issues/5527))
+- **refactor(broker):** Update ProducerManager to use ProducerGroupName type alias for producer group mapping ([#6638](https://github.com/mxsm/rocketmq-rust/issues/6638))
