@@ -3496,6 +3496,7 @@ name = "rocketmq-broker"
 version = "0.8.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "bytes",
  "cfg-if",
  "cheetah-string",

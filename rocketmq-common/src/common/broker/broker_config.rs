@@ -159,6 +159,10 @@ mod defaults {
         true
     }
 
+    pub fn enable_register_producer() -> bool {
+        true
+    }
+
     pub fn register_name_server_period() -> u64 {
         1000 * 30
     }
@@ -544,6 +548,11 @@ pub struct BrokerConfig {
     #[serde(default)]
     pub enable_slave_acting_master: bool,
 
+    /// Enable producer registration. When false with reject_transaction_message=true,
+    /// only existing producers can send heartbeats, new producers cannot register.
+    #[serde(default = "defaults::enable_register_producer")]
+    pub enable_register_producer: bool,
+
     #[serde(default)]
     pub reject_transaction_message: bool,
 
@@ -821,6 +830,7 @@ impl Default for BrokerConfig {
             cluster_topic_enable: true,
             revive_queue_num: 8,
             enable_slave_acting_master: false,
+            enable_register_producer: true,
             reject_transaction_message: false,
             enable_detail_stat: true,
             flush_consumer_offset_interval: 1000 * 5,
