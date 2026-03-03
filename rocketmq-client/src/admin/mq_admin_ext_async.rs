@@ -33,6 +33,7 @@ use rocketmq_remoting::protocol::body::acl_info::AclInfo;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_remoting::protocol::body::broker_replicas_info::BrokerReplicasInfo;
+use rocketmq_remoting::protocol::body::check_rocksdb_cqwrite_progress_response_body::CheckRocksdbCqWriteResult;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
 use rocketmq_remoting::protocol::body::consumer_connection::ConsumerConnection;
 use rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo;
@@ -175,7 +176,8 @@ pub trait MQAdminExt: Send {
         &self,
         broker_addr: CheetahString,
         topic: CheetahString,
-    ) -> rocketmq_error::RocketMQResult<CheetahString>;
+        check_store_time: i64,
+    ) -> rocketmq_error::RocketMQResult<CheckRocksdbCqWriteResult>;
 
     async fn examine_broker_cluster_info(&self) -> rocketmq_error::RocketMQResult<ClusterInfo>;
 

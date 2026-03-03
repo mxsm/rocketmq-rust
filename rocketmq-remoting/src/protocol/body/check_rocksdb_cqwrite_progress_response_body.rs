@@ -16,10 +16,40 @@ use cheetah_string::CheetahString;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(i32)]
+pub enum CheckStatus {
+    CheckOk = 0,
+    CheckNotOk = 1,
+    CheckInProgress = 2,
+    CheckError = 3,
+}
+
+impl From<i32> for CheckStatus {
+    fn from(value: i32) -> Self {
+        match value {
+            0 => CheckStatus::CheckOk,
+            1 => CheckStatus::CheckNotOk,
+            2 => CheckStatus::CheckInProgress,
+            3 => CheckStatus::CheckError,
+            _ => CheckStatus::CheckError,
+        }
+    }
+}
+
+/// Result of checking RocksDB consume queue write progress.
+/// Corresponds to Java's `CheckRocksdbCqWriteResult`.
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct ClusterAclVersionInfo {
-    pub diff_result: Option<CheetahString>,
+pub struct CheckRocksdbCqWriteResult {
+    pub check_result: Option<CheetahString>,
+    pub check_status: i32,
+}
+
+impl CheckRocksdbCqWriteResult {
+    pub fn get_check_status(&self) -> CheckStatus {
+        CheckStatus::from(self.check_status)
+    }
 }
 
 #[cfg(test)]
@@ -29,39 +59,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cluster_acl_version_info_default_values() {
-        let info = ClusterAclVersionInfo::default();
-        assert!(info.diff_result.is_none());
+    fn check_rocksdb_cq_write_result_default_values() {
+        let result = CheckRocksdbCqWriteResult::default();
+        assert!(result.check_result.is_none());
+        assert_eq!(result.check_status, 0);
     }
 
     #[test]
-    fn cluster_acl_version_info_with_diff_result() {
-        let info = ClusterAclVersionInfo {
-            diff_result: Some(CheetahString::from("diff")),
+    fn check_rocksdb_cq_write_result_with_values() {
+        let result = CheckRocksdbCqWriteResult {
+            check_result: Some(CheetahString::from("all topic is ready")),
+            check_status: 0,
         };
-        assert_eq!(info.diff_result, Some(CheetahString::from("diff")));
+        assert_eq!(result.check_result, Some(CheetahString::from("all topic is ready")));
+        assert_eq!(result.get_check_status(), CheckStatus::CheckOk);
     }
 
     #[test]
-    fn serialize_cluster_acl_version_info() {
-        let info = ClusterAclVersionInfo {
-            diff_result: Some(CheetahString::from("diff")),
+    fn serialize_check_rocksdb_cq_write_result() {
+        let result = CheckRocksdbCqWriteResult {
+            check_result: Some(CheetahString::from("check doing")),
+            check_status: 2,
         };
-        let serialized = serde_json::to_string(&info).unwrap();
-        assert_eq!(serialized, r#"{"diffResult":"diff"}"#);
+        let serialized = serde_json::to_string(&result).unwrap();
+        assert!(serialized.contains("\"checkResult\":\"check doing\""));
+        assert!(serialized.contains("\"checkStatus\":2"));
     }
 
     #[test]
-    fn deserialize_cluster_acl_version_info() {
-        let json = r#"{"diffResult":"diff"}"#;
-        let deserialized: ClusterAclVersionInfo = serde_json::from_str(json).unwrap();
-        assert_eq!(deserialized.diff_result, Some(CheetahString::from("diff")));
+    fn deserialize_check_rocksdb_cq_write_result() {
+        let json = r#"{"checkResult":"all ok","checkStatus":0}"#;
+        let result: CheckRocksdbCqWriteResult = serde_json::from_str(json).unwrap();
+        assert_eq!(result.check_result, Some(CheetahString::from("all ok")));
+        assert_eq!(result.check_status, 0);
+        assert_eq!(result.get_check_status(), CheckStatus::CheckOk);
     }
 
     #[test]
-    fn deserialize_cluster_acl_version_info_missing_diff_result() {
-        let json = r#"{}"#;
-        let deserialized: ClusterAclVersionInfo = serde_json::from_str(json).unwrap();
-        assert!(deserialized.diff_result.is_none());
+    fn deserialize_check_rocksdb_cq_write_result_error() {
+        let json = r#"{"checkResult":"error info","checkStatus":3}"#;
+        let result: CheckRocksdbCqWriteResult = serde_json::from_str(json).unwrap();
+        assert_eq!(result.get_check_status(), CheckStatus::CheckError);
+    }
+
+    #[test]
+    fn check_status_from_i32() {
+        assert_eq!(CheckStatus::from(0), CheckStatus::CheckOk);
+        assert_eq!(CheckStatus::from(1), CheckStatus::CheckNotOk);
+        assert_eq!(CheckStatus::from(2), CheckStatus::CheckInProgress);
+        assert_eq!(CheckStatus::from(3), CheckStatus::CheckError);
+        assert_eq!(CheckStatus::from(99), CheckStatus::CheckError);
     }
 }
