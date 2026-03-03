@@ -30,7 +30,7 @@ pub trait ConsumeMessageHook: Sync + Send + 'static {
     /// debugging, or identifying the hook within a collection of hooks.
     ///
     /// # Returns
-    /// A string slice (`&str`) representing the name of the hook.
+    /// A static string slice (`&'static str`) representing the name of the hook.
     fn hook_name(&self) -> &'static str;
 
     /// Hook method called before a message is consumed.
