@@ -558,7 +558,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         group: CheetahString,
         client_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, HashMap<MessageQueue, u64>>> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .get_consume_status(topic, group, client_addr)
+            .await
     }
 
     async fn create_or_update_order_conf(
