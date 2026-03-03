@@ -15,7 +15,7 @@
 use crate::hook::end_transaction_context::EndTransactionContext;
 
 pub trait EndTransactionHook: Send + Sync {
-    fn hook_name(&self) -> &str;
+    fn hook_name(&self) -> &'static str;
 
     fn end_transaction(&self, context: &EndTransactionContext);
 }

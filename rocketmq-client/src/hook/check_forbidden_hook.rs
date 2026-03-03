@@ -33,7 +33,7 @@ use crate::hook::check_forbidden_context::CheckForbiddenContext;
 /// struct RegionValidator;
 ///
 /// impl CheckForbiddenHook for RegionValidator {
-///     fn hook_name(&self) -> &str {
+///     fn hook_name(&self) -> &'static str {
 ///         "RegionValidator"
 ///     }
 ///
@@ -51,7 +51,7 @@ pub trait CheckForbiddenHook: Send + Sync {
     /// Returns the unique name of this hook.
     ///
     /// The name is used for logging and diagnostic purposes.
-    fn hook_name(&self) -> &str;
+    fn hook_name(&self) -> &'static str;
 
     /// Validates whether a message send operation should be allowed.
     ///

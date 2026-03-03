@@ -27,7 +27,7 @@ impl EndTransactionTraceHookImpl {
 }
 
 impl EndTransactionHook for EndTransactionTraceHookImpl {
-    fn hook_name(&self) -> &str {
+    fn hook_name(&self) -> &'static str {
         "EndTransactionTraceHookImpl"
     }
 

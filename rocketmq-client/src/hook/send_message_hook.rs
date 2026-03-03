@@ -15,7 +15,7 @@
 use crate::hook::send_message_context::SendMessageContext;
 
 pub trait SendMessageHook: Send + Sync {
-    fn hook_name(&self) -> &str;
+    fn hook_name(&self) -> &'static str;
 
     fn send_message_before(&self, context: &Option<SendMessageContext<'_>>);
 
