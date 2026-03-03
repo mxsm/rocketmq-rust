@@ -212,3 +212,131 @@ impl Default for AssignedMessageQueue {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rocketmq_common::common::message::message_queue::MessageQueue;
+
+    fn mock_mq(topic: &str, queue_id: i32) -> MessageQueue {
+        MessageQueue::from_parts(topic, "mock_broker", queue_id)
+    }
+
+    #[tokio::test]
+    async fn test_put_and_size() {
+        let amq = AssignedMessageQueue::new();
+        let mq1 = mock_mq("topic_a", 0);
+        let mq2 = mock_mq("topic_a", 1);
+
+        assert_eq!(amq.size().await, 0);
+
+        amq.put(mq1.clone()).await;
+        assert_eq!(amq.size().await, 1);
+
+        amq.put(mq2.clone()).await;
+        assert_eq!(amq.size().await, 2);
+
+        amq.put(mq1.clone()).await;
+        assert_eq!(amq.size().await, 2);
+
+        let queues = amq.message_queues().await;
+        assert!(queues.contains(&mq1));
+        assert!(queues.contains(&mq2));
+    }
+
+    #[tokio::test]
+    async fn test_remove() {
+        let amq = AssignedMessageQueue::new();
+        let mq1 = mock_mq("topic_a", 0);
+
+        amq.put(mq1.clone()).await;
+        assert_eq!(amq.size().await, 1);
+
+        let removed_pq = amq.remove(&mq1).await;
+        assert!(removed_pq.is_some());
+        assert_eq!(amq.size().await, 0);
+
+        let mq2 = mock_mq("topic_b", 0);
+        let removed_none = amq.remove(&mq2).await;
+        assert!(removed_none.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_remove_by_topic() {
+        let amq = AssignedMessageQueue::new();
+        let mq1 = mock_mq("topic_a", 0);
+        let mq2 = mock_mq("topic_a", 1);
+        let mq3 = mock_mq("topic_b", 0);
+
+        amq.put(mq1.clone()).await;
+        amq.put(mq2.clone()).await;
+        amq.put(mq3.clone()).await;
+        assert_eq!(amq.size().await, 3);
+
+        let removed_pqs = amq.remove_by_topic("topic_a").await;
+        assert_eq!(removed_pqs.len(), 2);
+        assert_eq!(amq.size().await, 1);
+    }
+
+    #[tokio::test]
+    async fn test_pause_and_resume() {
+        let amq = AssignedMessageQueue::new();
+        let mq = mock_mq("topic_a", 0);
+
+        amq.put(mq.clone()).await;
+
+        assert!(!amq.is_paused(&mq).await);
+
+        amq.set_paused(&mq, true).await;
+        assert!(amq.is_paused(&mq).await);
+
+        amq.set_paused(&mq, false).await;
+        assert!(!amq.is_paused(&mq).await);
+    }
+
+    #[tokio::test]
+    async fn test_seek_offset() {
+        let amq = AssignedMessageQueue::new();
+        let mq = mock_mq("topic_a", 0);
+
+        amq.put(mq.clone()).await;
+
+        assert_eq!(amq.get_seek_offset(&mq).await, -1);
+
+        amq.set_seek_offset(&mq, 1024).await;
+        assert_eq!(amq.get_seek_offset(&mq).await, 1024);
+
+        amq.clear_seek_offset(&mq).await;
+        assert_eq!(amq.get_seek_offset(&mq).await, -1);
+    }
+
+    #[tokio::test]
+    async fn test_pull_and_consume_offset() {
+        let amq = AssignedMessageQueue::new();
+        let mq = mock_mq("topic_a", 0);
+
+        amq.put(mq.clone()).await;
+
+        let pq = amq.get_process_queue(&mq).await.unwrap();
+
+        assert_eq!(amq.get_pull_offset(&mq).await, -1);
+        amq.update_pull_offset(&mq, 500, &pq).await;
+        assert_eq!(amq.get_pull_offset(&mq).await, 500);
+
+        assert_eq!(amq.get_consume_offset(&mq).await, -1);
+        amq.update_consume_offset(&mq, 300).await;
+        assert_eq!(amq.get_consume_offset(&mq).await, 300);
+    }
+
+    #[tokio::test]
+    async fn test_clear() {
+        let amq = AssignedMessageQueue::new();
+        amq.put(mock_mq("topic_a", 0)).await;
+        amq.put(mock_mq("topic_b", 1)).await;
+
+        assert_eq!(amq.size().await, 2);
+
+        amq.clear().await;
+        assert_eq!(amq.size().await, 0);
+    }
+}
