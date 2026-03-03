@@ -12,13 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod async_trace_dispatcher;
-pub mod hook;
-pub mod trace_bean;
-pub mod trace_constants;
-pub mod trace_context;
-pub mod trace_dispatcher;
-pub mod trace_dispatcher_type;
-pub mod trace_transfer_bean;
-pub mod trace_type;
-pub mod trace_view;
+/// Type of trace dispatcher indicating the source of trace data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum TraceDispatcherType {
+    /// Trace data from message producers
+    #[default]
+    Producer,
+    /// Trace data from message consumers
+    Consumer,
+}
+
+impl TraceDispatcherType {
+    #[inline]
+    pub fn is_producer(&self) -> bool {
+        matches!(self, Self::Producer)
+    }
+
+    #[inline]
+    pub fn is_consumer(&self) -> bool {
+        matches!(self, Self::Consumer)
+    }
+}
