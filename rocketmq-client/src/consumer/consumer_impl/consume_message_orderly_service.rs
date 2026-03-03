@@ -660,7 +660,7 @@ impl ConsumeRequest {
                             .unwrap_or_default(),
                         access_channel: Default::default(),
                     });
-                    default_mqpush_consumer_impl.execute_hook_before(&mut consume_message_context);
+                    default_mqpush_consumer_impl.execute_hook_before(consume_message_context.as_ref().unwrap());
                 }
                 let begin_timestamp = Instant::now();
                 let mut has_exception = false;
@@ -750,7 +750,7 @@ impl ConsumeRequest {
                     consume_message_context.as_mut().unwrap().success =
                         status == ConsumeOrderlyStatus::Success || status == ConsumeOrderlyStatus::Commit;
                     consume_message_context.as_mut().unwrap().status = status.to_string().into();
-                    default_mqpush_consumer_impl.execute_hook_after(&mut consume_message_context);
+                    default_mqpush_consumer_impl.execute_hook_after(consume_message_context.as_ref().unwrap());
                 }
                 // Record message consume round-trip time.
                 if let Some(client_instance) = default_mqpush_consumer_impl.client_instance.as_ref() {

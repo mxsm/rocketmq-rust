@@ -925,7 +925,7 @@ impl DefaultLitePullConsumerImpl {
                 // Execute hook before with panic protection
                 for hook in &self.consume_message_hook_list {
                     if let Err(err) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        hook.consume_message_before(Some(&mut context));
+                        hook.consume_message_before(&context);
                     })) {
                         tracing::error!(
                             "consumeMessageHook {} executeHookBefore panicked: {:?}",
@@ -942,7 +942,7 @@ impl DefaultLitePullConsumerImpl {
                 // Execute hook after with panic protection
                 for hook in &self.consume_message_hook_list {
                     if let Err(err) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        hook.consume_message_after(Some(&mut context));
+                        hook.consume_message_after(&context);
                     })) {
                         tracing::error!(
                             "consumeMessageHook {} executeHookAfter panicked: {:?}",
