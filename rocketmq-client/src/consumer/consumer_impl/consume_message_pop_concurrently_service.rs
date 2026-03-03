@@ -601,22 +601,17 @@ impl ConsumeRequest {
         }
 
         if default_mqpush_consumer_impl.has_hook() {
-            let queue = self.message_queue.clone();
-            consume_message_context = Some(ConsumeMessageContext {
-                consumer_group: self.consumer_group.clone(),
-                msg_list: &self.msgs,
-                mq: Some(queue),
-                success: false,
-                status: CheetahString::new(),
-                mq_trace_context: None,
-                props: Default::default(),
-                namespace: default_mqpush_consumer_impl
-                    .client_config
-                    .get_namespace()
-                    .unwrap_or_default(),
-                access_channel: Default::default(),
-            });
-            default_mqpush_consumer_impl.execute_hook_before(consume_message_context.as_ref().unwrap());
+            consume_message_context = Some(
+                ConsumeMessageContext::new(self.consumer_group.clone(), &self.msgs)
+                    .with_mq(self.message_queue.clone())
+                    .with_namespace(
+                        default_mqpush_consumer_impl
+                            .client_config
+                            .get_namespace()
+                            .unwrap_or_default(),
+                    ),
+            );
+            default_mqpush_consumer_impl.execute_hook_before(consume_message_context.as_mut().unwrap());
         }
 
         let listener = self.message_listener.clone();
@@ -700,7 +695,7 @@ impl ConsumeRequest {
             cmc.status = status.unwrap().to_string().into();
             cmc.success = status.unwrap() == ConsumeConcurrentlyStatus::ConsumeSuccess;
             cmc.access_channel = Some(default_mqpush_consumer_impl.client_config.access_channel);
-            default_mqpush_consumer_impl.execute_hook_after(consume_message_context.as_ref().unwrap());
+            default_mqpush_consumer_impl.execute_hook_after(consume_message_context.as_mut().unwrap());
         }
 
         // Record message consume round-trip time.

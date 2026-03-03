@@ -910,22 +910,15 @@ impl DefaultLitePullConsumerImpl {
 
             // Execute consume message hooks if registered
             if !self.consume_message_hook_list.is_empty() {
-                let mut context = ConsumeMessageContext {
-                    consumer_group: self.consumer_config.consumer_group.clone(),
-                    msg_list: &messages,
-                    mq: Some(request.message_queue.clone()),
-                    success: false,
-                    status: CheetahString::new(),
-                    mq_trace_context: None,
-                    props: HashMap::new(),
-                    namespace: self.client_config.namespace.clone().unwrap_or_default(),
-                    access_channel: Some(self.client_config.access_channel),
-                };
+                let mut context = ConsumeMessageContext::new(self.consumer_config.consumer_group.clone(), &messages)
+                    .with_mq(request.message_queue.clone())
+                    .with_namespace(self.client_config.namespace.clone().unwrap_or_default())
+                    .with_access_channel(self.client_config.access_channel);
 
                 // Execute hook before with panic protection
                 for hook in &self.consume_message_hook_list {
                     if let Err(err) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        hook.consume_message_before(&context);
+                        hook.consume_message_before(&mut context);
                     })) {
                         tracing::error!(
                             "consumeMessageHook {} executeHookBefore panicked: {:?}",
@@ -942,7 +935,7 @@ impl DefaultLitePullConsumerImpl {
                 // Execute hook after with panic protection
                 for hook in &self.consume_message_hook_list {
                     if let Err(err) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        hook.consume_message_after(&context);
+                        hook.consume_message_after(&mut context);
                     })) {
                         tracing::error!(
                             "consumeMessageHook {} executeHookAfter panicked: {:?}",
