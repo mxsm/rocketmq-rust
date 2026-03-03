@@ -68,7 +68,7 @@ mod tests {
     #[test]
     fn trace_dispatcher_type_clone() {
         let dispatcher_type: TraceDispatcherType = TraceDispatcherType::Consumer;
-        let cloned_type = dispatcher_type.clone();
+        let cloned_type = dispatcher_type;
         assert_eq!(dispatcher_type, cloned_type);
     }
 
