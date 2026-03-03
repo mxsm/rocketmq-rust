@@ -15,7 +15,7 @@
 use crate::hook::filter_message_context::FilterMessageContext;
 
 pub trait FilterMessageHook {
-    fn hook_name(&self) -> &str;
+    fn hook_name(&self) -> &'static str;
 
     fn filter_message(&self, context: &FilterMessageContext<'_>);
 }

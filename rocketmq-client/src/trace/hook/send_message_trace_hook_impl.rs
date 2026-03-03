@@ -26,7 +26,7 @@ impl SendMessageTraceHookImpl {
     }
 }
 impl SendMessageHook for SendMessageTraceHookImpl {
-    fn hook_name(&self) -> &str {
+    fn hook_name(&self) -> &'static str {
         todo!()
     }
 
