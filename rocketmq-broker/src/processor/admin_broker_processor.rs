@@ -258,7 +258,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .get_producer_connection_list(ctx, request)
                     .await
             }
-            RequestCode::GetAllProducerInfo => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::GetAllProducerInfo => self.producer_request_handler.get_all_producer_info(ctx, request).await,
             RequestCode::GetConsumeStats => {
                 self.consumer_request_handler
                     .get_consume_stats(channel, ctx, request_code, request)

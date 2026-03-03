@@ -569,9 +569,14 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
 
     async fn get_all_producer_info(
         &self,
-        _broker_addr: CheetahString,
+        broker_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<ProducerTableInfo> {
-        unimplemented!("get_all_producer_info not implemented yet")
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .get_all_producer_info(broker_addr.as_str(), self.timeout_millis.as_millis() as u64)
+            .await
     }
 
     async fn get_name_server_address_list(&self) -> Vec<CheetahString> {

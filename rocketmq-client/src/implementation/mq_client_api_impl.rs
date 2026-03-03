@@ -80,6 +80,7 @@ use rocketmq_remoting::protocol::body::get_lite_group_info_response_body::GetLit
 use rocketmq_remoting::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
 use rocketmq_remoting::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_remoting::protocol::body::producer_table_info::ProducerTableInfo;
 use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
 use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
 use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
@@ -1769,6 +1770,41 @@ impl MQClientAPIImpl {
                 )
             )),
         }
+    }
+
+    pub async fn get_all_producer_info(
+        &mut self,
+        addr: &str,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<ProducerTableInfo> {
+        let request = RemotingCommand::create_request_command(RequestCode::GetAllProducerInfo, EmptyHeader {});
+        let response = self
+            .remoting_client
+            .invoke_request(
+                Some(mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr).as_ref()),
+                request,
+                timeout_millis,
+            )
+            .await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                if let Some(body) = response.body() {
+                    return ProducerTableInfo::decode(body);
+                }
+            }
+            _ => {
+                return Err(client_broker_err!(
+                    response.code(),
+                    response.remark().map_or("".to_string(), |s| s.to_string()),
+                    addr.to_string()
+                ));
+            }
+        }
+        Err(client_broker_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string()),
+            addr.to_string()
+        ))
     }
 
     pub async fn update_consumer_offset_oneway(

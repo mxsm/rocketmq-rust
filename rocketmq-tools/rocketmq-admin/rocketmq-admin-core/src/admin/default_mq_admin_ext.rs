@@ -1138,9 +1138,9 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn get_all_producer_info(
         &self,
-        _broker_addr: CheetahString,
+        broker_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<ProducerTableInfo> {
-        unimplemented!("get_all_producer_info not implemented yet")
+        self.default_mqadmin_ext_impl.get_all_producer_info(broker_addr).await
     }
     #[allow(deprecated)]
     async fn delete_topic_in_broker_concurrent(

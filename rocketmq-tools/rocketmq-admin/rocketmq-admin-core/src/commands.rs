@@ -26,6 +26,7 @@ mod lite;
 mod message;
 mod namesrv;
 mod offset;
+mod producer;
 mod target;
 mod topic;
 
@@ -139,6 +140,11 @@ pub enum Commands {
     Offset(offset::OffsetCommands),
 
     #[command(subcommand)]
+    #[command(about = "Producer commands")]
+    #[command(name = "producer")]
+    Producer(producer::ProducerCommands),
+
+    #[command(subcommand)]
     #[command(about = "Topic commands")]
     Topic(topic::TopicCommands),
 
@@ -161,6 +167,7 @@ impl CommandExecute for Commands {
             Commands::Message(value) => value.execute(rpc_hook).await,
             Commands::NameServer(value) => value.execute(rpc_hook).await,
             Commands::Offset(value) => value.execute(rpc_hook).await,
+            Commands::Producer(value) => value.execute(rpc_hook).await,
             Commands::Topic(value) => value.execute(rpc_hook).await,
             Commands::Show(value) => value.execute(rpc_hook).await,
         }
@@ -486,6 +493,11 @@ impl CommandExecute for ClassificationTablePrint {
                 category: "Offset",
                 command: "resetOffsetByTime",
                 remark: "Reset consumer group offsets to a specific timestamp (no restart required).",
+            },
+            Command {
+                category: "Producer",
+                command: "producer",
+                remark: "Query producer's instances, connection, status, etc.",
             },
             Command {
                 category: "Topic",
