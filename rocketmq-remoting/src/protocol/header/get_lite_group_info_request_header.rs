@@ -68,18 +68,12 @@ mod tests {
         };
 
         let map = header.to_map().unwrap();
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("group")).unwrap(),
-            "my_group"
-        );
+        assert_eq!(map.get(&CheetahString::from_static_str("group")).unwrap(), "my_group");
         assert_eq!(
             map.get(&CheetahString::from_static_str("liteTopic")).unwrap(),
             "my_lite_topic"
         );
-        assert_eq!(
-            map.get(&CheetahString::from_static_str("topK")).unwrap(),
-            "5"
-        );
+        assert_eq!(map.get(&CheetahString::from_static_str("topK")).unwrap(), "5");
     }
 
     #[test]
@@ -93,10 +87,7 @@ mod tests {
             CheetahString::from_static_str("liteTopic"),
             CheetahString::from("deserialized_lite"),
         );
-        map.insert(
-            CheetahString::from_static_str("topK"),
-            CheetahString::from("20"),
-        );
+        map.insert(CheetahString::from_static_str("topK"), CheetahString::from("20"));
 
         let header = <GetLiteGroupInfoRequestHeader as FromMap>::from(&map).unwrap();
         assert_eq!(header.group, CheetahString::from("deserialized_group"));
