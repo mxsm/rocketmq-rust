@@ -71,6 +71,10 @@ harness = false
 name    = "thread_local_index_bench"
 harness = false
 
+[[bench]]
+name    = "message_util_bench"
+harness = false
+
 [[example]]
 name = "simple-producer"
 path = "examples/producer/simple_producer.rs"
