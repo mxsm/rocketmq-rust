@@ -84,6 +84,7 @@ use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
 use rocketmq_remoting::protocol::body::producer_table_info::ProducerTableInfo;
 use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
 use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
+use rocketmq_remoting::protocol::body::query_consume_queue_response_body::QueryConsumeQueueResponseBody;
 use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
 use rocketmq_remoting::protocol::body::response::get_consumer_status_body::GetConsumerStatusBody;
 use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
@@ -131,6 +132,7 @@ use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageR
 use rocketmq_remoting::protocol::header::pop_message_response_header::PopMessageResponseHeader;
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_remoting::protocol::header::pull_message_response_header::PullMessageResponseHeader;
+use rocketmq_remoting::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
 use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
 use rocketmq_remoting::protocol::header::recall_message_request_header::RecallMessageRequestHeader;
@@ -638,6 +640,50 @@ impl MQClientAPIImpl {
             if let Some(body) = response.get_body() {
                 let result: CheckRocksdbCqWriteResult = serde_json::from_slice(body.as_ref()).map_err(|e| {
                     mq_client_err!(-1, format!("Failed to deserialize CheckRocksdbCqWriteResult: {}", e))
+                })?;
+                return Ok(result);
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn query_consume_queue(
+        &self,
+        addr: &CheetahString,
+        topic: CheetahString,
+        queue_id: i32,
+        index: i64,
+        count: i32,
+        consumer_group: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<QueryConsumeQueueResponseBody> {
+        let request_header = QueryConsumeQueueRequestHeader {
+            topic,
+            queue_id,
+            index,
+            count,
+            consumer_group: if consumer_group.is_empty() {
+                None
+            } else {
+                Some(consumer_group)
+            },
+            rpc: None,
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::QueryConsumeQueue, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                let result: QueryConsumeQueueResponseBody = serde_json::from_slice(body.as_ref()).map_err(|e| {
+                    mq_client_err!(
+                        -1,
+                        format!("Failed to deserialize QueryConsumeQueueResponseBody: {}", e)
+                    )
                 })?;
                 return Ok(result);
             }

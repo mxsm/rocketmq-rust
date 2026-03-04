@@ -1238,14 +1238,16 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn query_consume_queue(
         &self,
-        _broker_addr: CheetahString,
-        _topic: CheetahString,
-        _queue_id: i32,
-        _index: u64,
-        _count: i32,
-        _consumer_group: CheetahString,
+        broker_addr: CheetahString,
+        topic: CheetahString,
+        queue_id: i32,
+        index: u64,
+        count: i32,
+        consumer_group: CheetahString,
     ) -> rocketmq_error::RocketMQResult<QueryConsumeQueueResponseBody> {
-        unimplemented!("query_consume_queue not implemented yet")
+        self.default_mqadmin_ext_impl
+            .query_consume_queue(broker_addr, topic, queue_id, index, count, consumer_group)
+            .await
     }
 
     async fn update_and_get_group_read_forbidden(
