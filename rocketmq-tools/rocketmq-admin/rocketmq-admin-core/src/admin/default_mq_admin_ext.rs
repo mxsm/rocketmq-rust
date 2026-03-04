@@ -389,7 +389,7 @@ impl MQAdminExt for DefaultMQAdminExt {
     }
 
     async fn fetch_all_topic_list(&self) -> rocketmq_error::RocketMQResult<TopicList> {
-        todo!()
+        self.default_mqadmin_ext_impl.fetch_all_topic_list().await
     }
 
     async fn fetch_topics_by_cluster(&self, cluster_name: CheetahString) -> rocketmq_error::RocketMQResult<TopicList> {
@@ -410,7 +410,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         broker_addr: Option<CheetahString>,
         timeout_millis: Option<u64>,
     ) -> rocketmq_error::RocketMQResult<ConsumeStats> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .examine_consume_stats(consumer_group, topic, cluster_name, broker_addr, timeout_millis)
+            .await
     }
 
     async fn examine_broker_cluster_info(&self) -> rocketmq_error::RocketMQResult<ClusterInfo> {
@@ -574,7 +576,7 @@ impl MQAdminExt for DefaultMQAdminExt {
     }
 
     async fn query_topic_consume_by_who(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<GroupList> {
-        todo!()
+        self.default_mqadmin_ext_impl.query_topic_consume_by_who(topic).await
     }
 
     async fn query_topics_by_consumer(&self, group: CheetahString) -> rocketmq_error::RocketMQResult<TopicList> {
@@ -1200,11 +1202,13 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn view_broker_stats_data(
         &self,
-        _broker_addr: CheetahString,
-        _stats_name: CheetahString,
-        _stats_key: CheetahString,
+        broker_addr: CheetahString,
+        stats_name: CheetahString,
+        stats_key: CheetahString,
     ) -> rocketmq_error::RocketMQResult<BrokerStatsData> {
-        unimplemented!("view_broker_stats_data not implemented yet")
+        self.default_mqadmin_ext_impl
+            .view_broker_stats_data(broker_addr, stats_name, stats_key)
+            .await
     }
 
     async fn fetch_consume_stats_in_broker(

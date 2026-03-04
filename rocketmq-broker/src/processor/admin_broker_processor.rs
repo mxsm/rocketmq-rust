@@ -16,6 +16,7 @@ use crate::broker_runtime::BrokerRuntimeInner;
 use crate::processor::admin_broker_processor::batch_mq_handler::BatchMqHandler;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 use crate::processor::admin_broker_processor::broker_epoch_cache_handler::BrokerEpochCacheHandler;
+use crate::processor::admin_broker_processor::broker_stats_handler::BrokerStatsHandler;
 use crate::processor::admin_broker_processor::consumer_request_handler::ConsumerRequestHandler;
 use crate::processor::admin_broker_processor::get_broker_ha_status_handler::GetBrokerHaStatusHandler;
 use crate::processor::admin_broker_processor::get_user_request_handler::GetUserRequestHandler;
@@ -44,6 +45,7 @@ use tracing::warn;
 mod batch_mq_handler;
 mod broker_config_request_handler;
 mod broker_epoch_cache_handler;
+mod broker_stats_handler;
 mod consumer_request_handler;
 mod get_broker_ha_status_handler;
 mod get_user_request_handler;
@@ -82,6 +84,7 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     get_user_request_handler: GetUserRequestHandler<MS>,
     update_cold_data_flow_ctr_group_config_request_handler: UpdateColdDataFlowCtrGroupConfigRequestHandler<MS>,
     get_broker_ha_status_handler: GetBrokerHaStatusHandler<MS>,
+    broker_stats_handler: BrokerStatsHandler<MS>,
 }
 
 impl<MS> RequestProcessor for AdminBrokerProcessor<MS>
@@ -126,6 +129,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
         let update_cold_data_flow_ctr_group_config_request_handler =
             UpdateColdDataFlowCtrGroupConfigRequestHandler::new(broker_runtime_inner.clone());
         let get_broker_ha_status_handler = GetBrokerHaStatusHandler::new(broker_runtime_inner.clone());
+        let broker_stats_handler = BrokerStatsHandler::new(broker_runtime_inner.clone());
 
         AdminBrokerProcessor {
             topic_request_handler,
@@ -147,6 +151,7 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             get_user_request_handler,
             update_cold_data_flow_ctr_group_config_request_handler,
             get_broker_ha_status_handler,
+            broker_stats_handler,
         }
     }
 }
@@ -305,7 +310,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             RequestCode::QueryCorrectionOffset => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::ConsumeMessageDirectly => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::CloneGroupOffset => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::ViewBrokerStatsData => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::ViewBrokerStatsData => {
+                self.broker_stats_handler
+                    .view_broker_stats_data(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::GetBrokerConsumeStats => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::QueryConsumeQueue => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::CheckRocksdbCqWriteProgress => Ok(get_unknown_cmd_response(request_code)),
