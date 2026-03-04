@@ -512,6 +512,11 @@ impl CommandExecute for ClassificationTablePrint {
                 remark: "Check if rocksdb cq is same as file cq.",
             },
             Command {
+                category: "Queue",
+                command: "queryCq",
+                remark: "Query cq command.",
+            },
+            Command {
                 category: "Topic",
                 command: "allocateMQ",
                 remark: "Allocate MQ.",
