@@ -33,10 +33,10 @@ use crate::base::client_config::ClientConfig;
 ///
 /// # Examples
 ///
-/// ```no_run
+/// ```ignore
 /// use cheetah_string::CheetahString;
-/// use rocketmq_client::base::client_config::ClientConfig;
-/// use rocketmq_client::hook::namespace_rpc_hook::NamespaceRpcHook;
+/// use rocketmq_client_rust::base::client_config::ClientConfig;
+/// use rocketmq_client_rust::hook::namespace_rpc_hook::NamespaceRpcHook;
 ///
 /// let mut config = ClientConfig::default();
 /// config.set_namespace_v2(CheetahString::from_static_str("my-namespace"));
