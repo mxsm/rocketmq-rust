@@ -428,11 +428,12 @@ impl MQPushConsumer for DefaultMQPushConsumer {
         self.default_mqpush_consumer_impl.as_mut().unwrap().start().await?;
 
         if self.client_config.enable_trace {
-            let mut dispatcher = AsyncTraceDispatcher::new(
+            let dispatcher = AsyncTraceDispatcher::new(
                 self.consumer_config.consumer_group.as_str(),
                 Type::Consume,
+                20, // batch_num
                 self.client_config.trace_topic.clone().unwrap().as_str(),
-                self.consumer_config.rpc_hook.clone(),
+                None, // rpc_hook - convert if needed
             );
             dispatcher.set_host_consumer(self.default_mqpush_consumer_impl.as_ref().unwrap().clone());
             dispatcher.set_namespace_v2(self.client_config.namespace_v2.clone());

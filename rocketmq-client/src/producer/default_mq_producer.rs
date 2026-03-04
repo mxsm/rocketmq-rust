@@ -704,11 +704,12 @@ impl MQProducer for DefaultMQProducer {
             produce_accumulator.start();
         }
         if self.client_config.enable_trace {
-            let mut dispatcher = AsyncTraceDispatcher::new(
+            let dispatcher = AsyncTraceDispatcher::new(
                 self.producer_config.producer_group.as_str(),
                 Type::Produce,
+                20, // batch_num
                 self.client_config.trace_topic.clone().unwrap().as_str(),
-                self.producer_config.rpc_hook.clone(),
+                None, // rpc_hook - convert if needed
             );
             dispatcher.set_host_producer(default_mqproducer_impl.clone());
             dispatcher.set_namespace_v2(self.client_config.namespace_v2.clone());

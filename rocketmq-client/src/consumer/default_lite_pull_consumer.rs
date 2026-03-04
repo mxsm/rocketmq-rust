@@ -268,8 +268,9 @@ impl DefaultLitePullConsumer {
         let dispatcher = AsyncTraceDispatcher::new(
             self.consumer_config.consumer_group.as_str(),
             Type::Consume,
+            20, // batch_num
             trace_topic,
-            self.rpc_hook.clone(),
+            None, // rpc_hook - convert if needed
         );
 
         let dispatcher_arc: Arc<dyn TraceDispatcher + Send + Sync> = Arc::new(dispatcher);
