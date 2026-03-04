@@ -33,3 +33,58 @@ impl TraceDispatcherType {
         matches!(self, Self::Consumer)
     }
 }
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    #[test]
+    fn trace_dispatcher_type_default() {
+        let default_type: TraceDispatcherType = Default::default();
+        assert_eq!(default_type, TraceDispatcherType::Producer);
+    }
+
+    #[test]
+    fn trace_dispatcher_type_is_producer() {
+        let dispatcher_type = TraceDispatcherType::Producer;
+        assert!(dispatcher_type.is_producer());
+        assert!(!dispatcher_type.is_consumer());
+    }
+
+    #[test]
+    fn trace_dispatcher_type_is_consumer() {
+        let dispatcher_type = TraceDispatcherType::Consumer;
+        assert!(dispatcher_type.is_consumer());
+        assert!(!dispatcher_type.is_producer());
+    }
+
+    #[test]
+    fn trace_dispatcher_type_copy() {
+        let dispatcher_type: TraceDispatcherType = TraceDispatcherType::Producer;
+        let copied_type = dispatcher_type;
+        assert_eq!(dispatcher_type, copied_type);
+    }
+
+    #[test]
+    fn trace_dispatcher_type_clone() {
+        let dispatcher_type: TraceDispatcherType = TraceDispatcherType::Consumer;
+        let cloned_type = dispatcher_type;
+        assert_eq!(dispatcher_type, cloned_type);
+    }
+
+    #[test]
+    fn trace_dispatcher_type_debug() {
+        let dispatcher_type = TraceDispatcherType::Producer;
+        let debug_str = format!("{:?}", dispatcher_type);
+        assert_eq!(debug_str, "Producer");
+    }
+
+    #[test]
+    fn trace_dispatcher_type_equality() {
+        let type1 = TraceDispatcherType::Producer;
+        let type2 = TraceDispatcherType::Producer;
+        let type3 = TraceDispatcherType::Consumer;
+        assert_eq!(type1, type2);
+        assert_ne!(type1, type3);
+    }
+}
