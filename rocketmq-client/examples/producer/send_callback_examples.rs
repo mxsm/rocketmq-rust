@@ -14,7 +14,7 @@
 
 //! # SendCallback Examples
 //!
-//! This example demonstrates various ways to use the `SendMessageCallback` API
+//! This example demonstrates various ways to use the `SendCallback` API
 //! for asynchronous message sending in RocketMQ Rust client.
 //!
 //! ## Run the example

@@ -22,7 +22,7 @@ use crate::base::access_channel::AccessChannel;
 use crate::trace::trace_bean::TraceBean;
 use crate::trace::trace_type::TraceType;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct TraceContext {
     pub trace_type: Option<TraceType>,
     pub time_stamp: u64,
