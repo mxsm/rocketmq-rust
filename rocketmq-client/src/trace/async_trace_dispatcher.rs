@@ -454,25 +454,27 @@ async fn worker_loop(
                 }
             }
 
-            // Receive trace context
-            Some(ctx) = rx.recv() => {
-                buffer.push(ctx);
+            // Receive trace context or detect channel close
+            result = rx.recv() => {
+                match result {
+                    Some(ctx) => {
+                        buffer.push(ctx);
 
-                // Flush immediately if batch is full
-                if buffer.len() >= config.batch_num {
-                    flush_buffer(&mut buffer, &state, &producer, &config).await;
-                    last_flush = Instant::now();
+                        // Flush immediately if batch is full
+                        if buffer.len() >= config.batch_num {
+                            flush_buffer(&mut buffer, &state, &producer, &config).await;
+                            last_flush = Instant::now();
+                        }
+                    }
+                    None => {
+                        // Channel closed
+                        info!("Worker loop exiting (channel closed)");
+                        if !buffer.is_empty() {
+                            flush_buffer(&mut buffer, &state, &producer, &config).await;
+                        }
+                        break;
+                    }
                 }
-            }
-
-            // Channel closed
-            else => {
-                info!("Worker loop exiting (channel closed)");
-                // Flush remaining data
-                if !buffer.is_empty() {
-                    flush_buffer(&mut buffer, &state, &producer, &config).await;
-                }
-                break;
             }
         }
     }
