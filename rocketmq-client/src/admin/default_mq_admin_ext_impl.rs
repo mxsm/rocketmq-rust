@@ -74,7 +74,10 @@ use rocketmq_remoting::protocol::body::topic::topic_list::TopicList;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::body::user_info::UserInfo;
 use rocketmq_remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
+use rocketmq_remoting::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
 use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
+use rocketmq_remoting::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader;
+use rocketmq_remoting::protocol::header::view_broker_stats_data_request_header::ViewBrokerStatsDataRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
@@ -448,7 +451,12 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
     }
 
     async fn fetch_all_topic_list(&self) -> rocketmq_error::RocketMQResult<TopicList> {
-        todo!()
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .get_all_topic_list_from_name_server(self.timeout_millis.as_millis() as u64)
+            .await
     }
 
     async fn fetch_topics_by_cluster(&self, cluster_name: CheetahString) -> rocketmq_error::RocketMQResult<TopicList> {
@@ -472,7 +480,61 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         broker_addr: Option<CheetahString>,
         timeout_millis: Option<u64>,
     ) -> rocketmq_error::RocketMQResult<ConsumeStats> {
-        todo!()
+        let timeout = timeout_millis.unwrap_or(self.timeout_millis.as_millis() as u64);
+        let topic_str = topic.clone().unwrap_or_default();
+
+        if let Some(addr) = broker_addr {
+            let request_header = GetConsumeStatsRequestHeader {
+                consumer_group,
+                topic: topic_str,
+                topic_request_header: None,
+            };
+            return self
+                .client_instance
+                .as_ref()
+                .unwrap()
+                .get_mq_client_api_impl()
+                .get_consume_stats(&addr, request_header, timeout)
+                .await;
+        }
+
+        let retry_topic: CheetahString = rocketmq_common::common::mix_all::get_retry_topic(&consumer_group).into();
+        let topic_route = self
+            .client_instance
+            .as_ref()
+            .unwrap()
+            .mq_client_api_impl
+            .as_ref()
+            .unwrap()
+            .get_topic_route_info_from_name_server(&retry_topic, timeout)
+            .await?;
+
+        let mut result = ConsumeStats::new();
+
+        if let Some(route_data) = topic_route {
+            for bd in &route_data.broker_datas {
+                if let Some(master_addr) = bd.broker_addrs().get(&rocketmq_common::common::mix_all::MASTER_ID) {
+                    let request_header = GetConsumeStatsRequestHeader {
+                        consumer_group: consumer_group.clone(),
+                        topic: topic_str.clone(),
+                        topic_request_header: None,
+                    };
+                    let cs = self
+                        .client_instance
+                        .as_ref()
+                        .unwrap()
+                        .get_mq_client_api_impl()
+                        .get_consume_stats(master_addr, request_header, timeout)
+                        .await?;
+
+                    result.get_offset_table_mut().extend(cs.offset_table);
+                    let new_tps = result.get_consume_tps() + cs.consume_tps;
+                    result.set_consume_tps(new_tps);
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     async fn check_rocksdb_cq_write_progress(
@@ -781,7 +843,35 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
     }
 
     async fn query_topic_consume_by_who(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<GroupList> {
-        todo!()
+        let topic_route = self
+            .client_instance
+            .as_ref()
+            .unwrap()
+            .mq_client_api_impl
+            .as_ref()
+            .unwrap()
+            .get_topic_route_info_from_name_server(&topic, self.timeout_millis.as_millis() as u64)
+            .await?;
+
+        if let Some(route_data) = topic_route {
+            for bd in &route_data.broker_datas {
+                if let Some(master_addr) = bd.broker_addrs().get(&rocketmq_common::common::mix_all::MASTER_ID) {
+                    let request_header = QueryTopicConsumeByWhoRequestHeader {
+                        topic: topic.clone(),
+                        topic_request_header: None,
+                    };
+                    return self
+                        .client_instance
+                        .as_ref()
+                        .unwrap()
+                        .get_mq_client_api_impl()
+                        .query_topic_consume_by_who(master_addr, request_header, self.timeout_millis.as_millis() as u64)
+                        .await;
+                }
+            }
+        }
+
+        Ok(GroupList::default())
     }
 
     async fn query_topics_by_consumer(&self, group: CheetahString) -> rocketmq_error::RocketMQResult<TopicList> {
@@ -1503,11 +1593,17 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
 
     async fn view_broker_stats_data(
         &self,
-        _broker_addr: CheetahString,
-        _stats_name: CheetahString,
-        _stats_key: CheetahString,
+        broker_addr: CheetahString,
+        stats_name: CheetahString,
+        stats_key: CheetahString,
     ) -> rocketmq_error::RocketMQResult<BrokerStatsData> {
-        unimplemented!("view_broker_stats_data not implemented yet")
+        let request_header = ViewBrokerStatsDataRequestHeader { stats_name, stats_key };
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .view_broker_stats_data(&broker_addr, request_header, self.timeout_millis.as_millis() as u64)
+            .await
     }
 
     async fn fetch_consume_stats_in_broker(

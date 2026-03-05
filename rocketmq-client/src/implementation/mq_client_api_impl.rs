@@ -828,6 +828,95 @@ impl MQClientAPIImpl {
             response.remark().map_or("".to_string(), |s| s.to_string())
         ))
     }
+
+    pub(crate) async fn get_all_topic_list_from_name_server(
+        &self,
+        timeout_millis: u64,
+    ) -> RocketMQResult<rocketmq_remoting::protocol::body::topic::topic_list::TopicList> {
+        let request =
+            RemotingCommand::create_request_command(RequestCode::GetAllTopicListFromNameserver, EmptyHeader {});
+        let response = self
+            .remoting_client
+            .invoke_request(None, request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return rocketmq_remoting::protocol::body::topic::topic_list::TopicList::decode(body.as_ref());
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn get_consume_stats(
+        &self,
+        addr: &CheetahString,
+        request_header: rocketmq_remoting::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader,
+        timeout_millis: u64,
+    ) -> RocketMQResult<rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats> {
+        let request = RemotingCommand::create_request_command(RequestCode::GetConsumeStats, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats::decode(body.as_ref());
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn query_topic_consume_by_who(
+        &self,
+        addr: &CheetahString,
+        request_header: rocketmq_remoting::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader,
+        timeout_millis: u64,
+    ) -> RocketMQResult<rocketmq_remoting::protocol::body::group_list::GroupList> {
+        let request = RemotingCommand::create_request_command(RequestCode::QueryTopicConsumeByWho, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return rocketmq_remoting::protocol::body::group_list::GroupList::decode(body.as_ref());
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn view_broker_stats_data(
+        &self,
+        addr: &CheetahString,
+        request_header: rocketmq_remoting::protocol::header::view_broker_stats_data_request_header::ViewBrokerStatsDataRequestHeader,
+        timeout_millis: u64,
+    ) -> RocketMQResult<rocketmq_remoting::protocol::subscription::broker_stats_data::BrokerStatsData> {
+        let request = RemotingCommand::create_request_command(RequestCode::ViewBrokerStatsData, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return rocketmq_remoting::protocol::subscription::broker_stats_data::BrokerStatsData::decode(
+                    body.as_ref(),
+                );
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
 }
 
 impl NameServerUpdateCallback for MQClientAPIImpl {

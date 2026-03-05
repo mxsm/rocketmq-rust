@@ -28,6 +28,7 @@ mod namesrv;
 mod offset;
 mod producer;
 mod queue;
+mod stats;
 mod target;
 mod topic;
 
@@ -151,6 +152,11 @@ pub enum Commands {
     Queue(queue::QueueCommands),
 
     #[command(subcommand)]
+    #[command(about = "Stats commands")]
+    #[command(name = "stats")]
+    Stats(stats::StatsCommands),
+
+    #[command(subcommand)]
     #[command(about = "Topic commands")]
     Topic(topic::TopicCommands),
 
@@ -175,6 +181,7 @@ impl CommandExecute for Commands {
             Commands::Offset(value) => value.execute(rpc_hook).await,
             Commands::Producer(value) => value.execute(rpc_hook).await,
             Commands::Queue(value) => value.execute(rpc_hook).await,
+            Commands::Stats(value) => value.execute(rpc_hook).await,
             Commands::Topic(value) => value.execute(rpc_hook).await,
             Commands::Show(value) => value.execute(rpc_hook).await,
         }
@@ -515,6 +522,11 @@ impl CommandExecute for ClassificationTablePrint {
                 category: "Queue",
                 command: "queryCq",
                 remark: "Query cq command.",
+            },
+            Command {
+                category: "Stats",
+                command: "statsAll",
+                remark: "Topic and Consumer tps stats.",
             },
             Command {
                 category: "Topic",
