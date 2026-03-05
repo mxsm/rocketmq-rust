@@ -51,6 +51,7 @@ pub mod get_min_offset_request_header;
 pub mod get_min_offset_response_header;
 pub mod get_parent_topic_info_request_header;
 pub mod get_producer_connection_list_request_header;
+pub mod get_subscription_group_config_request_header;
 pub mod get_topic_config_request_header;
 pub mod get_topic_stats_info_request_header;
 pub mod get_topic_stats_request_header;
