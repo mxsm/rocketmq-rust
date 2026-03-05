@@ -354,6 +354,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Consumer",
+                command: "getConsumerConfig",
+                remark: "Get consumer config by subscription group name.",
+            },
+            Command {
+                category: "Consumer",
                 command: "updateSubGroup",
                 remark: "Update consumer sub group.",
             },

@@ -18,6 +18,7 @@ use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
 use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
+use rocketmq_remoting::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::protocol::RemotingDeserializable;
@@ -80,6 +81,34 @@ impl<MS: MessageStore> SubscriptionGroupHandler<MS> {
         // status.getName())     .build();
         // BrokerMetricsManager.consumerGroupCreateExecuteTime.record(executionTime, attributes);
         Ok(Some(response))
+    }
+
+    pub async fn get_subscription_group_config(
+        &mut self,
+        _channel: Channel,
+        _ctx: ConnectionHandlerContext,
+        _request_code: RequestCode,
+        request: &mut RemotingCommand,
+    ) -> rocketmq_error::RocketMQResult<Option<RemotingCommand>> {
+        let mut response = RemotingCommand::create_response_command();
+        let request_header = request.decode_command_custom_header::<GetSubscriptionGroupConfigRequestHeader>()?;
+        let group = &request_header.group;
+        let group_config = self
+            .broker_runtime_inner
+            .subscription_group_manager()
+            .find_subscription_group_config(group);
+
+        match group_config {
+            Some(config) => {
+                response.set_body_mut_ref(config.encode()?);
+                Ok(Some(response.set_code(ResponseCode::Success)))
+            }
+            None => Ok(Some(
+                response
+                    .set_code(ResponseCode::SubscriptionGroupNotExist)
+                    .set_remark(format!("No group in this broker. group: {}", group)),
+            )),
+        }
     }
 
     pub async fn unlock_batch_mq(

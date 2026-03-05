@@ -3233,6 +3233,37 @@ impl MQClientAPIImpl {
         ))
     }
 
+    pub(crate) async fn get_subscription_group_config(
+        &self,
+        addr: &CheetahString,
+        group: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig>
+    {
+        let request = RemotingCommand::create_request_command(
+            RequestCode::GetSubscriptionGroupConfig,
+            rocketmq_remoting::protocol::header::get_subscription_group_config_request_header::GetSubscriptionGroupConfigRequestHeader {
+                group,
+                rpc_request_header: None,
+            },
+        );
+        let mut response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.take_body() {
+                return rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig::decode(
+                    body.as_ref(),
+                );
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
     fn build_queue_offset_sorted_map(
         topic: &str,
         msg_found_list: &[MessageExt],

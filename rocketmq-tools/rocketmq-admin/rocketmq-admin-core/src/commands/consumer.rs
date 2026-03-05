@@ -1,4 +1,4 @@
-// Copyright 2026 The RocketMQ Rust Authors
+// Copyright 2023 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 mod consumer_status_sub_command;
 mod consumer_sub_command;
 mod delete_subscription_group_sub_command;
+mod get_consumer_config_sub_command;
 mod set_consume_mode_sub_command;
 mod start_monitoring_sub_command;
 mod update_sub_group_list_sub_command;
@@ -28,6 +29,7 @@ use rocketmq_remoting::runtime::RPCHook;
 use crate::commands::consumer::consumer_status_sub_command::ConsumerStatusSubCommand;
 use crate::commands::consumer::consumer_sub_command::ConsumerSubCommand;
 use crate::commands::consumer::delete_subscription_group_sub_command::DeleteSubscriptionGroupSubCommand;
+use crate::commands::consumer::get_consumer_config_sub_command::GetConsumerConfigSubCommand;
 use crate::commands::consumer::set_consume_mode_sub_command::SetConsumeModeSubCommand;
 use crate::commands::consumer::start_monitoring_sub_command::StartMonitoringSubCommand;
 use crate::commands::consumer::update_sub_group_list_sub_command::UpdateSubGroupListSubCommand;
@@ -56,6 +58,13 @@ pub enum ConsumerCommands {
         long_about = r#"Delete subscription group from broker."#
     )]
     DeleteSubscriptionGroup(DeleteSubscriptionGroupSubCommand),
+
+    #[command(
+        name = "getConsumerConfig",
+        about = "Get consumer config by subscription group name.",
+        long_about = None,
+    )]
+    GetConsumerConfig(GetConsumerConfigSubCommand),
 
     #[command(
         name = "setConsumeMode",
@@ -92,6 +101,7 @@ impl CommandExecute for ConsumerCommands {
             ConsumerCommands::ConsumerStatus(cmd) => cmd.execute(rpc_hook).await,
             ConsumerCommands::Consumer(cmd) => cmd.execute(rpc_hook).await,
             ConsumerCommands::DeleteSubscriptionGroup(cmd) => cmd.execute(rpc_hook).await,
+            ConsumerCommands::GetConsumerConfig(cmd) => cmd.execute(rpc_hook).await,
             ConsumerCommands::SetConsumeMode(cmd) => cmd.execute(rpc_hook).await,
             ConsumerCommands::StartMonitoring(cmd) => cmd.execute(rpc_hook).await,
             ConsumerCommands::UpdateSubGroupList(cmd) => cmd.execute(rpc_hook).await,

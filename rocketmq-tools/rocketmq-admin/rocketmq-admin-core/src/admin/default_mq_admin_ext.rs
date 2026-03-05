@@ -373,7 +373,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         addr: CheetahString,
         group: CheetahString,
     ) -> rocketmq_error::RocketMQResult<SubscriptionGroupConfig> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .examine_subscription_group_config(addr, group)
+            .await
     }
 
     async fn examine_topic_stats(

@@ -319,7 +319,11 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             RequestCode::QueryConsumeQueue => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::CheckRocksdbCqWriteProgress => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::UpdateAndGetGroupForbidden => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::GetSubscriptionGroupConfig => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::GetSubscriptionGroupConfig => {
+                self.subscription_group_handler
+                    .get_subscription_group_config(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::UpdateAndCreateAclConfig => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::DeleteAclConfig => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::GetBrokerClusterAclInfo => Ok(get_unknown_cmd_response(request_code)),
