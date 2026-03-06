@@ -14,6 +14,7 @@
 
 #![allow(dead_code)]
 #![allow(incomplete_features)]
+#![allow(unused_features)]
 #![feature(duration_constructors)]
 #![feature(impl_trait_in_assoc_type)]
 extern crate core;
