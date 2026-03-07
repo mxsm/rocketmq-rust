@@ -18,7 +18,6 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, Deserialize, RequestHeaderCodecV2, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
-#[serde(default)]
 pub struct QueryMessageResponseHeader {
     pub index_last_update_timestamp: i64,
     pub index_last_update_phyoffset: i64,
@@ -273,10 +272,8 @@ mod tests {
     #[test]
     fn serde_json_deserialization_with_missing_fields() {
         let json = "{}";
-        let header: QueryMessageResponseHeader = serde_json::from_str(json).unwrap();
-
-        assert_eq!(header.index_last_update_timestamp, 0);
-        assert_eq!(header.index_last_update_phyoffset, 0);
+        let result: Result<QueryMessageResponseHeader, _> = serde_json::from_str(json);
+        assert!(result.is_err());
     }
 
     #[test]
