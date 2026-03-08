@@ -270,6 +270,20 @@ mod tests {
     }
 
     #[test]
+    fn test_timer_metrics_wrapper_with_data_version_field() {
+        let mut data_version = DataVersion::new();
+        data_version.set_state_version(7);
+        data_version.set_timestamp(12345);
+        data_version.set_counter(3);
+
+        let wrapper = TimerMetricsSerializeWrapper::new().with_data_version(data_version.clone());
+
+        assert_eq!(wrapper.data_version().state_version(), data_version.state_version());
+        assert_eq!(wrapper.data_version().timestamp(), data_version.timestamp());
+        assert_eq!(wrapper.data_version().counter(), data_version.counter());
+    }
+
+    #[test]
     fn test_timer_metrics_wrapper_getter_methods() {
         let mut wrapper = TimerMetricsSerializeWrapper::new();
         let key = CheetahString::from_static_str("metric1");
@@ -316,6 +330,22 @@ mod tests {
     }
 
     #[test]
+    fn test_timer_metrics_wrapper_data_version_mut_updates() {
+        let mut wrapper = TimerMetricsSerializeWrapper::new();
+
+        {
+            let data_version = wrapper.data_version_mut();
+            data_version.set_state_version(11);
+            data_version.set_timestamp(22222);
+            data_version.set_counter(5);
+        }
+
+        assert_eq!(wrapper.data_version().state_version(), 11);
+        assert_eq!(wrapper.data_version().timestamp(), 22222);
+        assert_eq!(wrapper.data_version().counter(), 5);
+    }
+
+    #[test]
     fn test_timer_metrics_wrapper_insert_and_get_metric() {
         let mut wrapper = TimerMetricsSerializeWrapper::new();
 
@@ -350,6 +380,25 @@ mod tests {
 
         let result = wrapper.get_metric(&key);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_timer_metrics_wrapper_remove_metric() {
+        let mut wrapper = TimerMetricsSerializeWrapper::new();
+        let key = CheetahString::from_static_str("to_remove");
+
+        wrapper.insert_metric(
+            key.clone(),
+            Metric {
+                count: AtomicU64::new(1),
+                time_stamp: 1,
+            },
+        );
+        assert!(wrapper.get_metric(&key).is_some());
+
+        let removed = wrapper.timing_count_mut().remove(&key);
+        assert!(removed.is_some());
+        assert!(wrapper.get_metric(&key).is_none());
     }
 
     #[test]
