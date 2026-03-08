@@ -15,8 +15,6 @@
 #![allow(dead_code)]
 #![allow(incomplete_features)]
 #![feature(duration_constructors)]
-#![feature(impl_trait_in_assoc_type)]
-#![feature(sync_unsafe_cell)]
 #![allow(clippy::mut_from_ref)]
 #![allow(clippy::result_large_err)]
 

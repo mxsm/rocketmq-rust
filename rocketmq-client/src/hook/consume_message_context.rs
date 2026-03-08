@@ -172,3 +172,77 @@ impl<'a> fmt::Debug for ConsumeMessageContext<'a> {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn consume_message_context_new() {
+        let group = CheetahString::from("test_group");
+        let msg_list = vec![ArcMut::new(MessageExt::default())];
+        let context = ConsumeMessageContext::new(group.clone(), &msg_list);
+
+        assert_eq!(context.consumer_group, group);
+        assert_eq!(context.message_count(), 1);
+        assert!(context.mq.is_none());
+        assert!(!context.success);
+    }
+
+    #[test]
+    fn consume_message_context_builder_methods() {
+        let group = CheetahString::from("test_group");
+        let msg_list = vec![];
+        let mq = MessageQueue::from_parts("topic", "broker", 1);
+
+        let context = ConsumeMessageContext::new(group, &msg_list)
+            .with_mq(mq.clone())
+            .with_success(true)
+            .with_status("SUCCESS")
+            .with_namespace("test_ns")
+            .with_access_channel(AccessChannel::Cloud);
+
+        assert_eq!(context.mq.unwrap(), mq);
+        assert!(context.success);
+        assert_eq!(context.status, "SUCCESS");
+        assert_eq!(context.namespace, "test_ns");
+        assert_eq!(context.access_channel.unwrap(), AccessChannel::Cloud);
+    }
+
+    #[test]
+    fn consume_message_context_add_prop() {
+        let mut context = ConsumeMessageContext::<'static>::default();
+        context.add_prop("key1", "value1");
+        assert_eq!(context.props.get(&CheetahString::from("key1")).unwrap(), "value1");
+    }
+
+    #[test]
+    fn consume_message_context_display() {
+        let group = CheetahString::from("test_group");
+        let msg_list = vec![];
+        let context = ConsumeMessageContext::new(group, &msg_list)
+            .with_success(true)
+            .with_status("OK");
+
+        let display = format!("{}", context);
+        assert!(display.contains("consumer_group: test_group"));
+        assert!(display.contains("msg_count: 0"));
+        assert!(display.contains("success: true"));
+        assert!(display.contains("status: OK"));
+    }
+
+    #[test]
+    fn consume_message_context_debug() {
+        let context = ConsumeMessageContext::<'static>::default();
+        let debug = format!("{:?}", context);
+        assert!(debug.contains("ConsumeMessageContext"));
+        assert!(debug.contains("consumer_group"));
+    }
+
+    #[test]
+    fn consume_message_context_with_trace_context() {
+        let context =
+            ConsumeMessageContext::<'static>::default().with_trace_context(Arc::new("trace_data".to_string()));
+        assert!(context.mq_trace_context.is_some());
+    }
+}

@@ -109,3 +109,24 @@ impl MessageSelector {
         &self.expression
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn message_selector_by_sql() {
+        let sql = "a > 10";
+        let selector = MessageSelector::by_sql(sql);
+        assert_eq!(selector.get_expression_type(), ExpressionType::SQL92);
+        assert_eq!(selector.get_expression(), sql);
+    }
+
+    #[test]
+    fn message_selector_by_tag() {
+        let tag = "TagA || TagB";
+        let selector = MessageSelector::by_tag(tag);
+        assert_eq!(selector.get_expression_type(), ExpressionType::TAG);
+        assert_eq!(selector.get_expression(), tag);
+    }
+}
