@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **test(remoting):** Add comprehensive test coverage for `QueryMessageResponseHeader` including integration with RemotingCommand, boundary checks, and error handling
 - **feat(tools):** Add `broker` command group with `GetBrokerConfigSubCommand` for querying broker configuration by broker address or cluster, with optional `--keyPattern` regex filtering
 - **feat(tools):** Add `CleanExpiredCQSubCommand` under broker commands with broker/cluster/topic target scan, dry-run preview, and cleanup summary reporting
 - **feat(tools):** Add `UpdateBrokerConfigSubCommand` under broker commands with single/multi key updates, value validation, broker or cluster targeting, old/new diff display, and rollback on partial failures
