@@ -892,4 +892,18 @@ pub trait MQAdminExt: Send {
         timestamp: u64,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<u64>;
+
+    async fn min_offset(
+        &self,
+        broker_addr: CheetahString,
+        message_queue: MessageQueue,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<i64>;
+
+    async fn max_offset(
+        &self,
+        broker_addr: CheetahString,
+        message_queue: MessageQueue,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<i64>;
 }

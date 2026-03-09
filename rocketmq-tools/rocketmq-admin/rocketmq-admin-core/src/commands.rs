@@ -465,6 +465,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Message",
+                command: "printMsgByQueue",
+                remark: "Print Message Detail by queueId.",
+            },
+            Command {
+                category: "Message",
                 command: "sendMessage",
                 remark: "Send a message.",
             },
