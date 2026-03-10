@@ -47,27 +47,13 @@ mod tests {
             )),
         };
 
-        assert!(header.rpc_request_header.is_some());
-        assert!(header.rpc_request_header.as_ref().unwrap().namespace.is_some());
-        assert_eq!(
-            header.rpc_request_header.as_ref().unwrap().namespace.as_ref().unwrap(),
-            "some_value"
-        );
-        assert!(header.rpc_request_header.as_ref().unwrap().namespaced.is_some());
-        assert!(header.rpc_request_header.as_ref().unwrap().namespaced.unwrap());
-        assert!(header.rpc_request_header.as_ref().unwrap().broker_name.is_some());
-        assert_eq!(
-            header
-                .rpc_request_header
-                .as_ref()
-                .unwrap()
-                .broker_name
-                .as_ref()
-                .unwrap(),
-            "brokerName"
-        );
-        assert!(header.rpc_request_header.as_ref().unwrap().oneway.is_some());
-        assert!(header.rpc_request_header.as_ref().unwrap().oneway.unwrap());
+        let json_str = serde_json::to_string(&header).unwrap();
+
+        // Verify the serialized JSON contains expected fields with camelCase naming
+        assert!(json_str.contains("\"namespace\":\"some_value\""));
+        assert!(json_str.contains("\"namespaced\":true"));
+        assert!(json_str.contains("\"brokerName\":\"brokerName\""));
+        assert!(json_str.contains("\"oneway\":true"));
     }
 
     #[test]
