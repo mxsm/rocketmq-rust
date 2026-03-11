@@ -252,6 +252,20 @@ impl DefaultMQAdminExt {
             .update_user_with_user_info(broker_addr, user_info)
             .await
     }
+
+    pub async fn pull_message_from_queue(
+        &self,
+        broker_addr: &str,
+        mq: &MessageQueue,
+        sub_expression: &str,
+        offset: i64,
+        max_nums: i32,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<rocketmq_client_rust::consumer::pull_result::PullResult> {
+        self.default_mqadmin_ext_impl
+            .pull_message_from_queue(broker_addr, mq, sub_expression, offset, max_nums, timeout_millis)
+            .await
+    }
 }
 
 impl Default for DefaultMQAdminExt {
@@ -1124,13 +1138,37 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn search_offset(
         &self,
-        _broker_addr: CheetahString,
-        _topic_name: CheetahString,
-        _queue_id: i32,
-        _timestamp: u64,
-        _timeout_millis: u64,
+        broker_addr: CheetahString,
+        topic_name: CheetahString,
+        queue_id: i32,
+        timestamp: u64,
+        timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<u64> {
-        unimplemented!("search_offset not implemented yet (deprecated)")
+        self.default_mqadmin_ext_impl
+            .search_offset(broker_addr, topic_name, queue_id, timestamp, timeout_millis)
+            .await
+    }
+
+    async fn min_offset(
+        &self,
+        broker_addr: CheetahString,
+        message_queue: MessageQueue,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<i64> {
+        self.default_mqadmin_ext_impl
+            .min_offset(broker_addr, message_queue, timeout_millis)
+            .await
+    }
+
+    async fn max_offset(
+        &self,
+        broker_addr: CheetahString,
+        message_queue: MessageQueue,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<i64> {
+        self.default_mqadmin_ext_impl
+            .max_offset(broker_addr, message_queue, timeout_millis)
+            .await
     }
 
     async fn check_rocksdb_cq_write_progress(

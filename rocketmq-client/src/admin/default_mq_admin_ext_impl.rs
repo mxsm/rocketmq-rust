@@ -24,7 +24,12 @@ use crate::admin::mq_admin_ext_async::MQAdminExt;
 use crate::admin::mq_admin_ext_async_inner::MQAdminExtInnerImpl;
 use crate::base::client_config::ClientConfig;
 use crate::common::admin_tool_result::AdminToolResult;
+use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
+use crate::consumer::pull_callback::PullCallback;
+use crate::consumer::pull_status::PullStatus;
 use crate::factory::mq_client_instance::MQClientInstance;
+use crate::implementation::communication_mode::CommunicationMode;
+use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 use crate::implementation::mq_client_manager::MQClientManager;
 use cheetah_string::CheetahString;
 use rand::seq::IndexedRandom;
@@ -32,12 +37,14 @@ use rocketmq_common::common::base::plain_access_config::PlainAccessConfig;
 use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::PermName;
+use rocketmq_common::common::message::message_decoder;
 use rocketmq_common::common::message::message_enum::MessageRequestMode;
 use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::DLQ_GROUP_TOPIC_PREFIX;
 use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
+use rocketmq_common::common::sys_flag::pull_sys_flag::PullSysFlag;
 #[allow(deprecated)]
 use rocketmq_common::common::tools::broker_operator_result::BrokerOperatorResult;
 #[allow(deprecated)]
@@ -76,6 +83,7 @@ use rocketmq_remoting::protocol::body::user_info::UserInfo;
 use rocketmq_remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
 use rocketmq_remoting::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
 use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
+use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_remoting::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader;
 use rocketmq_remoting::protocol::header::view_broker_stats_data_request_header::ViewBrokerStatsDataRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
@@ -267,6 +275,64 @@ impl DefaultMQAdminExtImpl {
 
         self.update_user(broker_addr, username, password, user_type, user_status)
             .await
+    }
+
+    pub async fn pull_message_from_queue(
+        &self,
+        broker_addr: &str,
+        mq: &MessageQueue,
+        sub_expression: &str,
+        offset: i64,
+        max_nums: i32,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<crate::consumer::pull_result::PullResult> {
+        let sys_flag = PullSysFlag::build_sys_flag(false, false, true, false);
+
+        let request_header = PullMessageRequestHeader {
+            consumer_group: CheetahString::from_static_str(mix_all::TOOLS_CONSUMER_GROUP),
+            topic: mq.topic().clone(),
+            queue_id: mq.queue_id(),
+            queue_offset: offset,
+            max_msg_nums: max_nums,
+            sys_flag: sys_flag as i32,
+            commit_offset: 0,
+            suspend_timeout_millis: 0,
+            sub_version: 0,
+            subscription: Some(CheetahString::from(sub_expression)),
+            expression_type: None,
+            max_msg_bytes: None,
+            request_source: None,
+            proxy_forward_client_id: None,
+            topic_request: None,
+        };
+
+        struct NoopPullCallback;
+        impl PullCallback for NoopPullCallback {
+            async fn on_success(&mut self, _pull_result: PullResultExt) {}
+            fn on_exception(&mut self, _e: Box<dyn std::error::Error + Send>) {}
+        }
+
+        let api_impl = self.client_instance.as_ref().unwrap().get_mq_client_api_impl();
+
+        let mut result = MQClientAPIImpl::pull_message(
+            api_impl,
+            CheetahString::from(broker_addr),
+            request_header,
+            timeout_millis,
+            CommunicationMode::Sync,
+            NoopPullCallback,
+        )
+        .await?
+        .ok_or_else(|| rocketmq_error::RocketMQError::Internal("pull_message returned None in sync mode".into()))?;
+
+        if result.pull_result.pull_status == PullStatus::Found {
+            if let Some(mut message_binary) = result.message_binary.take() {
+                let msg_vec = message_decoder::decodes_batch(&mut message_binary, true, true);
+                result.pull_result.msg_found_list = Some(msg_vec.into_iter().map(ArcMut::new).collect());
+            }
+        }
+
+        Ok(result.pull_result)
     }
 }
 
@@ -1921,12 +1987,54 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
 
     async fn search_offset(
         &self,
-        _broker_addr: CheetahString,
-        _topic_name: CheetahString,
-        _queue_id: i32,
-        _timestamp: u64,
-        _timeout_millis: u64,
+        broker_addr: CheetahString,
+        topic_name: CheetahString,
+        queue_id: i32,
+        timestamp: u64,
+        timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<u64> {
-        unimplemented!("search_offset not implemented yet (deprecated)")
+        let mq = MessageQueue::from_parts(&topic_name, "", queue_id);
+        let offset = self
+            .client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .search_offset_by_timestamp(
+                broker_addr.as_str(),
+                &mq,
+                timestamp as i64,
+                rocketmq_common::common::boundary_type::BoundaryType::Lower,
+                timeout_millis,
+            )
+            .await?;
+        Ok(offset as u64)
+    }
+
+    async fn min_offset(
+        &self,
+        broker_addr: CheetahString,
+        message_queue: MessageQueue,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<i64> {
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .get_min_offset(broker_addr.as_str(), &message_queue, timeout_millis)
+            .await
+    }
+
+    async fn max_offset(
+        &self,
+        broker_addr: CheetahString,
+        message_queue: MessageQueue,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<i64> {
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .get_max_offset(broker_addr.as_str(), &message_queue, timeout_millis)
+            .await
     }
 }
