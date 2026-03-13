@@ -385,6 +385,8 @@ impl TraceDataEncoder {
         sb.push_str(&bean.offset_msg_id);
         sb.push(TraceConstants::CONTENT_SPLITOR);
         sb.push_str(if ctx.is_success { "true" } else { "false" });
+        sb.push(TraceConstants::CONTENT_SPLITOR);
+        sb.push_str(&bean.client_host);
         sb.push(TraceConstants::FIELD_SPLITOR);
     }
 
@@ -530,5 +532,366 @@ impl TraceDataEncoder {
             "UNKNOW" | "UNKNOWN" => Some(LocalTransactionState::Unknown),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cheetah_string::CheetahString;
+    use rocketmq_common::common::message::message_enum::MessageType;
+
+    use crate::base::access_channel::AccessChannel;
+    use crate::producer::local_transaction_state::LocalTransactionState;
+    use crate::trace::trace_bean::TraceBean;
+    use crate::trace::trace_context::TraceContext;
+    use crate::trace::trace_type::TraceType;
+
+    use super::*;
+
+    #[test]
+    fn test_decode_empty_trace_data() {
+        let result = TraceDataEncoder::decoder_from_trace_data_string("");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_encode_and_decode_pub_context() {
+        let bean = TraceBean {
+            topic: CheetahString::from("test-topic"),
+            msg_id: CheetahString::from("msg-001"),
+            tags: CheetahString::from("tagA"),
+            keys: CheetahString::from("key1 key2"),
+            store_host: CheetahString::from("127.0.0.1:10911"),
+            body_length: 1024,
+            msg_type: Some(MessageType::NormalMsg),
+            offset_msg_id: CheetahString::from("offset-001"),
+            client_host: CheetahString::from("192.168.1.1:12345"),
+            ..Default::default()
+        };
+
+        let ctx = TraceContext {
+            trace_type: Some(TraceType::Pub),
+            time_stamp: 1234567890,
+            region_id: CheetahString::from("us-east-1"),
+            group_name: CheetahString::from("test-group"),
+            cost_time: 100,
+            is_success: true,
+            trace_beans: Some(vec![bean]),
+            ..Default::default()
+        };
+
+        let transfer_bean = TraceDataEncoder::encoder_from_context_bean(&ctx).unwrap();
+        let decoded_contexts = TraceDataEncoder::decoder_from_trace_data_string(&transfer_bean.trans_data);
+
+        assert_eq!(decoded_contexts.len(), 1);
+        let decoded = &decoded_contexts[0];
+        assert_eq!(decoded.trace_type, Some(TraceType::Pub));
+        assert_eq!(decoded.time_stamp, 1234567890);
+        assert_eq!(decoded.region_id, CheetahString::from("us-east-1"));
+        assert_eq!(decoded.group_name, CheetahString::from("test-group"));
+        assert_eq!(decoded.cost_time, 100);
+        assert!(decoded.is_success);
+        assert!(decoded.trace_beans.is_some());
+        let decoded_bean = &decoded.trace_beans.as_ref().unwrap()[0];
+        assert_eq!(decoded_bean.topic, CheetahString::from("test-topic"));
+        assert_eq!(decoded_bean.msg_id, CheetahString::from("msg-001"));
+        assert_eq!(decoded_bean.tags, CheetahString::from("tagA"));
+        assert_eq!(decoded_bean.keys, CheetahString::from("key1 key2"));
+        assert_eq!(decoded_bean.store_host, CheetahString::from("127.0.0.1:10911"));
+        assert_eq!(decoded_bean.body_length, 1024);
+        assert_eq!(decoded_bean.msg_type, Some(MessageType::NormalMsg));
+        assert_eq!(decoded_bean.offset_msg_id, CheetahString::from("offset-001"));
+        assert_eq!(decoded_bean.client_host, CheetahString::from("192.168.1.1:12345"));
+    }
+
+    #[test]
+    fn test_encode_and_decode_sub_before_context() {
+        let bean = TraceBean {
+            msg_id: CheetahString::from("msg-002"),
+            retry_times: 2,
+            keys: CheetahString::from("key3"),
+            ..Default::default()
+        };
+
+        let ctx = TraceContext {
+            trace_type: Some(TraceType::SubBefore),
+            time_stamp: 9876543210,
+            region_id: CheetahString::from("eu-west-1"),
+            group_name: CheetahString::from("consumer-group"),
+            request_id: CheetahString::from("req-123"),
+            trace_beans: Some(vec![bean]),
+            ..Default::default()
+        };
+
+        let transfer_bean = TraceDataEncoder::encoder_from_context_bean(&ctx).unwrap();
+        let decoded_contexts = TraceDataEncoder::decoder_from_trace_data_string(&transfer_bean.trans_data);
+
+        assert_eq!(decoded_contexts.len(), 1);
+        let decoded = &decoded_contexts[0];
+        assert_eq!(decoded.trace_type, Some(TraceType::SubBefore));
+        assert_eq!(decoded.time_stamp, 9876543210);
+        assert_eq!(decoded.region_id, CheetahString::from("eu-west-1"));
+        assert_eq!(decoded.group_name, CheetahString::from("consumer-group"));
+        assert_eq!(decoded.request_id, CheetahString::from("req-123"));
+        assert!(decoded.trace_beans.is_some());
+        let decoded_bean = &decoded.trace_beans.as_ref().unwrap()[0];
+        assert_eq!(decoded_bean.msg_id, CheetahString::from("msg-002"));
+        assert_eq!(decoded_bean.retry_times, 2);
+        assert_eq!(decoded_bean.keys, CheetahString::from("key3"));
+    }
+
+    #[test]
+    fn test_encode_and_decode_sub_after_context() {
+        let bean = TraceBean {
+            msg_id: CheetahString::from("msg-003"),
+            keys: CheetahString::from("key4 key5"),
+            ..Default::default()
+        };
+
+        let ctx = TraceContext {
+            trace_type: Some(TraceType::SubAfter),
+            request_id: CheetahString::from("req-456"),
+            cost_time: 200,
+            is_success: false,
+            context_code: 1,
+            time_stamp: 1122334455,
+            group_name: CheetahString::from("consumer-group-2"),
+            trace_beans: Some(vec![bean]),
+            ..Default::default()
+        };
+
+        let transfer_bean = TraceDataEncoder::encoder_from_context_bean(&ctx).unwrap();
+        let decoded_contexts = TraceDataEncoder::decoder_from_trace_data_string(&transfer_bean.trans_data);
+
+        assert_eq!(decoded_contexts.len(), 1);
+        let decoded = &decoded_contexts[0];
+        assert_eq!(decoded.trace_type, Some(TraceType::SubAfter));
+        assert_eq!(decoded.request_id, CheetahString::from("req-456"));
+        assert_eq!(decoded.cost_time, 200);
+        assert!(!decoded.is_success);
+        assert_eq!(decoded.context_code, 1);
+        assert_eq!(decoded.time_stamp, 1122334455);
+        assert_eq!(decoded.group_name, CheetahString::from("consumer-group-2"));
+        assert!(decoded.trace_beans.is_some());
+        let decoded_bean = &decoded.trace_beans.as_ref().unwrap()[0];
+        assert_eq!(decoded_bean.msg_id, CheetahString::from("msg-003"));
+        assert_eq!(decoded_bean.keys, CheetahString::from("key4 key5"));
+    }
+
+    #[test]
+    fn test_encode_and_decode_sub_after_cloud_channel() {
+        let bean = TraceBean {
+            msg_id: CheetahString::from("msg-004"),
+            keys: CheetahString::from("key6"),
+            ..Default::default()
+        };
+
+        let ctx = TraceContext {
+            trace_type: Some(TraceType::SubAfter),
+            request_id: CheetahString::from("req-789"),
+            cost_time: 150,
+            is_success: true,
+            context_code: 0,
+            access_channel: Some(AccessChannel::Cloud),
+            time_stamp: 1122334455,
+            group_name: CheetahString::from("consumer-group-cloud"),
+            trace_beans: Some(vec![bean]),
+            ..Default::default()
+        };
+
+        let transfer_bean = TraceDataEncoder::encoder_from_context_bean(&ctx).unwrap();
+        let decoded_contexts = TraceDataEncoder::decoder_from_trace_data_string(&transfer_bean.trans_data);
+
+        assert_eq!(decoded_contexts.len(), 1);
+        let decoded = &decoded_contexts[0];
+        assert_eq!(decoded.trace_type, Some(TraceType::SubAfter));
+        assert_eq!(decoded.request_id, CheetahString::from("req-789"));
+        assert_eq!(decoded.cost_time, 150);
+        assert!(decoded.is_success);
+        assert_eq!(decoded.context_code, 0);
+        assert_eq!(decoded.time_stamp, 0);
+        assert_eq!(decoded.group_name, CheetahString::default());
+    }
+
+    #[test]
+    fn test_encode_and_decode_end_transaction_context() {
+        let bean = TraceBean {
+            topic: CheetahString::from("tx-topic"),
+            msg_id: CheetahString::from("msg-tx-001"),
+            tags: CheetahString::from("tx-tag"),
+            keys: CheetahString::from("tx-key"),
+            store_host: CheetahString::from("127.0.0.1:10911"),
+            msg_type: Some(MessageType::TransMsgCommit),
+            transaction_id: Some(CheetahString::from("tx-id-001")),
+            transaction_state: Some(LocalTransactionState::CommitMessage),
+            from_transaction_check: true,
+            ..Default::default()
+        };
+
+        let ctx = TraceContext {
+            trace_type: Some(TraceType::EndTransaction),
+            time_stamp: 1234567890123,
+            region_id: CheetahString::from("ap-southeast-1"),
+            group_name: CheetahString::from("tx-group"),
+            trace_beans: Some(vec![bean]),
+            ..Default::default()
+        };
+
+        let transfer_bean = TraceDataEncoder::encoder_from_context_bean(&ctx).unwrap();
+        let decoded_contexts = TraceDataEncoder::decoder_from_trace_data_string(&transfer_bean.trans_data);
+
+        assert_eq!(decoded_contexts.len(), 1);
+        let decoded = &decoded_contexts[0];
+        assert_eq!(decoded.trace_type, Some(TraceType::EndTransaction));
+        assert_eq!(decoded.time_stamp, 1234567890123);
+        assert_eq!(decoded.region_id, CheetahString::from("ap-southeast-1"));
+        assert_eq!(decoded.group_name, CheetahString::from("tx-group"));
+        assert!(decoded.trace_beans.is_some());
+        let decoded_bean = &decoded.trace_beans.as_ref().unwrap()[0];
+        assert_eq!(decoded_bean.topic, CheetahString::from("tx-topic"));
+        assert_eq!(decoded_bean.msg_id, CheetahString::from("msg-tx-001"));
+        assert_eq!(decoded_bean.tags, CheetahString::from("tx-tag"));
+        assert_eq!(decoded_bean.keys, CheetahString::from("tx-key"));
+        assert_eq!(decoded_bean.store_host, CheetahString::from("127.0.0.1:10911"));
+        assert_eq!(decoded_bean.msg_type, Some(MessageType::TransMsgCommit));
+        assert_eq!(decoded_bean.transaction_id, Some(CheetahString::from("tx-id-001")));
+        assert_eq!(
+            decoded_bean.transaction_state,
+            Some(LocalTransactionState::CommitMessage)
+        );
+        assert!(decoded_bean.from_transaction_check);
+    }
+
+    #[test]
+    fn test_encode_and_decode_recall_context() {
+        let bean = TraceBean {
+            topic: CheetahString::from("recall-topic"),
+            msg_id: CheetahString::from("msg-recall-001"),
+            ..Default::default()
+        };
+
+        let ctx = TraceContext {
+            trace_type: Some(TraceType::Recall),
+            time_stamp: 9876543210987,
+            region_id: CheetahString::from("sa-east-1"),
+            group_name: CheetahString::from("recall-group"),
+            is_success: true,
+            trace_beans: Some(vec![bean]),
+            ..Default::default()
+        };
+
+        let transfer_bean = TraceDataEncoder::encoder_from_context_bean(&ctx).unwrap();
+        let decoded_contexts = TraceDataEncoder::decoder_from_trace_data_string(&transfer_bean.trans_data);
+
+        assert_eq!(decoded_contexts.len(), 1);
+        let decoded = &decoded_contexts[0];
+        assert_eq!(decoded.trace_type, Some(TraceType::Recall));
+        assert_eq!(decoded.time_stamp, 9876543210987);
+        assert_eq!(decoded.region_id, CheetahString::from("sa-east-1"));
+        assert_eq!(decoded.group_name, CheetahString::from("recall-group"));
+        assert!(decoded.is_success);
+        assert!(decoded.trace_beans.is_some());
+        let decoded_bean = &decoded.trace_beans.as_ref().unwrap()[0];
+        assert_eq!(decoded_bean.topic, CheetahString::from("recall-topic"));
+        assert_eq!(decoded_bean.msg_id, CheetahString::from("msg-recall-001"));
+    }
+
+    #[test]
+    fn test_encode_invalid_context() {
+        let ctx_no_beans = TraceContext {
+            trace_type: Some(TraceType::Pub),
+            trace_beans: None,
+            ..Default::default()
+        };
+        assert!(TraceDataEncoder::encoder_from_context_bean(&ctx_no_beans).is_none());
+
+        let ctx_empty_beans = TraceContext {
+            trace_type: Some(TraceType::Pub),
+            trace_beans: Some(vec![]),
+            ..Default::default()
+        };
+        assert!(TraceDataEncoder::encoder_from_context_bean(&ctx_empty_beans).is_none());
+        let ctx_no_trace_type = TraceContext {
+            trace_type: None,
+            trace_beans: Some(vec![TraceBean::default()]),
+            ..Default::default()
+        };
+        assert!(TraceDataEncoder::encoder_from_context_bean(&ctx_no_trace_type).is_none());
+    }
+
+    #[test]
+    fn test_transfer_bean_keys() {
+        let bean = TraceBean {
+            msg_id: CheetahString::from("msg-key-test"),
+            keys: CheetahString::from("key1 key2 key3"),
+            ..Default::default()
+        };
+
+        let ctx = TraceContext {
+            trace_type: Some(TraceType::Pub),
+            trace_beans: Some(vec![bean]),
+            ..Default::default()
+        };
+
+        let transfer_bean = TraceDataEncoder::encoder_from_context_bean(&ctx).unwrap();
+        assert!(transfer_bean.trans_key.contains(&CheetahString::from("msg-key-test")));
+        assert!(transfer_bean.trans_key.contains(&CheetahString::from("key1")));
+        assert!(transfer_bean.trans_key.contains(&CheetahString::from("key2")));
+        assert!(transfer_bean.trans_key.contains(&CheetahString::from("key3")));
+    }
+
+    #[test]
+    fn test_message_type_ordinal_conversion() {
+        assert_eq!(TraceDataEncoder::message_type_to_ordinal(MessageType::NormalMsg), 0);
+        assert_eq!(TraceDataEncoder::message_type_to_ordinal(MessageType::TransMsgHalf), 1);
+        assert_eq!(
+            TraceDataEncoder::message_type_to_ordinal(MessageType::TransMsgCommit),
+            2
+        );
+        assert_eq!(TraceDataEncoder::message_type_to_ordinal(MessageType::DelayMsg), 3);
+        assert_eq!(TraceDataEncoder::message_type_to_ordinal(MessageType::OrderMsg), 4);
+
+        assert_eq!(
+            TraceDataEncoder::message_type_from_ordinal(0),
+            Some(MessageType::NormalMsg)
+        );
+        assert_eq!(
+            TraceDataEncoder::message_type_from_ordinal(1),
+            Some(MessageType::TransMsgHalf)
+        );
+        assert_eq!(
+            TraceDataEncoder::message_type_from_ordinal(2),
+            Some(MessageType::TransMsgCommit)
+        );
+        assert_eq!(
+            TraceDataEncoder::message_type_from_ordinal(3),
+            Some(MessageType::DelayMsg)
+        );
+        assert_eq!(
+            TraceDataEncoder::message_type_from_ordinal(4),
+            Some(MessageType::OrderMsg)
+        );
+        assert_eq!(TraceDataEncoder::message_type_from_ordinal(99), None);
+    }
+
+    #[test]
+    fn test_parse_transaction_state() {
+        assert_eq!(
+            TraceDataEncoder::parse_transaction_state("COMMIT_MESSAGE"),
+            Some(LocalTransactionState::CommitMessage)
+        );
+        assert_eq!(
+            TraceDataEncoder::parse_transaction_state("ROLLBACK_MESSAGE"),
+            Some(LocalTransactionState::RollbackMessage)
+        );
+        assert_eq!(
+            TraceDataEncoder::parse_transaction_state("UNKNOW"),
+            Some(LocalTransactionState::Unknown)
+        );
+        assert_eq!(
+            TraceDataEncoder::parse_transaction_state("UNKNOWN"),
+            Some(LocalTransactionState::Unknown)
+        );
+        assert_eq!(TraceDataEncoder::parse_transaction_state("INVALID"), None);
     }
 }
