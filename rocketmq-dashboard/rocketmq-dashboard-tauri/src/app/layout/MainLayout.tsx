@@ -50,7 +50,7 @@ export const MainLayout = ({children}: MainLayoutProps) => {
                 <div className="flex-1 overflow-y-auto px-4 py-2 space-y-8">
                     <div>
                         <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 px-3">Platform</div>
-                        <SidebarItem icon={Settings} label="NameServer" active={activeTab === 'OPS'} onClick={() => setActiveTab('OPS')}/>
+                        <SidebarItem icon={Settings} label="NameServer" active={activeTab === 'NameServer'} onClick={() => setActiveTab('NameServer')}/>
                         <SidebarItem icon={LayoutDashboard} label="Dashboard" active={activeTab === 'Dashboard'} onClick={() => setActiveTab('Dashboard')}/>
                         <SidebarItem icon={Network} label="Proxy" active={activeTab === 'Proxy'} onClick={() => setActiveTab('Proxy')}/>
                         <SidebarItem icon={Server} label="Cluster" active={activeTab === 'Cluster'} onClick={() => setActiveTab('Cluster')}/>

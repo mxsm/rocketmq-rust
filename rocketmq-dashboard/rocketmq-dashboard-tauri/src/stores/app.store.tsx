@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, ReactNode } from 'react';
 import type { SessionUser } from '../features/auth/types/auth.types';
 
 type Tab =
-  | 'OPS'
+  | 'NameServer'
   | 'Proxy'
   | 'Dashboard'
   | 'Cluster'
@@ -42,7 +42,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
   const getPageTitle = (tab: Tab) => {
     switch (tab) {
-      case 'OPS':
+      case 'NameServer':
         return 'NameServer Management';
       case 'Proxy':
         return 'Proxy Management';

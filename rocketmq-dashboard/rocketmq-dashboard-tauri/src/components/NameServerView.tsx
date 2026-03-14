@@ -6,33 +6,87 @@ import {Card} from '../components/ui/LegacyCard';
 import {Button} from '../components/ui/LegacyButton';
 import {Input} from '../components/ui/LegacyInput';
 import {Toggle} from '../components/ui/LegacyToggle';
+import {useNameServer} from '../features/nameserver/hooks/useNameServer';
 
-export const OpsView = () => {
-    const [nameServers, setNameServers] = useState(['127.0.0.1:9876', '192.168.1.20:9876']);
+export const NameServerView = () => {
     const [newNameServer, setNewNameServer] = useState('');
-    const [selectedNameServer, setSelectedNameServer] = useState('127.0.0.1:9876');
-    const [isVIPChannel, setIsVIPChannel] = useState(true);
-    const [useTLS, setUseTLS] = useState(false);
+    const {
+        nameServers,
+        selectedNameServer,
+        isVIPChannel,
+        useTLS,
+        isLoading,
+        pendingAction,
+        addNameServer,
+        switchNameServer,
+        deleteNameServer,
+        updateVIPChannel,
+        updateUseTLS,
+    } = useNameServer();
 
-    const handleAddNameServer = () => {
-        if (!newNameServer) return toast.error('Please enter a valid address');
-        if (nameServers.includes(newNameServer)) return toast.error('Address already exists');
-        setNameServers([...nameServers, newNameServer]);
+    const normalizedAddresses = new Set(nameServers.map((address) => address.trim().toLowerCase()));
+
+    const handleAddNameServer = async () => {
+        const nextAddress = newNameServer.trim();
+
+        if (!nextAddress) {
+            toast.error('Please enter a valid address');
+            return;
+        }
+
+        if (normalizedAddresses.has(nextAddress.toLowerCase())) {
+            toast.error('Address already exists');
+            return;
+        }
+
+        const response = await addNameServer(nextAddress);
+        if (!response.success) {
+            toast.error(response.message);
+            return;
+        }
+
         setNewNameServer('');
-        toast.success('Name Server added');
+        toast.success(response.message);
     };
 
-    const handleRemoveNameServer = (ns: string) => {
-        if (nameServers.length <= 1) return toast.error('Cannot remove the last Name Server');
-        if (ns === selectedNameServer) return toast.error('Cannot remove the active Name Server');
+    const handleRemoveNameServer = async (ns: string) => {
+        const response = await deleteNameServer(ns);
+        if (!response.success) {
+            toast.error(response.message);
+            return;
+        }
 
-        setNameServers(nameServers.filter(s => s !== ns));
-        toast.success('Name Server removed');
+        toast.success(response.message);
     };
 
-    const handleSwitchServer = (ns: string) => {
-        setSelectedNameServer(ns);
-        toast.success(`Switched to Name Server: ${ns}`);
+    const handleSwitchServer = async (ns: string) => {
+        const response = await switchNameServer(ns);
+        if (!response.success) {
+            toast.error(response.message);
+            return;
+        }
+
+        toast.success(response.message);
+    };
+
+    const handleVIPChannelChange = async (checked: boolean) => {
+        const response = await updateVIPChannel(checked);
+        if (!response.success) {
+            toast.error(response.message);
+            return;
+        }
+
+        toast.success(response.message);
+    };
+
+    const handleUseTLSChange = async (checked: boolean) => {
+        const response = await updateUseTLS(checked);
+        if (!response.success) {
+            toast.error(response.message);
+            return;
+        }
+
+        toast.success(response.message);
     };
 
     return (
@@ -40,12 +94,13 @@ export const OpsView = () => {
             <Card title="Name Server Configuration" description="Manage your Name Server addresses and connection status.">
                 <div className="space-y-6">
 
-                    <div className="flex gap-3 items-start">
+                    <div className="flex items-stretch gap-3">
                         <div className="flex-1">
                             <Input
                                 placeholder="Enter new Name Server address (e.g. 192.168.1.50:9876)"
                                 value={newNameServer}
                                 onChange={(e) => setNewNameServer(e.target.value)}
+                                disabled={isLoading || pendingAction === 'add'}
                                 className="bg-white dark:bg-gray-800 dark:text-white dark:border-gray-700 shadow-sm"
                             />
                         </div>
@@ -53,13 +108,14 @@ export const OpsView = () => {
                             variant="primary"
                             onClick={handleAddNameServer}
                             icon={Plus}
-                            className="dark:!bg-gray-900 dark:!text-white dark:border dark:border-gray-700 dark:hover:!bg-gray-800"
+                            disabled={isLoading || pendingAction === 'add'}
+                            className="h-[46px] w-[164px] shrink-0 px-5 dark:!bg-gray-900 dark:!text-white dark:border dark:border-gray-700 dark:hover:!bg-gray-800"
                         >
                             Add Server
                         </Button>
                     </div>
 
-                    <div className="border border-gray-200 rounded-xl overflow-hidden bg-white shadow-sm">
+                    <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden bg-white dark:bg-gray-900 shadow-sm">
                         <div className="min-w-full">
                             <div
                                 className="bg-gray-100 dark:bg-gray-800 border-b border-gray-100 dark:border-gray-800 px-6 py-3 flex items-center text-xs font-medium text-gray-900 dark:text-gray-200 uppercase tracking-wider">
@@ -83,6 +139,15 @@ export const OpsView = () => {
                                 }}
                             >
                                 <AnimatePresence mode="popLayout">
+                                    {isLoading && nameServers.length === 0 && (
+                                        <motion.div
+                                            initial={{opacity: 0}}
+                                            animate={{opacity: 1}}
+                                            className="px-6 py-8 text-sm text-gray-500 dark:text-gray-400"
+                                        >
+                                            Loading local NameServer settings...
+                                        </motion.div>
+                                    )}
                                     {nameServers.map((ns) => (
                                         <motion.div
                                             layout
@@ -94,7 +159,7 @@ export const OpsView = () => {
                                             exit={{opacity: 0, height: 0, marginBottom: 0, transition: {duration: 0.2}}}
                                             whileHover={{scale: 1.002}}
                                             transition={{type: "spring", stiffness: 400, damping: 30}}
-                                            className={`flex items-center px-6 py-4 transition-colors relative group hover:bg-gray-50 dark:hover:bg-gray-800/50 ${ns === selectedNameServer ? 'bg-gray-100 dark:bg-gray-800' : 'bg-white dark:bg-gray-900'}`}
+                                            className={`flex items-center px-6 py-4 transition-colors relative group hover:bg-gray-50 dark:hover:bg-gray-800/60 ${ns === selectedNameServer ? 'bg-gray-100 dark:bg-gray-800' : 'bg-white dark:bg-gray-900'}`}
                                         >
                                             {ns === selectedNameServer && (
                                                 <motion.div
@@ -129,13 +194,18 @@ export const OpsView = () => {
                                             </div>
 
                                             <div
-                                                className="w-32 flex justify-end items-center space-x-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                                                className="w-32 flex justify-end items-center space-x-2 opacity-100 md:opacity-70 md:group-hover:opacity-100 transition-opacity duration-200">
                                                 {ns !== selectedNameServer && (
                                                     <motion.button
                                                         whileHover={{scale: 1.05}}
                                                         whileTap={{scale: 0.95}}
                                                         onClick={() => handleSwitchServer(ns)}
-                                                        className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 px-3 py-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
+                                                        disabled={isLoading || pendingAction === `switch:${ns}`}
+                                                        className={`text-xs font-semibold px-3 py-1.5 rounded-md border shadow-sm transition-colors ${
+                                                            isLoading || pendingAction === `switch:${ns}`
+                                                                ? 'text-slate-400 border-slate-700 bg-slate-800/60 cursor-not-allowed'
+                                                                : 'text-blue-700 dark:text-slate-100 border-blue-200/80 bg-blue-50/80 hover:bg-blue-100 dark:border-slate-700 dark:bg-slate-800/88 dark:hover:bg-slate-700/92 dark:hover:border-slate-600'
+                                                        }`}
                                                     >
                                                         Switch
                                                     </motion.button>
@@ -144,12 +214,12 @@ export const OpsView = () => {
                                                     whileHover={{scale: 1.1, color: "#ef4444"}}
                                                     whileTap={{scale: 0.9}}
                                                     onClick={() => handleRemoveNameServer(ns)}
+                                                    disabled={ns === selectedNameServer || isLoading || pendingAction === `delete:${ns}`}
                                                     className={`p-1.5 rounded-md transition-colors ${
-                                                        ns === selectedNameServer
-                                                            ? 'text-gray-300 dark:text-gray-700 cursor-not-allowed'
-                                                            : 'text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800'
+                                                        ns === selectedNameServer || isLoading || pendingAction === `delete:${ns}`
+                                                            ? 'text-gray-300 dark:text-gray-600 bg-transparent cursor-not-allowed'
+                                                            : 'text-gray-500 dark:text-slate-200 border border-gray-200 bg-white hover:bg-gray-50 dark:border-slate-700 dark:bg-slate-800/88 dark:hover:bg-rose-500/14 dark:hover:border-rose-400/30 dark:hover:text-rose-100 shadow-sm'
                                                     }`}
-                                                    disabled={ns === selectedNameServer}
                                                 >
                                                     <Trash2 className="w-4 h-4"/>
                                                 </motion.button>
@@ -168,11 +238,19 @@ export const OpsView = () => {
                 <div className="divide-y divide-gray-100 dark:divide-gray-800">
                     <div className="flex items-center justify-between py-4">
                         <span className="text-sm font-medium text-gray-900 dark:text-gray-300">VIP Channel</span>
-                        <Toggle checked={isVIPChannel} onChange={setIsVIPChannel}/>
+                        <Toggle
+                            checked={isVIPChannel}
+                            onChange={handleVIPChannelChange}
+                            disabled={isLoading || pendingAction === 'vip'}
+                        />
                     </div>
                     <div className="flex items-center justify-between py-4">
                         <span className="text-sm font-medium text-gray-900 dark:text-gray-300">TLS Encryption</span>
-                        <Toggle checked={useTLS} onChange={setUseTLS}/>
+                        <Toggle
+                            checked={useTLS}
+                            onChange={handleUseTLSChange}
+                            disabled={isLoading || pendingAction === 'tls'}
+                        />
                     </div>
                 </div>
             </Card>

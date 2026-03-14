@@ -4,7 +4,7 @@ import {DashboardPage} from '../../pages/dashboard/DashboardPage';
 
 // Import Views
 import {ACLView} from '../../components/ACLView';
-import {OpsView} from '../../components/OpsView';
+import {NameServerView} from '../../components/NameServerView';
 import {ProxyView} from '../../components/ProxyView';
 import {ClusterView} from '../../components/ClusterView';
 import {TopicView} from '../../components/TopicView';
@@ -19,8 +19,8 @@ export const AppRouter = () => {
     const {activeTab} = useAppStore();
 
     switch (activeTab) {
-        case 'OPS':
-            return <OpsView/>;
+        case 'NameServer':
+            return <NameServerView/>;
         case 'Proxy':
             return <ProxyView/>;
         case 'Dashboard':
