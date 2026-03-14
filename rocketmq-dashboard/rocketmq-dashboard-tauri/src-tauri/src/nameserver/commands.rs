@@ -19,9 +19,7 @@ use crate::nameserver::types::NameServerResult;
 use tauri::State;
 
 #[tauri::command]
-pub fn get_name_server_home_page(
-    nameserver_service: State<'_, NameServerService>,
-) -> NameServerHomePageResponse {
+pub fn get_name_server_home_page(nameserver_service: State<'_, NameServerService>) -> NameServerHomePageResponse {
     match nameserver_service.get_home_page() {
         Ok(response) => response,
         Err(error) => {
@@ -74,10 +72,7 @@ pub fn update_vip_channel(
 }
 
 #[tauri::command]
-pub fn update_use_tls(
-    enabled: bool,
-    nameserver_service: State<'_, NameServerService>,
-) -> NameServerMutationResponse {
+pub fn update_use_tls(enabled: bool, nameserver_service: State<'_, NameServerService>) -> NameServerMutationResponse {
     handle_mutation("update TLS setting", || nameserver_service.update_use_tls(enabled))
 }
 

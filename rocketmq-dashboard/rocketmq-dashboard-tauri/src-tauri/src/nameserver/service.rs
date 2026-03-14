@@ -142,12 +142,7 @@ impl NameServerService {
             INSERT INTO nameserver_addresses (address, is_active, sort_order, created_at, updated_at)
             VALUES (?1, ?2, ?3, ?4, ?4)
             ",
-            params![
-                normalized_address,
-                if has_active { 0 } else { 1 },
-                next_sort_order,
-                now
-            ],
+            params![normalized_address, if has_active { 0 } else { 1 }, next_sort_order, now],
         )?;
         transaction.commit()?;
 
@@ -327,9 +322,9 @@ fn normalize_address(address: &str) -> NameServerResult<String> {
         ));
     }
 
-    normalized_port.parse::<u16>().map_err(|_| {
-        NameServerError::Validation("Name Server port must be a valid number".to_string())
-    })?;
+    normalized_port
+        .parse::<u16>()
+        .map_err(|_| NameServerError::Validation("Name Server port must be a valid number".to_string()))?;
 
     Ok(format!("{normalized_host}:{normalized_port}"))
 }
@@ -357,7 +352,10 @@ mod tests {
 
     impl TestDir {
         fn new() -> Self {
-            let path = env::temp_dir().join(format!("rocketmq-dashboard-tauri-nameserver-service-tests-{}", Uuid::new_v4()));
+            let path = env::temp_dir().join(format!(
+                "rocketmq-dashboard-tauri-nameserver-service-tests-{}",
+                Uuid::new_v4()
+            ));
             fs::create_dir_all(&path).expect("failed to create test directory");
             Self { path }
         }
@@ -430,10 +428,6 @@ mod tests {
             .delete_name_server("127.0.0.1:9876")
             .expect_err("active address removal should fail");
 
-        assert!(
-            error
-                .to_string()
-                .contains("Cannot remove the active Name Server")
-        );
+        assert!(error.to_string().contains("Cannot remove the active Name Server"));
     }
 }
