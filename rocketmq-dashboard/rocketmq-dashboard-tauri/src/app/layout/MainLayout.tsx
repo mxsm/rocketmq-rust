@@ -21,6 +21,7 @@ import {SidebarItem} from '../../components/ui/SidebarItem';
 import rocketLogo from 'rocketmq-rust:asset/rocketmq-rust-logo.png';
 import {useTheme} from '../../hooks/useTheme';
 import {useAppStore} from '../../stores/app.store';
+import {useAuth} from '../../features/auth';
 
 interface MainLayoutProps {
     children: React.ReactNode;
@@ -28,7 +29,9 @@ interface MainLayoutProps {
 
 export const MainLayout = ({children}: MainLayoutProps) => {
     const {isDark, toggleTheme} = useTheme();
-    const {activeTab, setActiveTab, setIsLoggedIn, pageTitle} = useAppStore();
+    const {activeTab, currentUser, pageTitle, setActiveTab} = useAppStore();
+    const {logout} = useAuth();
+    const initials = (currentUser?.username ?? 'AD').slice(0, 2).toUpperCase();
 
     return (
         <div className={`flex h-screen font-sans text-gray-900 selection:bg-blue-100 ${isDark ? 'dark bg-gray-950 text-white' : 'bg-gray-50/50'}`}>
@@ -89,20 +92,22 @@ export const MainLayout = ({children}: MainLayoutProps) => {
                     </div>
 
                     <button
-                        onClick={() => {
-                            toast.success("Logged out successfully");
-                            setTimeout(() => setIsLoggedIn(false), 500);
+                        onClick={async () => {
+                            await logout();
+                            toast.success('Logged out successfully');
                         }}
                         className="flex items-center space-x-3 w-full px-2 py-2 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors group"
                     >
                         <div
                             className="w-8 h-8 rounded-full bg-gradient-to-tr from-gray-800 to-gray-900 flex items-center justify-center text-xs font-medium text-white shadow-sm group-hover:shadow-md transition-all">
-                            AD
+                            {initials}
                         </div>
                         <div className="flex-1 text-left min-w-0">
-                            <div className="text-sm font-bold text-gray-900 dark:text-white truncate">Admin User</div>
+                            <div className="text-sm font-bold text-gray-900 dark:text-white truncate">
+                                {currentUser?.username ?? 'Admin'}
+                            </div>
                             <div
-                                className="text-xs text-gray-500 truncate group-hover:text-gray-700 dark:group-hover:text-gray-400 transition-colors">admin@rocketmq-rust.com
+                                className="text-xs text-gray-500 truncate group-hover:text-gray-700 dark:group-hover:text-gray-400 transition-colors">Local Administrator
                             </div>
                         </div>
                         <ChevronDown className="w-3.5 h-3.5 text-gray-400"/>

@@ -1,178 +1,109 @@
 # RocketMQ-Rust Dashboard (Tauri)
 
-A RocketMQ-Rust Dashboard GUI implemented with [Tauri](https://tauri.app/).
+A RocketMQ-Rust desktop dashboard built with Tauri, React, and Rust.
 
 ## Features
 
-- Native desktop application with web-based UI
-- Cross-platform support (Linux, macOS, Windows)
-- Backend written in Rust
-- Frontend built with modern web technologies:
-    - **React** - UI Library
-    - **Vite** - Build Tool
-    - **Tailwind CSS** & **Radix UI** - Styling and UI Components
-    - **Recharts** - Data Visualization
-- Small bundle size and low resource usage
-- Secure with minimal attack surface
+- Native desktop packaging with a web UI
+- Rust backend and React frontend
+- Local embedded authentication with SQLite
+- Argon2 password hashing
+- Forced bootstrap password change on first login
+- In-memory session management with session restore while the backend process remains alive
 
-## UI Preview & Feature Status
+## Authentication Quick Start
 
-![Dashboard UI Preview](./resources/rocketmq-rust-dashboard-topic.png)
+On first startup the application bootstraps a local administrator account:
 
-> **Note**: The features shown in the sidebar menu are currently under development.
+- Username: `admin`
+- Initial password:
+  - `ROCKETMQ_DASHBOARD_INIT_PASSWORD`, if provided
+  - otherwise `admin123`
 
-## Feature Development Roadmap
+After the first successful login, the user must change the password before entering the dashboard.
 
-| Category      | Feature        | Status            |
-|---------------|----------------|-------------------|
-| **Platform**  | NameServer     | 🚧 In Development |
-|               | Dashboard      | 🚧 In Development |
-|               | Proxy          | 🚧 In Development |
-|               | Cluster        | 🚧 In Development |
-| **Messaging** | Topic          | 🚧 In Development |
-|               | Consumer       | 🚧 In Development |
-|               | Producer       | 🚧 In Development |
-|               | Message        | 🚧 In Development |
-|               | MessageTrace   | 🚧 In Development |
-|               | DLQMessage     | 🚧 In Development |
-| **Advanced**  | ACL Management | 🚧 In Development |
+Authentication data is stored in:
 
-## Installation
+- Windows: `%APPDATA%\com.rocketmq-rust.dashboard\dashboard.db`
+- macOS: `~/Library/Application Support/com.rocketmq-rust.dashboard/dashboard.db`
+- Linux: `~/.config/rocketmq-rust-dashboard/dashboard.db`
+
+For more detail, see [doc/AUTH_CONFIG.md](./doc/AUTH_CONFIG.md).
+
+## Development
 
 ### Prerequisites
 
-- Rust toolchain (1.77.2 or later)
+- Rust toolchain
 - Node.js and npm
-- Platform-specific dependencies:
-    - **Windows**: WebView2
-    - **macOS**: No additional dependencies
-    - **Linux**: webkit2gtk, libssl, and other dependencies (see [Tauri prerequisites](https://tauri.app/v1/guides/getting-started/prerequisites))
+- Tauri platform prerequisites for your OS
 
-### Build from source
-
-#### Using NPM
+### Install
 
 ```bash
-# Clone the repository
-git clone https://github.com/mxsm/rocketmq-rust.git
-cd rocketmq-rust/rocketmq-dashboard/rocketmq-dashboard-tauri
-
-# Install frontend dependencies
 npm install
-
-# Build the application
-npm run tauri build
 ```
 
-#### Using Cargo
-
-If you prefer using Cargo, you can install the Tauri CLI:
+### Run in development mode
 
 ```bash
-cargo install tauri-cli
-```
-
-Then build the project:
-
-```bash
-# Install frontend dependencies (still required)
-npm install
-
-# Build the application
-cargo tauri build
-```
-
-The binary will be available in `src-tauri/target/release/`.
-
-## Quick Start
-
-### Default Login Credentials
-
-> **⚠️ Note**: This is a temporary authentication implementation. A more comprehensive authentication system with additional security features (password change UI, multi-user support, role-based access control) will be implemented in future versions.
-
-When you first run the application, a default configuration will be created with the following credentials:
-
-- **Username**: `admin`
-- **Password**: `admin123`
-
-⚠️ **Security Notice**: Please change the default password after your first login!
-
-The authentication configuration is stored at:
-
-- **Windows**: `%APPDATA%\com.rocketmqrust.dashboard\auth_config.json`
-- **macOS**: `~/Library/Application Support/com.rocketmqrust.dashboard/auth_config.json`
-- **Linux**: `~/.config/rocketmq-rust-dashboard/auth_config.json`
-
-For more details on authentication and security, see [AUTH_CONFIG.md](doc/AUTH_CONFIG.md).
-
-### Development Mode
-
-#### Using NPM
-
-```bash
-# Install dependencies
-npm install
-
-# Start the development server
 npm run tauri dev
 ```
 
-#### Using Cargo
+If you prefer Cargo:
 
 ```bash
-# Install dependencies
-npm install
-
-# Start the development server
+cargo install tauri-cli
 cargo tauri dev
 ```
 
-### Build for Production
+### Build
 
 ```bash
-# Using NPM
+npm run build
 npm run tauri build
+```
 
-# OR Using Cargo
+If you prefer Cargo for packaging:
+
+```bash
+cargo install tauri-cli
 cargo tauri build
 ```
 
-### With Logging
+Notes:
 
-Development mode includes debug logging by default. Check the console for logs.
+- `npm run build` only builds the frontend assets.
+- `npm run tauri build` or `cargo tauri build` produces the desktop package.
+- `cargo build` inside `src-tauri` only builds the Rust backend and does not generate the installer bundle.
 
-## Project Structure
+## Verification
 
-```
-rocketmq-dashboard-tauri/
-├── src/                     # Frontend source code
-├── src-tauri/              # Rust backend
-│   ├── src/
-│   │   ├── main.rs        # Application entry point
-│   │   └── lib.rs         # Library exports
-│   ├── Cargo.toml         # Rust dependencies
-│   ├── tauri.conf.json    # Tauri configuration
-│   └── icons/             # Application icons
-├── package.json            # Node.js dependencies
-└── README.md
+Backend:
+
+```bash
+cd src-tauri
+cargo test
 ```
 
-## Scripts
+Frontend:
 
-- `npm run dev` - Start frontend development server
-- `npm run build` - Build frontend for production
-- `npm run tauri dev` - Start Tauri development mode
-- `npm run tauri build` - Build application for production
+```bash
+npm run build
+```
+
+## Reset local auth
+
+To reset the local administrator account:
+
+1. Stop the application.
+2. Delete `dashboard.db` from the application config directory.
+3. Restart the application.
+4. Sign in again with the bootstrap password source.
 
 ## License
 
 Licensed under either of:
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](../../LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](../../LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+- Apache License, Version 2.0
+- MIT license

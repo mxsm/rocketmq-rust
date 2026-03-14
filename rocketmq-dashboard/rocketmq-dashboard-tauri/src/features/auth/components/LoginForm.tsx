@@ -20,12 +20,12 @@ export const LoginForm: React.FC = () => {
             animate={{
                 opacity: 1,
                 y: 0,
-                x: shake ? [0, -10, 10, -10, 10, -5, 5, 0] : 0
+                x: shake ? [0, -10, 10, -10, 10, -5, 5, 0] : 0,
             }}
             transition={{
-                opacity: { duration: 0.8, delay: 0.2, ease: "easeOut" },
-                y: { duration: 0.8, delay: 0.2, ease: "easeOut" },
-                x: { duration: 0.65 }
+                opacity: { duration: 0.8, delay: 0.2, ease: 'easeOut' },
+                y: { duration: 0.8, delay: 0.2, ease: 'easeOut' },
+                x: { duration: 0.65 },
             }}
             className="w-full max-w-md"
         >
@@ -34,12 +34,13 @@ export const LoginForm: React.FC = () => {
                     <h1 className="text-2xl font-bold text-white mb-2 tracking-tight">
                         Sign in to your account
                     </h1>
-                    <p className="text-gray-400 text-sm">Welcome back! Please enter your details.</p>
+                    <p className="text-gray-400 text-sm">
+                        Use the local administrator credentials to access the dashboard.
+                    </p>
                 </div>
 
                 <form onSubmit={handleSubmit} className="space-y-6">
                     <div className="space-y-4">
-                        {/* Username Input */}
                         <div className="space-y-2">
                             <label className="text-xs font-semibold text-gray-300 uppercase tracking-wider ml-1">
                                 Username
@@ -51,7 +52,12 @@ export const LoginForm: React.FC = () => {
                                 <input
                                     type="text"
                                     value={username}
-                                    onChange={(e) => setUsername(e.target.value)}
+                                    onChange={(e) => {
+                                        setUsername(e.target.value);
+                                        if (error) {
+                                            clearError();
+                                        }
+                                    }}
                                     className="block w-full pl-10 pr-4 py-3 bg-gray-950/50 border border-gray-700/50 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-sm font-medium hover:border-gray-600"
                                     placeholder="Enter your username"
                                     required
@@ -60,7 +66,6 @@ export const LoginForm: React.FC = () => {
                             </div>
                         </div>
 
-                        {/* Password Input */}
                         <div className="space-y-2">
                             <label className="text-xs font-semibold text-gray-300 uppercase tracking-wider ml-1">
                                 Password
@@ -72,9 +77,14 @@ export const LoginForm: React.FC = () => {
                                 <input
                                     type="password"
                                     value={password}
-                                    onChange={(e) => setPassword(e.target.value)}
+                                    onChange={(e) => {
+                                        setPassword(e.target.value);
+                                        if (error) {
+                                            clearError();
+                                        }
+                                    }}
                                     className="block w-full pl-10 pr-4 py-3 bg-gray-950/50 border border-gray-700/50 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-sm font-medium hover:border-gray-600"
-                                    placeholder="••••••••"
+                                    placeholder="Enter your password"
                                     required
                                     disabled={isLoading}
                                 />
@@ -82,24 +92,8 @@ export const LoginForm: React.FC = () => {
                         </div>
                     </div>
 
-                    {/* Remember Me & Forgot Password */}
-                    <div className="flex items-center justify-between text-sm">
-                        <label className="flex items-center text-gray-400 hover:text-gray-300 cursor-pointer select-none group">
-                            <input
-                                type="checkbox"
-                                className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500/40 transition-colors cursor-pointer"
-                            />
-                            <span className="ml-2 group-hover:text-white transition-colors">Remember me</span>
-                        </label>
-                        <a href="#" className="text-blue-400 hover:text-blue-300 font-medium transition-colors hover:underline">
-                            Forgot password?
-                        </a>
-                    </div>
+                    <ErrorAlert message={error} title="Login Failed" onClose={clearError} />
 
-                    {/* Error Alert */}
-                    <ErrorAlert message={error} onClose={clearError} />
-
-                    {/* Submit Button */}
                     <button
                         type="submit"
                         disabled={isLoading}
@@ -116,13 +110,9 @@ export const LoginForm: React.FC = () => {
                     </button>
                 </form>
 
-                {/* Footer */}
-                <div className="mt-8 pt-6 border-t border-gray-800 text-center">
+                <div className="mt-8 pt-6 border-t border-gray-800">
                     <p className="text-sm text-gray-500">
-                        Don't have an account?{' '}
-                        <a href="#" className="text-white hover:text-blue-400 font-medium transition-colors">
-                            Contact Administrator
-                        </a>
+                        First-time login requires a password change before the dashboard becomes available.
                     </p>
                 </div>
             </div>
