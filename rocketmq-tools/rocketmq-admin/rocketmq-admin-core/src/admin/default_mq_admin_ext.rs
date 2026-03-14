@@ -266,6 +266,31 @@ impl DefaultMQAdminExt {
             .pull_message_from_queue(broker_addr, mq, sub_expression, offset, max_nums, timeout_millis)
             .await
     }
+
+    pub async fn query_message_by_key(
+        &self,
+        cluster_name: Option<CheetahString>,
+        topic: CheetahString,
+        key: CheetahString,
+        max_num: i32,
+        begin_timestamp: i64,
+        end_timestamp: i64,
+        key_type: CheetahString,
+        last_key: Option<CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<rocketmq_client_rust::base::query_result::QueryResult> {
+        self.default_mqadmin_ext_impl
+            .query_message_by_key(
+                cluster_name,
+                topic,
+                key,
+                max_num,
+                begin_timestamp,
+                end_timestamp,
+                key_type,
+                last_key,
+            )
+            .await
+    }
 }
 
 impl Default for DefaultMQAdminExt {

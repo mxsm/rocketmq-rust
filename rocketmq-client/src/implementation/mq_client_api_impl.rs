@@ -135,6 +135,8 @@ use rocketmq_remoting::protocol::header::pull_message_response_header::PullMessa
 use rocketmq_remoting::protocol::header::query_consume_queue_request_header::QueryConsumeQueueRequestHeader;
 use rocketmq_remoting::protocol::header::query_consumer_offset_request_header::QueryConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::query_consumer_offset_response_header::QueryConsumerOffsetResponseHeader;
+use rocketmq_remoting::protocol::header::query_message_request_header::QueryMessageRequestHeader;
+use rocketmq_remoting::protocol::header::query_message_response_header::QueryMessageResponseHeader;
 use rocketmq_remoting::protocol::header::recall_message_request_header::RecallMessageRequestHeader;
 use rocketmq_remoting::protocol::header::recall_message_response_header::RecallMessageResponseHeader;
 use rocketmq_remoting::protocol::header::reset_master_flush_offset_header::ResetMasterFlushOffsetHeader;
@@ -2050,6 +2052,39 @@ impl MQClientAPIImpl {
             response.remark().map_or("".to_string(), |s| s.to_string()),
             addr.to_string()
         ))
+    }
+
+    pub async fn query_message(
+        this: &ArcMut<Self>,
+        addr: &CheetahString,
+        request_header: QueryMessageRequestHeader,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<Option<(QueryMessageResponseHeader, Option<bytes::Bytes>)>> {
+        let request = RemotingCommand::create_request_command(RequestCode::QueryMessage, request_header);
+        let response = this
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                let response_header = response
+                    .decode_command_custom_header::<QueryMessageResponseHeader>()
+                    .map_err(|e| {
+                        rocketmq_error::RocketMQError::Internal(format!(
+                            "decode QueryMessageResponseHeader failed: {}",
+                            e
+                        ))
+                    })?;
+                let body = response.body().cloned();
+                Ok(Some((response_header, body)))
+            }
+            ResponseCode::QueryNotFound => Ok(None),
+            _ => Err(client_broker_err!(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string()),
+                addr.to_string()
+            )),
+        }
     }
 
     pub async fn pull_message<PCB>(
