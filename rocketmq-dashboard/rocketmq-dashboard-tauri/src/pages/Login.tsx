@@ -15,7 +15,8 @@ export const Login = () => {
                     className="flex-1 flex flex-col items-center md:items-start text-center md:text-left"
                 >
                     <div className="relative w-full max-w-[500px] aspect-square flex items-center justify-center">
-                        <div className="absolute inset-0 bg-blue-500/10 blur-[120px] rounded-full" />
+                        <div className="absolute inset-0 rounded-full bg-[radial-gradient(circle_at_center,_rgba(56,189,248,0.16),_transparent_55%)] blur-[90px]" />
+                        <div className="absolute inset-[12%] rounded-full border border-sky-300/10 bg-[radial-gradient(circle_at_top,_rgba(125,211,252,0.14),_transparent_45%)]" />
                         <img
                             src={rocketImage}
                             alt="RocketMQ Rust"
