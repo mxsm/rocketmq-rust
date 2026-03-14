@@ -53,7 +53,7 @@ static CHANNEL_CONSUMER_GROUPS: LazyLock<DashMap<CheetahString, HashSet<CheetahS
     LazyLock::new(|| DashMap::with_capacity_and_shard_amount(4096, 64));
 
 /// Type alias for consumer change listener to reduce complexity
-type ConsumerListener = Arc<Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>>;
+type ConsumerListener = Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static>;
 
 /// Manages consumer client connections and their lifecycle.
 ///
@@ -522,7 +522,7 @@ impl ConsumerManager {
     ///
     /// # Example
     /// ```ignore
-    /// let custom_listener = Arc::new(Box::new(MyCustomListener::new()));
+    /// let custom_listener = Arc::new(MyCustomListener::new());
     /// consumer_manager.append_consumer_ids_change_listener(custom_listener);
     /// ```
     pub fn append_consumer_ids_change_listener(&self, listener: ConsumerListener) {
