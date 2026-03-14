@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "256"]
+
 use std::collections::HashSet;
 
 use cheetah_string::CheetahString;
@@ -60,10 +62,10 @@ pub async fn main() -> RocketMQResult<()> {
 async fn switch_pop_consumer() -> RocketMQResult<()> {
     let mut mq_admin_ext = DefaultMQAdminExt::new();
     mq_admin_ext.client_config_mut().namesrv_addr = Some(CheetahString::from_static_str(DEFAULT_NAMESRVADDR));
-    MQAdminExt::start(&mut mq_admin_ext).await.unwrap();
-    let broker_datas = MQAdminExt::examine_topic_route_info(&mq_admin_ext, CheetahString::from_static_str(TOPIC))
-        .await
-        .unwrap()
+    mq_admin_ext.start().await?;
+    let broker_datas = mq_admin_ext
+        .examine_topic_route_info(CheetahString::from_static_str(TOPIC))
+        .await?
         .unwrap();
     for broker_data in broker_datas.broker_datas {
         let broker_addrs = broker_data
@@ -72,17 +74,16 @@ async fn switch_pop_consumer() -> RocketMQResult<()> {
             .cloned()
             .collect::<HashSet<CheetahString>>();
         for broker_addr in broker_addrs {
-            MQAdminExt::set_message_request_mode(
-                &mq_admin_ext,
-                broker_addr,
-                CheetahString::from_static_str(TOPIC),
-                CheetahString::from_static_str(CONSUMER_GROUP),
-                MessageRequestMode::Pop,
-                8,
-                3_000,
-            )
-            .await
-            .unwrap();
+            mq_admin_ext
+                .set_message_request_mode(
+                    broker_addr,
+                    CheetahString::from_static_str(TOPIC),
+                    CheetahString::from_static_str(CONSUMER_GROUP),
+                    MessageRequestMode::Pop,
+                    8,
+                    3_000,
+                )
+                .await?;
         }
     }
     mq_admin_ext.shutdown().await;
