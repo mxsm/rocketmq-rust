@@ -1,23 +1,37 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { LoginCredentials, LoginResponse } from '../features/auth/types/auth.types';
+import type {
+    AuthSessionResponse,
+    BootstrapStatus,
+    ChangePasswordPayload,
+    CommonResponse,
+    LoginCredentials,
+} from '../features/auth/types/auth.types';
 
-/**
- * Authentication service for Tauri backend
- */
 export class AuthService {
-    /**
-     * Verify user credentials via Tauri backend
-     */
-    static async login(credentials: LoginCredentials): Promise<LoginResponse> {
-        try {
-            const result = await invoke<LoginResponse>('verify_login', {
-                username: credentials.username,
-                password: credentials.password,
-            });
-            return result;
-        } catch (error) {
-            console.error('Authentication error:', error);
-            throw new Error('Failed to connect to authentication service');
-        }
+    static async login(credentials: LoginCredentials): Promise<AuthSessionResponse> {
+        return invoke<AuthSessionResponse>('login', {
+            username: credentials.username,
+            password: credentials.password,
+        });
+    }
+
+    static async logout(sessionId: string): Promise<CommonResponse> {
+        return invoke<CommonResponse>('logout', { sessionId });
+    }
+
+    static async restoreSession(sessionId: string): Promise<AuthSessionResponse> {
+        return invoke<AuthSessionResponse>('restore_session', { sessionId });
+    }
+
+    static async changePassword(payload: ChangePasswordPayload): Promise<CommonResponse> {
+        return invoke<CommonResponse>('change_password', {
+            sessionId: payload.sessionId,
+            oldPassword: payload.oldPassword,
+            newPassword: payload.newPassword,
+        });
+    }
+
+    static async getBootstrapStatus(): Promise<BootstrapStatus> {
+        return invoke<BootstrapStatus>('get_auth_bootstrap_status');
     }
 }
