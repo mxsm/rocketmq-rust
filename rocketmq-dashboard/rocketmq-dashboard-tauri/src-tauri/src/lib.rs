@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod auth;
+mod nameserver;
 
 use tauri::Manager;
 
@@ -38,6 +39,16 @@ pub fn run() {
             let auth_service = auth::AuthService::new(auth_db);
             let bootstrap_status = auth_service.bootstrap_default_admin()?;
 
+            let nameserver_db = nameserver::NameServerDb::new(app.handle())?;
+            nameserver_db.init()?;
+            log::info!(
+                "Local NameServer SQLite database initialized at: {}",
+                nameserver_db.db_path().display()
+            );
+
+            let nameserver_service = nameserver::NameServerService::new(nameserver_db);
+            nameserver_service.bootstrap_defaults()?;
+
             if bootstrap_status.created {
                 log::warn!(
                     "Initialized local dashboard admin account `{}` with the bootstrap password. The password must be \
@@ -47,6 +58,7 @@ pub fn run() {
             }
 
             app.manage(auth_service);
+            app.manage(nameserver_service);
             app.manage(auth::SessionState::default());
 
             Ok(())
@@ -56,7 +68,13 @@ pub fn run() {
             auth::commands::logout,
             auth::commands::restore_session,
             auth::commands::change_password,
-            auth::commands::get_auth_bootstrap_status
+            auth::commands::get_auth_bootstrap_status,
+            nameserver::commands::get_name_server_home_page,
+            nameserver::commands::add_name_server,
+            nameserver::commands::switch_name_server,
+            nameserver::commands::delete_name_server,
+            nameserver::commands::update_vip_channel,
+            nameserver::commands::update_use_tls
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
