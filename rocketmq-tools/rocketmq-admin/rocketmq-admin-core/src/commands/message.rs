@@ -15,6 +15,7 @@
 pub mod check_msg_send_rt_sub_command;
 pub mod decode_message_id_sub_command;
 pub mod dump_compaction_log_sub_command;
+pub mod print_message_sub_command;
 pub mod print_msg_by_queue_sub_command;
 pub mod query_msg_by_key_sub_command;
 pub mod send_message_sub_command;
@@ -28,6 +29,7 @@ use rocketmq_remoting::runtime::RPCHook;
 use crate::commands::message::check_msg_send_rt_sub_command::CheckMsgSendRTSubCommand;
 use crate::commands::message::decode_message_id_sub_command::DecodeMessageIdSubCommand;
 use crate::commands::message::dump_compaction_log_sub_command::DumpCompactionLogSubCommand;
+use crate::commands::message::print_message_sub_command::PrintMessageSubCommand;
 use crate::commands::message::print_msg_by_queue_sub_command::PrintMsgByQueueSubCommand;
 use crate::commands::message::query_msg_by_key_sub_command::QueryMsgByKeySubCommand;
 use crate::commands::message::send_message_sub_command::SendMessageSubCommand;
@@ -57,6 +59,13 @@ pub enum MessageCommands {
     DumpCompactionLog(DumpCompactionLogSubCommand),
 
     #[command(
+        name = "printMessage",
+        about = "Print Message Detail.",
+        long_about = None,
+    )]
+    PrintMessage(PrintMessageSubCommand),
+
+    #[command(
         name = "printMsgByQueue",
         about = "Print Message Detail by queueId.",
         long_about = None,
@@ -84,6 +93,7 @@ impl CommandExecute for MessageCommands {
             MessageCommands::CheckMsgSendRT(value) => value.execute(rpc_hook).await,
             MessageCommands::DecodeMessageId(value) => value.execute(rpc_hook).await,
             MessageCommands::DumpCompactionLog(value) => value.execute(rpc_hook).await,
+            MessageCommands::PrintMessage(value) => value.execute(rpc_hook).await,
             MessageCommands::PrintMsgByQueue(value) => value.execute(rpc_hook).await,
             MessageCommands::QueryMsgByKey(value) => value.execute(rpc_hook).await,
             MessageCommands::SendMessage(value) => value.execute(rpc_hook).await,
