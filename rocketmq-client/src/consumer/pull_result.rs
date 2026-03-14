@@ -63,8 +63,8 @@ impl PullResult {
     }
 
     #[inline]
-    pub fn msg_found_list(&self) -> &Option<Vec<ArcMut<MessageExt>>> {
-        &self.msg_found_list
+    pub fn msg_found_list(&self) -> Option<&Vec<ArcMut<MessageExt>>> {
+        self.msg_found_list.as_ref()
     }
 
     #[inline]

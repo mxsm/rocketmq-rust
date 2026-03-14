@@ -449,7 +449,7 @@ where
                 let op_msg = if let Some(ref inner) = pull_result {
                     inner.msg_found_list()
                 } else {
-                    &None
+                    None
                 };
                 let is_need_check = self.is_check_needed(
                     op_msg,
@@ -624,13 +624,13 @@ where
     /// Determine if message check is needed
     fn is_check_needed(
         &self,
-        op_msg: &Option<Vec<ArcMut<MessageExt>>>,
+        op_msg: Option<&Vec<ArcMut<MessageExt>>>,
         value_of_current_minus_born: i64,
         check_immunity_time: i64,
         start_time: i64,
         transaction_timeout: i64,
     ) -> bool {
-        if let Some(ref messages) = op_msg {
+        if let Some(messages) = op_msg {
             if let Some(last_msg) = messages.last() {
                 return last_msg.born_timestamp() - start_time > transaction_timeout;
             }

@@ -250,7 +250,7 @@ impl<MS: MessageStore> PopReviveService<MS> {
                 pull_result.next_begin_offset() as i64 - 1,
             );
         }
-        pull_result.msg_found_list().clone()
+        pull_result.msg_found_list().cloned()
     }
 
     pub async fn get_message(
