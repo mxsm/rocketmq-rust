@@ -348,7 +348,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         addr: CheetahString,
         config: TopicConfig,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .create_and_update_topic_config(addr, config)
+            .await
     }
 
     async fn create_and_update_topic_config_list(
@@ -356,7 +358,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         addr: CheetahString,
         topic_config_list: Vec<TopicConfig>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .create_and_update_topic_config_list(addr, topic_config_list)
+            .await
     }
 
     async fn create_and_update_plain_access_config(
@@ -422,11 +426,15 @@ impl MQAdminExt for DefaultMQAdminExt {
         topic: CheetahString,
         broker_addr: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<TopicStatsTable> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .examine_topic_stats(topic, broker_addr)
+            .await
     }
 
     async fn examine_topic_stats_concurrent(&self, topic: CheetahString) -> AdminToolResult<TopicStatsTable> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .examine_topic_stats_concurrent(topic)
+            .await
     }
 
     async fn fetch_all_topic_list(&self) -> rocketmq_error::RocketMQResult<TopicList> {
@@ -530,7 +538,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         topic_name: CheetahString,
         cluster_name: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .delete_topic(topic_name, cluster_name)
+            .await
     }
 
     async fn delete_topic_in_broker(
@@ -538,7 +548,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         addrs: HashSet<CheetahString>,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl.delete_topic_in_broker(addrs, topic).await
     }
 
     async fn delete_topic_in_name_server(
@@ -547,7 +557,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         cluster_name: Option<CheetahString>,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .delete_topic_in_name_server(addrs, cluster_name, topic)
+            .await
     }
 
     async fn delete_subscription_group(
@@ -584,7 +596,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         timestamp: u64,
         is_force: bool,
     ) -> rocketmq_error::RocketMQResult<HashMap<MessageQueue, u64>> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .reset_offset_by_timestamp(cluster_name, topic, group, timestamp, is_force)
+            .await
     }
 
     async fn reset_offset_new(
@@ -613,7 +627,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         value: CheetahString,
         is_cluster: bool,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .create_or_update_order_conf(key, value, is_cluster)
+            .await
     }
 
     async fn query_topic_consume_by_who(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<GroupList> {
@@ -802,7 +818,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         addr: CheetahString,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<TopicConfig> {
-        todo!()
+        self.default_mqadmin_ext_impl.examine_topic_config(addr, topic).await
     }
 
     async fn create_static_topic(
@@ -1224,12 +1240,14 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn reset_offset_by_timestamp_old(
         &self,
-        _consumer_group: CheetahString,
-        _topic: CheetahString,
-        _timestamp: u64,
-        _force: bool,
+        consumer_group: CheetahString,
+        topic: CheetahString,
+        timestamp: u64,
+        force: bool,
     ) -> rocketmq_error::RocketMQResult<Vec<RollbackStats>> {
-        unimplemented!("reset_offset_by_timestamp_old not implemented yet")
+        self.default_mqadmin_ext_impl
+            .reset_offset_by_timestamp_old(consumer_group, topic, timestamp, force)
+            .await
     }
     #[allow(deprecated)]
     async fn reset_offset_new_concurrent(

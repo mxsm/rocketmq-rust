@@ -88,6 +88,7 @@ use rocketmq_remoting::protocol::body::query_consume_queue_response_body::QueryC
 use rocketmq_remoting::protocol::body::request::lock_batch_request_body::LockBatchRequestBody;
 use rocketmq_remoting::protocol::body::response::get_consumer_status_body::GetConsumerStatusBody;
 use rocketmq_remoting::protocol::body::response::lock_batch_response_body::LockBatchResponseBody;
+use rocketmq_remoting::protocol::body::response::reset_offset_body::ResetOffsetBody;
 use rocketmq_remoting::protocol::body::set_message_request_mode_request_body::SetMessageRequestModeRequestBody;
 use rocketmq_remoting::protocol::body::unlock_batch_request_body::UnlockBatchRequestBody;
 use rocketmq_remoting::protocol::body::user_info::UserInfo;
@@ -97,9 +98,11 @@ use rocketmq_remoting::protocol::header::change_invisible_time_response_header::
 use rocketmq_remoting::protocol::header::check_rocksdb_cq_write_progress_request_header::CheckRocksdbCqWriteProgressRequestHeader;
 use rocketmq_remoting::protocol::header::client_request_header::GetRouteInfoRequestHeader;
 use rocketmq_remoting::protocol::header::consumer_send_msg_back_request_header::ConsumerSendMsgBackRequestHeader;
+use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
 use rocketmq_remoting::protocol::header::create_user_request_header::CreateUserRequestHeader;
 use rocketmq_remoting::protocol::header::delete_acl_request_header::DeleteAclRequestHeader;
 use rocketmq_remoting::protocol::header::delete_subscription_group_request_header::DeleteSubscriptionGroupRequestHeader;
+use rocketmq_remoting::protocol::header::delete_topic_request_header::DeleteTopicRequestHeader;
 use rocketmq_remoting::protocol::header::delete_user_request_header::DeleteUserRequestHeader;
 use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
@@ -114,6 +117,8 @@ use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaD
 use rocketmq_remoting::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
 use rocketmq_remoting::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader;
+use rocketmq_remoting::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
+use rocketmq_remoting::protocol::header::get_topic_stats_info_request_header::GetTopicStatsInfoRequestHeader;
 use rocketmq_remoting::protocol::header::get_user_request_headers::GetUserRequestHeader;
 use rocketmq_remoting::protocol::header::heartbeat_request_header::HeartbeatRequestHeader;
 use rocketmq_remoting::protocol::header::list_acl_request_header::ListAclRequestHeader;
@@ -123,11 +128,14 @@ use rocketmq_remoting::protocol::header::message_operation_header::send_message_
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_request_header_v2::SendMessageRequestHeaderV2;
 use rocketmq_remoting::protocol::header::message_operation_header::send_message_response_header::SendMessageResponseHeader;
 use rocketmq_remoting::protocol::header::namesrv::kv_config_header::DeleteKVConfigRequestHeader;
+use rocketmq_remoting::protocol::header::namesrv::kv_config_header::GetKVConfigRequestHeader;
+use rocketmq_remoting::protocol::header::namesrv::kv_config_header::GetKVConfigResponseHeader;
 use rocketmq_remoting::protocol::header::namesrv::kv_config_header::PutKVConfigRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::perm_broker_header::AddWritePermOfBrokerRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::perm_broker_header::AddWritePermOfBrokerResponseHeader;
 use rocketmq_remoting::protocol::header::namesrv::perm_broker_header::WipeWritePermOfBrokerRequestHeader;
 use rocketmq_remoting::protocol::header::namesrv::perm_broker_header::WipeWritePermOfBrokerResponseHeader;
+use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader;
 use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageRequestHeader;
 use rocketmq_remoting::protocol::header::pop_message_response_header::PopMessageResponseHeader;
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
@@ -140,6 +148,7 @@ use rocketmq_remoting::protocol::header::query_message_response_header::QueryMes
 use rocketmq_remoting::protocol::header::recall_message_request_header::RecallMessageRequestHeader;
 use rocketmq_remoting::protocol::header::recall_message_response_header::RecallMessageResponseHeader;
 use rocketmq_remoting::protocol::header::reset_master_flush_offset_header::ResetMasterFlushOffsetHeader;
+use rocketmq_remoting::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
 
 use rocketmq_common::common::boundary_type::BoundaryType;
 use rocketmq_remoting::protocol::header::unlock_batch_mq_request_header::UnlockBatchMqRequestHeader;
@@ -156,6 +165,7 @@ use rocketmq_remoting::protocol::namespace_util::NamespaceUtil;
 use rocketmq_remoting::protocol::remoting_command;
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_remoting::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
 use rocketmq_remoting::protocol::RemotingDeserializable;
 use rocketmq_remoting::protocol::RemotingSerializable;
 use rocketmq_remoting::remoting::RemotingService;
@@ -186,6 +196,44 @@ pub struct MQClientAPIImpl {
 }
 
 impl MQClientAPIImpl {
+    pub(crate) async fn get_kvconfig_value(
+        &self,
+        namespace: CheetahString,
+        key: CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<Option<CheetahString>> {
+        let request_header = GetKVConfigRequestHeader::new(namespace, key);
+        let request = RemotingCommand::create_request_command(RequestCode::GetKvConfig, request_header);
+
+        let name_server_address_list = self.remoting_client.get_name_server_address_list();
+        let mut err_response = None;
+        for name_srv_addr in name_server_address_list {
+            let response = self
+                .remoting_client
+                .invoke_request(Some(name_srv_addr), request.clone(), timeout_millis)
+                .await?;
+            match ResponseCode::from(response.code()) {
+                ResponseCode::Success => {
+                    let response_header = response
+                        .decode_command_custom_header::<GetKVConfigResponseHeader>()
+                        .map_err(|error| mq_client_err!(format!("decode GetKVConfigResponseHeader failed: {error}")))?;
+                    return Ok(response_header.value);
+                }
+                ResponseCode::QueryNotFound => return Ok(None),
+                _ => err_response = Some(response),
+            }
+        }
+
+        if let Some(err_response) = err_response {
+            return Err(mq_client_err!(
+                err_response.code(),
+                err_response.remark().map_or("".to_string(), |s| s.to_string())
+            ));
+        }
+
+        Ok(None)
+    }
+
     pub(crate) async fn delete_kvconfig_value(
         &self,
         namespace: CheetahString,
@@ -874,6 +922,52 @@ impl MQClientAPIImpl {
         ))
     }
 
+    pub(crate) async fn get_topic_stats_info(
+        &self,
+        addr: &CheetahString,
+        request_header: GetTopicStatsInfoRequestHeader,
+        timeout_millis: u64,
+    ) -> RocketMQResult<rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable> {
+        let request = RemotingCommand::create_request_command(RequestCode::GetTopicStatsInfo, request_header);
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable::decode(body.as_ref());
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn get_topic_config(
+        &self,
+        addr: &CheetahString,
+        request_header: GetTopicConfigRequestHeader,
+        timeout_millis: u64,
+    ) -> RocketMQResult<TopicConfigAndQueueMapping> {
+        let request = RemotingCommand::create_request_command(RequestCode::GetTopicConfig, request_header);
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                return serde_json::from_slice(body.as_ref()).map_err(Into::into);
+            }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
     pub(crate) async fn query_topic_consume_by_who(
         &self,
         addr: &CheetahString,
@@ -889,6 +983,94 @@ impl MQClientAPIImpl {
             if let Some(body) = response.get_body() {
                 return rocketmq_remoting::protocol::body::group_list::GroupList::decode(body.as_ref());
             }
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn update_or_create_topic(
+        &self,
+        addr: &CheetahString,
+        request_header: CreateTopicRequestHeader,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let request = RemotingCommand::create_request_command(RequestCode::UpdateAndCreateTopic, request_header);
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            return Ok(());
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn delete_topic_in_broker(
+        &self,
+        addr: &CheetahString,
+        request_header: DeleteTopicRequestHeader,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let request = RemotingCommand::create_request_command(RequestCode::DeleteTopicInBroker, request_header);
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            return Ok(());
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn delete_topic_in_nameserver(
+        &self,
+        addr: &CheetahString,
+        request_header: DeleteTopicFromNamesrvRequestHeader,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let request = RemotingCommand::create_request_command(RequestCode::DeleteTopicInNamesrv, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            return Ok(());
+        }
+        Err(mq_client_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string())
+        ))
+    }
+
+    pub(crate) async fn invoke_broker_to_reset_offset(
+        &self,
+        addr: &CheetahString,
+        request_header: ResetOffsetRequestHeader,
+        timeout_millis: u64,
+    ) -> RocketMQResult<HashMap<MessageQueue, i64>> {
+        let request = RemotingCommand::create_request_command(RequestCode::InvokeBrokerToResetOffset, request_header);
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+        if ResponseCode::from(response.code()) == ResponseCode::Success {
+            if let Some(body) = response.get_body() {
+                if let Some(reset_body) = ResetOffsetBody::decode(body.as_ref()) {
+                    return Ok(reset_body.offset_table);
+                }
+            }
+            return Ok(HashMap::new());
         }
         Err(mq_client_err!(
             response.code(),

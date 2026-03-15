@@ -12,8 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![recursion_limit = "512"]
+
 mod auth;
 mod nameserver;
+mod topic;
 
 use rocketmq_dashboard_common::NameServerConfigStore;
 use std::sync::Arc;
@@ -61,11 +64,13 @@ pub fn run() {
                 nameserver_store.load_snapshot()?,
             ));
             let nameserver_manager = nameserver::NameServerManager::new(nameserver_db, nameserver_runtime.clone())?;
+            let topic_manager = topic::TopicManager::new(nameserver_runtime.clone());
 
             app.manage(auth_service);
             app.manage(auth::SessionState::default());
             app.manage(nameserver_runtime);
             app.manage(nameserver_manager);
+            app.manage(topic_manager);
 
             Ok(())
         })
@@ -81,7 +86,18 @@ pub fn run() {
             nameserver::commands::switch_name_server,
             nameserver::commands::delete_name_server,
             nameserver::commands::update_vip_channel,
-            nameserver::commands::update_use_tls
+            nameserver::commands::update_use_tls,
+            topic::commands::get_topic_list,
+            topic::commands::get_topic_route,
+            topic::commands::get_topic_stats,
+            topic::commands::get_topic_config,
+            topic::commands::create_or_update_topic,
+            topic::commands::delete_topic,
+            topic::commands::get_topic_consumer_groups,
+            topic::commands::get_topic_consumers,
+            topic::commands::reset_consumer_offset,
+            topic::commands::skip_message_accumulate,
+            topic::commands::send_topic_message
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
