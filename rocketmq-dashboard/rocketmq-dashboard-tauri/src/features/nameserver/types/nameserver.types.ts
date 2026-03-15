@@ -1,13 +1,13 @@
-export interface NameServerHomePageResponse {
-    success: boolean;
-    message: string;
-    namesrvAddrList: string[];
+export interface NameServerConfigSnapshot {
     currentNamesrv: string | null;
+    namesrvAddrList: string[];
     useVIPChannel: boolean;
     useTLS: boolean;
 }
 
-export interface NameServerMutationResponse {
-    success: boolean;
+export interface NameServerHomePageInfo extends NameServerConfigSnapshot {}
+
+export interface NameServerMutationResult {
     message: string;
+    snapshot: NameServerConfigSnapshot;
 }

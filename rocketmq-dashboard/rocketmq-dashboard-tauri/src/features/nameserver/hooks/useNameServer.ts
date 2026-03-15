@@ -1,60 +1,83 @@
 import { useEffect, useState } from 'react';
 import { NameServerService } from '../../../services/nameserver.service';
+import type {
+    NameServerConfigSnapshot,
+    NameServerHomePageInfo,
+} from '../types/nameserver.types';
+
+const toErrorMessage = (error: unknown) => {
+    if (error instanceof Error) {
+        return error.message;
+    }
+
+    if (typeof error === 'string') {
+        return error;
+    }
+
+    return 'NameServer operation failed';
+};
 
 export const useNameServer = () => {
-    const [nameServers, setNameServers] = useState<string[]>([]);
-    const [selectedNameServer, setSelectedNameServer] = useState('');
-    const [isVIPChannel, setIsVIPChannel] = useState(true);
-    const [useTLS, setUseTLS] = useState(false);
+    const [data, setData] = useState<NameServerHomePageInfo | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [loadError, setLoadError] = useState('');
     const [pendingAction, setPendingAction] = useState<string | null>(null);
+    const [newAddress, setNewAddress] = useState('');
 
-    const loadNameServerSettings = async () => {
-        setIsLoading(true);
-
+    const loadHomePage = async () => {
         try {
-            const response = await NameServerService.getHomePage();
-
-            if (!response.success) {
-                return {
-                    success: false,
-                    message: response.message || 'Failed to load NameServer settings',
-                };
-            }
-
-            setNameServers(response.namesrvAddrList);
-            setSelectedNameServer(response.currentNamesrv ?? '');
-            setIsVIPChannel(response.useVIPChannel);
-            setUseTLS(response.useTLS);
-
-            return {
-                success: true,
-                message: response.message,
-            };
+            const homePage = await NameServerService.getHomePageInfo();
+            setData(homePage);
+            setLoadError('');
+            return homePage;
         } catch (error) {
-            return {
-                success: false,
-                message: error instanceof Error ? error.message : 'Failed to load NameServer settings',
-            };
-        } finally {
-            setIsLoading(false);
+            const errorMessage = toErrorMessage(error);
+            setLoadError(errorMessage);
+            throw new Error(errorMessage);
         }
     };
 
     useEffect(() => {
-        void loadNameServerSettings();
+        let isMounted = true;
+
+        loadHomePage()
+            .then((homePage) => {
+                if (isMounted) {
+                    setData(homePage);
+                }
+            })
+            .catch((error) => {
+                console.error('Failed to load NameServer home page', error);
+                if (isMounted) {
+                    setLoadError(toErrorMessage(error));
+                }
+            })
+            .finally(() => {
+                if (isMounted) {
+                    setIsLoading(false);
+                }
+            });
+
+        return () => {
+            isMounted = false;
+        };
     }, []);
 
-    const addNameServer = async (address: string) => {
-        setPendingAction('add');
-        try {
-            const response = await NameServerService.addNameServer(address);
-            if (!response.success) {
-                return response;
-            }
+    const addNameServer = async () => {
+        const nextAddress = newAddress.trim();
+        if (!nextAddress) {
+            throw new Error('Please enter a valid NameServer address');
+        }
 
-            const refreshResult = await loadNameServerSettings();
-            return refreshResult.success ? response : refreshResult;
+        setPendingAction('add');
+
+        try {
+            const result = await NameServerService.addNameServer(nextAddress);
+            await loadHomePage();
+            setNewAddress('');
+            return result.message;
+        } catch (error) {
+            throw new Error(toErrorMessage(error));
         } finally {
             setPendingAction(null);
         }
@@ -62,14 +85,13 @@ export const useNameServer = () => {
 
     const switchNameServer = async (address: string) => {
         setPendingAction(`switch:${address}`);
-        try {
-            const response = await NameServerService.switchNameServer(address);
-            if (!response.success) {
-                return response;
-            }
 
-            const refreshResult = await loadNameServerSettings();
-            return refreshResult.success ? response : refreshResult;
+        try {
+            const result = await NameServerService.switchNameServer(address);
+            await loadHomePage();
+            return result.message;
+        } catch (error) {
+            throw new Error(toErrorMessage(error));
         } finally {
             setPendingAction(null);
         }
@@ -77,75 +99,85 @@ export const useNameServer = () => {
 
     const deleteNameServer = async (address: string) => {
         setPendingAction(`delete:${address}`);
-        try {
-            const response = await NameServerService.deleteNameServer(address);
-            if (!response.success) {
-                return response;
-            }
 
-            const refreshResult = await loadNameServerSettings();
-            return refreshResult.success ? response : refreshResult;
+        try {
+            const result = await NameServerService.deleteNameServer(address);
+            await loadHomePage();
+            return result.message;
+        } catch (error) {
+            throw new Error(toErrorMessage(error));
         } finally {
             setPendingAction(null);
         }
     };
 
-    const updateVIPChannel = async (enabled: boolean) => {
-        const previousValue = isVIPChannel;
+    const updateSnapshot = (updater: (previous: NameServerHomePageInfo) => NameServerHomePageInfo) => {
+        setData((previous) => (previous ? updater(previous) : previous));
+    };
+
+    const applySnapshot = (snapshot: NameServerConfigSnapshot) => {
+        setData({
+            currentNamesrv: snapshot.currentNamesrv,
+            namesrvAddrList: snapshot.namesrvAddrList,
+            useVIPChannel: snapshot.useVIPChannel,
+            useTLS: snapshot.useTLS,
+        });
+    };
+
+    const updateVipChannel = async (enabled: boolean) => {
+        if (!data) {
+            return;
+        }
+
+        const previous = data;
         setPendingAction('vip');
-        setIsVIPChannel(enabled);
+        updateSnapshot((snapshot) => ({ ...snapshot, useVIPChannel: enabled }));
 
         try {
-            const response = await NameServerService.updateVIPChannel(enabled);
-            if (!response.success) {
-                setIsVIPChannel(previousValue);
-            }
-            return response;
+            const result = await NameServerService.updateVipChannel(enabled);
+            applySnapshot(result.snapshot);
+            return result.message;
         } catch (error) {
-            setIsVIPChannel(previousValue);
-            return {
-                success: false,
-                message: error instanceof Error ? error.message : 'Failed to update VIP Channel',
-            };
+            setData(previous);
+            throw new Error(toErrorMessage(error));
         } finally {
             setPendingAction(null);
         }
     };
 
-    const updateUseTLS = async (enabled: boolean) => {
-        const previousValue = useTLS;
+    const updateUseTls = async (enabled: boolean) => {
+        if (!data) {
+            return;
+        }
+
+        const previous = data;
         setPendingAction('tls');
-        setUseTLS(enabled);
+        updateSnapshot((snapshot) => ({ ...snapshot, useTLS: enabled }));
 
         try {
-            const response = await NameServerService.updateUseTLS(enabled);
-            if (!response.success) {
-                setUseTLS(previousValue);
-            }
-            return response;
+            const result = await NameServerService.updateUseTls(enabled);
+            applySnapshot(result.snapshot);
+            return result.message;
         } catch (error) {
-            setUseTLS(previousValue);
-            return {
-                success: false,
-                message: error instanceof Error ? error.message : 'Failed to update TLS',
-            };
+            setData(previous);
+            throw new Error(toErrorMessage(error));
         } finally {
             setPendingAction(null);
         }
     };
 
     return {
-        nameServers,
-        selectedNameServer,
-        isVIPChannel,
-        useTLS,
+        data,
         isLoading,
+        loadError,
+        newAddress,
         pendingAction,
-        reload: loadNameServerSettings,
+        setNewAddress,
+        loadHomePage,
         addNameServer,
         switchNameServer,
         deleteNameServer,
-        updateVIPChannel,
-        updateUseTLS,
+        updateVipChannel,
+        updateUseTls,
     };
 };

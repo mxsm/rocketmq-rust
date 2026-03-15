@@ -15,6 +15,8 @@
 mod auth;
 mod nameserver;
 
+use rocketmq_dashboard_common::NameServerConfigStore;
+use std::sync::Arc;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -57,9 +59,24 @@ pub fn run() {
                 );
             }
 
+            let nameserver_db = nameserver::NameServerDb::new(app.handle())?;
+            nameserver_db.init()?;
+            log::info!(
+                "Local NameServer SQLite tables initialized at: {}",
+                nameserver_db.db_path().display()
+            );
+
+            let nameserver_store = nameserver::SqliteNameServerStore::new(nameserver_db.clone());
+            let nameserver_runtime = Arc::new(nameserver::NameServerRuntimeState::new(
+                nameserver_store.load_snapshot()?,
+            ));
+            let nameserver_manager = nameserver::NameServerManager::new(nameserver_db, nameserver_runtime.clone())?;
+
             app.manage(auth_service);
             app.manage(nameserver_service);
             app.manage(auth::SessionState::default());
+            app.manage(nameserver_runtime);
+            app.manage(nameserver_manager);
 
             Ok(())
         })

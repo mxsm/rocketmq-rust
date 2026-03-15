@@ -14,8 +14,10 @@
 
 pub(crate) mod commands;
 pub(crate) mod db;
+pub(crate) mod runtime;
 pub(crate) mod service;
-pub(crate) mod types;
 
 pub(crate) use db::NameServerDb;
-pub(crate) use service::NameServerService;
+pub(crate) use db::SqliteNameServerStore;
+pub(crate) use runtime::NameServerRuntimeState;
+pub(crate) use service::NameServerManager;

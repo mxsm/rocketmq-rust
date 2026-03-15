@@ -12,85 +12,72 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::nameserver::service::NameServerService;
-use crate::nameserver::types::NameServerHomePageResponse;
-use crate::nameserver::types::NameServerMutationResponse;
-use crate::nameserver::types::NameServerResult;
+use crate::nameserver::NameServerManager;
+use rocketmq_dashboard_common::NameServerHomePageInfo;
+use rocketmq_dashboard_common::NameServerMutationResult;
 use tauri::State;
 
 #[tauri::command]
-pub fn get_name_server_home_page(nameserver_service: State<'_, NameServerService>) -> NameServerHomePageResponse {
-    match nameserver_service.get_home_page() {
-        Ok(response) => response,
-        Err(error) => {
-            log::error!("Failed to load NameServer settings: {}", error);
-            NameServerHomePageResponse {
-                success: false,
-                message: error
-                    .to_string()
-                    .replace("Validation error: ", "")
-                    .replace("Database error: ", ""),
-                namesrv_addr_list: Vec::new(),
-                current_namesrv: None,
-                use_vip_channel: true,
-                use_tls: false,
-            }
-        }
-    }
+pub fn get_name_server_home_page(
+    nameserver_manager: State<'_, NameServerManager>,
+) -> Result<NameServerHomePageInfo, String> {
+    nameserver_manager.home_page_info().map_err(|error| {
+        log::error!("Failed to load NameServer home page: {}", error);
+        error.to_string()
+    })
 }
 
 #[tauri::command]
 pub fn add_name_server(
     address: String,
-    nameserver_service: State<'_, NameServerService>,
-) -> NameServerMutationResponse {
-    handle_mutation("add Name Server", || nameserver_service.add_name_server(&address))
+    nameserver_manager: State<'_, NameServerManager>,
+) -> Result<NameServerMutationResult, String> {
+    nameserver_manager.add_name_server(&address).map_err(|error| {
+        log::warn!("Failed to add NameServer `{}`: {}", address, error);
+        error.to_string()
+    })
 }
 
 #[tauri::command]
 pub fn switch_name_server(
     address: String,
-    nameserver_service: State<'_, NameServerService>,
-) -> NameServerMutationResponse {
-    handle_mutation("switch Name Server", || nameserver_service.switch_name_server(&address))
+    nameserver_manager: State<'_, NameServerManager>,
+) -> Result<NameServerMutationResult, String> {
+    nameserver_manager.switch_name_server(&address).map_err(|error| {
+        log::warn!("Failed to switch NameServer to `{}`: {}", address, error);
+        error.to_string()
+    })
 }
 
 #[tauri::command]
 pub fn delete_name_server(
     address: String,
-    nameserver_service: State<'_, NameServerService>,
-) -> NameServerMutationResponse {
-    handle_mutation("delete Name Server", || nameserver_service.delete_name_server(&address))
+    nameserver_manager: State<'_, NameServerManager>,
+) -> Result<NameServerMutationResult, String> {
+    nameserver_manager.delete_name_server(&address).map_err(|error| {
+        log::warn!("Failed to delete NameServer `{}`: {}", address, error);
+        error.to_string()
+    })
 }
 
 #[tauri::command]
 pub fn update_vip_channel(
     enabled: bool,
-    nameserver_service: State<'_, NameServerService>,
-) -> NameServerMutationResponse {
-    handle_mutation("update VIP channel", || nameserver_service.update_vip_channel(enabled))
+    nameserver_manager: State<'_, NameServerManager>,
+) -> Result<NameServerMutationResult, String> {
+    nameserver_manager.update_vip_channel(enabled).map_err(|error| {
+        log::warn!("Failed to update VIP channel: {}", error);
+        error.to_string()
+    })
 }
 
 #[tauri::command]
-pub fn update_use_tls(enabled: bool, nameserver_service: State<'_, NameServerService>) -> NameServerMutationResponse {
-    handle_mutation("update TLS setting", || nameserver_service.update_use_tls(enabled))
-}
-
-fn handle_mutation(
-    operation: &str,
-    action: impl FnOnce() -> NameServerResult<NameServerMutationResponse>,
-) -> NameServerMutationResponse {
-    match action() {
-        Ok(response) => response,
-        Err(error) => {
-            log::warn!("Failed to {}: {}", operation, error);
-            NameServerMutationResponse {
-                success: false,
-                message: error
-                    .to_string()
-                    .replace("Validation error: ", "")
-                    .replace("Database error: ", ""),
-            }
-        }
-    }
+pub fn update_use_tls(
+    enabled: bool,
+    nameserver_manager: State<'_, NameServerManager>,
+) -> Result<NameServerMutationResult, String> {
+    nameserver_manager.update_use_tls(enabled).map_err(|error| {
+        log::warn!("Failed to update TLS setting: {}", error);
+        error.to_string()
+    })
 }
