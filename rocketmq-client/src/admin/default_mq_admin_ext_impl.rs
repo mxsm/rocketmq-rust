@@ -53,7 +53,9 @@ use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::common::FAQUrl;
 use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
 use rocketmq_remoting::protocol::admin::consume_stats_list::ConsumeStatsList;
+use rocketmq_remoting::protocol::admin::offset_wrapper::OffsetWrapper;
 use rocketmq_remoting::protocol::admin::rollback_stats::RollbackStats;
+use rocketmq_remoting::protocol::admin::topic_offset::TopicOffset;
 use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
 use rocketmq_remoting::protocol::body::acl_info::AclInfo;
 use rocketmq_remoting::protocol::body::broker_body::broker_member_group::BrokerMemberGroup;
@@ -80,14 +82,23 @@ use rocketmq_remoting::protocol::body::subscription_group_wrapper::SubscriptionG
 use rocketmq_remoting::protocol::body::topic::topic_list::TopicList;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::body::user_info::UserInfo;
+use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopicRequestHeader;
+use rocketmq_remoting::protocol::header::delete_topic_request_header::DeleteTopicRequestHeader;
 use rocketmq_remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
 use rocketmq_remoting::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
+use rocketmq_remoting::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
+use rocketmq_remoting::protocol::header::get_topic_stats_info_request_header::GetTopicStatsInfoRequestHeader;
 use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_remoting::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader;
+use rocketmq_remoting::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
+use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
+use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader;
 use rocketmq_remoting::protocol::header::view_broker_stats_data_request_header::ViewBrokerStatsDataRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_remoting::protocol::route::route_data_view::QueueData;
+use rocketmq_remoting::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::subscription::broker_stats_data::BrokerStatsData;
 use rocketmq_remoting::protocol::subscription::group_forbidden::GroupForbidden;
@@ -503,7 +514,38 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         addr: CheetahString,
         config: TopicConfig,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        let topic = config
+            .topic_name
+            .clone()
+            .ok_or_else(|| rocketmq_error::RocketMQError::IllegalArgument("Topic name is required".into()))?;
+        let attributes = if config.attributes.is_empty() {
+            None
+        } else {
+            Some(CheetahString::from(
+                serde_json::to_string(&config.attributes)
+                    .map_err(|error| rocketmq_error::RocketMQError::Internal(error.to_string()))?,
+            ))
+        };
+        let request_header = CreateTopicRequestHeader {
+            topic,
+            default_topic: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
+            read_queue_nums: config.read_queue_nums as i32,
+            write_queue_nums: config.write_queue_nums as i32,
+            perm: config.perm as i32,
+            topic_filter_type: config.topic_filter_type.to_string().into(),
+            topic_sys_flag: Some(config.topic_sys_flag as i32),
+            order: config.order,
+            attributes,
+            force: Some(false),
+            topic_request_header: None,
+        };
+
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .update_or_create_topic(&addr, request_header, self.timeout_millis.as_millis() as u64)
+            .await
     }
 
     async fn create_and_update_topic_config_list(
@@ -511,7 +553,10 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         addr: CheetahString,
         topic_config_list: Vec<TopicConfig>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        for config in topic_config_list {
+            self.create_and_update_topic_config(addr.clone(), config).await?;
+        }
+        Ok(())
     }
 
     async fn create_and_update_plain_access_config(
@@ -580,11 +625,49 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         topic: CheetahString,
         broker_addr: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<TopicStatsTable> {
-        todo!()
+        let timeout = self.timeout_millis.as_millis() as u64;
+        let request_header = GetTopicStatsInfoRequestHeader {
+            topic: topic.clone(),
+            topic_request_header: None,
+        };
+        if let Some(addr) = broker_addr {
+            return self
+                .client_instance
+                .as_ref()
+                .unwrap()
+                .get_mq_client_api_impl()
+                .get_topic_stats_info(&addr, request_header, timeout)
+                .await;
+        }
+
+        let topic_route = self.examine_topic_route_info(topic).await?;
+        let mut result = TopicStatsTable::new();
+        if let Some(route_data) = topic_route {
+            for broker_data in &route_data.broker_datas {
+                if let Some(master_addr) = broker_data.broker_addrs().get(&mix_all::MASTER_ID) {
+                    let stats = self
+                        .client_instance
+                        .as_ref()
+                        .unwrap()
+                        .get_mq_client_api_impl()
+                        .get_topic_stats_info(master_addr, request_header.clone(), timeout)
+                        .await?;
+                    result.get_offset_table_mut().extend(stats.into_offset_table());
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     async fn examine_topic_stats_concurrent(&self, topic: CheetahString) -> AdminToolResult<TopicStatsTable> {
-        todo!()
+        match self.examine_topic_stats(topic, None).await {
+            Ok(stats) => AdminToolResult::success(stats),
+            Err(error) => AdminToolResult::failure(
+                crate::common::admin_tools_result_code_enum::AdminToolsResultCodeEnum::RemotingError,
+                error.to_string(),
+            ),
+        }
     }
 
     async fn fetch_all_topic_list(&self) -> rocketmq_error::RocketMQResult<TopicList> {
@@ -834,7 +917,14 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         namespace: CheetahString,
         key: CheetahString,
     ) -> rocketmq_error::RocketMQResult<CheetahString> {
-        todo!()
+        Ok(self
+            .client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .get_kvconfig_value(namespace, key, self.timeout_millis.as_millis() as u64)
+            .await?
+            .unwrap_or_default())
     }
 
     async fn get_kv_list_by_namespace(&self, namespace: CheetahString) -> rocketmq_error::RocketMQResult<KVTable> {
@@ -846,7 +936,24 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         topic_name: CheetahString,
         cluster_name: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        let cluster_info = self.examine_broker_cluster_info().await?;
+        let mut broker_addrs = HashSet::new();
+        if let Some(cluster_addr_table) = cluster_info.cluster_addr_table.as_ref() {
+            if let Some(broker_names) = cluster_addr_table.get(&cluster_name) {
+                if let Some(broker_addr_table) = cluster_info.broker_addr_table.as_ref() {
+                    for broker_name in broker_names {
+                        if let Some(broker_data) = broker_addr_table.get(broker_name) {
+                            broker_addrs.extend(broker_data.broker_addrs().values().cloned());
+                        }
+                    }
+                }
+            }
+        }
+        self.delete_topic_in_broker(broker_addrs, topic_name.clone()).await?;
+
+        let namesrv_addrs: HashSet<CheetahString> = self.get_name_server_address_list().await.into_iter().collect();
+        self.delete_topic_in_name_server(namesrv_addrs, Some(cluster_name), topic_name)
+            .await
     }
 
     async fn delete_topic_in_broker(
@@ -854,7 +961,24 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         addrs: HashSet<CheetahString>,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        let request_header = DeleteTopicRequestHeader {
+            topic: topic.clone(),
+            topic_request_header: None,
+        };
+        let api = self.client_instance.as_ref().unwrap().get_mq_client_api_impl();
+        let timeout = self.timeout_millis.as_millis() as u64;
+        for addr in addrs {
+            api.delete_topic_in_broker(
+                &addr,
+                DeleteTopicRequestHeader {
+                    topic: request_header.topic.clone(),
+                    topic_request_header: None,
+                },
+                timeout,
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     async fn delete_topic_in_name_server(
@@ -863,7 +987,13 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         cluster_name: Option<CheetahString>,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        let request_header = DeleteTopicFromNamesrvRequestHeader::new(topic, cluster_name);
+        let api = self.client_instance.as_ref().unwrap().get_mq_client_api_impl();
+        let timeout = self.timeout_millis.as_millis() as u64;
+        for addr in addrs {
+            api.delete_topic_in_nameserver(&addr, request_header.clone(), timeout).await?;
+        }
+        Ok(())
     }
 
     async fn delete_subscription_group(
@@ -920,7 +1050,40 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         timestamp: u64,
         is_force: bool,
     ) -> rocketmq_error::RocketMQResult<HashMap<MessageQueue, u64>> {
-        todo!()
+        let topic_route = self.examine_topic_route_info(topic.clone()).await?;
+        let mut offset_table = HashMap::new();
+        let timeout = self.timeout_millis.as_millis() as u64;
+
+        if let Some(route_data) = topic_route {
+            for broker_data in &route_data.broker_datas {
+                if let Some(expected_cluster) = cluster_name.as_ref() {
+                    if broker_data.cluster() != expected_cluster {
+                        continue;
+                    }
+                }
+                if let Some(master_addr) = broker_data.broker_addrs().get(&mix_all::MASTER_ID) {
+                    let request_header = ResetOffsetRequestHeader {
+                        topic: topic.clone(),
+                        group: group.clone(),
+                        queue_id: -1,
+                        offset: None,
+                        timestamp: timestamp as i64,
+                        is_force,
+                        topic_request_header: None,
+                    };
+                    let offsets = self
+                        .client_instance
+                        .as_ref()
+                        .unwrap()
+                        .get_mq_client_api_impl()
+                        .invoke_broker_to_reset_offset(master_addr, request_header, timeout)
+                        .await?;
+                    offset_table.extend(offsets.into_iter().map(|(mq, offset)| (mq, offset as u64)));
+                }
+            }
+        }
+
+        Ok(offset_table)
     }
 
     async fn reset_offset_new(
@@ -976,7 +1139,47 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         value: CheetahString,
         is_cluster: bool,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        if is_cluster {
+            return self
+                .client_instance
+                .as_ref()
+                .unwrap()
+                .get_mq_client_api_impl()
+                .put_kvconfig_value(
+                    CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG),
+                    key,
+                    value,
+                    self.timeout_millis.as_millis() as u64,
+                )
+                .await;
+        }
+
+        let existing = self
+            .client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .get_kvconfig_value(
+                CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG),
+                key.clone(),
+                self.timeout_millis.as_millis() as u64,
+            )
+            .await?
+            .unwrap_or_default();
+
+        let merged_order_conf = merge_order_conf_entries(existing.as_str(), value.as_str());
+
+        self.client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .put_kvconfig_value(
+                CheetahString::from_static_str(NAMESPACE_ORDER_TOPIC_CONFIG),
+                key,
+                merged_order_conf.into(),
+                self.timeout_millis.as_millis() as u64,
+            )
+            .await
     }
 
     async fn query_topic_consume_by_who(&self, topic: CheetahString) -> rocketmq_error::RocketMQResult<GroupList> {
@@ -1247,7 +1450,19 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         addr: CheetahString,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<TopicConfig> {
-        todo!()
+        let request_header = GetTopicConfigRequestHeader {
+            topic,
+            topic_request_header: None,
+        };
+        let mapping: TopicConfigAndQueueMapping = self
+            .client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .get_topic_config(&addr, request_header, self.timeout_millis.as_millis() as u64)
+            .await?;
+
+        Ok(mapping.topic_config)
     }
 
     async fn create_static_topic(
@@ -1687,12 +1902,40 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
 
     async fn reset_offset_by_timestamp_old(
         &self,
-        _consumer_group: CheetahString,
-        _topic: CheetahString,
-        _timestamp: u64,
-        _force: bool,
+        consumer_group: CheetahString,
+        topic: CheetahString,
+        timestamp: u64,
+        force: bool,
     ) -> rocketmq_error::RocketMQResult<Vec<RollbackStats>> {
-        unimplemented!("reset_offset_by_timestamp_old not implemented yet")
+        let topic_route_data = self.examine_topic_route_info(topic.clone()).await?;
+        let mut rollback_stats_list = Vec::new();
+
+        if let Some(route_data) = topic_route_data {
+            let mut topic_route_map = HashMap::new();
+            for queue_data in &route_data.queue_datas {
+                topic_route_map.insert(queue_data.broker_name().to_string(), queue_data.clone());
+            }
+
+            for broker_data in &route_data.broker_datas {
+                if let Some(addr) = broker_data.select_broker_addr() {
+                    if let Some(queue_data) = topic_route_map.get(broker_data.broker_name().as_str()) {
+                        let mut rollback_stats = self
+                            .reset_offset_by_timestamp_old_on_broker(
+                                addr,
+                                queue_data,
+                                consumer_group.clone(),
+                                topic.clone(),
+                                timestamp as i64,
+                                force,
+                            )
+                            .await?;
+                        rollback_stats_list.append(&mut rollback_stats);
+                    }
+                }
+            }
+        }
+
+        Ok(rollback_stats_list)
     }
     #[allow(deprecated)]
     async fn reset_offset_new_concurrent(
@@ -2102,5 +2345,197 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
             .get_mq_client_api_impl()
             .get_max_offset(broker_addr.as_str(), &message_queue, timeout_millis)
             .await
+    }
+}
+
+impl DefaultMQAdminExtImpl {
+    async fn reset_offset_by_timestamp_old_on_broker(
+        &self,
+        broker_addr: CheetahString,
+        queue_data: &QueueData,
+        consumer_group: CheetahString,
+        topic: CheetahString,
+        timestamp: i64,
+        force: bool,
+    ) -> rocketmq_error::RocketMQResult<Vec<RollbackStats>> {
+        let consume_stats = self
+            .client_instance
+            .as_ref()
+            .unwrap()
+            .get_mq_client_api_impl()
+            .get_consume_stats(
+                &broker_addr,
+                GetConsumeStatsRequestHeader {
+                    consumer_group: consumer_group.clone(),
+                    topic: CheetahString::empty(),
+                    topic_request_header: None,
+                },
+                self.timeout_millis.as_millis() as u64,
+            )
+            .await?;
+
+        let mut rollback_stats_list = Vec::new();
+        let mut has_consumed = false;
+
+        for (queue, offset_wrapper) in &consume_stats.offset_table {
+            if queue.topic() == &topic {
+                has_consumed = true;
+                rollback_stats_list.push(
+                    self.reset_offset_consume_offset(
+                        broker_addr.clone(),
+                        consumer_group.clone(),
+                        queue.clone(),
+                        offset_wrapper,
+                        timestamp,
+                        force,
+                    )
+                    .await?,
+                );
+            }
+        }
+
+        if !has_consumed {
+            let topic_status = self
+                .client_instance
+                .as_ref()
+                .unwrap()
+                .get_mq_client_api_impl()
+                .get_topic_stats_info(
+                    &broker_addr,
+                    GetTopicStatsInfoRequestHeader {
+                        topic: topic.clone(),
+                        topic_request_header: None,
+                    },
+                    self.timeout_millis.as_millis() as u64,
+                )
+                .await?;
+
+            for queue_id in 0..queue_data.read_queue_nums() {
+                let queue = MessageQueue::from_parts(topic.clone(), queue_data.broker_name().clone(), queue_id as i32);
+                let mut offset_wrapper = OffsetWrapper::new();
+                let topic_offset = topic_status
+                    .get_offset_table()
+                    .get(&queue)
+                    .cloned()
+                    .unwrap_or_else(TopicOffset::new);
+                offset_wrapper.set_broker_offset(topic_offset.get_max_offset());
+                offset_wrapper.set_consumer_offset(topic_offset.get_min_offset());
+                rollback_stats_list.push(
+                    self.reset_offset_consume_offset(
+                        broker_addr.clone(),
+                        consumer_group.clone(),
+                        queue,
+                        &offset_wrapper,
+                        timestamp,
+                        force,
+                    )
+                    .await?,
+                );
+            }
+        }
+
+        Ok(rollback_stats_list)
+    }
+
+    async fn reset_offset_consume_offset(
+        &self,
+        broker_addr: CheetahString,
+        consumer_group: CheetahString,
+        queue: MessageQueue,
+        offset_wrapper: &OffsetWrapper,
+        timestamp: i64,
+        force: bool,
+    ) -> rocketmq_error::RocketMQResult<RollbackStats> {
+        let reset_offset = if timestamp == -1 {
+            self.client_instance
+                .as_ref()
+                .unwrap()
+                .get_mq_client_api_impl()
+                .get_max_offset(broker_addr.as_str(), &queue, self.timeout_millis.as_millis() as u64)
+                .await?
+        } else {
+            self.client_instance
+                .as_ref()
+                .unwrap()
+                .get_mq_client_api_impl()
+                .search_offset_by_timestamp(
+                    broker_addr.as_str(),
+                    &queue,
+                    timestamp,
+                    rocketmq_common::common::boundary_type::BoundaryType::Lower,
+                    self.timeout_millis.as_millis() as u64,
+                )
+                .await?
+        };
+
+        let mut rollback_stats = RollbackStats {
+            broker_name: queue.broker_name().clone(),
+            queue_id: queue.queue_id() as i64,
+            broker_offset: offset_wrapper.get_broker_offset(),
+            consumer_offset: offset_wrapper.get_consumer_offset(),
+            timestamp_offset: reset_offset,
+            rollback_offset: offset_wrapper.get_consumer_offset(),
+        };
+
+        if force || reset_offset <= offset_wrapper.get_consumer_offset() {
+            rollback_stats.rollback_offset = reset_offset;
+            self.client_instance
+                .as_ref()
+                .unwrap()
+                .get_mq_client_api_impl()
+                .update_consumer_offset(
+                    &broker_addr,
+                    UpdateConsumerOffsetRequestHeader {
+                        consumer_group,
+                        topic: queue.topic().clone(),
+                        queue_id: queue.queue_id(),
+                        commit_offset: reset_offset,
+                        topic_request_header: None,
+                    },
+                    self.timeout_millis.as_millis() as u64,
+                )
+                .await?;
+        }
+
+        Ok(rollback_stats)
+    }
+}
+
+fn merge_order_conf_entries(existing: &str, value: &str) -> String {
+    let mut entries = HashMap::new();
+    for item in existing.split(';').filter(|item| !item.trim().is_empty()) {
+        if let Some((broker_name, _)) = item.split_once(':') {
+            entries.insert(broker_name.to_string(), item.to_string());
+        }
+    }
+    if let Some((broker_name, _)) = value.split_once(':') {
+        entries.insert(broker_name.to_string(), value.to_string());
+    } else if !value.trim().is_empty() {
+        entries.insert(value.to_string(), value.to_string());
+    }
+
+    let mut broker_names: Vec<String> = entries.keys().cloned().collect();
+    broker_names.sort();
+    broker_names
+        .into_iter()
+        .filter_map(|broker_name| entries.remove(&broker_name))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_order_conf_entries;
+
+    #[test]
+    fn merge_order_conf_entries_replaces_existing_broker_value() {
+        let merged = merge_order_conf_entries("broker-a:4;broker-b:4", "broker-a:8");
+        assert_eq!(merged, "broker-a:8;broker-b:4");
+    }
+
+    #[test]
+    fn merge_order_conf_entries_adds_new_broker_value() {
+        let merged = merge_order_conf_entries("broker-a:4", "broker-b:8");
+        assert_eq!(merged, "broker-a:4;broker-b:8");
     }
 }

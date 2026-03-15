@@ -51,4 +51,9 @@ uuid             = { version = "1", features = ["v4", "serde"] }
 chrono           = { version = "0.4", features = ["serde"] }
 rocketmq-dashboard-common = { path = "../../rocketmq-dashboard-common" }
 anyhow           = "1.0"
+cheetah-string   = "1"
 rocketmq-common  = { path = "../../../rocketmq-common" }
+rocketmq-admin-core = { path = "../../../rocketmq-tools/rocketmq-admin/rocketmq-admin-core" }
+rocketmq-client-rust = { path = "../../../rocketmq-client" }
+rocketmq-remoting = { path = "../../../rocketmq-remoting" }
+rocketmq-error = { path = "../../../rocketmq-error" }
