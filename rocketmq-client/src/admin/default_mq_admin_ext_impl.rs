@@ -86,18 +86,18 @@ use rocketmq_remoting::protocol::header::create_topic_request_header::CreateTopi
 use rocketmq_remoting::protocol::header::delete_topic_request_header::DeleteTopicRequestHeader;
 use rocketmq_remoting::protocol::header::elect_master_response_header::ElectMasterResponseHeader;
 use rocketmq_remoting::protocol::header::get_consume_stats_request_header::GetConsumeStatsRequestHeader;
+use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
 use rocketmq_remoting::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
 use rocketmq_remoting::protocol::header::get_topic_stats_info_request_header::GetTopicStatsInfoRequestHeader;
-use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaDataResponseHeader;
+use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader;
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_remoting::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader;
 use rocketmq_remoting::protocol::header::reset_offset_request_header::ResetOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
-use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::DeleteTopicFromNamesrvRequestHeader;
 use rocketmq_remoting::protocol::header::view_broker_stats_data_request_header::ViewBrokerStatsDataRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
-use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::route::route_data_view::QueueData;
+use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::static_topic::topic_config_and_queue_mapping::TopicConfigAndQueueMapping;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
 use rocketmq_remoting::protocol::subscription::broker_stats_data::BrokerStatsData;
@@ -521,10 +521,9 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         let attributes = if config.attributes.is_empty() {
             None
         } else {
-            Some(CheetahString::from(
-                serde_json::to_string(&config.attributes)
-                    .map_err(|error| rocketmq_error::RocketMQError::Internal(error.to_string()))?,
-            ))
+            Some(CheetahString::from(serde_json::to_string(&config.attributes).map_err(
+                |error| rocketmq_error::RocketMQError::Internal(error.to_string()),
+            )?))
         };
         let request_header = CreateTopicRequestHeader {
             topic,
@@ -991,7 +990,8 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         let api = self.client_instance.as_ref().unwrap().get_mq_client_api_impl();
         let timeout = self.timeout_millis.as_millis() as u64;
         for addr in addrs {
-            api.delete_topic_in_nameserver(&addr, request_header.clone(), timeout).await?;
+            api.delete_topic_in_nameserver(&addr, request_header.clone(), timeout)
+                .await?;
         }
         Ok(())
     }

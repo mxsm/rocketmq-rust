@@ -548,9 +548,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         addrs: HashSet<CheetahString>,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<()> {
-        self.default_mqadmin_ext_impl
-            .delete_topic_in_broker(addrs, topic)
-            .await
+        self.default_mqadmin_ext_impl.delete_topic_in_broker(addrs, topic).await
     }
 
     async fn delete_topic_in_name_server(
@@ -820,9 +818,7 @@ impl MQAdminExt for DefaultMQAdminExt {
         addr: CheetahString,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<TopicConfig> {
-        self.default_mqadmin_ext_impl
-            .examine_topic_config(addr, topic)
-            .await
+        self.default_mqadmin_ext_impl.examine_topic_config(addr, topic).await
     }
 
     async fn create_static_topic(
