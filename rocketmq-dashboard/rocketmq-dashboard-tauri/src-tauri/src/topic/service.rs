@@ -495,6 +495,7 @@ impl TopicManager {
                     let rollback_stats = managed
                         .admin
                         .reset_offset_by_timestamp_old(
+                            None,
                             consumer_group.clone().into(),
                             request.topic.clone().into(),
                             request.reset_time as u64,
