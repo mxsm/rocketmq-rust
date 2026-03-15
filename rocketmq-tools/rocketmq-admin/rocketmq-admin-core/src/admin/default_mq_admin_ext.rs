@@ -1306,11 +1306,13 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn query_message(
         &self,
-        _cluster_name: CheetahString,
-        _topic: CheetahString,
-        _msg_id: CheetahString,
+        cluster_name: CheetahString,
+        topic: CheetahString,
+        msg_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<MessageExt> {
-        unimplemented!("query_message not implemented yet")
+        self.default_mqadmin_ext_impl
+            .query_message(cluster_name, topic, msg_id)
+            .await
     }
 
     async fn get_broker_ha_status(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<HARuntimeInfo> {

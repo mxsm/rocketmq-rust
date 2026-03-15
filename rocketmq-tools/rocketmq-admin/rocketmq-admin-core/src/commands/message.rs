@@ -16,6 +16,7 @@ pub mod check_msg_send_rt_sub_command;
 pub mod decode_message_id_sub_command;
 pub mod dump_compaction_log_sub_command;
 pub mod print_msg_by_queue_sub_command;
+pub mod query_msg_by_id_sub_command;
 pub mod send_message_sub_command;
 
 use std::sync::Arc;
@@ -28,6 +29,7 @@ use crate::commands::message::check_msg_send_rt_sub_command::CheckMsgSendRTSubCo
 use crate::commands::message::decode_message_id_sub_command::DecodeMessageIdSubCommand;
 use crate::commands::message::dump_compaction_log_sub_command::DumpCompactionLogSubCommand;
 use crate::commands::message::print_msg_by_queue_sub_command::PrintMsgByQueueSubCommand;
+use crate::commands::message::query_msg_by_id_sub_command::QueryMsgByIdSubCommand;
 use crate::commands::message::send_message_sub_command::SendMessageSubCommand;
 use crate::commands::CommandExecute;
 
@@ -62,6 +64,13 @@ pub enum MessageCommands {
     PrintMsgByQueue(PrintMsgByQueueSubCommand),
 
     #[command(
+        name = "queryMsgById",
+        about = "Query message by message ID.",
+        long_about = None,
+    )]
+    QueryMsgById(QueryMsgByIdSubCommand),
+
+    #[command(
         name = "sendMessage",
         about = "Send a message.",
         long_about = None,
@@ -76,6 +85,7 @@ impl CommandExecute for MessageCommands {
             MessageCommands::DecodeMessageId(value) => value.execute(rpc_hook).await,
             MessageCommands::DumpCompactionLog(value) => value.execute(rpc_hook).await,
             MessageCommands::PrintMsgByQueue(value) => value.execute(rpc_hook).await,
+            MessageCommands::QueryMsgById(value) => value.execute(rpc_hook).await,
             MessageCommands::SendMessage(value) => value.execute(rpc_hook).await,
         }
     }

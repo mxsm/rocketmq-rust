@@ -495,10 +495,32 @@ pub fn decode_message(buffer: &mut Bytes) -> Message {
     message
 }
 
-pub fn decode_message_id(msg_id: &str) -> MessageId {
-    let bytes = util_all::string_to_bytes(msg_id).unwrap();
+pub fn validate_message_id(msg_id: &str) -> Result<(), String> {
+    let msg_id = msg_id.trim();
+
+    if msg_id.is_empty() {
+        return Err("Message ID cannot be empty".to_string());
+    }
+
+    if msg_id.len() != 32 && msg_id.len() != 40 {
+        return Err(format!(
+            "Invalid message ID length: {}. Expected 32 characters (IPv4) or 40 characters (IPv6)",
+            msg_id.len()
+        ));
+    }
+
+    if !msg_id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("Message ID must be a valid hexadecimal string".to_string());
+    }
+
+    Ok(())
+}
+
+pub fn decode_message_id(msg_id: &str) -> Result<MessageId, String> {
+    let bytes = util_all::string_to_bytes(msg_id)
+        .ok_or_else(|| "Failed to decode message ID: invalid hex string".to_string())?;
     let mut buffer = Bytes::from(bytes);
-    let len = if msg_id.len() == 32 {
+    let address = if msg_id.len() == 32 {
         let mut ip = [0u8; 4];
         buffer.copy_to_slice(&mut ip);
         let port = buffer.get_i32();
@@ -509,10 +531,10 @@ pub fn decode_message_id(msg_id: &str) -> MessageId {
         let port = buffer.get_i32();
         SocketAddr::new(IpAddr::V6(Ipv6Addr::from(ip)), port as u16)
     };
-    MessageId {
-        address: len,
+    Ok(MessageId {
+        address,
         offset: buffer.get_i64(),
-    }
+    })
 }
 
 pub fn encode(message_ext: &MessageExt, need_compress: bool) -> rocketmq_error::RocketMQResult<Bytes> {
@@ -891,7 +913,7 @@ mod tests {
     #[test]
     fn decode_message_id_ipv4() {
         let msg_id = "7F0000010007D8260BF075769D36C348";
-        let message_id = decode_message_id(msg_id);
+        let message_id = decode_message_id(msg_id).unwrap();
         assert_eq!(message_id.address, "127.0.0.1:55334".parse().unwrap());
         assert_eq!(message_id.offset, 860316681131967304);
     }

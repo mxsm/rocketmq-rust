@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use rocketmq_common::MessageDecoder::decode_message_id;
+use rocketmq_common::MessageDecoder::validate_message_id;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
@@ -43,23 +44,12 @@ impl CommandExecute for DecodeMessageIdSubCommand {
                 continue;
             }
 
-            if msg_id.len() != 32 && msg_id.len() != 40 {
-                eprintln!(
-                    "Invalid message ID: {}. Expected 32 characters (IPv4) or 40 characters (IPv6) hexadecimal string.",
-                    msg_id
-                );
+            if let Err(e) = validate_message_id(msg_id) {
+                eprintln!("Invalid message ID: {}. {}", msg_id, e);
                 continue;
             }
 
-            if !msg_id.chars().all(|c| c.is_ascii_hexdigit()) {
-                eprintln!(
-                    "Invalid message ID: {}. Message ID must be a valid hexadecimal string.",
-                    msg_id
-                );
-                continue;
-            }
-
-            match std::panic::catch_unwind(|| decode_message_id(msg_id)) {
+            match decode_message_id(msg_id) {
                 Ok(message_id) => {
                     let ip = message_id.address.ip();
                     let port = message_id.address.port();
@@ -74,10 +64,10 @@ impl CommandExecute for DecodeMessageIdSubCommand {
                     println!("  Offset Hex: {:#018X}", offset);
                     println!();
                 }
-                Err(_) => {
+                Err(e) => {
                     return Err(RocketMQError::Internal(format!(
-                        "DecodeMessageIdSubCommand command failed: failed to decode message ID: {}",
-                        msg_id
+                        "DecodeMessageIdSubCommand command failed: failed to decode message ID '{}': {}",
+                        msg_id, e
                     )));
                 }
             }

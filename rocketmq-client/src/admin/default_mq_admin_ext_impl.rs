@@ -86,6 +86,7 @@ use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaD
 use rocketmq_remoting::protocol::header::pull_message_request_header::PullMessageRequestHeader;
 use rocketmq_remoting::protocol::header::query_topic_consume_by_who_request_header::QueryTopicConsumeByWhoRequestHeader;
 use rocketmq_remoting::protocol::header::view_broker_stats_data_request_header::ViewBrokerStatsDataRequestHeader;
+use rocketmq_remoting::protocol::header::view_message_request_header::ViewMessageRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use rocketmq_remoting::protocol::static_topic::topic_queue_mapping_detail::TopicQueueMappingDetail;
@@ -1752,10 +1753,38 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
     async fn query_message(
         &self,
         _cluster_name: CheetahString,
-        _topic: CheetahString,
-        _msg_id: CheetahString,
+        topic: CheetahString,
+        msg_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<MessageExt> {
-        unimplemented!("query_message not implemented yet")
+        let client_instance = self
+            .client_instance
+            .as_ref()
+            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+
+        let msg_id_str = msg_id.as_str();
+
+        if let Err(e) = message_decoder::validate_message_id(msg_id_str) {
+            return Err(rocketmq_error::RocketMQError::IllegalArgument(format!(
+                "Invalid message ID: {}",
+                e
+            )));
+        }
+
+        let message_id = message_decoder::decode_message_id(msg_id_str).map_err(|e| {
+            rocketmq_error::RocketMQError::IllegalArgument(format!("Failed to decode message ID: {}", e))
+        })?;
+        let broker_addr =
+            CheetahString::from_string(format!("{}:{}", message_id.address.ip(), message_id.address.port()));
+
+        let request_header = ViewMessageRequestHeader {
+            topic: Some(topic),
+            offset: message_id.offset,
+        };
+
+        client_instance
+            .get_mq_client_api_impl()
+            .view_message(&broker_addr, request_header, self.timeout_millis.as_millis() as u64)
+            .await
     }
 
     async fn get_broker_ha_status(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<HARuntimeInfo> {
