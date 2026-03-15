@@ -21,8 +21,10 @@ pub mod api;
 pub mod models;
 pub mod nameserver;
 pub mod service;
+pub mod topic;
 
 pub use api::*;
 pub use models::*;
 pub use nameserver::*;
 pub use service::*;
+pub use topic::*;
