@@ -56,10 +56,7 @@ impl ConsumerProgressSubCommand {
         group_name: &str,
     ) -> HashMap<MessageQueue, String> {
         let mut results = HashMap::new();
-        if let Ok(consumer_connection) = admin
-            .examine_consumer_connection_info(group_name.into(), None)
-            .await
-        {
+        if let Ok(consumer_connection) = admin.examine_consumer_connection_info(group_name.into(), None).await {
             for connection in consumer_connection.get_connection_set() {
                 let client_id = connection.get_client_id().clone();
                 if let Ok(consumer_running_info) = admin
@@ -67,10 +64,7 @@ impl ConsumerProgressSubCommand {
                     .await
                 {
                     for mq in consumer_running_info.mq_table.keys() {
-                        results.insert(
-                            mq.clone(),
-                            client_id.split('@').next().unwrap_or("").to_string(),
-                        );
+                        results.insert(mq.clone(), client_id.split('@').next().unwrap_or("").to_string());
                     }
                 }
             }
@@ -78,10 +72,7 @@ impl ConsumerProgressSubCommand {
         results
     }
 
-    async fn execute_with_admin(
-        &self,
-        admin: &DefaultMQAdminExt,
-    ) -> rocketmq_error::RocketMQResult<()> {
+    async fn execute_with_admin(&self, admin: &DefaultMQAdminExt) -> rocketmq_error::RocketMQResult<()> {
         if let Some(consumer_group) = self.consumer_group.as_deref().map(str::trim) {
             let cluster = self
                 .cluster
@@ -103,8 +94,7 @@ impl ConsumerProgressSubCommand {
             let mut message_queue_allocation_result: HashMap<MessageQueue, String> = HashMap::new();
             if self.show_client_ip {
                 message_queue_allocation_result =
-                    Self::get_message_queue_allocation_result_with_admin(admin, consumer_group)
-                        .await;
+                    Self::get_message_queue_allocation_result_with_admin(admin, consumer_group).await;
             }
 
             if self.show_client_ip {
@@ -138,10 +128,8 @@ impl ConsumerProgressSubCommand {
             let mut inflight_total = 0i64;
             for mq in mq_list {
                 if let Some(offset_wrapper) = offset_table.get(&mq) {
-                    let diff =
-                        offset_wrapper.get_broker_offset() - offset_wrapper.get_consumer_offset();
-                    let inflight =
-                        offset_wrapper.get_pull_offset() - offset_wrapper.get_consumer_offset();
+                    let diff = offset_wrapper.get_broker_offset() - offset_wrapper.get_consumer_offset();
+                    let inflight = offset_wrapper.get_pull_offset() - offset_wrapper.get_consumer_offset();
                     diff_total += diff;
                     inflight_total += inflight;
 
@@ -215,8 +203,7 @@ impl ConsumerProgressSubCommand {
                         .await
                     {
                         group_consume_info.count = cc.get_connection_set().len() as i32;
-                        group_consume_info.message_model =
-                            cc.get_message_model().unwrap_or(MessageModel::Clustering);
+                        group_consume_info.message_model = cc.get_message_model().unwrap_or(MessageModel::Clustering);
                         group_consume_info.consume_type =
                             cc.get_consume_type().unwrap_or(ConsumeType::ConsumePassively);
                         group_consume_info.version = cc.compute_min_version();
@@ -263,10 +250,7 @@ impl CommandExecute for ConsumerProgressSubCommand {
         }
 
         default_mq_admin_ext.start().await.map_err(|e| {
-            RocketMQError::Internal(format!(
-                "ConsumerProgressSubCommand: Failed to start MQAdminExt: {}",
-                e
-            ))
+            RocketMQError::Internal(format!("ConsumerProgressSubCommand: Failed to start MQAdminExt: {}", e))
         })?;
 
         let result = self.execute_with_admin(&default_mq_admin_ext).await;
@@ -310,9 +294,7 @@ impl GroupConsumeInfo {
 
     fn version_desc(&self) -> String {
         if self.count != 0 {
-            RocketMqVersion::from_ordinal(self.version as u32)
-                .name()
-                .to_string()
+            RocketMqVersion::from_ordinal(self.version as u32).name().to_string()
         } else {
             "".to_string()
         }
