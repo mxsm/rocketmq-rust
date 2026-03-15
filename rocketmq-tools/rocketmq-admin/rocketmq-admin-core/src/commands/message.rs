@@ -103,6 +103,7 @@ impl CommandExecute for MessageCommands {
             MessageCommands::DumpCompactionLog(value) => value.execute(rpc_hook).await,
             MessageCommands::PrintMessage(value) => value.execute(rpc_hook).await,
             MessageCommands::PrintMsgByQueue(value) => value.execute(rpc_hook).await,
+            MessageCommands::QueryMsgById(value) => value.execute(rpc_hook).await,
             MessageCommands::QueryMsgByKey(value) => value.execute(rpc_hook).await,
             MessageCommands::SendMessage(value) => value.execute(rpc_hook).await,
         }

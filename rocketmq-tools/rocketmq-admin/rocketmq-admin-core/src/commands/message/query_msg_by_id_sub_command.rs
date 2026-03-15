@@ -1,4 +1,4 @@
-// Copyright 2026 The RocketMQ Rust Authors
+// Copyright 2023 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
 
 use cheetah_string::CheetahString;
@@ -33,15 +34,18 @@ use crate::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use crate::commands::CommandExecute;
 use crate::commands::CommonArgs;
 
+const DEFAULT_TIMEOUT_MS: u64 = 3000;
+
 #[derive(Debug, Clone, Parser)]
 pub struct QueryMsgByIdSubCommand {
     #[arg(
         short = 'i',
         long = "messageId",
         required = true,
-        help = "Message ID to query (32-char hex for IPv4, 40-char for IPv6)"
+        action = clap::ArgAction::Append,
+        help = "Message ID to query (32-char hex for IPv4, 40-char for IPv6). Can be specified multiple times."
     )]
-    message_id: String,
+    message_ids: Vec<String>,
 
     #[arg(
         short = 't',
@@ -62,12 +66,27 @@ pub struct QueryMsgByIdSubCommand {
         short = 'c',
         long = "charset",
         default_value = "UTF-8",
-        help = "Character set for body decoding"
+        help = "Character set for body decoding (supported: UTF-8, ASCII, ISO-8859-1)"
     )]
     charset: String,
 
+    #[arg(
+        short = 'T',
+        long = "timeout",
+        default_value_t = DEFAULT_TIMEOUT_MS,
+        help = "Query timeout in milliseconds"
+    )]
+    timeout: u64,
+
     #[command(flatten)]
     common_args: CommonArgs,
+}
+
+struct MessageOutputConfig<'a> {
+    charset: &'a str,
+    print_body: bool,
+    broker_addr: &'a str,
+    query_time_ms: u64,
 }
 
 impl QueryMsgByIdSubCommand {
@@ -162,16 +181,9 @@ impl QueryMsgByIdSubCommand {
             return;
         }
 
-        let mut user_props: Vec<(&CheetahString, &CheetahString)> = Vec::new();
-        let mut system_props: Vec<(&CheetahString, &CheetahString)> = Vec::new();
-
-        for (key, value) in properties {
-            if Self::is_system_property(key.as_str()) {
-                system_props.push((key, value));
-            } else {
-                user_props.push((key, value));
-            }
-        }
+        let (user_props, system_props): (Vec<_>, Vec<_>) = properties
+            .iter()
+            .partition(|(key, _)| !Self::is_system_property(key.as_str()));
 
         if !user_props.is_empty() {
             println!("Properties (User):");
@@ -190,6 +202,53 @@ impl QueryMsgByIdSubCommand {
         }
     }
 
+    fn is_utf8_charset(charset: &str) -> bool {
+        charset.eq_ignore_ascii_case("utf-8") || charset.eq_ignore_ascii_case("utf8")
+    }
+
+    fn is_supported_charset(charset: &str) -> bool {
+        Self::is_utf8_charset(charset)
+            || charset.eq_ignore_ascii_case("ascii")
+            || charset.eq_ignore_ascii_case("iso-8859-1")
+            || charset.eq_ignore_ascii_case("latin1")
+            || charset.eq_ignore_ascii_case("latin-1")
+    }
+
+    fn decode_body_with_charset(body: &[u8], charset: &str) -> Result<String, String> {
+        if Self::is_utf8_charset(charset) {
+            return std::str::from_utf8(body)
+                .map(|s| s.to_string())
+                .map_err(|_| "Invalid UTF-8 sequence".to_string());
+        }
+
+        if charset.eq_ignore_ascii_case("iso-8859-1")
+            || charset.eq_ignore_ascii_case("latin1")
+            || charset.eq_ignore_ascii_case("latin-1")
+        {
+            return Ok(body.iter().map(|&b| b as char).collect());
+        }
+
+        if charset.eq_ignore_ascii_case("ascii") {
+            return body
+                .iter()
+                .map(|&b| {
+                    if b.is_ascii() {
+                        Ok(b as char)
+                    } else {
+                        Err(format!("Non-ASCII byte: {:02X}", b))
+                    }
+                })
+                .collect::<Result<String, String>>();
+        }
+
+        std::str::from_utf8(body).map(|s| s.to_string()).map_err(|_| {
+            format!(
+                "Unsupported charset: {}. Only UTF-8, ASCII, and ISO-8859-1 are supported.",
+                charset
+            )
+        })
+    }
+
     fn print_body(msg: &MessageExt, charset: &str, print_body: bool) {
         if !print_body {
             println!("Message Body: <Not printed>");
@@ -200,20 +259,15 @@ impl QueryMsgByIdSubCommand {
             println!("Message Body ({}):", charset);
             println!("{}", "-".repeat(50));
 
-            let charset_upper = charset.to_uppercase();
-            if charset_upper == "UTF-8" || charset_upper == "UTF8" {
-                match std::str::from_utf8(&body[..]) {
-                    Ok(body_str) => println!("{}", body_str),
-                    Err(_) => Self::print_hex_dump(&body),
-                }
-            } else {
-                if std::str::from_utf8(&body[..]).is_ok() {
-                    if let Ok(body_str) = std::str::from_utf8(&body[..]) {
+            match Self::decode_body_with_charset(&body, charset) {
+                Ok(body_str) => {
+                    if body_str.is_empty() {
+                        println!("<Empty body>");
+                    } else {
                         println!("{}", body_str);
                     }
-                } else {
-                    Self::print_hex_dump(&body);
                 }
+                Err(_) => Self::print_hex_dump(&body),
             }
             println!("{}", "-".repeat(50));
         } else {
@@ -242,13 +296,29 @@ impl QueryMsgByIdSubCommand {
         }
     }
 
-    fn print_message_info(msg: &MessageExt, broker_addr: &str, charset: &str, print_body: bool, query_time_ms: u64) {
+    fn print_message_not_found(msg_id: &str, query_time_ms: u64, reason: &str) {
+        println!("Message Query Result");
+        println!("====================");
+        println!();
+        println!("Message ID: {}", msg_id);
+        println!();
+        println!("Message Found: false");
+        println!("Reason: {}", reason);
+        println!("Query Time: {} ms", query_time_ms);
+        println!();
+        println!("Possible causes:");
+        println!("  - Message has been deleted or compacted");
+        println!("  - Message ID is incorrect");
+        println!("  - Broker is unreachable");
+    }
+
+    fn print_message_info(msg: &MessageExt, config: &MessageOutputConfig<'_>) {
         println!("Message Query Result");
         println!("====================");
         println!();
         println!("Message ID: {}", msg.msg_id());
         println!();
-        Self::print_basic_info(msg, broker_addr);
+        Self::print_basic_info(msg, config.broker_addr);
         println!();
         Self::print_timestamps(msg);
         println!();
@@ -257,23 +327,94 @@ impl QueryMsgByIdSubCommand {
         Self::print_metadata(msg);
         println!();
         Self::print_properties(msg);
-        Self::print_body(msg, charset, print_body);
+        Self::print_body(msg, config.charset, config.print_body);
         println!();
-        println!("Query Time: {} ms", query_time_ms);
+        println!("Query Time: {} ms", config.query_time_ms);
         println!("Message Found: true");
+    }
+
+    async fn query_single_message(
+        admin: &mut DefaultMQAdminExt,
+        msg_id: &str,
+        topic: &CheetahString,
+        cluster_name: &CheetahString,
+        charset: &str,
+        print_body: bool,
+    ) -> RocketMQResult<()> {
+        let start_time = Instant::now();
+        let msg_id = msg_id.trim().to_string();
+
+        let query_result = admin
+            .query_message(cluster_name.clone(), topic.clone(), CheetahString::from(&msg_id))
+            .await;
+
+        let query_time_ms = start_time.elapsed().as_millis() as u64;
+
+        match query_result {
+            Ok(msg) => {
+                let broker_addr = format!("{}", msg.store_host());
+                let config = MessageOutputConfig {
+                    charset,
+                    print_body,
+                    broker_addr: &broker_addr,
+                    query_time_ms,
+                };
+                Self::print_message_info(&msg, &config);
+                Ok(())
+            }
+            Err(RocketMQError::BrokerOperationFailed { code: _, message, .. })
+                if message.contains("not found")
+                    || message.contains("does not exist")
+                    || message.contains("No message") =>
+            {
+                Self::print_message_not_found(&msg_id, query_time_ms, &message);
+                Ok(())
+            }
+            Err(RocketMQError::Rpc(rpc_error)) => {
+                let err_msg = format!("{}", rpc_error);
+                if err_msg.contains("not found") || err_msg.contains("does not exist") || err_msg.contains("No message")
+                {
+                    Self::print_message_not_found(&msg_id, query_time_ms, &err_msg);
+                    Ok(())
+                } else {
+                    Err(RocketMQError::Internal(format!(
+                        "Failed to query message by ID '{}': {}",
+                        msg_id, err_msg
+                    )))
+                }
+            }
+            Err(e) => Err(RocketMQError::Internal(format!(
+                "Failed to query message by ID '{}': {}",
+                msg_id, e
+            ))),
+        }
     }
 }
 
 impl CommandExecute for QueryMsgByIdSubCommand {
     async fn execute(&self, rpc_hook: Option<Arc<dyn RPCHook>>) -> RocketMQResult<()> {
-        validate_message_id(&self.message_id).map_err(RocketMQError::IllegalArgument)?;
+        if self.message_ids.is_empty() {
+            return Err(RocketMQError::IllegalArgument(
+                "At least one message ID is required".to_string(),
+            ));
+        }
 
-        let start_time = Instant::now();
+        for msg_id in &self.message_ids {
+            validate_message_id(msg_id).map_err(RocketMQError::IllegalArgument)?;
+        }
 
+        if !Self::is_supported_charset(&self.charset) {
+            return Err(RocketMQError::IllegalArgument(format!(
+                "Unsupported charset: '{}'. Supported charsets are: UTF-8, ASCII, ISO-8859-1 (also: latin1, latin-1)",
+                self.charset
+            )));
+        }
+
+        let timeout_duration = Duration::from_millis(self.timeout);
         let mut default_mqadmin_ext = if let Some(rpc_hook) = rpc_hook {
-            DefaultMQAdminExt::with_rpc_hook(rpc_hook)
+            DefaultMQAdminExt::with_rpc_hook_and_timeout(rpc_hook, timeout_duration)
         } else {
-            DefaultMQAdminExt::new()
+            DefaultMQAdminExt::with_timeout(timeout_duration)
         };
         default_mqadmin_ext
             .client_config_mut()
@@ -283,12 +424,12 @@ impl CommandExecute for QueryMsgByIdSubCommand {
             default_mqadmin_ext.set_namesrv_addr(namesrv_addr);
         }
 
+        let timeout_ms = self.timeout;
         let operation_result = async {
             MQAdminExt::start(&mut default_mqadmin_ext)
                 .await
                 .map_err(|e| RocketMQError::Internal(format!("Failed to start MQAdminExt: {}", e)))?;
 
-            let msg_id = self.message_id.trim();
             let topic = self
                 .topic
                 .as_ref()
@@ -297,14 +438,49 @@ impl CommandExecute for QueryMsgByIdSubCommand {
 
             let cluster_name = CheetahString::from_static_str("DefaultCluster");
 
-            let msg = default_mqadmin_ext
-                .query_message(cluster_name, topic, CheetahString::from(msg_id))
-                .await
-                .map_err(|e| RocketMQError::Internal(format!("Failed to query message by ID '{}': {}", msg_id, e)))?;
+            let total_count = self.message_ids.len();
+            let mut success_count = 0;
+            let mut fail_count = 0;
 
-            let broker_addr = format!("{}:{}", msg.store_host().ip(), msg.store_host().port());
-            let query_time_ms = start_time.elapsed().as_millis() as u64;
-            Self::print_message_info(&msg, &broker_addr, &self.charset, self.print_body, query_time_ms);
+            for (index, msg_id) in self.message_ids.iter().enumerate() {
+                if total_count > 1 {
+                    println!();
+                    println!(
+                        "{}Message {} of {}{}",
+                        "=".repeat(20),
+                        index + 1,
+                        total_count,
+                        "=".repeat(20)
+                    );
+                    println!();
+                }
+
+                let query_future = Self::query_single_message(
+                    &mut default_mqadmin_ext,
+                    msg_id,
+                    &topic,
+                    &cluster_name,
+                    &self.charset,
+                    self.print_body,
+                );
+
+                match tokio::time::timeout(Duration::from_millis(timeout_ms), query_future).await {
+                    Ok(Ok(())) => success_count += 1,
+                    Ok(Err(_)) => fail_count += 1,
+                    Err(_) => {
+                        eprintln!("Query timed out for message ID: {}", msg_id);
+                        fail_count += 1;
+                    }
+                }
+            }
+
+            if total_count > 1 {
+                println!();
+                println!("{}Summary{}", "=".repeat(20), "=".repeat(20));
+                println!("Total: {} messages", total_count);
+                println!("Success: {}", success_count);
+                println!("Failed: {}", fail_count);
+            }
 
             Ok(())
         }
@@ -320,12 +496,32 @@ mod tests {
     use super::*;
     use rocketmq_common::common::message::message_single::Message;
 
+    #[allow(dead_code)]
     fn create_test_command() -> QueryMsgByIdSubCommand {
         QueryMsgByIdSubCommand {
-            message_id: "AC11000100002A9F0000000000000001".to_string(),
+            message_ids: vec!["AC11000100002A9F0000000000000001".to_string()],
             topic: Some("test_topic".to_string()),
             print_body: true,
             charset: "UTF-8".to_string(),
+            timeout: DEFAULT_TIMEOUT_MS,
+            common_args: CommonArgs {
+                namesrv_addr: Some("127.0.0.1:9876".to_string()),
+                skip_confirm: false,
+            },
+        }
+    }
+
+    #[allow(dead_code)]
+    fn create_test_command_multiple_ids() -> QueryMsgByIdSubCommand {
+        QueryMsgByIdSubCommand {
+            message_ids: vec![
+                "AC11000100002A9F0000000000000001".to_string(),
+                "AC11000100002A9F0000000000000002".to_string(),
+            ],
+            topic: Some("test_topic".to_string()),
+            print_body: true,
+            charset: "UTF-8".to_string(),
+            timeout: DEFAULT_TIMEOUT_MS,
             common_args: CommonArgs {
                 namesrv_addr: Some("127.0.0.1:9876".to_string()),
                 skip_confirm: false,
@@ -341,7 +537,7 @@ mod tests {
 
     #[test]
     fn test_validate_message_id_valid_ipv6() {
-        let result = validate_message_id("20010db800000000000000000000000100000001");
+        let result = validate_message_id("20010db800000000000000000000000100002A9F0000000000000001");
         assert!(result.is_ok());
     }
 
@@ -440,14 +636,26 @@ mod tests {
     fn test_print_message_info() {
         let msg = create_test_message_ext();
         let broker_addr = "192.168.1.10:10911";
-        QueryMsgByIdSubCommand::print_message_info(&msg, broker_addr, "UTF-8", true, 12);
+        let config = MessageOutputConfig {
+            charset: "UTF-8",
+            print_body: true,
+            broker_addr,
+            query_time_ms: 12,
+        };
+        QueryMsgByIdSubCommand::print_message_info(&msg, &config);
     }
 
     #[test]
     fn test_print_message_info_without_body() {
         let msg = create_test_message_ext();
         let broker_addr = "192.168.1.10:10911";
-        QueryMsgByIdSubCommand::print_message_info(&msg, broker_addr, "UTF-8", false, 15);
+        let config = MessageOutputConfig {
+            charset: "UTF-8",
+            print_body: false,
+            broker_addr,
+            query_time_ms: 15,
+        };
+        QueryMsgByIdSubCommand::print_message_info(&msg, &config);
     }
 
     #[test]
@@ -510,5 +718,136 @@ mod tests {
     fn test_print_body_disabled() {
         let msg = create_test_message_ext();
         QueryMsgByIdSubCommand::print_body(&msg, "UTF-8", false);
+    }
+
+    #[test]
+    fn test_is_utf8_charset() {
+        assert!(QueryMsgByIdSubCommand::is_utf8_charset("UTF-8"));
+        assert!(QueryMsgByIdSubCommand::is_utf8_charset("utf-8"));
+        assert!(QueryMsgByIdSubCommand::is_utf8_charset("UTF8"));
+        assert!(QueryMsgByIdSubCommand::is_utf8_charset("utf8"));
+        assert!(!QueryMsgByIdSubCommand::is_utf8_charset("GBK"));
+        assert!(!QueryMsgByIdSubCommand::is_utf8_charset("ISO-8859-1"));
+    }
+
+    #[test]
+    fn test_decode_body_with_charset_utf8() {
+        let body = b"Hello, World!";
+        let result = QueryMsgByIdSubCommand::decode_body_with_charset(body, "UTF-8");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "Hello, World!");
+    }
+
+    #[test]
+    fn test_decode_body_with_charset_utf8_case_insensitive() {
+        let body = b"Hello, World!";
+        let result = QueryMsgByIdSubCommand::decode_body_with_charset(body, "utf-8");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "Hello, World!");
+
+        let result = QueryMsgByIdSubCommand::decode_body_with_charset(body, "utf8");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "Hello, World!");
+    }
+
+    #[test]
+    fn test_decode_body_with_charset_iso_8859_1() {
+        let body = b"Hello, World!";
+        let result = QueryMsgByIdSubCommand::decode_body_with_charset(body, "ISO-8859-1");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "Hello, World!");
+    }
+
+    #[test]
+    fn test_decode_body_with_charset_latin1() {
+        let body = b"Hello, World!";
+        let result = QueryMsgByIdSubCommand::decode_body_with_charset(body, "latin1");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "Hello, World!");
+    }
+
+    #[test]
+    fn test_decode_body_with_charset_ascii() {
+        let body = b"Hello, World!";
+        let result = QueryMsgByIdSubCommand::decode_body_with_charset(body, "ASCII");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "Hello, World!");
+    }
+
+    #[test]
+    fn test_decode_body_with_charset_unsupported() {
+        let body = b"Hello, World!";
+        let result = QueryMsgByIdSubCommand::decode_body_with_charset(body, "invalid-charset");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_decode_body_with_empty_body() {
+        let body: &[u8] = b"";
+        let result = QueryMsgByIdSubCommand::decode_body_with_charset(body, "UTF-8");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "");
+    }
+
+    #[test]
+    fn test_print_message_not_found() {
+        QueryMsgByIdSubCommand::print_message_not_found(
+            "AC11000100002A9F0000000000000001",
+            15,
+            "Message not found in broker",
+        );
+    }
+
+    #[test]
+    fn test_print_body_with_iso_8859_1_charset() {
+        let mut message = Message::default();
+        message.set_topic(CheetahString::from_static_str("test_topic"));
+        let iso_bytes = vec![0x48, 0x65, 0x6C, 0x6C, 0x6F]; // "Hello" in ISO-8859-1
+        message.set_body(Some(bytes::Bytes::from(iso_bytes)));
+
+        let msg = MessageExt {
+            message,
+            broker_name: CheetahString::from_static_str("test_broker"),
+            queue_id: 0,
+            store_size: 128,
+            queue_offset: 12345,
+            sys_flag: 0,
+            born_timestamp: 1708337445123,
+            born_host: "192.168.1.100:54321".parse().unwrap(),
+            store_timestamp: 1708337445125,
+            store_host: "192.168.1.10:10911".parse().unwrap(),
+            msg_id: CheetahString::from_static_str("AC11000100002A9F0000000000000001"),
+            commit_log_offset: 123456789,
+            body_crc: 12345,
+            reconsume_times: 0,
+            prepared_transaction_offset: 0,
+        };
+        QueryMsgByIdSubCommand::print_body(&msg, "ISO-8859-1", true);
+    }
+
+    #[test]
+    fn test_print_body_with_empty_body() {
+        let mut message = Message::default();
+        message.set_topic(CheetahString::from_static_str("test_topic"));
+        message.set_body(None);
+
+        let msg = MessageExt {
+            message,
+            broker_name: CheetahString::from_static_str("test_broker"),
+            queue_id: 0,
+            store_size: 128,
+            queue_offset: 12345,
+            sys_flag: 0,
+            born_timestamp: 1708337445123,
+            born_host: "192.168.1.100:54321".parse().unwrap(),
+            store_timestamp: 1708337445125,
+            store_host: "192.168.1.10:10911".parse().unwrap(),
+            msg_id: CheetahString::from_static_str("AC11000100002A9F0000000000000001"),
+            commit_log_offset: 123456789,
+            body_crc: 12345,
+            reconsume_times: 0,
+            prepared_transaction_offset: 0,
+        };
+        QueryMsgByIdSubCommand::print_body(&msg, "UTF-8", true);
     }
 }
