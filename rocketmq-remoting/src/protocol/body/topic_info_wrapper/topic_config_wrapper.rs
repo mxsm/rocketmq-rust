@@ -136,4 +136,181 @@ mod tests {
         );
         assert_eq!(wrapper.data_version(), &data_version);
     }
+
+    fn create_topic_config(name: &str) -> (CheetahString, TopicConfig) {
+        (CheetahString::from(name), TopicConfig::default())
+    }
+
+    #[test]
+    fn test_default_initialization() {
+        let wrapper = TopicConfigSerializeWrapper::default();
+        assert!(wrapper.topic_config_table.is_empty());
+        assert_eq!(wrapper.data_version, DataVersion::default());
+    }
+
+    #[test]
+    fn test_clone_trait() {
+        let mut wrapper = TopicConfigSerializeWrapper::default();
+        let (k, v) = create_topic_config("topic_a");
+        wrapper.topic_config_table.insert(k.clone(), v.clone());
+
+        let cloned = wrapper.clone();
+
+        assert_eq!(wrapper, cloned);
+        assert_eq!(cloned.topic_config_table.get(&k), Some(&v));
+    }
+
+    #[test]
+    fn test_partial_eq_identical() {
+        let mut w1 = TopicConfigSerializeWrapper::default();
+        let mut w2 = TopicConfigSerializeWrapper::default();
+
+        let (k, v) = create_topic_config("topic_eq");
+
+        w1.topic_config_table.insert(k.clone(), v.clone());
+        w2.topic_config_table.insert(k, v);
+
+        assert_eq!(w1, w2);
+    }
+
+    #[test]
+    fn test_partial_eq_different() {
+        let mut w1 = TopicConfigSerializeWrapper::default();
+        let mut w2 = TopicConfigSerializeWrapper::default();
+
+        let (k1, v1) = create_topic_config("topic1");
+        let (k2, v2) = create_topic_config("topic2");
+
+        w1.topic_config_table.insert(k1, v1);
+        w2.topic_config_table.insert(k2, v2);
+
+        assert_ne!(w1, w2);
+    }
+
+    #[test]
+    fn test_getters() {
+        let mut wrapper = TopicConfigSerializeWrapper::default();
+
+        let (k, v) = create_topic_config("topic_getter");
+        wrapper.topic_config_table.insert(k.clone(), v.clone());
+
+        let dv = DataVersion::default();
+        wrapper.data_version = dv.clone();
+
+        assert_eq!(wrapper.topic_config_table().get(&k), Some(&v));
+        assert_eq!(wrapper.data_version(), &dv);
+    }
+
+    #[test]
+    fn test_empty_topic_config_table() {
+        let wrapper = TopicConfigSerializeWrapper::default();
+        assert!(wrapper.topic_config_table().is_empty());
+    }
+
+    #[test]
+    fn test_single_topic_config() {
+        let mut wrapper = TopicConfigSerializeWrapper::default();
+        let (k, v) = create_topic_config("single_topic");
+
+        wrapper.topic_config_table.insert(k.clone(), v.clone());
+
+        assert_eq!(wrapper.topic_config_table().len(), 1);
+        assert_eq!(wrapper.topic_config_table().get(&k), Some(&v));
+    }
+
+    #[test]
+    fn test_multiple_topic_configs() {
+        let mut wrapper = TopicConfigSerializeWrapper::default();
+
+        for i in 0..5 {
+            let name = format!("topic_{i}");
+            let (k, v) = create_topic_config(&name);
+            wrapper.topic_config_table.insert(k, v);
+        }
+
+        assert_eq!(wrapper.topic_config_table().len(), 5);
+    }
+
+    #[test]
+    fn test_data_version_behavior() {
+        let mut wrapper = TopicConfigSerializeWrapper::default();
+        let dv = DataVersion::default();
+
+        wrapper.data_version = dv.clone();
+
+        assert_eq!(wrapper.data_version(), &dv);
+    }
+
+    #[test]
+    fn test_json_serialization_field_names() {
+        let mut wrapper = TopicConfigSerializeWrapper::default();
+        let (k, v) = create_topic_config("serde_topic");
+
+        wrapper.topic_config_table.insert(k, v);
+
+        let json = serde_json::to_string(&wrapper).unwrap();
+
+        assert!(json.contains("topicConfigTable"));
+        assert!(json.contains("dataVersion"));
+    }
+
+    #[test]
+    fn test_json_deserialization_field_names() {
+        let json = r#"
+    {
+        "topicConfigTable": {},
+        "dataVersion": {
+            "stateVersion": 0,
+            "timestamp": 0,
+            "counter": 0
+        }
+    }
+    "#;
+
+        let wrapper: TopicConfigSerializeWrapper = serde_json::from_str(json).unwrap();
+
+        assert!(wrapper.topic_config_table.is_empty());
+    }
+
+    #[test]
+    fn test_serde_roundtrip() {
+        let mut wrapper = TopicConfigSerializeWrapper::default();
+
+        let (k1, v1) = create_topic_config("topic_round_1");
+        let (k2, v2) = create_topic_config("topic_round_2");
+
+        wrapper.topic_config_table.insert(k1, v1);
+        wrapper.topic_config_table.insert(k2, v2);
+
+        let json = serde_json::to_string(&wrapper).unwrap();
+        let decoded: TopicConfigSerializeWrapper = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(wrapper, decoded);
+    }
+
+    #[test]
+    fn test_debug_trait_output() {
+        let wrapper = TopicConfigSerializeWrapper::default();
+        let debug_str = format!("{:?}", wrapper);
+
+        assert!(debug_str.contains("TopicConfigSerializeWrapper"));
+    }
+
+    #[test]
+    fn test_create_with_populated_fields() {
+        let mut table = HashMap::new();
+        let (k, v) = create_topic_config("populated_topic");
+
+        table.insert(k.clone(), v.clone());
+
+        let dv = DataVersion::default();
+
+        let wrapper = TopicConfigSerializeWrapper {
+            topic_config_table: table,
+            data_version: dv.clone(),
+        };
+
+        assert_eq!(wrapper.topic_config_table().get(&k), Some(&v));
+        assert_eq!(wrapper.data_version(), &dv);
+    }
 }
