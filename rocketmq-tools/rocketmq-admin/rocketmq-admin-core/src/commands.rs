@@ -534,6 +534,11 @@ impl CommandExecute for ClassificationTablePrint {
                 remark: "Reset consumer group offsets to a specific timestamp (no restart required).",
             },
             Command {
+                category: "Offset",
+                command: "resetOffsetByTimeOld",
+                remark: "Reset consumer offset by timestamp (execute this command required client restart).",
+            },
+            Command {
                 category: "Producer",
                 command: "producer",
                 remark: "Query producer's instances, connection, status, etc.",

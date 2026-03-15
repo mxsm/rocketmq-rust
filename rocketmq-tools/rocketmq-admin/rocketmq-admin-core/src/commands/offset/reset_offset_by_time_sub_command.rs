@@ -189,7 +189,7 @@ impl ResetOffsetByTimeSubCommand {
         println!();
 
         let rollback_stats = admin
-            .reset_offset_by_timestamp_old(group.into(), topic.into(), timestamp, false)
+            .reset_offset_by_timestamp_old(None, group.into(), topic.into(), timestamp, false)
             .await?;
 
         println!(
