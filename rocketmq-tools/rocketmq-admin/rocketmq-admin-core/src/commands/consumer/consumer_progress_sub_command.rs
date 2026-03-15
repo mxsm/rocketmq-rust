@@ -51,54 +51,37 @@ pub struct ConsumerProgressSubCommand {
 }
 
 impl ConsumerProgressSubCommand {
-    async fn get_message_queue_allocation_result(
-        default_mq_admin_ext: &DefaultMQAdminExt,
+    async fn get_message_queue_allocation_result_with_admin(
+        admin: &DefaultMQAdminExt,
         group_name: &str,
     ) -> HashMap<MessageQueue, String> {
         let mut results = HashMap::new();
-        if let Ok(consumer_connection) = default_mq_admin_ext
+        if let Ok(consumer_connection) = admin
             .examine_consumer_connection_info(group_name.into(), None)
             .await
         {
             for connection in consumer_connection.get_connection_set() {
                 let client_id = connection.get_client_id().clone();
-                if let Ok(consumer_running_info) = default_mq_admin_ext
+                if let Ok(consumer_running_info) = admin
                     .get_consumer_running_info(group_name.into(), client_id.clone(), false, None)
                     .await
                 {
                     for mq in consumer_running_info.mq_table.keys() {
-                        results.insert(mq.clone(), client_id.split('@').next().unwrap_or("").to_string());
+                        results.insert(
+                            mq.clone(),
+                            client_id.split('@').next().unwrap_or("").to_string(),
+                        );
                     }
                 }
             }
         }
         results
     }
-}
 
-impl CommandExecute for ConsumerProgressSubCommand {
-    async fn execute(
+    async fn execute_with_admin(
         &self,
-        rpc_hook: Option<std::sync::Arc<dyn rocketmq_remoting::runtime::RPCHook>>,
+        admin: &DefaultMQAdminExt,
     ) -> rocketmq_error::RocketMQResult<()> {
-        let rpc_hook = rpc_hook.ok_or(RocketMQError::Internal(
-            "rpc hook for ConsumerProgressSubCommand is empty!".to_string(),
-        ))?;
-
-        let mut default_mq_admin_ext = DefaultMQAdminExt::with_rpc_hook(rpc_hook);
-
-        default_mq_admin_ext
-            .client_config_mut()
-            .set_instance_name(current_millis().to_string().into());
-
-        if let Some(namesrv) = &self.namesrv_addr {
-            default_mq_admin_ext.set_namesrv_addr(namesrv.trim());
-        }
-
-        default_mq_admin_ext.start().await.map_err(|e| {
-            RocketMQError::Internal(format!("ConsumerProgressSubCommand: Failed to start MQAdminExt: {}", e))
-        })?;
-
         if let Some(consumer_group) = self.consumer_group.as_deref().map(str::trim) {
             let cluster = self
                 .cluster
@@ -109,7 +92,7 @@ impl CommandExecute for ConsumerProgressSubCommand {
                 .as_ref()
                 .map(|s| CheetahString::from_string(s.trim().to_string()));
 
-            let consume_stats = default_mq_admin_ext
+            let consume_stats = admin
                 .examine_consume_stats(consumer_group.into(), topic_name, cluster, None, None)
                 .await?;
 
@@ -120,7 +103,8 @@ impl CommandExecute for ConsumerProgressSubCommand {
             let mut message_queue_allocation_result: HashMap<MessageQueue, String> = HashMap::new();
             if self.show_client_ip {
                 message_queue_allocation_result =
-                    Self::get_message_queue_allocation_result(&default_mq_admin_ext, consumer_group).await;
+                    Self::get_message_queue_allocation_result_with_admin(admin, consumer_group)
+                        .await;
             }
 
             if self.show_client_ip {
@@ -154,8 +138,10 @@ impl CommandExecute for ConsumerProgressSubCommand {
             let mut inflight_total = 0i64;
             for mq in mq_list {
                 if let Some(offset_wrapper) = offset_table.get(&mq) {
-                    let diff = offset_wrapper.get_broker_offset() - offset_wrapper.get_consumer_offset();
-                    let inflight = offset_wrapper.get_pull_offset() - offset_wrapper.get_consumer_offset();
+                    let diff =
+                        offset_wrapper.get_broker_offset() - offset_wrapper.get_consumer_offset();
+                    let inflight =
+                        offset_wrapper.get_pull_offset() - offset_wrapper.get_consumer_offset();
                     diff_total += diff;
                     inflight_total += inflight;
 
@@ -207,7 +193,7 @@ impl CommandExecute for ConsumerProgressSubCommand {
                 "#Group", "#Count", "#Version", "#Type", "#Model", "#TPS", "#Diff Total"
             );
 
-            let topic_list = default_mq_admin_ext.fetch_all_topic_list().await?;
+            let topic_list = admin.fetch_all_topic_list().await?;
             for topic in topic_list.topic_list {
                 if topic.starts_with(mix_all::RETRY_GROUP_TOPIC_PREFIX) {
                     let consumer_group = KeyBuilder::parse_group(&topic);
@@ -216,7 +202,7 @@ impl CommandExecute for ConsumerProgressSubCommand {
                         ..Default::default()
                     };
 
-                    if let Ok(consume_stats) = default_mq_admin_ext
+                    if let Ok(consume_stats) = admin
                         .examine_consume_stats(consumer_group.clone().into(), None, None, None, None)
                         .await
                     {
@@ -224,12 +210,13 @@ impl CommandExecute for ConsumerProgressSubCommand {
                         group_consume_info.diff_total = consume_stats.compute_total_diff();
                     }
 
-                    if let Ok(cc) = default_mq_admin_ext
+                    if let Ok(cc) = admin
                         .examine_consumer_connection_info(consumer_group.into(), None)
                         .await
                     {
                         group_consume_info.count = cc.get_connection_set().len() as i32;
-                        group_consume_info.message_model = cc.get_message_model().unwrap_or(MessageModel::Clustering);
+                        group_consume_info.message_model =
+                            cc.get_message_model().unwrap_or(MessageModel::Clustering);
                         group_consume_info.consume_type =
                             cc.get_consume_type().unwrap_or(ConsumeType::ConsumePassively);
                         group_consume_info.version = cc.compute_min_version();
@@ -252,9 +239,40 @@ impl CommandExecute for ConsumerProgressSubCommand {
                 }
             }
         }
+        Ok(())
+    }
+}
+
+impl CommandExecute for ConsumerProgressSubCommand {
+    async fn execute(
+        &self,
+        rpc_hook: Option<std::sync::Arc<dyn rocketmq_remoting::runtime::RPCHook>>,
+    ) -> rocketmq_error::RocketMQResult<()> {
+        let rpc_hook = rpc_hook.ok_or(RocketMQError::Internal(
+            "rpc hook for ConsumerProgressSubCommand is empty!".to_string(),
+        ))?;
+
+        let mut default_mq_admin_ext = DefaultMQAdminExt::with_rpc_hook(rpc_hook);
+
+        default_mq_admin_ext
+            .client_config_mut()
+            .set_instance_name(current_millis().to_string().into());
+
+        if let Some(namesrv) = &self.namesrv_addr {
+            default_mq_admin_ext.set_namesrv_addr(namesrv.trim());
+        }
+
+        default_mq_admin_ext.start().await.map_err(|e| {
+            RocketMQError::Internal(format!(
+                "ConsumerProgressSubCommand: Failed to start MQAdminExt: {}",
+                e
+            ))
+        })?;
+
+        let result = self.execute_with_admin(&default_mq_admin_ext).await;
 
         default_mq_admin_ext.shutdown().await;
-        Ok(())
+        result
     }
 }
 
@@ -292,9 +310,76 @@ impl GroupConsumeInfo {
 
     fn version_desc(&self) -> String {
         if self.count != 0 {
-            RocketMqVersion::from_ordinal(self.version as u32).name().to_string()
+            RocketMqVersion::from_ordinal(self.version as u32)
+                .name()
+                .to_string()
         } else {
             "".to_string()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_consume_type_desc() {
+        let mut info = GroupConsumeInfo::default();
+        info.count = 1;
+        info.consume_type = ConsumeType::ConsumeActively;
+        assert_eq!(info.consume_type_desc(), "PULL");
+
+        info.consume_type = ConsumeType::ConsumePassively;
+        assert_eq!(info.consume_type_desc(), "PUSH");
+
+        info.count = 0;
+        assert_eq!(info.consume_type_desc(), "");
+    }
+
+    #[test]
+    fn test_message_model_desc() {
+        let mut info = GroupConsumeInfo::default();
+        info.count = 1;
+        info.consume_type = ConsumeType::ConsumePassively;
+        info.message_model = MessageModel::Clustering;
+        assert_eq!(info.message_model_desc(), "CLUSTERING");
+
+        info.message_model = MessageModel::Broadcasting;
+        assert_eq!(info.message_model_desc(), "BROADCASTING");
+
+        info.count = 0;
+        assert_eq!(info.message_model_desc(), "");
+
+        info.count = 1;
+        info.consume_type = ConsumeType::ConsumeActively;
+        assert_eq!(info.message_model_desc(), "");
+    }
+
+    #[test]
+    fn test_version_desc() {
+        let mut info = GroupConsumeInfo::default();
+        info.count = 1;
+        info.version = RocketMqVersion::V4_9_4 as i32;
+        assert_eq!(info.version_desc(), "V4_9_4");
+
+        info.count = 0;
+        assert_eq!(info.version_desc(), "");
+    }
+
+    #[test]
+    fn test_command_parsing() {
+        let cmd = ConsumerProgressSubCommand::try_parse_from(vec![
+            "consumerProgress",
+            "-g",
+            "test-group",
+            "-t",
+            "test-topic",
+            "-s",
+        ])
+        .unwrap();
+        assert_eq!(cmd.consumer_group, Some("test-group".to_string()));
+        assert_eq!(cmd.topic_name, Some("test-topic".to_string()));
+        assert!(cmd.show_client_ip);
     }
 }
