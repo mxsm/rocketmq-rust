@@ -74,6 +74,7 @@ pub fn run() {
             auth::commands::logout,
             auth::commands::restore_session,
             auth::commands::change_password,
+            auth::commands::get_current_user_profile,
             auth::commands::get_auth_bootstrap_status,
             nameserver::commands::get_name_server_home_page,
             nameserver::commands::add_name_server,

@@ -47,6 +47,7 @@ _asset_bundler_cache
 _site
 
 .claude
+.codex
 
 # Tauri
 **/src-tauri/target

@@ -5,6 +5,7 @@ import type {
     ChangePasswordPayload,
     CommonResponse,
     LoginCredentials,
+    UserProfileResponse,
 } from '../features/auth/types/auth.types';
 
 export class AuthService {
@@ -29,6 +30,10 @@ export class AuthService {
             oldPassword: payload.oldPassword,
             newPassword: payload.newPassword,
         });
+    }
+
+    static async getCurrentUserProfile(sessionId: string): Promise<UserProfileResponse> {
+        return invoke<UserProfileResponse>('get_current_user_profile', { sessionId });
     }
 
     static async getBootstrapStatus(): Promise<BootstrapStatus> {

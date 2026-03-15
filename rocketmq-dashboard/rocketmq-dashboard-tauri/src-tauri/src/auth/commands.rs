@@ -18,7 +18,46 @@ use crate::auth::types::AuthSessionResponse;
 use crate::auth::types::BootstrapStatus;
 use crate::auth::types::CommonResponse;
 use crate::auth::types::SessionUser;
+use crate::auth::types::UserProfileResponse;
 use tauri::State;
+
+fn load_current_user_profile(
+    session_id: &str,
+    auth_service: &AuthService,
+    session_state: &SessionState,
+) -> UserProfileResponse {
+    let Some(session) = session_state.get_session(session_id) else {
+        return UserProfileResponse {
+            success: false,
+            message: "Session not found".to_string(),
+            profile: None,
+        };
+    };
+
+    match auth_service.get_user_profile(&session.session_id, session.user_id) {
+        Ok(Some(profile)) if profile.is_active => UserProfileResponse {
+            success: true,
+            message: "Profile loaded".to_string(),
+            profile: Some(profile),
+        },
+        Ok(_) => {
+            session_state.remove_session(session_id);
+            UserProfileResponse {
+                success: false,
+                message: "User profile is no longer available".to_string(),
+                profile: None,
+            }
+        }
+        Err(error) => {
+            log::error!("Failed to load profile for session {}: {}", session_id, error);
+            UserProfileResponse {
+                success: false,
+                message: "Failed to load user profile".to_string(),
+                profile: None,
+            }
+        }
+    }
+}
 
 #[tauri::command]
 pub fn login(
@@ -165,6 +204,15 @@ pub fn change_password(
 }
 
 #[tauri::command]
+pub fn get_current_user_profile(
+    session_id: String,
+    auth_service: State<'_, AuthService>,
+    session_state: State<'_, SessionState>,
+) -> UserProfileResponse {
+    load_current_user_profile(&session_id, auth_service.inner(), session_state.inner())
+}
+
+#[tauri::command]
 pub fn get_auth_bootstrap_status(auth_service: State<'_, AuthService>) -> BootstrapStatus {
     match auth_service.get_bootstrap_status() {
         Ok(status) => status,
@@ -177,5 +225,98 @@ pub fn get_auth_bootstrap_status(auth_service: State<'_, AuthService>) -> Bootst
                 must_change_password: false,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::auth::db::AuthDb;
+    use crate::auth::service::AuthService;
+    use crate::auth::session::SessionState;
+    use std::env;
+    use std::fs;
+    use std::path::PathBuf;
+    use uuid::Uuid;
+
+    struct TestDir {
+        path: PathBuf,
+    }
+
+    impl TestDir {
+        fn new() -> Self {
+            let path = env::temp_dir().join(format!(
+                "rocketmq-dashboard-tauri-auth-command-tests-{}",
+                Uuid::new_v4()
+            ));
+            fs::create_dir_all(&path).expect("failed to create test directory");
+            Self { path }
+        }
+
+        fn db_path(&self) -> PathBuf {
+            self.path.join("dashboard.db")
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    struct TestContext {
+        _test_dir: TestDir,
+        auth_service: AuthService,
+        session_state: SessionState,
+    }
+
+    fn setup_context() -> TestContext {
+        let test_dir = TestDir::new();
+        let db = AuthDb::from_path(test_dir.db_path());
+        db.init().expect("database initialization should succeed");
+        let auth_service = AuthService::with_initial_password(db, "change-me-now");
+        auth_service
+            .bootstrap_default_admin()
+            .expect("bootstrap should succeed");
+
+        TestContext {
+            _test_dir: test_dir,
+            auth_service,
+            session_state: SessionState::default(),
+        }
+    }
+
+    #[test]
+    fn get_current_user_profile_returns_active_profile() {
+        let context = setup_context();
+        let user = context
+            .auth_service
+            .authenticate("admin", "change-me-now")
+            .expect("authentication should succeed");
+        context
+            .auth_service
+            .update_last_login(user.id)
+            .expect("last login should update");
+        let session = context.session_state.create_session(&user);
+
+        let response =
+            super::load_current_user_profile(&session.session_id, &context.auth_service, &context.session_state);
+
+        assert!(response.success);
+        let profile = response.profile.expect("profile should exist");
+        assert_eq!(profile.session_id, session.session_id);
+        assert_eq!(profile.user_id, user.id);
+        assert!(profile.last_login_at.is_some());
+    }
+
+    #[test]
+    fn get_current_user_profile_rejects_unknown_session() {
+        let context = setup_context();
+
+        let response =
+            super::load_current_user_profile("missing-session", &context.auth_service, &context.session_state);
+
+        assert!(!response.success);
+        assert_eq!(response.message, "Session not found");
+        assert!(response.profile.is_none());
     }
 }

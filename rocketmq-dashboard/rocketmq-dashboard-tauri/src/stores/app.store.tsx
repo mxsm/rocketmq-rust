@@ -12,7 +12,8 @@ type Tab =
   | 'Message'
   | 'MessageTrace'
   | 'DLQ'
-  | 'ACL';
+  | 'ACL'
+  | 'Account';
 
 interface AppState {
   isLoggedIn: boolean;
@@ -64,6 +65,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         return 'DLQ Message Management';
       case 'ACL':
         return 'ACL Management';
+      case 'Account':
+        return 'Account Overview';
       default:
         return tab;
     }
