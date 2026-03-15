@@ -528,7 +528,7 @@ where
         message_ext.properties_string =
             MessageDecoder::message_properties_to_string(message_ext.message_ext_inner.message.properties().as_map());
         let send_transaction_prepare_message = if tra_flag
-            && !(message_ext.reconsume_times() > 0 && message_ext.message_ext_inner.message.get_delay_time_level() > 0)
+            && !(message_ext.reconsume_times() > 0 && message_ext.message_ext_inner.message.delay_time_level() > 0)
         {
             if self
                 .inner

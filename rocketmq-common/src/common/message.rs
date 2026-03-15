@@ -141,7 +141,7 @@ pub trait MessageTrait: Any + Display + Debug {
     }
 
     /// Returns the delay time level of the message, or 0 if not set.
-    fn get_delay_time_level(&self) -> i32 {
+    fn delay_time_level(&self) -> i32 {
         self.property(&CheetahString::from_static_str(MessageConst::PROPERTY_DELAY_TIME_LEVEL))
             .and_then(|v| v.parse().ok())
             .unwrap_or(0)
