@@ -29,9 +29,9 @@ import {
 const glassCardClass =
     'border-white/60 bg-white/75 shadow-[0_18px_48px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/8 dark:bg-white/[0.04] dark:shadow-[0_24px_64px_rgba(0,0,0,0.32)]';
 const secondaryActionButtonClass =
-    'h-11 rounded-2xl border-black/15 bg-white/70 px-4 text-gray-700 hover:bg-white dark:border-white/12 dark:bg-white/[0.04] dark:text-gray-100 dark:hover:bg-white/[0.08]';
+    'h-11 rounded-2xl border-black/15 bg-white/70 px-4 text-gray-700 transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] hover:!bg-white hover:!text-gray-900 dark:border-white/12 dark:bg-white/[0.04] dark:text-gray-100 dark:hover:!bg-white/[0.15] dark:hover:!text-white';
 const dangerActionButtonClass =
-    'h-11 rounded-2xl border-black/15 bg-white/70 px-4 text-rose-700 hover:bg-rose-50 dark:border-white/12 dark:bg-white/[0.04] dark:text-rose-300 dark:hover:bg-rose-400/[0.12]';
+    'h-11 rounded-2xl border-black/15 bg-white/70 px-4 text-rose-700 transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] hover:!bg-rose-50 hover:!text-rose-900 dark:border-white/12 dark:bg-white/[0.04] dark:text-rose-300 dark:hover:!bg-rose-500/[0.25] dark:hover:!text-rose-50';
 
 const formatTimestamp = (value: string | null | undefined) => {
     if (!value) {
@@ -216,12 +216,13 @@ export const AccountPage = () => {
                             </div>
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-3 pb-8">
+                        <div className="flex flex-wrap items-center pt-4 pb-8 lg:pt-0" style={{ gap: '24px', paddingBottom: '16px' }}>
                             <Button
                                 type="button"
                                 variant="outline"
                                 onClick={() => setReloadKey((value) => value + 1)}
                                 className={secondaryActionButtonClass}
+                                style={{ paddingLeft: '24px', paddingRight: '24px' }}
                             >
                                 <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
                                 Refresh
@@ -231,6 +232,7 @@ export const AccountPage = () => {
                                 variant="outline"
                                 onClick={() => setIsPasswordDialogOpen(true)}
                                 className={secondaryActionButtonClass}
+                                style={{ paddingLeft: '24px', paddingRight: '24px' }}
                             >
                                 <KeyRound className="h-4 w-4" />
                                 Change Password
@@ -326,7 +328,7 @@ export const AccountPage = () => {
                             </Button>
                         </div>
 
-                        <div className="flex flex-wrap gap-3 pt-4 pb-4">
+                        <div className="flex flex-wrap gap-6 pt-6 pb-4">
                             <Button
                                 type="button"
                                 variant="outline"
