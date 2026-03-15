@@ -222,14 +222,15 @@ impl TopicManager {
             });
         }
 
-        Ok(TopicListResponse {
+        let response = TopicListResponse {
             total: items.len(),
             items,
             targets,
             current_namesrv: snapshot.current_namesrv.clone().unwrap_or_default(),
             use_vip_channel: snapshot.use_vip_channel,
             use_tls: snapshot.use_tls,
-        })
+        };
+        Ok(response)
     }
 
     async fn get_topic_route_with_admin(

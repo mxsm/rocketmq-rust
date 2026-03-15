@@ -1,4 +1,4 @@
-import React, {useState, ReactNode} from 'react';
+import React, {useEffect, useState, ReactNode} from 'react';
 import {motion, AnimatePresence} from 'motion/react';
 import {
     Activity,
@@ -36,12 +36,64 @@ import {
 import {toast} from 'sonner@2.0.3';
 import {Button} from '../components/ui/LegacyButton';
 import {Pagination} from './Pagination';
+import {useTopicCatalog} from '../features/topic/hooks/useTopicCatalog';
+import type {TopicCategory, TopicListItem} from '../features/topic/types/topic.types';
 
 interface Topic {
     name: string;
     type: string;
     operations: string[];
 }
+
+const TOPIC_PAGE_SIZE = 10;
+
+const TOPIC_FILTER_ORDER: TopicCategory[] = [
+    'NORMAL',
+    'DELAY',
+    'FIFO',
+    'TRANSACTION',
+    'UNSPECIFIED',
+    'RETRY',
+    'DLQ',
+    'SYSTEM',
+];
+
+const buildDefaultTopicFilters = (): Record<TopicCategory, boolean> => ({
+    NORMAL: true,
+    DELAY: false,
+    FIFO: true,
+    TRANSACTION: true,
+    UNSPECIFIED: true,
+    RETRY: true,
+    DLQ: true,
+    SYSTEM: true,
+});
+
+const buildTopicOperations = (item: TopicListItem): string[] => {
+    const baseOperations = ['Status', 'Router', 'Consumer Manage', 'Topic Config'];
+
+    if (item.systemTopic) {
+        return baseOperations;
+    }
+
+    if (item.category === 'RETRY' || item.category === 'DLQ') {
+        return [...baseOperations, 'Delete'];
+    }
+
+    return [
+        ...baseOperations,
+        'Send Message',
+        'Reset Consumer Offset',
+        'Skip Message Accumulate',
+        'Delete',
+    ];
+};
+
+const mapTopicListItem = (item: TopicListItem): Topic => ({
+    name: item.topic,
+    type: item.category,
+    operations: buildTopicOperations(item),
+});
 
 interface TopicRouterModalProps {
     isOpen: boolean;
@@ -1109,17 +1161,9 @@ const TopicSkipMessageAccumulateModal = ({isOpen, onClose, topic}: TopicRouterMo
 };
 
 export const TopicView = () => {
+    const {data, error, isLoading, isRefreshing, refresh} = useTopicCatalog();
     const [searchTerm, setSearchTerm] = useState('');
-    const [selectedFilters, setSelectedFilters] = useState<any>({
-        NORMAL: true,
-        Delay: false,
-        FIFO: true,
-        TRANSACTION: true,
-        UNSPECIFIED: true,
-        RETRY: true,
-        DLQ: true,
-        SYSTEM: true
-    });
+    const [selectedFilters, setSelectedFilters] = useState<Record<TopicCategory, boolean>>(buildDefaultTopicFilters);
     const [currentPage, setCurrentPage] = useState(1);
     const [statusModal, setStatusModal] = useState<{ isOpen: boolean, topic: Topic | null }>({isOpen: false, topic: null});
     const [routerModal, setRouterModal] = useState<{ isOpen: boolean, topic: Topic | null }>({isOpen: false, topic: null});
@@ -1129,31 +1173,43 @@ export const TopicView = () => {
     const [resetOffsetModal, setResetOffsetModal] = useState<{ isOpen: boolean, topic: Topic | null }>({isOpen: false, topic: null});
     const [skipAccumulateModal, setSkipAccumulateModal] = useState<{ isOpen: boolean, topic: Topic | null }>({isOpen: false, topic: null});
 
-    // Mock Topic Data
-    const topics = [
-        {name: 'SELF_TEST_TOPIC', type: 'SYSTEM', operations: ['Status', 'Router', 'Consumer Manage', 'Topic Config']},
-        {
-            name: 'DefaultCluster',
-            type: 'SYSTEM',
-            operations: ['Status', 'Router', 'Consumer Manage', 'Topic Config', 'Send Message', 'Reset Consumer Offset', 'Skip Message Accumulate', 'Delete']
-        },
-        {
-            name: 'OrderPlaced_TOPIC',
-            type: 'NORMAL',
-            operations: ['Status', 'Router', 'Consumer Manage', 'Topic Config', 'Send Message', 'Reset Consumer Offset', 'Skip Message Accumulate', 'Delete']
-        },
-        {name: 'UserSignup_EVENT', type: 'NORMAL', operations: ['Status', 'Router', 'Consumer Manage', 'Topic Config', 'Send Message']},
-        {name: 'rmq_sys_wheel_timer', type: 'SYSTEM', operations: ['Status', 'Router', 'Consumer Manage', 'Topic Config']},
-        {
-            name: 'benchmark',
-            type: 'NORMAL',
-            operations: ['Status', 'Router', 'Consumer Manage', 'Topic Config', 'Send Message', 'Reset Consumer Offset', 'Delete']
-        },
-        {name: 'RMQ_SYS_TRANS_HALF_TOPIC', type: 'SYSTEM', operations: ['Status', 'Router', 'Consumer Manage', 'Topic Config']},
-        {name: 'Payment_RETRY_TOPIC', type: 'RETRY', operations: ['Status', 'Router', 'Consumer Manage', 'Topic Config', 'Delete']},
-    ];
+    useEffect(() => {
+        if (error) {
+            toast.error(error);
+        }
+    }, [error]);
 
-    const toggleFilter = (key: string) => {
+    const topics = (data?.items ?? []).map(mapTopicListItem);
+    const normalizedSearch = searchTerm.trim().toLowerCase();
+    const filteredTopics = topics.filter((topic) => {
+        const matchesType = selectedFilters[topic.type as TopicCategory] ?? true;
+        if (!matchesType) {
+            return false;
+        }
+
+        if (!normalizedSearch) {
+            return true;
+        }
+
+        return topic.name.toLowerCase().includes(normalizedSearch) || topic.type.toLowerCase().includes(normalizedSearch);
+    });
+    const totalPages = Math.max(1, Math.ceil(filteredTopics.length / TOPIC_PAGE_SIZE));
+    const pagedTopics = filteredTopics.slice(
+        (currentPage - 1) * TOPIC_PAGE_SIZE,
+        currentPage * TOPIC_PAGE_SIZE,
+    );
+
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [normalizedSearch, selectedFilters]);
+
+    useEffect(() => {
+        if (currentPage > totalPages) {
+            setCurrentPage(totalPages);
+        }
+    }, [currentPage, totalPages]);
+
+    const toggleFilter = (key: TopicCategory) => {
         setSelectedFilters((prev) => ({...prev, [key]: !prev[key]}));
     };
 
@@ -1211,7 +1267,7 @@ export const TopicView = () => {
         switch (key) {
             case 'NORMAL':
                 return FileBox;
-            case 'Delay':
+            case 'DELAY':
                 return Clock;
             case 'FIFO':
                 return Layers;
@@ -1294,9 +1350,11 @@ export const TopicView = () => {
                         <Button
                             variant="secondary"
                             icon={RefreshCw}
+                            onClick={() => void refresh()}
+                            disabled={isRefreshing || isLoading}
                             className="dark:bg-gray-900 dark:text-white dark:border dark:border-gray-700 dark:hover:bg-gray-800"
                         >
-                            Refresh
+                            {isRefreshing ? 'Refreshing...' : 'Refresh'}
                         </Button>
                     </div>
                 </div>
@@ -1306,7 +1364,8 @@ export const TopicView = () => {
                         <Filter className="w-3 h-3 mr-1"/>
                         Types:
                     </div>
-                    {Object.entries(selectedFilters).map(([key, checked]) => {
+                    {TOPIC_FILTER_ORDER.map((key) => {
+                        const checked = selectedFilters[key];
                         const Icon = getFilterIcon(key);
                         return (
                             <button
@@ -1329,7 +1388,7 @@ export const TopicView = () => {
             {/* Topic Grid */}
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
                 <AnimatePresence mode="popLayout">
-                    {topics.map((topic, index) => (
+                    {pagedTopics.map((topic, index) => (
                         <motion.div
                             layout
                             key={topic.name}
@@ -1409,11 +1468,19 @@ export const TopicView = () => {
                 </AnimatePresence>
             </div>
 
+            {filteredTopics.length === 0 && (
+                <div className="rounded-2xl border border-dashed border-gray-200 bg-white/70 px-6 py-10 text-center text-sm text-gray-500 shadow-sm dark:border-gray-800 dark:bg-gray-900/70 dark:text-gray-400">
+                    {isLoading
+                        ? 'Loading topics from the current NameServer...'
+                        : 'No topics matched the current search keyword or type filters.'}
+                </div>
+            )}
+
             {/* Pagination */}
             <div className="flex items-center justify-center pt-6">
                 <Pagination
                     currentPage={currentPage}
-                    totalPages={5}
+                    totalPages={totalPages}
                     onPageChange={setCurrentPage}
                 />
             </div>
