@@ -2042,7 +2042,7 @@ impl DefaultMQProducerImpl {
         self.ensure_not_delayed_for_transactional(&msg)?;
 
         // ignore DelayTimeLevel parameter
-        if msg.get_delay_time_level() != 0 {
+        if msg.delay_time_level() != 0 {
             MessageAccessor::clear_property(&mut msg, MessageConst::PROPERTY_DELAY_TIME_LEVEL);
         }
         Validators::check_message(Some(&msg), self.producer_config.as_ref())?;

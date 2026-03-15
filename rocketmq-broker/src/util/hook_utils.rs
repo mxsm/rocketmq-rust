@@ -159,7 +159,7 @@ impl HookUtils {
                 }
             }
             // Delay Delivery
-            if msg.message_ext_inner.message.get_delay_time_level() > 0 {
+            if msg.message_ext_inner.message.delay_time_level() > 0 {
                 Self::transform_delay_level_message(broker_runtime_inner, msg);
             }
         }
@@ -171,7 +171,7 @@ impl HookUtils {
     }
 
     pub fn check_if_timer_message(msg: &mut MessageExtBrokerInner) -> bool {
-        if msg.message_ext_inner.message.get_delay_time_level() > 0 {
+        if msg.message_ext_inner.message.delay_time_level() > 0 {
             if msg
                 .message_ext_inner
                 .properties()
@@ -233,7 +233,7 @@ impl HookUtils {
         message_store_config: &MessageStoreConfig,
         msg: &mut MessageExtBrokerInner,
     ) -> Option<PutMessageResult> {
-        let delay_level = msg.message_ext_inner.message.get_delay_time_level();
+        let delay_level = msg.message_ext_inner.message.delay_time_level();
         let deliver_ms = match msg.property(MessageConst::PROPERTY_TIMER_DELAY_SEC) {
             Some(delay_sec) => current_millis() + delay_sec.parse::<u64>().unwrap() * 1000,
             None => match msg.property(MessageConst::PROPERTY_TIMER_DELAY_MS) {
@@ -313,7 +313,7 @@ impl HookUtils {
         msg: &mut MessageExtBrokerInner,
     ) {
         let schedule_message_service = broker_runtime_inner.schedule_message_service();
-        if msg.message_ext_inner.message.get_delay_time_level() > schedule_message_service.get_max_delay_level() {
+        if msg.message_ext_inner.message.delay_time_level() > schedule_message_service.get_max_delay_level() {
             msg.message_ext_inner
                 .message
                 .set_delay_time_level(schedule_message_service.get_max_delay_level());
@@ -334,7 +334,7 @@ impl HookUtils {
         msg.message_ext_inner
             .message
             .set_topic(CheetahString::from_static_str(TopicValidator::RMQ_SYS_SCHEDULE_TOPIC));
-        msg.message_ext_inner.queue_id = delay_level_to_queue_id(msg.message_ext_inner.message.get_delay_time_level());
+        msg.message_ext_inner.queue_id = delay_level_to_queue_id(msg.message_ext_inner.message.delay_time_level());
     }
 
     pub fn send_message_back(

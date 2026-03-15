@@ -664,7 +664,7 @@ impl DefaultMQProducer {
             return false;
         }
         // delay message do not support batch processing
-        if msg.get_delay_time_level() > 0
+        if msg.delay_time_level() > 0
             || msg.get_delay_time_ms() > 0
             || msg.get_delay_time_sec() > 0
             || msg.get_deliver_time_ms() > 0

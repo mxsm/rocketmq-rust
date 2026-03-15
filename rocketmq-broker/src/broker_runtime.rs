@@ -130,7 +130,7 @@ pub(crate) struct BrokerRuntime {
     inner: ArcMut<BrokerRuntimeInner<LocalFileMessageStore>>,
     broker_runtime: Option<RocketMQRuntime>,
     shutdown_hook: Option<BrokerShutdownHook>,
-    consumer_ids_change_listener: Arc<Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>>,
+    consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static>,
     topic_queue_mapping_clean_service: TopicQueueMappingCleanService,
     scheduled_task_manager: ScheduledTaskManager,
 }
@@ -164,8 +164,8 @@ impl BrokerRuntime {
             broker_config.get_broker_addr().into(),
         );
         let producer_manager = ProducerManager::new();
-        let consumer_ids_change_listener: Arc<Box<dyn ConsumerIdsChangeListener + Send + Sync + 'static>> =
-            Arc::new(Box::new(DefaultConsumerIdsChangeListener {}));
+        let consumer_ids_change_listener: Arc<dyn ConsumerIdsChangeListener + Send + Sync + 'static> =
+            Arc::new(DefaultConsumerIdsChangeListener {});
         let consumer_manager =
             ConsumerManager::new_with_broker_stats(consumer_ids_change_listener.clone(), broker_config.clone());
 

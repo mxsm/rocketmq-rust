@@ -96,7 +96,7 @@ impl MessageBatch {
 
         let mut first: Option<&Message> = None;
         for message in &message_list {
-            if message.get_delay_time_level() > 0 {
+            if message.delay_time_level() > 0 {
                 return Err(RocketMQError::illegal_argument(
                     "TimeDelayLevel is not supported for batching",
                 ));

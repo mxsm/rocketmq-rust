@@ -2,198 +2,106 @@
 
 ## Overview
 
-The RocketMQ Dashboard Tauri application uses a file-based authentication system. Credentials are stored in a configuration file and verified by the Rust backend.
+The RocketMQ Dashboard Tauri application now uses a local embedded SQLite database for authentication.
+The backend stores users in `dashboard.db`, hashes passwords with Argon2, and keeps login sessions in memory.
 
-## Default Credentials
+## Default Administrator Bootstrap
 
-When you first run the application, it will create a default configuration with:
+On first startup, the application creates a default local administrator account:
 
-- **Username**: `admin`
-- **Password**: `admin123`
+- Username: `admin`
+- Initial password source:
+  - `ROCKETMQ_DASHBOARD_INIT_PASSWORD` environment variable, if set
+  - otherwise `admin123`
 
-⚠️ **Security Warning**: Please change the default password immediately after first login!
+The password is stored only as an Argon2 hash. The bootstrap password is never written back to disk in plain text.
 
-## Configuration File Location
+After the first successful login, the administrator must change the password before the dashboard becomes available.
 
-The authentication configuration is stored in:
+## Database Location
+
+The authentication database is stored in the application config directory as `dashboard.db`.
 
 ### Windows
-```
-C:\Users\<YourUsername>\AppData\Roaming\com.rocketmq-rust.dashboard\auth_config.json
+
+```text
+C:\Users\<YourUsername>\AppData\Roaming\com.rocketmq-rust.dashboard\dashboard.db
 ```
 
 ### macOS
-```
-~/Library/Application Support/com.rocketmq-rust.dashboard/auth_config.json
+
+```text
+~/Library/Application Support/com.rocketmq-rust.dashboard/dashboard.db
 ```
 
 ### Linux
-```
-~/.config/rocketmq-rust-dashboard/auth_config.json
-```
 
-## Configuration File Format
-
-```json
-{
-  "username": "admin",
-  "password_hash": "hashed_password_value"
-}
+```text
+~/.config/rocketmq-rust-dashboard/dashboard.db
 ```
 
-**Note**: The password is stored as a hash, not plain text.
+## Schema
 
-## Changing Credentials
+The embedded database currently uses a single `users` table:
 
-### Method 1: Manual Configuration File Edit
+```sql
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  must_change_password INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_login_at TEXT
+);
+```
 
-1. Stop the application
-2. Delete the `auth_config.json` file
-3. Restart the application
-4. A new configuration with default credentials will be created
-5. Login with default credentials and change password through UI (future feature)
+## Session Behavior
 
-### Method 2: Direct File Edit (Advanced)
+- Sessions are stored only in process memory.
+- Session restore works while the Tauri backend process is still alive.
+- Restarting the desktop application clears all active sessions.
 
-You can manually edit the configuration file, but you'll need to generate the password hash using the application's hashing algorithm.
+This is intentional for the first version to keep the design simple and reduce local attack surface.
 
-For testing purposes, you can use the default hash values:
+## Resetting Local Authentication
 
-| Password | Hash |
-|----------|------|
-| `admin123` | (generated on first run) |
+If you need to reset the local administrator account:
 
-## Security Considerations
+1. Stop the application.
+2. Delete `dashboard.db`.
+3. Restart the application.
+4. Sign in with `admin` and the bootstrap password source described above.
 
-### Current Implementation
+## Security Notes
 
-- ✅ Password hashing (not plain text storage)
-- ✅ File-based configuration
-- ✅ Secure Rust backend verification
-- ✅ Frontend validation through Tauri commands
+- Password hashing uses Argon2.
+- SQLite access uses parameterized queries through `rusqlite`.
+- The default admin password should be changed immediately.
+- Multi-user support, RBAC, lockout policy, and persistent session storage are not part of this first version.
 
-### Future Enhancements
+## Tauri Commands
 
-- [ ] Use stronger hashing (bcrypt/argon2) instead of default hasher
-- [ ] Add password change functionality in UI
-- [ ] Support multiple users
-- [ ] Add role-based access control (RBAC)
-- [ ] Session management with timeouts
-- [ ] Password complexity requirements
-- [ ] Account lockout after failed attempts
-- [ ] Audit logging
+The backend currently exposes these authentication commands:
 
-## Troubleshooting
+- `login`
+- `logout`
+- `restore_session`
+- `change_password`
+- `get_auth_bootstrap_status`
 
-### Cannot Login
+## Verification
 
-1. **Check credentials**: Ensure you're using correct username/password
-2. **Reset configuration**: Delete `auth_config.json` and restart
-3. **Check logs**: Look for authentication errors in the application logs
+Backend tests:
 
-### Configuration File Not Found
-
-The configuration file is created automatically on first run. If it's missing:
-
-1. Restart the application
-2. Check application logs for errors
-3. Verify you have write permissions to the config directory
-
-### Password Lost/Forgotten
-
-Since passwords are hashed, they cannot be retrieved. To reset:
-
-1. Stop the application
-2. Delete `auth_config.json`
-3. Restart the application (default credentials will be created)
-4. Login with `admin` / `admin123`
-
-## Development Notes
-
-### Running in Development Mode
-
-When running in development mode, the application will:
-- Create configuration in the development config directory
-- Log authentication attempts at INFO level
-- Show detailed error messages
-
-### Testing
-
-The `auth.rs` module includes unit tests for:
-- Password hashing consistency
-- Credential verification
-- Password update functionality
-
-Run tests with:
 ```bash
 cd src-tauri
 cargo test
 ```
 
-## API Reference
+Frontend build:
 
-### Tauri Command: `verify_login`
-
-**Purpose**: Verify user credentials
-
-**Parameters**:
-- `username: String` - The username to verify
-- `password: String` - The password to verify
-
-**Returns**: `LoginResponse`
-```typescript
-interface LoginResponse {
-  success: boolean;
-  message: string;
-}
+```bash
+npm run build
 ```
-
-**Example Usage** (TypeScript):
-```typescript
-import {invoke} from '@tauri-apps/api/core';
-
-const result = await invoke<{success: boolean; message: string}>('verify_login', {
-    username: 'admin',
-    password: 'admin123'
-});
-
-if (result.success) {
-    // Login successful
-    console.log('Logged in successfully');
-} else {
-    // Login failed
-    console.error('Login failed:', result.message);
-}
-```
-
-## Upgrading Security (Production)
-
-For production use, update `src-tauri/Cargo.toml`:
-
-```toml
-[dependencies]
-# Add secure password hashing
-bcrypt = "0.15"
-# OR
-argon2 = "0.5"
-```
-
-Then update `src-tauri/src/auth.rs` to use the stronger hashing algorithm.
-
-Example with bcrypt:
-```rust
-use bcrypt::{hash, verify, DEFAULT_COST};
-
-fn hash_password(password: &str) -> String {
-    hash(password, DEFAULT_COST).expect("Failed to hash password")
-}
-
-fn verify_password(password: &str, hash: &str) -> bool {
-    verify(password, hash).unwrap_or(false)
-}
-```
-
----
-
-**Last Updated**: 2026-02-04
-**Version**: 0.1.0

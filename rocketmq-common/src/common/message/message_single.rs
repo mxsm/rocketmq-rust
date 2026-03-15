@@ -361,7 +361,7 @@ impl Message {
     }
 
     #[inline]
-    pub fn get_delay_time_level(&self) -> i32 {
+    pub fn delay_time_level(&self) -> i32 {
         self.properties.delay_level().unwrap_or(0)
     }
 
@@ -440,7 +440,7 @@ impl Message {
     /// Returns the delay time level.
     #[inline]
     pub fn delay_level(&self) -> i32 {
-        self.get_delay_time_level()
+        self.delay_time_level()
     }
 
     /// Returns the buyer ID.

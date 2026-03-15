@@ -4,10 +4,11 @@ import { AlertCircle } from 'lucide-react';
 
 interface ErrorAlertProps {
     message: string;
+    title?: string;
     onClose?: () => void;
 }
 
-export const ErrorAlert: React.FC<ErrorAlertProps> = ({ message, onClose }) => {
+export const ErrorAlert: React.FC<ErrorAlertProps> = ({ message, title = 'Action Failed', onClose }) => {
     return (
         <AnimatePresence mode="wait">
             {message && (
@@ -22,7 +23,7 @@ export const ErrorAlert: React.FC<ErrorAlertProps> = ({ message, onClose }) => {
                         <AlertCircle className="h-5 w-5 text-red-500" />
                     </div>
                     <div className="flex-1 pt-0.5">
-                        <p className="font-bold text-white mb-1">Login Failed</p>
+                        <p className="font-bold text-white mb-1">{title}</p>
                         <p className="text-sm text-white font-medium">{message}</p>
                     </div>
                 </motion.div>

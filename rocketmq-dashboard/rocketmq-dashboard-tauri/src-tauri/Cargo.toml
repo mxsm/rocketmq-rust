@@ -43,3 +43,12 @@ serde            = { version = "1.0", features = ["derive"] }
 log              = "0.4"
 tauri            = { version = "2.10.0", features = [] }
 tauri-plugin-log = "2"
+rusqlite         = { version = "0.32", features = ["bundled"] }
+argon2           = "0.5"
+password-hash    = "0.5"
+rand_core        = { version = "0.6", features = ["getrandom"] }
+uuid             = { version = "1", features = ["v4", "serde"] }
+chrono           = { version = "0.4", features = ["serde"] }
+rocketmq-dashboard-common = { path = "../../rocketmq-dashboard-common" }
+anyhow           = "1.0"
+rocketmq-common  = { path = "../../../rocketmq-common" }

@@ -727,10 +727,6 @@ impl WriteSocketService {
     async fn cleanup(&mut self) {
         *self.current_state.write().await = HAConnectionState::Shutdown;
 
-        /*        if let Err(e) = self.writer.close().await {
-            error!("Error closing sink: {}", e);
-        }*/
-
         if let Some(connection) = self.connection.upgrade() {
             self.ha_service.remove_connection(connection).await;
         }

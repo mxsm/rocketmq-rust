@@ -420,7 +420,7 @@ impl CommitLog {
             .message_ext_broker_inner
             .message_ext_inner
             .message
-            .get_delay_time_level()
+            .delay_time_level()
             > 0
         {
             return PutMessageResult::new_default(PutMessageStatus::MessageIllegal);

@@ -74,7 +74,7 @@ tokio-util   = { version = "0.7.18", features = ["full"] }
 tokio-stream = { version = "0.1.18", features = ["full"] }
 
 tracing            = "0.1.44"
-tracing-subscriber = { version = "0.3.22", features = ["time"] }
+tracing-subscriber = { version = "0.3.23", features = ["time"] }
 tracing-appender   = "0.2.4"
 
 thiserror = "2.0.18"
@@ -90,7 +90,7 @@ bytes              = "1.11.1"
 rand               = "0.10.0"
 num_cpus           = "1.17"
 
-config = "0.15.19"
+config = "0.15.21"
 
 parking_lot   = "0.12"
 dirs          = "6.0"
@@ -99,7 +99,7 @@ trait-variant = "0.1.2"
 mockall = "0.14.0"
 cfg-if  = "1.0.4"
 
-sysinfo = "0.38.3"
+sysinfo = "0.38.4"
 uuid = { version = "1.22.0", features = [
   "v4",                # Lets you generate random UUIDs
   "fast-rng",          # Use a faster (but still sufficiently random) RNG

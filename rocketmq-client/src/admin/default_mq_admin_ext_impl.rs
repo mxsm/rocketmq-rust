@@ -335,6 +335,72 @@ impl DefaultMQAdminExtImpl {
 
         Ok(result.pull_result)
     }
+
+    pub async fn query_message_by_key(
+        &self,
+        cluster_name: Option<CheetahString>,
+        topic: CheetahString,
+        key: CheetahString,
+        max_num: i32,
+        begin_timestamp: i64,
+        end_timestamp: i64,
+        _key_type: CheetahString,
+        _last_key: Option<CheetahString>,
+    ) -> rocketmq_error::RocketMQResult<crate::base::query_result::QueryResult> {
+        let route_topic = cluster_name.unwrap_or_else(|| topic.clone());
+        let topic_route_data = self
+            .examine_topic_route_info(route_topic.clone())
+            .await?
+            .ok_or_else(|| {
+                rocketmq_error::RocketMQError::Internal(format!("Topic route not found for: {}", route_topic))
+            })?;
+
+        let mut message_list: Vec<MessageExt> = Vec::new();
+        let mut index_last_update_timestamp: u64 = 0;
+
+        let api_impl = self.client_instance.as_ref().unwrap().get_mq_client_api_impl();
+        let timeout = self.timeout_millis.as_millis() as u64;
+
+        for broker_data in &topic_route_data.broker_datas {
+            let broker_addr = match broker_data.select_broker_addr() {
+                Some(addr) => addr,
+                None => continue,
+            };
+
+            let request_header =
+                rocketmq_remoting::protocol::header::query_message_request_header::QueryMessageRequestHeader {
+                    topic: topic.clone(),
+                    key: key.clone(),
+                    max_num,
+                    begin_timestamp,
+                    end_timestamp,
+                    topic_request_header: None,
+                };
+
+            match MQClientAPIImpl::query_message(&api_impl, &broker_addr, request_header, timeout).await {
+                Ok(Some((response_header, body))) => {
+                    if let Some(mut body_bytes) = body {
+                        let msgs = message_decoder::decodes_batch(&mut body_bytes, true, true);
+                        message_list.extend(msgs);
+                    }
+                    if response_header.index_last_update_timestamp as u64 > index_last_update_timestamp {
+                        index_last_update_timestamp = response_header.index_last_update_timestamp as u64;
+                    }
+                }
+                Ok(None) => {
+                    // No messages found on this broker, continue
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to query message by key from broker {}: {}", broker_addr, e);
+                }
+            }
+        }
+
+        Ok(crate::base::query_result::QueryResult::new(
+            index_last_update_timestamp,
+            message_list,
+        ))
+    }
 }
 
 #[allow(unused_variables)]

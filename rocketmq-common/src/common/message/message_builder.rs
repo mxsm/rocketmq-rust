@@ -301,7 +301,7 @@ mod tests {
             .delay_level(3)
             .build_unchecked();
 
-        assert_eq!(msg.get_delay_time_level(), 3);
+        assert_eq!(msg.delay_time_level(), 3);
     }
 
     #[test]

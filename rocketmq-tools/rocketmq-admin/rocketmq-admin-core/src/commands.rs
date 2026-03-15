@@ -465,6 +465,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Message",
+                command: "printMessage",
+                remark: "Print Message Detail.",
+            },
+            Command {
+                category: "Message",
                 command: "printMsgByQueue",
                 remark: "Print Message Detail by queueId.",
             },
@@ -472,6 +477,11 @@ impl CommandExecute for ClassificationTablePrint {
                 category: "Message",
                 command: "queryMsgById",
                 remark: "Query message by message ID.",
+            },
+            Command {
+                category: "Message",
+                command: "queryMsgByKey",
+                remark: "Query Message by Key.",
             },
             Command {
                 category: "Message",
