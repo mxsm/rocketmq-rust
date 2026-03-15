@@ -71,6 +71,19 @@ pub(crate) struct SessionUser {
     pub(crate) created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UserProfile {
+    pub(crate) session_id: String,
+    pub(crate) user_id: i64,
+    pub(crate) username: String,
+    pub(crate) is_active: bool,
+    pub(crate) must_change_password: bool,
+    pub(crate) created_at: String,
+    pub(crate) updated_at: String,
+    pub(crate) last_login_at: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AuthSessionResponse {
@@ -79,6 +92,14 @@ pub(crate) struct AuthSessionResponse {
     pub(crate) session_id: Option<String>,
     pub(crate) current_user: Option<SessionUser>,
     pub(crate) must_change_password: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UserProfileResponse {
+    pub(crate) success: bool,
+    pub(crate) message: String,
+    pub(crate) profile: Option<UserProfile>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,4 +125,7 @@ pub(crate) struct UserRecord {
     pub(crate) password_hash: String,
     pub(crate) is_active: bool,
     pub(crate) must_change_password: bool,
+    pub(crate) created_at: String,
+    pub(crate) updated_at: String,
+    pub(crate) last_login_at: Option<String>,
 }

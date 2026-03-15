@@ -74,6 +74,9 @@ mod tests {
             password_hash: "hashed".to_string(),
             is_active: true,
             must_change_password: true,
+            created_at: "2026-03-15T00:00:00Z".to_string(),
+            updated_at: "2026-03-15T00:00:00Z".to_string(),
+            last_login_at: None,
         }
     }
 

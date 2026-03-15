@@ -14,6 +14,7 @@ import {MessageView} from '../../components/MessageView';
 import {MessageTraceView} from '../../components/MessageTraceView';
 import {DLQMessageView} from '../../components/DLQMessageView';
 import {Activity} from 'lucide-react';
+import {AccountPage} from '../../pages/account/AccountPage';
 
 export const AppRouter = () => {
     const {activeTab} = useAppStore();
@@ -41,6 +42,8 @@ export const AppRouter = () => {
             return <DLQMessageView/>;
         case 'ACL':
             return <ACLView/>;
+        case 'Account':
+            return <AccountPage/>;
         default:
             return (
                 <div className="flex flex-col items-center justify-center h-full text-gray-400">

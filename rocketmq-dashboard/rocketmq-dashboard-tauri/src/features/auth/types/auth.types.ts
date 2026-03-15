@@ -19,6 +19,23 @@ export interface AuthSessionResponse {
     mustChangePassword: boolean;
 }
 
+export interface UserProfile {
+    sessionId: string;
+    userId: number;
+    username: string;
+    isActive: boolean;
+    mustChangePassword: boolean;
+    createdAt: string;
+    updatedAt: string;
+    lastLoginAt: string | null;
+}
+
+export interface UserProfileResponse {
+    success: boolean;
+    message: string;
+    profile: UserProfile | null;
+}
+
 export interface CommonResponse {
     success: boolean;
     message: string;

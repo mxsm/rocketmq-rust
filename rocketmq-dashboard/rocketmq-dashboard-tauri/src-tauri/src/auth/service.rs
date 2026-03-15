@@ -16,6 +16,7 @@ use crate::auth::db::AuthDb;
 use crate::auth::types::AuthError;
 use crate::auth::types::AuthResult;
 use crate::auth::types::BootstrapStatus;
+use crate::auth::types::UserProfile;
 use crate::auth::types::UserRecord;
 use argon2::Argon2;
 use chrono::Utc;
@@ -159,7 +160,8 @@ impl AuthService {
         connection
             .query_row(
                 "
-                SELECT id, username, password_hash, is_active, must_change_password
+                SELECT id, username, password_hash, is_active, must_change_password, created_at, updated_at, \
+                 last_login_at
                 FROM users
                 WHERE id = ?1
                 ",
@@ -185,12 +187,28 @@ impl AuthService {
         Ok(())
     }
 
+    pub(crate) fn get_user_profile(&self, session_id: &str, user_id: i64) -> AuthResult<Option<UserProfile>> {
+        let user = self.find_user_by_id(user_id)?;
+
+        Ok(user.map(|user| UserProfile {
+            session_id: session_id.to_string(),
+            user_id: user.id,
+            username: user.username,
+            is_active: user.is_active,
+            must_change_password: user.must_change_password,
+            created_at: user.created_at,
+            updated_at: user.updated_at,
+            last_login_at: user.last_login_at,
+        }))
+    }
+
     fn find_user_by_username(&self, username: &str) -> AuthResult<Option<UserRecord>> {
         let connection = self.db.connection()?;
         connection
             .query_row(
                 "
-                SELECT id, username, password_hash, is_active, must_change_password
+                SELECT id, username, password_hash, is_active, must_change_password, created_at, updated_at, \
+                 last_login_at
                 FROM users
                 WHERE username = ?1
                 ",
@@ -249,6 +267,9 @@ fn map_user_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<UserRecord> {
         password_hash: row.get(2)?,
         is_active: row.get::<_, i64>(3)? != 0,
         must_change_password: row.get::<_, i64>(4)? != 0,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
+        last_login_at: row.get(7)?,
     })
 }
 
@@ -371,5 +392,49 @@ mod tests {
         assert_ne!(hash_a, hash_b);
         assert!(verify_password("same-password", &hash_a).expect("verification should succeed"));
         assert!(verify_password("same-password", &hash_b).expect("verification should succeed"));
+    }
+
+    #[test]
+    fn get_user_profile_returns_persisted_account_fields() {
+        let context = setup_service("change-me-now");
+        let service = &context.service;
+        service.bootstrap_default_admin().expect("bootstrap should succeed");
+
+        let user = service
+            .authenticate("admin", "change-me-now")
+            .expect("login should succeed");
+        service.update_last_login(user.id).expect("last login should update");
+
+        let profile = service
+            .get_user_profile("session-123", user.id)
+            .expect("profile lookup should succeed")
+            .expect("profile should exist");
+
+        assert_eq!(profile.session_id, "session-123");
+        assert_eq!(profile.user_id, user.id);
+        assert_eq!(profile.username, "admin");
+        assert!(profile.is_active);
+        assert!(profile.must_change_password);
+        assert!(!profile.created_at.is_empty());
+        assert!(!profile.updated_at.is_empty());
+        assert!(profile.last_login_at.is_some());
+    }
+
+    #[test]
+    fn get_user_profile_keeps_null_last_login_when_never_logged_in() {
+        let context = setup_service("change-me-now");
+        let service = &context.service;
+        service.bootstrap_default_admin().expect("bootstrap should succeed");
+
+        let user = service
+            .authenticate("admin", "change-me-now")
+            .expect("authentication should succeed");
+
+        let profile = service
+            .get_user_profile("session-123", user.id)
+            .expect("profile lookup should succeed")
+            .expect("profile should exist");
+
+        assert_eq!(profile.last_login_at, None);
     }
 }
