@@ -475,6 +475,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Message",
+                command: "queryMsgById",
+                remark: "Query message by message ID.",
+            },
+            Command {
+                category: "Message",
                 command: "queryMsgByKey",
                 remark: "Query Message by Key.",
             },

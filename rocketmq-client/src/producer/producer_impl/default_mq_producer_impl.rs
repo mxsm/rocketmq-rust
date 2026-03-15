@@ -2109,9 +2109,13 @@ impl DefaultMQProducerImpl {
         local_transaction_state: LocalTransactionState,
     ) -> rocketmq_error::RocketMQResult<()> {
         let id = if let Some(ref offset_msg_id) = send_result.offset_msg_id {
-            MessageDecoder::decode_message_id(offset_msg_id)
+            MessageDecoder::decode_message_id(offset_msg_id).map_err(|e| {
+                rocketmq_error::RocketMQError::IllegalArgument(format!("Failed to decode message ID: {}", e))
+            })?
         } else {
-            MessageDecoder::decode_message_id(send_result.msg_id.as_ref().unwrap())
+            MessageDecoder::decode_message_id(send_result.msg_id.as_ref().unwrap()).map_err(|e| {
+                rocketmq_error::RocketMQError::IllegalArgument(format!("Failed to decode message ID: {}", e))
+            })?
         };
         let transaction_id = send_result.transaction_id.clone();
         let queue = self

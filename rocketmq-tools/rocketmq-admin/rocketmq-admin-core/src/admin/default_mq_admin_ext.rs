@@ -118,14 +118,17 @@ impl DefaultMQAdminExt {
     pub fn with_timeout(timeout_millis: Duration) -> Self {
         let admin_ext_group = CheetahString::from_static_str(ADMIN_EXT_GROUP);
         let client_config = ArcMut::new(ClientConfig::new());
+        let mut default_mqadmin_ext_impl = ArcMut::new(DefaultMQAdminExtImpl::new(
+            None,
+            timeout_millis,
+            client_config.clone(),
+            admin_ext_group.clone(),
+        ));
+        let inner = default_mqadmin_ext_impl.clone();
+        default_mqadmin_ext_impl.set_inner(inner);
         Self {
-            client_config: client_config.clone(),
-            default_mqadmin_ext_impl: ArcMut::new(DefaultMQAdminExtImpl::new(
-                None,
-                timeout_millis,
-                client_config,
-                admin_ext_group.clone(),
-            )),
+            client_config,
+            default_mqadmin_ext_impl,
             admin_ext_group,
             create_topic_key: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
             timeout_millis,
@@ -135,14 +138,17 @@ impl DefaultMQAdminExt {
     pub fn with_rpc_hook(rpc_hook: Arc<dyn RPCHook>) -> Self {
         let admin_ext_group = CheetahString::from_static_str(ADMIN_EXT_GROUP);
         let client_config = ArcMut::new(ClientConfig::new());
+        let mut default_mqadmin_ext_impl = ArcMut::new(DefaultMQAdminExtImpl::new(
+            Some(rpc_hook),
+            Duration::from_millis(5000),
+            client_config.clone(),
+            admin_ext_group.clone(),
+        ));
+        let inner = default_mqadmin_ext_impl.clone();
+        default_mqadmin_ext_impl.set_inner(inner);
         Self {
-            client_config: client_config.clone(),
-            default_mqadmin_ext_impl: ArcMut::new(DefaultMQAdminExtImpl::new(
-                Some(rpc_hook),
-                Duration::from_millis(5000),
-                client_config,
-                admin_ext_group.clone(),
-            )),
+            client_config,
+            default_mqadmin_ext_impl,
             admin_ext_group,
             create_topic_key: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
             timeout_millis: Duration::from_millis(5000),
@@ -152,14 +158,17 @@ impl DefaultMQAdminExt {
     pub fn with_rpc_hook_and_timeout(rpc_hook: Arc<dyn RPCHook>, timeout_millis: Duration) -> Self {
         let admin_ext_group = CheetahString::from_static_str(ADMIN_EXT_GROUP);
         let client_config = ArcMut::new(ClientConfig::new());
+        let mut default_mqadmin_ext_impl = ArcMut::new(DefaultMQAdminExtImpl::new(
+            Some(rpc_hook),
+            timeout_millis,
+            client_config.clone(),
+            admin_ext_group.clone(),
+        ));
+        let inner = default_mqadmin_ext_impl.clone();
+        default_mqadmin_ext_impl.set_inner(inner);
         Self {
-            client_config: client_config.clone(),
-            default_mqadmin_ext_impl: ArcMut::new(DefaultMQAdminExtImpl::new(
-                Some(rpc_hook),
-                timeout_millis,
-                client_config,
-                admin_ext_group.clone(),
-            )),
+            client_config,
+            default_mqadmin_ext_impl,
             admin_ext_group,
             create_topic_key: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
             timeout_millis,
@@ -169,14 +178,17 @@ impl DefaultMQAdminExt {
     pub fn with_admin_ext_group(admin_ext_group: impl Into<CheetahString>) -> Self {
         let admin_ext_group = admin_ext_group.into();
         let client_config = ArcMut::new(ClientConfig::new());
+        let mut default_mqadmin_ext_impl = ArcMut::new(DefaultMQAdminExtImpl::new(
+            None,
+            Duration::from_millis(5000),
+            client_config.clone(),
+            admin_ext_group.clone(),
+        ));
+        let inner = default_mqadmin_ext_impl.clone();
+        default_mqadmin_ext_impl.set_inner(inner);
         Self {
-            client_config: client_config.clone(),
-            default_mqadmin_ext_impl: ArcMut::new(DefaultMQAdminExtImpl::new(
-                None,
-                Duration::from_millis(5000),
-                client_config,
-                admin_ext_group.clone(),
-            )),
+            client_config,
+            default_mqadmin_ext_impl,
             admin_ext_group,
             create_topic_key: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
             timeout_millis: Duration::from_millis(5000),
@@ -189,14 +201,17 @@ impl DefaultMQAdminExt {
     ) -> Self {
         let admin_ext_group = admin_ext_group.into();
         let client_config = ArcMut::new(ClientConfig::new());
+        let mut default_mqadmin_ext_impl = ArcMut::new(DefaultMQAdminExtImpl::new(
+            None,
+            timeout_millis,
+            client_config.clone(),
+            admin_ext_group.clone(),
+        ));
+        let inner = default_mqadmin_ext_impl.clone();
+        default_mqadmin_ext_impl.set_inner(inner);
         Self {
-            client_config: client_config.clone(),
-            default_mqadmin_ext_impl: ArcMut::new(DefaultMQAdminExtImpl::new(
-                None,
-                timeout_millis,
-                client_config,
-                admin_ext_group.clone(),
-            )),
+            client_config,
+            default_mqadmin_ext_impl,
             admin_ext_group,
             create_topic_key: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
             timeout_millis,
@@ -1349,11 +1364,13 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn query_message(
         &self,
-        _cluster_name: CheetahString,
-        _topic: CheetahString,
-        _msg_id: CheetahString,
+        cluster_name: CheetahString,
+        topic: CheetahString,
+        msg_id: CheetahString,
     ) -> rocketmq_error::RocketMQResult<MessageExt> {
-        unimplemented!("query_message not implemented yet")
+        self.default_mqadmin_ext_impl
+            .query_message(cluster_name, topic, msg_id)
+            .await
     }
 
     async fn get_broker_ha_status(&self, broker_addr: CheetahString) -> rocketmq_error::RocketMQResult<HARuntimeInfo> {

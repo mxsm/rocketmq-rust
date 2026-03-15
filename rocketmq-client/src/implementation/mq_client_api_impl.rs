@@ -155,6 +155,7 @@ use rocketmq_remoting::protocol::header::unlock_batch_mq_request_header::UnlockB
 use rocketmq_remoting::protocol::header::unregister_client_request_header::UnregisterClientRequestHeader;
 use rocketmq_remoting::protocol::header::update_consumer_offset_header::UpdateConsumerOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::update_user_request_header::UpdateUserRequestHeader;
+use rocketmq_remoting::protocol::header::view_message_request_header::ViewMessageRequestHeader;
 use rocketmq_remoting::protocol::headers::client::GetConsumerConnectionListRequestHeader;
 use rocketmq_remoting::protocol::headers::view::SearchOffsetRequestHeader;
 use rocketmq_remoting::protocol::headers::view::SearchOffsetResponseHeader;
@@ -3479,6 +3480,41 @@ impl MQClientAPIImpl {
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string())
         ))
+    }
+
+    pub async fn view_message(
+        &mut self,
+        addr: &CheetahString,
+        request_header: ViewMessageRequestHeader,
+        timeout_millis: u64,
+    ) -> RocketMQResult<MessageExt> {
+        let request = RemotingCommand::create_request_command(RequestCode::ViewMessageById, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                if let Some(body) = response.get_body() {
+                    let mut bytes = body.clone();
+                    let body_len = bytes.len();
+                    MessageDecoder::decode(&mut bytes, true, true, false, false, false).ok_or_else(|| {
+                        mq_client_err!(format!(
+                            "Failed to decode message from view_message response body: body_len={}, possible causes: \
+                             CRC check failed or malformed message data",
+                            body_len
+                        ))
+                    })
+                } else {
+                    Err(mq_client_err!("view_message response body is empty".to_string()))
+                }
+            }
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or("".to_string(), |s| s.to_string())
+            )),
+        }
     }
 
     fn build_queue_offset_sorted_map(
