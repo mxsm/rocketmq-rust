@@ -274,6 +274,7 @@ pub trait MQAdminExt: Send {
 
     async fn reset_offset_by_timestamp_old(
         &self,
+        cluster_name: Option<CheetahString>,
         consumer_group: CheetahString,
         topic: CheetahString,
         timestamp: u64,

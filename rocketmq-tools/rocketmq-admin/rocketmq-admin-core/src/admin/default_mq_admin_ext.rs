@@ -1240,13 +1240,14 @@ impl MQAdminExt for DefaultMQAdminExt {
 
     async fn reset_offset_by_timestamp_old(
         &self,
+        cluster_name: Option<CheetahString>,
         consumer_group: CheetahString,
         topic: CheetahString,
         timestamp: u64,
         force: bool,
     ) -> rocketmq_error::RocketMQResult<Vec<RollbackStats>> {
         self.default_mqadmin_ext_impl
-            .reset_offset_by_timestamp_old(consumer_group, topic, timestamp, force)
+            .reset_offset_by_timestamp_old(cluster_name, consumer_group, topic, timestamp, force)
             .await
     }
     #[allow(deprecated)]

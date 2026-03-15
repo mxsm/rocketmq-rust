@@ -14,6 +14,7 @@
 
 mod clone_group_offset_sub_command;
 mod get_consumer_status_sub_command;
+mod reset_offset_by_time_old_sub_command;
 mod reset_offset_by_time_sub_command;
 
 use std::sync::Arc;
@@ -24,6 +25,7 @@ use rocketmq_remoting::runtime::RPCHook;
 
 use crate::commands::offset::clone_group_offset_sub_command::CloneGroupOffsetSubCommand;
 use crate::commands::offset::get_consumer_status_sub_command::GetConsumerStatusSubCommand;
+use crate::commands::offset::reset_offset_by_time_old_sub_command::ResetOffsetByTimeOldSubCommand;
 use crate::commands::offset::reset_offset_by_time_sub_command::ResetOffsetByTimeSubCommand;
 use crate::commands::CommandExecute;
 
@@ -70,6 +72,13 @@ EXAMPLES:
   resetOffsetByTime -g orderGroup -t orderTopic -s 1708330800000"#
     )]
     ResetOffsetByTime(ResetOffsetByTimeSubCommand),
+
+    #[command(
+        name = "resetOffsetByTimeOld",
+        about = "Reset consumer offset by timestamp(execute this command required client restart).",
+        long_about = None,
+    )]
+    ResetOffsetByTimeOld(ResetOffsetByTimeOldSubCommand),
 }
 
 impl CommandExecute for OffsetCommands {
@@ -78,6 +87,7 @@ impl CommandExecute for OffsetCommands {
             OffsetCommands::CloneGroupOffset(cmd) => cmd.execute(rpc_hook).await,
             OffsetCommands::GetConsumerStatus(cmd) => cmd.execute(rpc_hook).await,
             OffsetCommands::ResetOffsetByTime(cmd) => cmd.execute(rpc_hook).await,
+            OffsetCommands::ResetOffsetByTimeOld(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }

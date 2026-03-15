@@ -1902,12 +1902,21 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
 
     async fn reset_offset_by_timestamp_old(
         &self,
+        cluster_name: Option<CheetahString>,
         consumer_group: CheetahString,
         topic: CheetahString,
         timestamp: u64,
         force: bool,
     ) -> rocketmq_error::RocketMQResult<Vec<RollbackStats>> {
-        let topic_route_data = self.examine_topic_route_info(topic.clone()).await?;
+        let mut route_topic = topic.clone();
+        if !topic.is_empty()
+            && (mix_all::is_lmq(Some(topic.as_str()))
+                || topic.as_str() == format!("{}wheel_timer", TopicValidator::SYSTEM_TOPIC_PREFIX))
+            && cluster_name.as_ref().is_some_and(|name| !name.is_empty())
+        {
+            route_topic = cluster_name.unwrap();
+        }
+        let topic_route_data = self.examine_topic_route_info(route_topic).await?;
         let mut rollback_stats_list = Vec::new();
 
         if let Some(route_data) = topic_route_data {
