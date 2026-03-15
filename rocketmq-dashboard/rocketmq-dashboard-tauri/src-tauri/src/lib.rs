@@ -41,16 +41,6 @@ pub fn run() {
             let auth_service = auth::AuthService::new(auth_db);
             let bootstrap_status = auth_service.bootstrap_default_admin()?;
 
-            let nameserver_db = nameserver::NameServerDb::new(app.handle())?;
-            nameserver_db.init()?;
-            log::info!(
-                "Local NameServer SQLite database initialized at: {}",
-                nameserver_db.db_path().display()
-            );
-
-            let nameserver_service = nameserver::NameServerService::new(nameserver_db);
-            nameserver_service.bootstrap_defaults()?;
-
             if bootstrap_status.created {
                 log::warn!(
                     "Initialized local dashboard admin account `{}` with the bootstrap password. The password must be \
@@ -73,7 +63,6 @@ pub fn run() {
             let nameserver_manager = nameserver::NameServerManager::new(nameserver_db, nameserver_runtime.clone())?;
 
             app.manage(auth_service);
-            app.manage(nameserver_service);
             app.manage(auth::SessionState::default());
             app.manage(nameserver_runtime);
             app.manage(nameserver_manager);
