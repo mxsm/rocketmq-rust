@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **feat(tools):** Add `UpdateSubGroupSubCommand` in update_sub_group_sub_command.rs ([#5653](https://github.com/mxsm/rocketmq-rust/issues/5653))
 - **feat(tools):** Add `GetControllerMetadataSubCommand` ([#5624](https://github.com/mxsm/rocketmq-rust/issues/5624))
 - **feat(common):** Add `filter_type` module to filter.rs in rocketmq-common crate ([#5454](https://github.com/mxsm/rocketmq-rust/issues/5454))
+- **feat(tools):** Add `consumerProgress` command for querying consumer consumption progress and metrics, supporting both detailed single-group and summary all-groups views
 - **feat(common):** Add test coverage for `MessageQueueAssignment` struct to in rocketmq-common crate ([#5752](https://github.com/mxsm/rocketmq-rust/issues/5752))
 
 ### Changed

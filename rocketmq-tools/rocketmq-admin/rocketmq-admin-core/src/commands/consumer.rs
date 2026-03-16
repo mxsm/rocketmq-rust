@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod consumer_progress_sub_command;
 mod consumer_status_sub_command;
 mod consumer_sub_command;
 mod delete_subscription_group_sub_command;
@@ -26,6 +27,7 @@ use clap::Subcommand;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::runtime::RPCHook;
 
+use crate::commands::consumer::consumer_progress_sub_command::ConsumerProgressSubCommand;
 use crate::commands::consumer::consumer_status_sub_command::ConsumerStatusSubCommand;
 use crate::commands::consumer::consumer_sub_command::ConsumerSubCommand;
 use crate::commands::consumer::delete_subscription_group_sub_command::DeleteSubscriptionGroupSubCommand;
@@ -34,22 +36,23 @@ use crate::commands::consumer::set_consume_mode_sub_command::SetConsumeModeSubCo
 use crate::commands::consumer::start_monitoring_sub_command::StartMonitoringSubCommand;
 use crate::commands::consumer::update_sub_group_list_sub_command::UpdateSubGroupListSubCommand;
 use crate::commands::consumer::update_sub_group_sub_command::UpdateSubGroupSubCommand;
+
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
 pub enum ConsumerCommands {
     #[command(
-        name = "consumerStatus",
-        about = "Query and display consumer's internal data structures, including subscription information, queue allocation, consumption mode, and runtime information.",
-        long_about = None,
-    )]
+            name = "consumerStatus",
+            about = "Query and display consumer's internal data structures, including subscription information, queue allocation, consumption mode, and runtime information.",
+            long_about = None,
+        )]
     ConsumerStatus(ConsumerStatusSubCommand),
 
     #[command(
-        name = "consumer",
-        about = "Query consumer's connection, status, etc.",
-        long_about = None,
-    )]
+            name = "consumer",
+            about = "Query consumer's connection, status, etc.",
+            long_about = None,
+        )]
     Consumer(ConsumerSubCommand),
 
     #[command(
@@ -60,39 +63,46 @@ pub enum ConsumerCommands {
     DeleteSubscriptionGroup(DeleteSubscriptionGroupSubCommand),
 
     #[command(
-        name = "getConsumerConfig",
-        about = "Get consumer config by subscription group name.",
-        long_about = None,
-    )]
+            name = "getConsumerConfig",
+            about = "Get consumer config by subscription group name.",
+            long_about = None,
+        )]
     GetConsumerConfig(GetConsumerConfigSubCommand),
 
     #[command(
-        name = "setConsumeMode",
-        about = "Set consume message mode. pull/pop etc.",
-        long_about = None,
-    )]
+            name = "setConsumeMode",
+            about = "Set consume message mode. pull/pop etc.",
+            long_about = None,
+        )]
     SetConsumeMode(SetConsumeModeSubCommand),
 
     #[command(
-        name = "startMonitoring",
-        about = "Start Monitoring.",
-        long_about = None,
-    )]
+            name = "startMonitoring",
+            about = "Start Monitoring.",
+            long_about = None,
+        )]
     StartMonitoring(StartMonitoringSubCommand),
 
     #[command(
-        name = "updateSubGroupList",
-        about = "Create or update subscription groups in batch.",
-        long_about = None,
-    )]
+            name = "updateSubGroupList",
+            about = "Create or update subscription groups in batch.",
+            long_about = None,
+        )]
     UpdateSubGroupList(UpdateSubGroupListSubCommand),
 
     #[command(
-        name = "updateSubGroup",
-        about = "Update or create subscription group.",
-        long_about = None,
-    )]
+            name = "updateSubGroup",
+            about = "Update or create subscription group.",
+            long_about = None,
+        )]
     UpdateSubGroup(UpdateSubGroupSubCommand),
+
+    #[command(
+            name = "consumerProgress",
+            about = "Query consumer progress or speed.",
+            long_about  = None
+        )]
+    QueryConsumer(ConsumerProgressSubCommand),
 }
 
 impl CommandExecute for ConsumerCommands {
@@ -106,6 +116,7 @@ impl CommandExecute for ConsumerCommands {
             ConsumerCommands::StartMonitoring(cmd) => cmd.execute(rpc_hook).await,
             ConsumerCommands::UpdateSubGroupList(cmd) => cmd.execute(rpc_hook).await,
             ConsumerCommands::UpdateSubGroup(value) => value.execute(rpc_hook).await,
+            ConsumerCommands::QueryConsumer(value) => value.execute(rpc_hook).await,
         }
     }
 }
