@@ -62,7 +62,7 @@ config.workspace = true
 dirs.workspace = true
 
 flate2    = { version = "1.1.9", features = ["zlib"], default-features = false }
-lz4_flex  = { version = "0.12", default-features = false }
+lz4_flex  = { version = "0.13", default-features = false }
 zstd      = "0.13"
 byteorder = "1.5.0"
 md5       = { package = "md-5", version = "0.10" }
