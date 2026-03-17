@@ -90,7 +90,7 @@ bytes              = "1.11.1"
 rand               = "0.10.0"
 num_cpus           = "1.17"
 
-config = "0.15.21"
+config = "0.15.22"
 
 parking_lot   = "0.12"
 dirs          = "6.0"
