@@ -539,6 +539,11 @@ impl CommandExecute for ClassificationTablePrint {
                 remark: "Reset consumer offset by timestamp (execute this command required client restart).",
             },
             Command {
+                category: "Offset",
+                command: "skipAccumulatedMessage",
+                remark: "Skip all messages that are accumulated (not consumed) currently.",
+            },
+            Command {
                 category: "Producer",
                 command: "producer",
                 remark: "Query producer's instances, connection, status, etc.",

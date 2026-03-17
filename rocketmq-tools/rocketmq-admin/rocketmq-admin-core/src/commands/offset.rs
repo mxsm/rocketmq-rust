@@ -16,6 +16,7 @@ mod clone_group_offset_sub_command;
 mod get_consumer_status_sub_command;
 mod reset_offset_by_time_old_sub_command;
 mod reset_offset_by_time_sub_command;
+mod skip_accumulated_message_sub_command;
 
 use std::sync::Arc;
 
@@ -27,6 +28,7 @@ use crate::commands::offset::clone_group_offset_sub_command::CloneGroupOffsetSub
 use crate::commands::offset::get_consumer_status_sub_command::GetConsumerStatusSubCommand;
 use crate::commands::offset::reset_offset_by_time_old_sub_command::ResetOffsetByTimeOldSubCommand;
 use crate::commands::offset::reset_offset_by_time_sub_command::ResetOffsetByTimeSubCommand;
+use crate::commands::offset::skip_accumulated_message_sub_command::SkipAccumulatedMessageSubCommand;
 use crate::commands::CommandExecute;
 
 #[derive(Subcommand)]
@@ -79,6 +81,13 @@ EXAMPLES:
         long_about = None,
     )]
     ResetOffsetByTimeOld(ResetOffsetByTimeOldSubCommand),
+
+    #[command(
+        name = "skipAccumulatedMessage",
+        about = "Skip all messages that are accumulated (not consumed) currently.",
+        long_about = None
+    )]
+    SkipAccumulatedMessage(SkipAccumulatedMessageSubCommand),
 }
 
 impl CommandExecute for OffsetCommands {
@@ -88,6 +97,7 @@ impl CommandExecute for OffsetCommands {
             OffsetCommands::GetConsumerStatus(cmd) => cmd.execute(rpc_hook).await,
             OffsetCommands::ResetOffsetByTime(cmd) => cmd.execute(rpc_hook).await,
             OffsetCommands::ResetOffsetByTimeOld(cmd) => cmd.execute(rpc_hook).await,
+            OffsetCommands::SkipAccumulatedMessage(cmd) => cmd.execute(rpc_hook).await,
         }
     }
 }
