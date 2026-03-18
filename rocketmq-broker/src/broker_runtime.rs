@@ -286,21 +286,6 @@ impl BrokerRuntime {
         if let Some(client_housekeeping_service) = self.inner.client_housekeeping_service.take() {
             client_housekeeping_service.shutdown();
         }
-        /* if let Some(message_store) = &mut self.inner.message_store {
-            message_store.shutdown()
-        }
-
-        self.inner.topic_config_manager().persist();
-        info!("[Broker shutdown]TopicConfigManager persist success");
-        let _ = self.inner.topic_config_manager_mut().stop();
-
-        if let Some(pull_request_hold_service) = self.inner.pull_request_hold_service.as_mut() {
-            pull_request_hold_service.shutdown();
-        }
-
-        if let Some(runtime) = self.broker_runtime.take() {
-            runtime.shutdown();
-        }*/
     }
 
     async fn unregister_broker(&mut self) {
