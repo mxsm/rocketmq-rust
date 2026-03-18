@@ -167,6 +167,10 @@ impl DefaultMQAdminExtImpl {
         self.inner = Some(inner);
     }
 
+    pub fn has_inner(&self) -> bool {
+        self.inner.is_some()
+    }
+
     pub async fn create_acl_with_acl_info(
         &self,
         broker_addr: CheetahString,

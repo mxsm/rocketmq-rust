@@ -253,28 +253,6 @@ impl DefaultMQAdminExt {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::DefaultMQAdminExt;
-    use std::time::Duration;
-
-    #[test]
-    fn admin_ext_builders_initialize_inner_impl() {
-        let default_admin = DefaultMQAdminExt::new();
-        assert!(default_admin.default_mqadmin_ext_impl.inner.is_some());
-
-        let timed_admin = DefaultMQAdminExt::with_timeout(Duration::from_secs(3));
-        assert!(timed_admin.default_mqadmin_ext_impl.inner.is_some());
-
-        let grouped_admin = DefaultMQAdminExt::with_admin_ext_group("dashboard-test");
-        assert!(grouped_admin.default_mqadmin_ext_impl.inner.is_some());
-
-        let grouped_timed_admin =
-            DefaultMQAdminExt::with_admin_ext_group_and_timeout("dashboard-test", Duration::from_secs(3));
-        assert!(grouped_timed_admin.default_mqadmin_ext_impl.inner.is_some());
-    }
-}
-
 impl Default for DefaultMQAdminExt {
     fn default() -> Self {
         Self::new()
@@ -1494,5 +1472,27 @@ impl MQAdminExt for DefaultMQAdminExt {
         _config_types: Vec<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
         unimplemented!("export_rocksdb_config_to_json not implemented yet")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DefaultMQAdminExt;
+    use std::time::Duration;
+
+    #[test]
+    fn admin_ext_builders_initialize_inner_impl() {
+        let default_admin = DefaultMQAdminExt::new();
+        assert!(default_admin.default_mqadmin_ext_impl.has_inner());
+
+        let timed_admin = DefaultMQAdminExt::with_timeout(Duration::from_secs(3));
+        assert!(timed_admin.default_mqadmin_ext_impl.has_inner());
+
+        let grouped_admin = DefaultMQAdminExt::with_admin_ext_group("dashboard-test");
+        assert!(grouped_admin.default_mqadmin_ext_impl.has_inner());
+
+        let grouped_timed_admin =
+            DefaultMQAdminExt::with_admin_ext_group_and_timeout("dashboard-test", Duration::from_secs(3));
+        assert!(grouped_timed_admin.default_mqadmin_ext_impl.has_inner());
     }
 }
