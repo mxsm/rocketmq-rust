@@ -60,11 +60,13 @@ use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 #[derive(Clone)]
 pub(crate) struct TopicManager {
     runtime: Arc<NameServerRuntimeState>,
+    admin_session: Arc<Mutex<Option<ManagedTopicAdmin>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -76,52 +78,182 @@ struct TopicBrokerConfigSnapshot {
 
 impl TopicManager {
     pub(crate) fn new(runtime: Arc<NameServerRuntimeState>) -> Self {
-        Self { runtime }
+        Self {
+            runtime,
+            admin_session: Arc::new(Mutex::new(None)),
+        }
     }
 
     pub(crate) async fn get_topic_list(&self, request: TopicListRequest) -> TopicResult<TopicListResponse> {
-        let mut managed = ManagedTopicAdmin::connect(&self.runtime).await?;
-        let result = self
-            .get_topic_list_with_admin(&mut managed.admin, &managed.snapshot, request)
-            .await;
-        managed.shutdown().await;
-        result
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut session_guard = self.admin_session.lock().await;
+            self.ensure_admin_session(&mut session_guard).await?;
+
+            let snapshot = session_guard
+                .as_ref()
+                .expect("topic admin session should be initialized before use")
+                .snapshot
+                .clone();
+            let result = {
+                let session = session_guard
+                    .as_mut()
+                    .expect("topic admin session should be initialized before use");
+                self.get_topic_list_with_admin(&mut session.admin, &snapshot, request.clone())
+                    .await
+            };
+
+            let should_reset = Self::should_reset_session(&result);
+            if should_reset {
+                self.reset_admin_session(&mut session_guard, "get_topic_list failed")
+                    .await;
+            }
+            drop(session_guard);
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `get_topic_list` after reconnect: {}", error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     pub(crate) async fn get_topic_route(&self, request: TopicQueryRequest) -> TopicResult<TopicRouteView> {
-        let mut managed = ManagedTopicAdmin::connect(&self.runtime).await?;
-        let result = self.get_topic_route_with_admin(&mut managed.admin, request).await;
-        managed.shutdown().await;
-        result
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut session_guard = self.admin_session.lock().await;
+            self.ensure_admin_session(&mut session_guard).await?;
+
+            let result = {
+                let session = session_guard
+                    .as_mut()
+                    .expect("topic admin session should be initialized before use");
+                self.get_topic_route_with_admin(&mut session.admin, request.clone())
+                    .await
+            };
+
+            let should_reset = Self::should_reset_session(&result);
+            if should_reset {
+                self.reset_admin_session(&mut session_guard, "get_topic_route failed")
+                    .await;
+            }
+            drop(session_guard);
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `get_topic_route` after reconnect: {}", error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     pub(crate) async fn get_topic_stats(&self, request: TopicQueryRequest) -> TopicResult<TopicStatusView> {
-        let mut managed = ManagedTopicAdmin::connect(&self.runtime).await?;
-        let result = self.get_topic_stats_with_admin(&mut managed.admin, request).await;
-        managed.shutdown().await;
-        result
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut session_guard = self.admin_session.lock().await;
+            self.ensure_admin_session(&mut session_guard).await?;
+
+            let result = {
+                let session = session_guard
+                    .as_mut()
+                    .expect("topic admin session should be initialized before use");
+                self.get_topic_stats_with_admin(&mut session.admin, request.clone())
+                    .await
+            };
+
+            let should_reset = Self::should_reset_session(&result);
+            if should_reset {
+                self.reset_admin_session(&mut session_guard, "get_topic_stats failed")
+                    .await;
+            }
+            drop(session_guard);
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `get_topic_stats` after reconnect: {}", error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     pub(crate) async fn get_topic_config(&self, request: TopicConfigQueryRequest) -> TopicResult<TopicConfigView> {
-        let mut managed = ManagedTopicAdmin::connect(&self.runtime).await?;
-        let result = self.get_topic_config_with_admin(&mut managed.admin, request).await;
-        managed.shutdown().await;
-        result
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut session_guard = self.admin_session.lock().await;
+            self.ensure_admin_session(&mut session_guard).await?;
+
+            let result = {
+                let session = session_guard
+                    .as_mut()
+                    .expect("topic admin session should be initialized before use");
+                self.get_topic_config_with_admin(&mut session.admin, request.clone())
+                    .await
+            };
+
+            let should_reset = Self::should_reset_session(&result);
+            if should_reset {
+                self.reset_admin_session(&mut session_guard, "get_topic_config failed")
+                    .await;
+            }
+            drop(session_guard);
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `get_topic_config` after reconnect: {}", error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     pub(crate) async fn create_or_update_topic(&self, request: TopicConfigRequest) -> TopicResult<TopicMutationResult> {
-        let mut managed = ManagedTopicAdmin::connect(&self.runtime).await?;
-        let result = self
-            .create_or_update_topic_with_admin(&mut managed.admin, request)
-            .await;
-        managed.shutdown().await;
+        let mut session_guard = self.admin_session.lock().await;
+        self.ensure_admin_session(&mut session_guard).await?;
+
+        let result = {
+            let session = session_guard
+                .as_mut()
+                .expect("topic admin session should be initialized before use");
+            self.create_or_update_topic_with_admin(&mut session.admin, request).await
+        };
+
+        if Self::should_reset_session(&result) {
+            self.reset_admin_session(&mut session_guard, "create_or_update_topic failed")
+                .await;
+        }
+        drop(session_guard);
+
         result
     }
 
     pub(crate) async fn delete_topic(&self, request: DeleteTopicRequest) -> TopicResult<TopicMutationResult> {
-        let mut managed = ManagedTopicAdmin::connect(&self.runtime).await?;
-        let result = self.delete_topic_with_admin(&mut managed.admin, request).await;
-        managed.shutdown().await;
+        let mut session_guard = self.admin_session.lock().await;
+        self.ensure_admin_session(&mut session_guard).await?;
+
+        let result = {
+            let session = session_guard
+                .as_mut()
+                .expect("topic admin session should be initialized before use");
+            self.delete_topic_with_admin(&mut session.admin, request).await
+        };
+
+        if Self::should_reset_session(&result) {
+            self.reset_admin_session(&mut session_guard, "delete_topic failed")
+                .await;
+        }
+        drop(session_guard);
+
         result
     }
 
@@ -129,22 +261,70 @@ impl TopicManager {
         &self,
         request: TopicQueryRequest,
     ) -> TopicResult<TopicConsumerGroupListResponse> {
-        let mut managed = ManagedTopicAdmin::connect(&self.runtime).await?;
-        let result = self
-            .get_topic_consumer_groups_with_admin(&mut managed.admin, request)
-            .await;
-        managed.shutdown().await;
-        result
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut session_guard = self.admin_session.lock().await;
+            self.ensure_admin_session(&mut session_guard).await?;
+
+            let result = {
+                let session = session_guard
+                    .as_mut()
+                    .expect("topic admin session should be initialized before use");
+                self.get_topic_consumer_groups_with_admin(&mut session.admin, request.clone())
+                    .await
+            };
+
+            let should_reset = Self::should_reset_session(&result);
+            if should_reset {
+                self.reset_admin_session(&mut session_guard, "get_topic_consumer_groups failed")
+                    .await;
+            }
+            drop(session_guard);
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `get_topic_consumer_groups` after reconnect: {}", error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     pub(crate) async fn get_topic_consumers(
         &self,
         request: TopicQueryRequest,
     ) -> TopicResult<TopicConsumerInfoResponse> {
-        let mut managed = ManagedTopicAdmin::connect(&self.runtime).await?;
-        let result = self.get_topic_consumers_with_admin(&mut managed.admin, request).await;
-        managed.shutdown().await;
-        result
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut session_guard = self.admin_session.lock().await;
+            self.ensure_admin_session(&mut session_guard).await?;
+
+            let result = {
+                let session = session_guard
+                    .as_mut()
+                    .expect("topic admin session should be initialized before use");
+                self.get_topic_consumers_with_admin(&mut session.admin, request.clone())
+                    .await
+            };
+
+            let should_reset = Self::should_reset_session(&result);
+            if should_reset {
+                self.reset_admin_session(&mut session_guard, "get_topic_consumers failed")
+                    .await;
+            }
+            drop(session_guard);
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `get_topic_consumers` after reconnect: {}", error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     pub(crate) async fn reset_consumer_offset(&self, request: ResetOffsetRequest) -> TopicResult<TopicMutationResult> {
@@ -162,12 +342,65 @@ impl TopicManager {
         &self,
         request: SendTopicMessageRequest,
     ) -> TopicResult<TopicSendMessageResult> {
-        let mut managed = ManagedTopicAdmin::connect(&self.runtime).await?;
-        let result = self
-            .send_topic_message_with_admin(&mut managed.admin, &managed.snapshot, request)
-            .await;
-        managed.shutdown().await;
+        let mut session_guard = self.admin_session.lock().await;
+        self.ensure_admin_session(&mut session_guard).await?;
+
+        let snapshot = session_guard
+            .as_ref()
+            .expect("topic admin session should be initialized before use")
+            .snapshot
+            .clone();
+        let result = {
+            let session = session_guard
+                .as_mut()
+                .expect("topic admin session should be initialized before use");
+            self.send_topic_message_with_admin(&mut session.admin, &snapshot, request)
+                .await
+        };
+
+        if Self::should_reset_session(&result) {
+            self.reset_admin_session(&mut session_guard, "send_topic_message failed")
+                .await;
+        }
+        drop(session_guard);
+
         result
+    }
+
+    async fn ensure_admin_session(&self, session_slot: &mut Option<ManagedTopicAdmin>) -> TopicResult<()> {
+        let generation = self.runtime.generation();
+        let needs_reconnect = session_slot
+            .as_ref()
+            .is_none_or(|session| !session.matches_generation(generation));
+
+        if needs_reconnect {
+            self.reset_admin_session(session_slot, "refreshing topic admin session")
+                .await;
+            let session = ManagedTopicAdmin::connect(&self.runtime).await?;
+            log::info!(
+                "Connected topic admin session for namesrv `{}` at generation {}",
+                session.snapshot.current_namesrv.as_deref().unwrap_or_default(),
+                session.generation
+            );
+            *session_slot = Some(session);
+        }
+
+        Ok(())
+    }
+
+    async fn reset_admin_session(&self, session_slot: &mut Option<ManagedTopicAdmin>, reason: &str) {
+        if let Some(mut session) = session_slot.take() {
+            log::info!(
+                "Shutting down topic admin session for namesrv `{}`: {}",
+                session.snapshot.current_namesrv.as_deref().unwrap_or_default(),
+                reason
+            );
+            session.shutdown().await;
+        }
+    }
+
+    fn should_reset_session<T>(result: &TopicResult<T>) -> bool {
+        matches!(result, Err(TopicError::RocketMQ(_)))
     }
 
     async fn get_topic_list_with_admin(
@@ -230,6 +463,8 @@ impl TopicManager {
             use_vip_channel: snapshot.use_vip_channel,
             use_tls: snapshot.use_tls,
         };
+
+        //log::info!("get_topic_list_with_admin response: {:?}", response);
         Ok(response)
     }
 
@@ -474,59 +709,78 @@ impl TopicManager {
         if request.consumer_group_list.is_empty() {
             return Err(TopicError::Validation("Select at least one consumer group.".into()));
         }
+        let operation_name = if skip_accumulate {
+            "skip_message_accumulate"
+        } else {
+            "reset_consumer_offset"
+        };
 
-        let mut managed = ManagedTopicAdmin::connect(&self.runtime).await?;
-        let mut affected_queues = 0usize;
-        for consumer_group in &request.consumer_group_list {
-            let offsets = managed
-                .admin
-                .reset_offset_by_timestamp(
-                    None,
-                    request.topic.clone().into(),
-                    consumer_group.clone().into(),
-                    request.reset_time as u64,
-                    request.force,
-                )
-                .await;
-            match offsets {
-                Ok(offsets) => {
-                    affected_queues += offsets.len();
+        let mut session_guard = self.admin_session.lock().await;
+        self.ensure_admin_session(&mut session_guard).await?;
+
+        let result = {
+            let session = session_guard
+                .as_mut()
+                .expect("topic admin session should be initialized before use");
+            let mut affected_queues = 0usize;
+            for consumer_group in &request.consumer_group_list {
+                let offsets = session
+                    .admin
+                    .reset_offset_by_timestamp(
+                        None,
+                        request.topic.clone().into(),
+                        consumer_group.clone().into(),
+                        request.reset_time as u64,
+                        request.force,
+                    )
+                    .await;
+                match offsets {
+                    Ok(offsets) => {
+                        affected_queues += offsets.len();
+                    }
+                    Err(error) if is_consumer_not_online_error(&error) => {
+                        let rollback_stats = session
+                            .admin
+                            .reset_offset_by_timestamp_old(
+                                None,
+                                consumer_group.clone().into(),
+                                request.topic.clone().into(),
+                                request.reset_time as u64,
+                                request.force,
+                            )
+                            .await
+                            .map_err(|fallback_error| TopicError::RocketMQ(fallback_error.to_string()))?;
+                        affected_queues += rollback_stats.len();
+                    }
+                    Err(error) => return Err(TopicError::RocketMQ(error.to_string())),
                 }
-                Err(error) if is_consumer_not_online_error(&error) => {
-                    let rollback_stats = managed
-                        .admin
-                        .reset_offset_by_timestamp_old(
-                            None,
-                            consumer_group.clone().into(),
-                            request.topic.clone().into(),
-                            request.reset_time as u64,
-                            request.force,
-                        )
-                        .await
-                        .map_err(|fallback_error| TopicError::RocketMQ(fallback_error.to_string()))?;
-                    affected_queues += rollback_stats.len();
-                }
-                Err(error) => return Err(TopicError::RocketMQ(error.to_string())),
             }
-        }
-        managed.shutdown().await;
 
-        Ok(TopicMutationResult {
-            success: true,
-            message: if skip_accumulate {
-                format!(
-                    "Skipped accumulated messages for {} consumer group(s).",
-                    request.consumer_group_list.len()
-                )
-            } else {
-                format!(
-                    "Reset offsets for {} consumer group(s).",
-                    request.consumer_group_list.len()
-                )
-            },
-            topic_name: Some(request.topic),
-            affected_queues: Some(affected_queues),
-        })
+            Ok(TopicMutationResult {
+                success: true,
+                message: if skip_accumulate {
+                    format!(
+                        "Skipped accumulated messages for {} consumer group(s).",
+                        request.consumer_group_list.len()
+                    )
+                } else {
+                    format!(
+                        "Reset offsets for {} consumer group(s).",
+                        request.consumer_group_list.len()
+                    )
+                },
+                topic_name: Some(request.topic.clone()),
+                affected_queues: Some(affected_queues),
+            })
+        };
+
+        if Self::should_reset_session(&result) {
+            self.reset_admin_session(&mut session_guard, &format!("{operation_name} failed"))
+                .await;
+        }
+        drop(session_guard);
+
+        result
     }
 
     async fn send_topic_message_with_admin(

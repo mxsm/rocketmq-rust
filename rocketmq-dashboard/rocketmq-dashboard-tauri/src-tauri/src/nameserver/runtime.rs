@@ -66,6 +66,11 @@ impl NameServerRuntimeState {
             .clone()
     }
 
+    pub(crate) fn snapshot_and_generation(&self) -> (NameServerConfigSnapshot, u64) {
+        let state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        (state.snapshot.clone(), state.generation)
+    }
+
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn generation(&self) -> u64 {
         self.state

@@ -25,11 +25,12 @@ use uuid::Uuid;
 pub(crate) struct ManagedTopicAdmin {
     pub(crate) admin: DefaultMQAdminExt,
     pub(crate) snapshot: NameServerConfigSnapshot,
+    pub(crate) generation: u64,
 }
 
 impl ManagedTopicAdmin {
     pub(crate) async fn connect(runtime: &Arc<NameServerRuntimeState>) -> TopicResult<Self> {
-        let snapshot = runtime.snapshot();
+        let (snapshot, generation) = runtime.snapshot_and_generation();
         let current_namesrv = snapshot.current_namesrv.clone().ok_or_else(|| {
             TopicError::Configuration("No active NameServer is configured. Add and select a NameServer first.".into())
         })?;
@@ -50,7 +51,15 @@ impl ManagedTopicAdmin {
             .await
             .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
 
-        Ok(Self { admin, snapshot })
+        Ok(Self {
+            admin,
+            snapshot,
+            generation,
+        })
+    }
+
+    pub(crate) fn matches_generation(&self, generation: u64) -> bool {
+        self.generation == generation
     }
 
     pub(crate) async fn shutdown(&mut self) {
