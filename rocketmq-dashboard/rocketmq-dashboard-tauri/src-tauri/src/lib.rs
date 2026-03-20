@@ -96,6 +96,7 @@ pub fn run() {
             cluster::commands::get_cluster_home_page,
             cluster::commands::get_cluster_broker_config,
             cluster::commands::get_cluster_broker_status,
+            producer::commands::get_producer_topic_options,
             producer::commands::query_producer_connections,
             topic::commands::get_topic_list,
             topic::commands::get_topic_route,

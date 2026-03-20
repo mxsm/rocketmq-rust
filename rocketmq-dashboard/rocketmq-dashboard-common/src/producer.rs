@@ -17,6 +17,10 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProducerTopicOptionsRequest {}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProducerConnectionQueryRequest {
@@ -27,6 +31,15 @@ pub struct ProducerConnectionQueryRequest {
 #[cfg(test)]
 mod tests {
     use super::ProducerConnectionQueryRequest;
+    use super::ProducerTopicOptionsRequest;
+
+    #[test]
+    fn producer_topic_options_request_serializes_to_empty_object() {
+        let json =
+            serde_json::to_string(&ProducerTopicOptionsRequest {}).expect("serialize producer topic options request");
+
+        assert_eq!(json, "{}");
+    }
 
     #[test]
     fn producer_connection_query_request_uses_expected_field_names() {

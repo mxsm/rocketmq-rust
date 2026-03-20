@@ -39,6 +39,15 @@ impl std::error::Error for ProducerError {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct ProducerTopicOptionsView {
+    pub(crate) topics: Vec<String>,
+    pub(crate) current_namesrv: String,
+    pub(crate) use_vip_channel: bool,
+    pub(crate) use_tls: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct ProducerConnectionItem {
     pub(crate) client_id: String,
     pub(crate) client_addr: String,

@@ -18,10 +18,13 @@ use crate::producer::types::ProducerConnectionItem;
 use crate::producer::types::ProducerConnectionView;
 use crate::producer::types::ProducerError;
 use crate::producer::types::ProducerResult;
+use crate::producer::types::ProducerTopicOptionsView;
 use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_common::common::mq_version::RocketMqVersion;
+use rocketmq_dashboard_common::NameServerConfigSnapshot;
 use rocketmq_dashboard_common::ProducerConnectionQueryRequest;
+use rocketmq_dashboard_common::ProducerTopicOptionsRequest;
 use rocketmq_remoting::protocol::body::producer_connection::ProducerConnection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -71,6 +74,46 @@ impl ProducerManager {
                 Ok(response) => return Ok(response),
                 Err(error) if should_reset && attempt < 2 => {
                     log::warn!("Retrying `query_producer_connections` after reconnect: {}", error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    pub(crate) async fn get_producer_topic_options(
+        &self,
+        _request: ProducerTopicOptionsRequest,
+    ) -> ProducerResult<ProducerTopicOptionsView> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut session_guard = self.admin_session.lock().await;
+            self.ensure_admin_session(&mut session_guard).await?;
+
+            let snapshot = session_guard
+                .as_ref()
+                .expect("producer admin session should be initialized before use")
+                .snapshot
+                .clone();
+            let result = {
+                let session = session_guard
+                    .as_mut()
+                    .expect("producer admin session should be initialized before use");
+                self.get_producer_topic_options_with_admin(&mut session.admin, &snapshot)
+                    .await
+            };
+
+            let should_reset = Self::should_reset_session(&result);
+            if should_reset {
+                self.reset_admin_session(&mut session_guard, "get_producer_topic_options failed")
+                    .await;
+            }
+            drop(session_guard);
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `get_producer_topic_options` after reconnect: {}", error);
                 }
                 Err(error) => return Err(error),
             }
@@ -135,6 +178,26 @@ impl ProducerManager {
 
         Ok(build_connection_view(request, connection))
     }
+
+    async fn get_producer_topic_options_with_admin(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        snapshot: &NameServerConfigSnapshot,
+    ) -> ProducerResult<ProducerTopicOptionsView> {
+        let topic_list = admin
+            .fetch_all_topic_list()
+            .await
+            .map_err(|error| ProducerError::RocketMQ(error.to_string()))?;
+        let mut topics: Vec<String> = topic_list.topic_list.iter().map(|topic| topic.to_string()).collect();
+        topics.sort();
+
+        Ok(ProducerTopicOptionsView {
+            topics,
+            current_namesrv: snapshot.current_namesrv.clone().unwrap_or_default(),
+            use_vip_channel: snapshot.use_vip_channel,
+            use_tls: snapshot.use_tls,
+        })
+    }
 }
 
 fn build_connection_view(
@@ -166,6 +229,7 @@ fn build_connection_view(
 
 #[cfg(test)]
 mod tests {
+    use super::ProducerTopicOptionsView;
     use super::build_connection_view;
     use cheetah_string::CheetahString;
     use rocketmq_common::common::mq_version::RocketMqVersion;
@@ -212,5 +276,23 @@ mod tests {
 
     const fn ordinal_for_v5_0_0() -> i32 {
         433
+    }
+
+    #[test]
+    fn producer_topic_options_view_can_hold_unsuffixed_system_topics() {
+        let view = ProducerTopicOptionsView {
+            topics: vec![
+                "TBW102".to_string(),
+                "%RETRY%group-a".to_string(),
+                "TopicTest".to_string(),
+            ],
+            current_namesrv: "127.0.0.1:9876".to_string(),
+            use_vip_channel: true,
+            use_tls: false,
+        };
+
+        assert_eq!(view.topics[0], "TBW102");
+        assert_eq!(view.topics[1], "%RETRY%group-a");
+        assert_eq!(view.topics[2], "TopicTest");
     }
 }

@@ -14,8 +14,21 @@
 
 use crate::producer::service::ProducerManager;
 use crate::producer::types::ProducerConnectionView;
+use crate::producer::types::ProducerTopicOptionsView;
 use rocketmq_dashboard_common::ProducerConnectionQueryRequest;
+use rocketmq_dashboard_common::ProducerTopicOptionsRequest;
 use tauri::State;
+
+#[tauri::command]
+pub async fn get_producer_topic_options(
+    request: ProducerTopicOptionsRequest,
+    producer_manager: State<'_, ProducerManager>,
+) -> Result<ProducerTopicOptionsView, String> {
+    producer_manager
+        .get_producer_topic_options(request)
+        .await
+        .map_err(|error| error.to_string())
+}
 
 #[tauri::command]
 pub async fn query_producer_connections(
