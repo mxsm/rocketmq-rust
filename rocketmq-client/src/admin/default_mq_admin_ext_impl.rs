@@ -34,6 +34,7 @@ use crate::implementation::mq_client_api_impl::MQClientAPIImpl;
 use crate::implementation::mq_client_manager::MQClientManager;
 use cheetah_string::CheetahString;
 use rand::seq::IndexedRandom;
+use rocketmq_common::common::attribute::attribute_parser::AttributeParser;
 use rocketmq_common::common::base::plain_access_config::PlainAccessConfig;
 use rocketmq_common::common::base::service_state::ServiceState;
 use rocketmq_common::common::config::TopicConfig;
@@ -134,6 +135,26 @@ fn get_system_group_set() -> &'static HashSet<CheetahString> {
 
 const SOCKS_PROXY_JSON: &str = "socksProxyJson";
 const NAMESPACE_ORDER_TOPIC_CONFIG: &str = "ORDER_TOPIC_CONFIG";
+
+fn encode_topic_attributes(attributes: &HashMap<CheetahString, CheetahString>) -> Option<CheetahString> {
+    if attributes.is_empty() {
+        return None;
+    }
+
+    let serialized = AttributeParser::parse_to_string(
+        &attributes
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect::<HashMap<String, String>>(),
+    );
+
+    if serialized.is_empty() {
+        None
+    } else {
+        Some(serialized.into())
+    }
+}
+
 pub struct DefaultMQAdminExtImpl {
     service_state: ServiceState,
     client_instance: Option<ArcMut<MQClientInstance>>,
@@ -544,13 +565,7 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
             .topic_name
             .clone()
             .ok_or_else(|| rocketmq_error::RocketMQError::IllegalArgument("Topic name is required".into()))?;
-        let attributes = if config.attributes.is_empty() {
-            None
-        } else {
-            Some(CheetahString::from(serde_json::to_string(&config.attributes).map_err(
-                |error| rocketmq_error::RocketMQError::Internal(error.to_string()),
-            )?))
-        };
+        let attributes = encode_topic_attributes(&config.attributes);
         let request_header = CreateTopicRequestHeader {
             topic,
             default_topic: CheetahString::from_static_str(TopicValidator::AUTO_CREATE_TOPIC_KEY_TOPIC),
@@ -2588,6 +2603,11 @@ fn merge_order_conf_entries(existing: &str, value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use cheetah_string::CheetahString;
+
+    use super::encode_topic_attributes;
     use super::merge_order_conf_entries;
 
     #[test]
@@ -2600,5 +2620,15 @@ mod tests {
     fn merge_order_conf_entries_adds_new_broker_value() {
         let merged = merge_order_conf_entries("broker-a:4", "broker-b:8");
         assert_eq!(merged, "broker-a:4;broker-b:8");
+    }
+
+    #[test]
+    fn encode_topic_attributes_matches_java_attribute_parser_format() {
+        let mut attributes = HashMap::<CheetahString, CheetahString>::new();
+        attributes.insert("+message.type".into(), "NORMAL".into());
+
+        let encoded = encode_topic_attributes(&attributes);
+
+        assert_eq!(encoded, Some(CheetahString::from("+message.type=NORMAL")));
     }
 }

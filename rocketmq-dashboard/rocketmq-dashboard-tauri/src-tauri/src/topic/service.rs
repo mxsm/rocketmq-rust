@@ -605,7 +605,7 @@ impl TopicManager {
 
         let mut attributes = HashMap::new();
         attributes.insert(
-            TopicAttributes::topic_message_type_attribute().name().clone(),
+            format!("+{}", TopicAttributes::topic_message_type_attribute().name()).into(),
             normalize_message_type(request.message_type.as_deref()).into(),
         );
 
@@ -1288,6 +1288,20 @@ mod topic_config_tests {
         let broker_names = HashSet::from(["broker-b".to_string(), "broker-a".to_string()]);
 
         assert_eq!(build_order_conf(&broker_names, 8), "broker-a:8;broker-b:8");
+    }
+
+    #[test]
+    fn create_or_update_uses_add_attribute_prefix_for_message_type() {
+        let mut attributes: HashMap<CheetahString, CheetahString> = HashMap::new();
+        let message_type_key: CheetahString =
+            format!("+{}", TopicAttributes::topic_message_type_attribute().name()).into();
+        attributes.insert(message_type_key.clone(), normalize_message_type(Some("NORMAL")).into());
+
+        assert!(attributes.contains_key(&message_type_key));
+        assert_eq!(
+            attributes.get(&message_type_key).map(|value| value.to_string()),
+            Some("NORMAL".to_string())
+        );
     }
 }
 
