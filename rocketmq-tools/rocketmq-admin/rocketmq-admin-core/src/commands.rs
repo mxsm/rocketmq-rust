@@ -485,6 +485,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Message",
+                command: "queryMsgByOffset",
+                remark: "Query Message by offset.",
+            },
+            Command {
+                category: "Message",
                 command: "sendMessage",
                 remark: "Send a message.",
             },

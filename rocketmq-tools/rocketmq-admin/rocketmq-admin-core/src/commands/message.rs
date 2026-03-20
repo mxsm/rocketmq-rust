@@ -19,6 +19,7 @@ pub mod print_message_sub_command;
 pub mod print_msg_by_queue_sub_command;
 pub mod query_msg_by_id_sub_command;
 pub mod query_msg_by_key_sub_command;
+pub mod query_msg_by_offset_sub_command;
 pub mod send_message_sub_command;
 
 use std::sync::Arc;
@@ -34,6 +35,7 @@ use crate::commands::message::print_message_sub_command::PrintMessageSubCommand;
 use crate::commands::message::print_msg_by_queue_sub_command::PrintMsgByQueueSubCommand;
 use crate::commands::message::query_msg_by_id_sub_command::QueryMsgByIdSubCommand;
 use crate::commands::message::query_msg_by_key_sub_command::QueryMsgByKeySubCommand;
+use crate::commands::message::query_msg_by_offset_sub_command::QueryMsgByOffsetSubCommand;
 use crate::commands::message::send_message_sub_command::SendMessageSubCommand;
 use crate::commands::CommandExecute;
 
@@ -88,6 +90,13 @@ pub enum MessageCommands {
     QueryMsgByKey(QueryMsgByKeySubCommand),
 
     #[command(
+        name = "queryMsgByOffset",
+        about = "Query Message by offset.",
+        long_about = None,
+    )]
+    QueryMsgByOffset(QueryMsgByOffsetSubCommand),
+
+    #[command(
         name = "sendMessage",
         about = "Send a message.",
         long_about = None,
@@ -105,6 +114,7 @@ impl CommandExecute for MessageCommands {
             MessageCommands::PrintMsgByQueue(value) => value.execute(rpc_hook).await,
             MessageCommands::QueryMsgById(value) => value.execute(rpc_hook).await,
             MessageCommands::QueryMsgByKey(value) => value.execute(rpc_hook).await,
+            MessageCommands::QueryMsgByOffset(value) => value.execute(rpc_hook).await,
             MessageCommands::SendMessage(value) => value.execute(rpc_hook).await,
         }
     }
