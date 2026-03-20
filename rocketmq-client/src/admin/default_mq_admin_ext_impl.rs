@@ -847,14 +847,8 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         let mut result = ConsumerConnection::new();
         let timeout = self.timeout_millis.as_millis() as u64;
 
-        if let Some(broker_addr) = broker_addr {
-            result = self
-                .client_instance
-                .as_ref()
-                .unwrap()
-                .get_mq_client_api_impl()
-                .get_consumer_connection_list(broker_addr.as_str(), consumer_group.clone(), timeout)
-                .await?;
+        let selected_addr = if let Some(broker_addr) = broker_addr {
+            Some(broker_addr)
         } else {
             let topic = CheetahString::from_string(mix_all::get_retry_topic(consumer_group.as_str()));
             let topic_route_data = self
@@ -865,22 +859,22 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
                 .get_topic_route_info_from_name_server(&topic, timeout)
                 .await?;
 
-            if let Some(topic_route_data) = topic_route_data {
-                let brokers = &topic_route_data.broker_datas;
-                if !brokers.is_empty() {
-                    if let Some(broker_data) = brokers.choose(&mut rand::rng()) {
-                        if let Some(addr) = broker_data.select_broker_addr() {
-                            result = self
-                                .client_instance
-                                .as_ref()
-                                .unwrap()
-                                .get_mq_client_api_impl()
-                                .get_consumer_connection_list(addr.as_str(), consumer_group.clone(), timeout)
-                                .await?;
-                        }
-                    }
-                }
-            }
+            topic_route_data.and_then(|topic_route_data| {
+                topic_route_data
+                    .broker_datas
+                    .choose(&mut rand::rng())
+                    .and_then(|broker_data| broker_data.select_broker_addr())
+            })
+        };
+
+        if let Some(broker_addr) = selected_addr {
+            result = self
+                .client_instance
+                .as_ref()
+                .unwrap()
+                .get_mq_client_api_impl()
+                .get_consumer_connection_list(broker_addr.as_str(), consumer_group.clone(), timeout)
+                .await?;
         }
 
         if result.get_connection_set().is_empty() {

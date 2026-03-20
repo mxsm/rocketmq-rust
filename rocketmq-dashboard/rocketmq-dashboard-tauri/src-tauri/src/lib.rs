@@ -16,6 +16,7 @@
 
 mod auth;
 mod cluster;
+mod consumer;
 mod nameserver;
 mod producer;
 mod topic;
@@ -67,6 +68,7 @@ pub fn run() {
             ));
             let nameserver_manager = nameserver::NameServerManager::new(nameserver_db, nameserver_runtime.clone())?;
             let cluster_manager = cluster::ClusterManager::new(nameserver_runtime.clone());
+            let consumer_manager = consumer::ConsumerManager::new(nameserver_runtime.clone());
             let producer_manager = producer::ProducerManager::new(nameserver_runtime.clone());
             let topic_manager = topic::TopicManager::new(nameserver_runtime.clone());
 
@@ -75,6 +77,7 @@ pub fn run() {
             app.manage(nameserver_runtime);
             app.manage(nameserver_manager);
             app.manage(cluster_manager);
+            app.manage(consumer_manager);
             app.manage(producer_manager);
             app.manage(topic_manager);
 
@@ -96,6 +99,8 @@ pub fn run() {
             cluster::commands::get_cluster_home_page,
             cluster::commands::get_cluster_broker_config,
             cluster::commands::get_cluster_broker_status,
+            consumer::commands::query_consumer_groups,
+            consumer::commands::refresh_consumer_group,
             producer::commands::get_producer_topic_options,
             producer::commands::query_producer_connections,
             topic::commands::get_topic_list,
