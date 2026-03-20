@@ -1,4 +1,4 @@
-// Copyright 2025 The RocketMQ Rust Authors
+// Copyright 2023 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,21 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Common shared code for RocketMQ Dashboard implementations
-//!
-//! This crate provides shared functionality, data models, and business logic
-//! that can be reused across different dashboard implementations (GPUI, Tauri, etc.)
+pub(crate) mod admin;
+pub(crate) mod commands;
+pub(crate) mod service;
+pub(crate) mod types;
 
-pub mod api;
-pub mod cluster;
-pub mod models;
-pub mod nameserver;
-pub mod service;
-pub mod topic;
-
-pub use api::*;
-pub use cluster::*;
-pub use models::*;
-pub use nameserver::*;
-pub use service::*;
-pub use topic::*;
+pub(crate) use service::ClusterManager;

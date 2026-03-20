@@ -293,14 +293,16 @@ impl MQAdminExt for DefaultMQAdminExt {
         broker_addr: CheetahString,
         properties: HashMap<CheetahString, CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .update_broker_config(broker_addr, properties)
+            .await
     }
 
     async fn get_broker_config(
         &self,
         broker_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, CheetahString>> {
-        todo!()
+        self.default_mqadmin_ext_impl.get_broker_config(broker_addr).await
     }
 
     async fn create_and_update_topic_config(

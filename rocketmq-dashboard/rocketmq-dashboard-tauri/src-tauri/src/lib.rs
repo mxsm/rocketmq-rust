@@ -15,6 +15,7 @@
 #![recursion_limit = "512"]
 
 mod auth;
+mod cluster;
 mod nameserver;
 mod topic;
 
@@ -64,12 +65,14 @@ pub fn run() {
                 nameserver_store.load_snapshot()?,
             ));
             let nameserver_manager = nameserver::NameServerManager::new(nameserver_db, nameserver_runtime.clone())?;
+            let cluster_manager = cluster::ClusterManager::new(nameserver_runtime.clone());
             let topic_manager = topic::TopicManager::new(nameserver_runtime.clone());
 
             app.manage(auth_service);
             app.manage(auth::SessionState::default());
             app.manage(nameserver_runtime);
             app.manage(nameserver_manager);
+            app.manage(cluster_manager);
             app.manage(topic_manager);
 
             Ok(())
@@ -87,6 +90,9 @@ pub fn run() {
             nameserver::commands::delete_name_server,
             nameserver::commands::update_vip_channel,
             nameserver::commands::update_use_tls,
+            cluster::commands::get_cluster_home_page,
+            cluster::commands::get_cluster_broker_config,
+            cluster::commands::get_cluster_broker_status,
             topic::commands::get_topic_list,
             topic::commands::get_topic_route,
             topic::commands::get_topic_stats,
