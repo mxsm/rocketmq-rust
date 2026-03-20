@@ -103,6 +103,7 @@ pub fn run() {
             consumer::commands::refresh_consumer_group,
             consumer::commands::query_consumer_connection,
             consumer::commands::query_consumer_topic_detail,
+            consumer::commands::query_consumer_config,
             producer::commands::get_producer_topic_options,
             producer::commands::query_producer_connections,
             topic::commands::get_topic_list,

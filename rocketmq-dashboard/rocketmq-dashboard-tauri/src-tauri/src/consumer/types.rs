@@ -135,3 +135,33 @@ pub(crate) struct ConsumerTopicDetailView {
     pub(crate) total_diff: i64,
     pub(crate) topics: Vec<ConsumerTopicDetailItem>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConsumerConfigAttributeItem {
+    pub(crate) key: String,
+    pub(crate) value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConsumerConfigView {
+    pub(crate) consumer_group: String,
+    pub(crate) broker_name: String,
+    pub(crate) broker_address: String,
+    pub(crate) consume_enable: bool,
+    pub(crate) consume_from_min_enable: bool,
+    pub(crate) consume_broadcast_enable: bool,
+    pub(crate) consume_message_orderly: bool,
+    pub(crate) retry_queue_nums: i32,
+    pub(crate) retry_max_times: i32,
+    pub(crate) broker_id: u64,
+    pub(crate) which_broker_when_consume_slowly: u64,
+    pub(crate) notify_consumer_ids_changed_enable: bool,
+    pub(crate) group_sys_flag: i32,
+    pub(crate) consume_timeout_minute: i32,
+    pub(crate) group_retry_policy_json: String,
+    pub(crate) subscription_topic_count: usize,
+    pub(crate) subscription_topics: Vec<String>,
+    pub(crate) attributes: Vec<ConsumerConfigAttributeItem>,
+}

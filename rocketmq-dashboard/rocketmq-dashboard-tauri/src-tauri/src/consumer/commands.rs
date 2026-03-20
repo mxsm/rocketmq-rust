@@ -13,10 +13,12 @@
 // limitations under the License.
 
 use crate::consumer::service::ConsumerManager;
+use crate::consumer::types::ConsumerConfigView;
 use crate::consumer::types::ConsumerConnectionView;
 use crate::consumer::types::ConsumerGroupListItem;
 use crate::consumer::types::ConsumerGroupListResponse;
 use crate::consumer::types::ConsumerTopicDetailView;
+use rocketmq_dashboard_common::ConsumerConfigQueryRequest;
 use rocketmq_dashboard_common::ConsumerConnectionQueryRequest;
 use rocketmq_dashboard_common::ConsumerGroupListRequest;
 use rocketmq_dashboard_common::ConsumerGroupRefreshRequest;
@@ -63,6 +65,17 @@ pub async fn query_consumer_topic_detail(
 ) -> Result<ConsumerTopicDetailView, String> {
     consumer_manager
         .query_consumer_topic_detail(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn query_consumer_config(
+    request: ConsumerConfigQueryRequest,
+    consumer_manager: State<'_, ConsumerManager>,
+) -> Result<ConsumerConfigView, String> {
+    consumer_manager
+        .query_consumer_config(request)
         .await
         .map_err(|error| error.to_string())
 }

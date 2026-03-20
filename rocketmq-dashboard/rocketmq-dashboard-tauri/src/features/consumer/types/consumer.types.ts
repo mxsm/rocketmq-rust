@@ -18,6 +18,11 @@ export interface ConsumerTopicDetailQueryRequest {
     address?: string;
 }
 
+export interface ConsumerConfigQueryRequest {
+    consumerGroup: string;
+    address?: string;
+}
+
 export interface ConsumerGroupListSummary {
     totalGroups: number;
     normalGroups: number;
@@ -97,4 +102,30 @@ export interface ConsumerTopicDetailView {
     topicCount: number;
     totalDiff: number;
     topics: ConsumerTopicDetailItem[];
+}
+
+export interface ConsumerConfigAttributeItem {
+    key: string;
+    value: string;
+}
+
+export interface ConsumerConfigView {
+    consumerGroup: string;
+    brokerName: string;
+    brokerAddress: string;
+    consumeEnable: boolean;
+    consumeFromMinEnable: boolean;
+    consumeBroadcastEnable: boolean;
+    consumeMessageOrderly: boolean;
+    retryQueueNums: number;
+    retryMaxTimes: number;
+    brokerId: number;
+    whichBrokerWhenConsumeSlowly: number;
+    notifyConsumerIdsChangedEnable: boolean;
+    groupSysFlag: number;
+    consumeTimeoutMinute: number;
+    groupRetryPolicyJson: string;
+    subscriptionTopicCount: number;
+    subscriptionTopics: string[];
+    attributes: ConsumerConfigAttributeItem[];
 }

@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use crate::consumer::admin::ManagedConsumerAdmin;
+use crate::consumer::types::ConsumerConfigAttributeItem;
+use crate::consumer::types::ConsumerConfigView;
 use crate::consumer::types::ConsumerConnectionItem;
 use crate::consumer::types::ConsumerConnectionView;
 use crate::consumer::types::ConsumerError;
@@ -32,6 +34,7 @@ use rocketmq_common::common::consumer::consume_from_where::ConsumeFromWhere;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mq_version::RocketMqVersion;
+use rocketmq_dashboard_common::ConsumerConfigQueryRequest;
 use rocketmq_dashboard_common::ConsumerConnectionQueryRequest;
 use rocketmq_dashboard_common::ConsumerGroupListRequest;
 use rocketmq_dashboard_common::ConsumerGroupRefreshRequest;
@@ -41,6 +44,10 @@ use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
 use rocketmq_remoting::protocol::admin::offset_wrapper::OffsetWrapper;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_remoting::protocol::body::consumer_connection::ConsumerConnection;
+use rocketmq_remoting::protocol::subscription::group_retry_policy::GroupRetryPolicy;
+use rocketmq_remoting::protocol::subscription::group_retry_policy_type::GroupRetryPolicyType;
+use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
+use serde_json::json;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -220,6 +227,43 @@ impl ConsumerManager {
         }
     }
 
+    pub(crate) async fn query_consumer_config(
+        &self,
+        request: ConsumerConfigQueryRequest,
+    ) -> ConsumerResult<ConsumerConfigView> {
+        let group_name = validate_consumer_group_name(&request.consumer_group)?;
+
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut session_guard = self.admin_session.lock().await;
+            self.ensure_admin_session(&mut session_guard).await?;
+
+            let result = {
+                let session = session_guard
+                    .as_mut()
+                    .expect("consumer admin session should be initialized before use");
+                self.query_consumer_config_with_admin(&mut session.admin, &group_name, request.clone())
+                    .await
+            };
+
+            let should_reset = Self::should_reset_session(&result);
+            if should_reset {
+                self.reset_admin_session(&mut session_guard, "query_consumer_config failed")
+                    .await;
+            }
+            drop(session_guard);
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) if should_reset && attempt < 2 => {
+                    log::warn!("Retrying `query_consumer_config` after reconnect: {}", error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
     async fn ensure_admin_session(&self, session_slot: &mut Option<ManagedConsumerAdmin>) -> ConsumerResult<()> {
         let generation = self.runtime.generation();
         let needs_reconnect = session_slot
@@ -366,6 +410,51 @@ impl ConsumerManager {
             raw_group_name,
             stats,
             &queue_client_map,
+        ))
+    }
+
+    async fn query_consumer_config_with_admin(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        raw_group_name: &str,
+        request: ConsumerConfigQueryRequest,
+    ) -> ConsumerResult<ConsumerConfigView> {
+        let cluster_info = admin
+            .examine_broker_cluster_info()
+            .await
+            .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?;
+
+        let broker_address = match normalize_address(request.address.as_deref()) {
+            Some(address) => address,
+            None => {
+                let group_map = collect_consumer_group_meta(admin, &cluster_info).await?;
+                let meta = group_map.get(raw_group_name).ok_or_else(|| {
+                    ConsumerError::Validation(format!(
+                        "Consumer group `{}` was not found in the current cluster view.",
+                        raw_group_name
+                    ))
+                })?;
+                resolve_first_consumer_broker_address(meta).ok_or_else(|| {
+                    ConsumerError::Validation(format!(
+                        "No broker address was found for consumer group `{}`.",
+                        raw_group_name
+                    ))
+                })?
+            }
+        };
+
+        let config = admin
+            .examine_subscription_group_config(broker_address.clone(), raw_group_name.into())
+            .await
+            .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?;
+
+        let broker_name = resolve_broker_name_by_address(&cluster_info, broker_address.as_str()).unwrap_or_default();
+
+        Ok(build_consumer_config_view(
+            raw_group_name,
+            broker_name,
+            broker_address.to_string(),
+            &config,
         ))
     }
 }
@@ -538,6 +627,14 @@ fn parse_addresses(address: Option<&str>) -> Vec<CheetahString> {
         .collect()
 }
 
+fn resolve_first_consumer_broker_address(meta: &ConsumerGroupMeta) -> Option<CheetahString> {
+    let mut broker_addresses: Vec<&String> = meta.broker_addresses.iter().collect();
+    broker_addresses.sort();
+    broker_addresses
+        .first()
+        .map(|value| CheetahString::from(value.as_str()))
+}
+
 fn first_address(address: Option<&str>) -> Option<CheetahString> {
     parse_addresses(address).into_iter().next()
 }
@@ -650,6 +747,104 @@ fn build_consumer_connection_view(raw_group_name: &str, connection: ConsumerConn
     }
 }
 
+fn build_consumer_config_view(
+    raw_group_name: &str,
+    broker_name: String,
+    broker_address: String,
+    config: &SubscriptionGroupConfig,
+) -> ConsumerConfigView {
+    let mut subscription_topics: Vec<String> = config
+        .subscription_data_set()
+        .into_iter()
+        .flat_map(|items| items.iter())
+        .map(|item| item.topic().to_string())
+        .collect();
+    subscription_topics.sort();
+    subscription_topics.dedup();
+
+    let mut attributes: Vec<ConsumerConfigAttributeItem> = config
+        .attributes()
+        .iter()
+        .map(|(key, value)| ConsumerConfigAttributeItem {
+            key: key.to_string(),
+            value: value.to_string(),
+        })
+        .collect();
+    attributes.sort_by(|left, right| left.key.cmp(&right.key));
+
+    ConsumerConfigView {
+        consumer_group: raw_group_name.to_string(),
+        broker_name,
+        broker_address,
+        consume_enable: config.consume_enable(),
+        consume_from_min_enable: config.consume_from_min_enable(),
+        consume_broadcast_enable: config.consume_broadcast_enable(),
+        consume_message_orderly: config.consume_message_orderly(),
+        retry_queue_nums: config.retry_queue_nums(),
+        retry_max_times: config.retry_max_times(),
+        broker_id: config.broker_id(),
+        which_broker_when_consume_slowly: config.which_broker_when_consume_slowly(),
+        notify_consumer_ids_changed_enable: config.notify_consumer_ids_changed_enable(),
+        group_sys_flag: config.group_sys_flag(),
+        consume_timeout_minute: config.consume_timeout_minute(),
+        group_retry_policy_json: serialize_group_retry_policy_json(config.group_retry_policy())
+            .unwrap_or_else(|_| "{}".to_string()),
+        subscription_topic_count: subscription_topics.len(),
+        subscription_topics,
+        attributes,
+    }
+}
+
+fn resolve_broker_name_by_address(cluster_info: &ClusterInfo, broker_address: &str) -> Option<String> {
+    cluster_info.broker_addr_table.as_ref().and_then(|table| {
+        table.iter().find_map(|(broker_name, broker_data)| {
+            broker_data
+                .broker_addrs()
+                .values()
+                .any(|addr| addr.as_str() == broker_address)
+                .then(|| broker_name.to_string())
+        })
+    })
+}
+
+fn serialize_group_retry_policy_json(policy: &GroupRetryPolicy) -> Result<String, serde_json::Error> {
+    let effective_retry_policy = match policy.type_() {
+        GroupRetryPolicyType::Exponential => json!({
+            "type": "EXPONENTIAL",
+            "initial": policy
+                .exponential_retry_policy()
+                .map(|value| value.initial())
+                .unwrap_or(5_000),
+            "max": policy
+                .exponential_retry_policy()
+                .map(|value| value.max())
+                .unwrap_or(7_200_000),
+            "multiplier": policy
+                .exponential_retry_policy()
+                .map(|value| value.multiplier())
+                .unwrap_or(2),
+        }),
+        GroupRetryPolicyType::Customized => json!({
+            "type": "CUSTOMIZED",
+            "next": policy
+                .customized_retry_policy()
+                .map(|value| value.next().to_vec())
+                .unwrap_or_else(|| vec![
+                    1_000, 5_000, 10_000, 30_000, 60_000, 120_000, 180_000, 240_000, 300_000,
+                    360_000, 420_000, 480_000, 540_000, 600_000, 1_200_000, 1_800_000, 3_600_000,
+                    7_200_000,
+                ]),
+        }),
+    };
+
+    serde_json::to_string_pretty(&json!({
+        "type": policy.type_(),
+        "exponentialRetryPolicy": policy.exponential_retry_policy(),
+        "customizedRetryPolicy": policy.customized_retry_policy(),
+        "retryPolicy": effective_retry_policy,
+    }))
+}
+
 fn consume_from_where_label(value: ConsumeFromWhere) -> String {
     #[allow(deprecated)]
     match value {
@@ -759,12 +954,15 @@ fn build_consumer_topic_detail_view(
 #[cfg(test)]
 mod tests {
     use super::ConsumerGroupMeta;
+    use super::build_consumer_config_view;
     use super::build_consumer_connection_view;
     use super::build_consumer_topic_detail_view;
     use super::build_summary;
     use super::classify_consumer_group;
     use super::is_reconnect_worthy_error;
     use super::is_system_consumer_group;
+    use super::resolve_broker_name_by_address;
+    use super::resolve_first_consumer_broker_address;
     use super::strip_system_prefix;
     use crate::consumer::types::ConsumerGroupListItem;
     use cheetah_string::CheetahString;
@@ -773,12 +971,16 @@ mod tests {
     use rocketmq_remoting::protocol::LanguageCode;
     use rocketmq_remoting::protocol::admin::consume_stats::ConsumeStats;
     use rocketmq_remoting::protocol::admin::offset_wrapper::OffsetWrapper;
+    use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
     use rocketmq_remoting::protocol::body::connection::Connection;
     use rocketmq_remoting::protocol::body::consumer_connection::ConsumerConnection;
     use rocketmq_remoting::protocol::heartbeat::consume_type::ConsumeType;
     use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
     use rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData;
+    use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
+    use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
     use std::collections::HashMap;
+    use std::collections::HashSet;
 
     #[test]
     fn classify_consumer_group_marks_system_fifo_and_normal() {
@@ -916,6 +1118,93 @@ mod tests {
         assert!(is_reconnect_worthy_error("request timeout while talking to namesrv"));
         assert!(!is_reconnect_worthy_error("consumer group not found"));
         assert!(!is_reconnect_worthy_error("subscription group metadata is empty"));
+    }
+
+    #[test]
+    fn resolve_first_consumer_broker_address_returns_sorted_first_value() {
+        let meta = ConsumerGroupMeta {
+            broker_addresses: HashSet::from(["172.19.80.2:10911".to_string(), "172.19.80.1:10911".to_string()]),
+            orderly_flags: Vec::new(),
+        };
+
+        let resolved = resolve_first_consumer_broker_address(&meta).expect("expected a broker address");
+
+        assert_eq!(resolved.as_str(), "172.19.80.1:10911");
+    }
+
+    #[test]
+    fn build_consumer_config_view_maps_subscription_group_config_fields() {
+        let mut config = SubscriptionGroupConfig::default();
+        config.set_group_name("group-a".into());
+        config.set_consume_enable(false);
+        config.set_consume_from_min_enable(false);
+        config.set_consume_broadcast_enable(true);
+        config.set_consume_message_orderly(true);
+        config.set_retry_queue_nums(4);
+        config.set_retry_max_times(8);
+        config.set_broker_id(1);
+        config.set_which_broker_when_consume_slowly(2);
+        config.set_notify_consumer_ids_changed_enable(false);
+        config.set_group_sys_flag(7);
+        config.set_consume_timeout_minute(21);
+        config.set_attributes(HashMap::from([("a".into(), "1".into()), ("b".into(), "2".into())]));
+        config.set_subscription_data_set(Some(HashSet::from([
+            rocketmq_remoting::protocol::subscription::simple_subscription_data::SimpleSubscriptionData::new(
+                "TopicB".to_string(),
+                "TAG".to_string(),
+                "*".to_string(),
+                1,
+            ),
+            rocketmq_remoting::protocol::subscription::simple_subscription_data::SimpleSubscriptionData::new(
+                "TopicA".to_string(),
+                "TAG".to_string(),
+                "*".to_string(),
+                2,
+            ),
+        ])));
+
+        let view = build_consumer_config_view(
+            "group-a",
+            "broker-a".to_string(),
+            "172.19.80.1:10911".to_string(),
+            &config,
+        );
+
+        assert_eq!(view.consumer_group, "group-a");
+        assert_eq!(view.broker_name, "broker-a");
+        assert_eq!(view.broker_address, "172.19.80.1:10911");
+        assert!(!view.consume_enable);
+        assert!(!view.consume_from_min_enable);
+        assert!(view.consume_broadcast_enable);
+        assert!(view.consume_message_orderly);
+        assert_eq!(view.retry_queue_nums, 4);
+        assert_eq!(view.retry_max_times, 8);
+        assert_eq!(view.broker_id, 1);
+        assert_eq!(view.which_broker_when_consume_slowly, 2);
+        assert!(!view.notify_consumer_ids_changed_enable);
+        assert_eq!(view.group_sys_flag, 7);
+        assert_eq!(view.consume_timeout_minute, 21);
+        assert_eq!(view.subscription_topic_count, 2);
+        assert_eq!(
+            view.subscription_topics,
+            vec!["TopicA".to_string(), "TopicB".to_string()]
+        );
+        assert_eq!(view.attributes.len(), 2);
+        assert_eq!(view.attributes[0].key, "a");
+        assert!(view.group_retry_policy_json.contains("\"retryPolicy\""));
+        assert!(view.group_retry_policy_json.contains("\"CUSTOMIZED\""));
+    }
+
+    #[test]
+    fn resolve_broker_name_by_address_finds_matching_broker() {
+        let mut broker_addrs = HashMap::new();
+        broker_addrs.insert(0, "172.19.80.1:10911".into());
+        let broker_data = BrokerData::new("DefaultCluster".into(), "broker-a".into(), broker_addrs, None);
+
+        let cluster_info = ClusterInfo::new(Some(HashMap::from([("broker-a".into(), broker_data)])), None);
+
+        let resolved = resolve_broker_name_by_address(&cluster_info, "172.19.80.1:10911");
+        assert_eq!(resolved.as_deref(), Some("broker-a"));
     }
 
     const fn ordinal_for_v5_4_0() -> i32 {

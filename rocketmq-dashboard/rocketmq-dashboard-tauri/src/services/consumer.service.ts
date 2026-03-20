@@ -1,5 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
+    ConsumerConfigQueryRequest,
+    ConsumerConfigView,
     ConsumerConnectionQueryRequest,
     ConsumerConnectionView,
     ConsumerGroupListItem,
@@ -25,5 +27,9 @@ export class ConsumerService {
 
     static async queryConsumerTopicDetail(request: ConsumerTopicDetailQueryRequest): Promise<ConsumerTopicDetailView> {
         return invoke<ConsumerTopicDetailView>('query_consumer_topic_detail', { request });
+    }
+
+    static async queryConsumerConfig(request: ConsumerConfigQueryRequest): Promise<ConsumerConfigView> {
+        return invoke<ConsumerConfigView>('query_consumer_config', { request });
     }
 }

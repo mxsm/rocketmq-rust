@@ -50,8 +50,17 @@ pub struct ConsumerTopicDetailQueryRequest {
     pub address: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsumerConfigQueryRequest {
+    pub consumer_group: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
+    use super::ConsumerConfigQueryRequest;
     use super::ConsumerConnectionQueryRequest;
     use super::ConsumerGroupListRequest;
     use super::ConsumerGroupRefreshRequest;
@@ -100,6 +109,18 @@ mod tests {
         };
 
         let json = serde_json::to_string(&request).expect("serialize consumer topic detail request");
+        assert!(json.contains("\"consumerGroup\""));
+        assert!(json.contains("\"address\""));
+    }
+
+    #[test]
+    fn consumer_config_query_request_uses_expected_field_names() {
+        let request = ConsumerConfigQueryRequest {
+            consumer_group: "group-a".to_string(),
+            address: Some("127.0.0.1:10911".to_string()),
+        };
+
+        let json = serde_json::to_string(&request).expect("serialize consumer config request");
         assert!(json.contains("\"consumerGroup\""));
         assert!(json.contains("\"address\""));
     }

@@ -26,6 +26,7 @@ import { toast } from 'sonner@2.0.3';
 import { Pagination } from './Pagination';
 import { useConsumerCatalog } from '../features/consumer/hooks/useConsumerCatalog';
 import { ConsumerClientModal } from '../features/consumer/components/ConsumerClientModal';
+import { ConsumerConfigModal } from '../features/consumer/components/ConsumerConfigModal';
 import { ConsumerDetailModal } from '../features/consumer/components/ConsumerDetailModal';
 import type { ConsumerGroupListItem } from '../features/consumer/types/consumer.types';
 
@@ -187,7 +188,7 @@ const LegacyConsumerDetailModal = ({ isOpen, onClose, consumer }: any) => {
   );
 };
 
-const ConsumerConfigModal = ({ isOpen, onClose, consumer }: any) => {
+const LegacyConsumerConfigModal = ({ isOpen, onClose, consumer }: any) => {
   if (!isOpen) return null;
 
   return (
