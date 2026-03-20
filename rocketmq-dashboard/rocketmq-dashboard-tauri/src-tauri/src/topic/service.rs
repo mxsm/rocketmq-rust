@@ -401,7 +401,10 @@ impl TopicManager {
     }
 
     fn should_reset_session<T>(result: &TopicResult<T>) -> bool {
-        matches!(result, Err(TopicError::RocketMQ(_)))
+        match result {
+            Err(TopicError::RocketMQ(message)) => is_reconnect_worthy_error(message),
+            _ => false,
+        }
     }
 
     async fn get_topic_list_with_admin(
@@ -483,10 +486,49 @@ impl TopicManager {
         admin: &mut DefaultMQAdminExt,
         request: TopicQueryRequest,
     ) -> TopicResult<TopicStatusView> {
-        let stats = admin
-            .examine_topic_stats(request.topic.clone().into(), None)
-            .await
-            .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+        let route = require_topic_route(admin, &request.topic).await?;
+        let mut stats = TopicStatsTable::new();
+        let mut successful_brokers = 0usize;
+        let mut last_error = None;
+
+        for broker_data in &route.broker_datas {
+            if let Some(master_addr) = broker_data.broker_addrs().get(&mix_all::MASTER_ID) {
+                match admin
+                    .examine_topic_stats(request.topic.clone().into(), Some(master_addr.clone()))
+                    .await
+                {
+                    Ok(broker_stats) => {
+                        stats.get_offset_table_mut().extend(broker_stats.into_offset_table());
+                        successful_brokers += 1;
+                    }
+                    Err(error) => {
+                        let error_message = error.to_string();
+                        log::warn!(
+                            "Failed to load topic stats for topic `{}` from broker `{}` at `{}`: {}",
+                            request.topic,
+                            broker_data.broker_name(),
+                            master_addr,
+                            error_message
+                        );
+                        last_error = Some(error_message);
+                    }
+                }
+            }
+        }
+
+        if successful_brokers == 0 {
+            return Err(TopicError::RocketMQ(last_error.unwrap_or_else(|| {
+                format!("Topic `{}` has no reachable master broker.", request.topic)
+            })));
+        }
+
+        if stats.get_offset_table().is_empty() {
+            return Err(TopicError::Validation(format!(
+                "Topic `{}` returned no queue offset data.",
+                request.topic
+            )));
+        }
+
         Ok(map_status_view(&request.topic, &stats))
     }
 
@@ -825,9 +867,10 @@ impl TopicManager {
             .await
             .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
 
+        let normalized_message_body = normalize_topic_message_body(&request.message_body)?;
         let mut builder = Message::builder()
             .topic(request.topic.clone())
-            .body_slice(request.message_body.as_bytes())
+            .body_slice(normalized_message_body.as_bytes())
             .trace_switch(request.trace_enabled);
         if !request.tag.trim().is_empty() {
             builder = builder.tags(request.tag.clone());
@@ -1319,12 +1362,150 @@ fn map_status_view(topic: &str, stats: &TopicStatsTable) -> TopicStatusView {
     }
 }
 
+fn is_reconnect_worthy_error(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    [
+        "connect",
+        "connection refused",
+        "timed out",
+        "timeout",
+        "channel inactive",
+        "broken pipe",
+        "connection reset",
+        "network is unreachable",
+        "name server",
+        "namesrv",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
+}
+
+fn normalize_topic_message_body(body: &str) -> TopicResult<String> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return Err(TopicError::Validation(
+            "Message body is required before sending.".into(),
+        ));
+    }
+
+    if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
+        return Ok(body.to_string());
+    }
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        return serde_json::to_string(&value)
+            .map_err(|error| TopicError::Validation(format!("Failed to serialize message JSON: {error}")));
+    }
+
+    if let Ok(value) = json5::from_str::<serde_json::Value>(trimmed) {
+        return serde_json::to_string(&value).map_err(|error| {
+            TopicError::Validation(format!("Failed to serialize relaxed JSON message body: {error}"))
+        });
+    }
+
+    let normalized_numeric_keys = quote_numeric_object_keys(trimmed);
+    if normalized_numeric_keys != trimmed {
+        if let Ok(value) = json5::from_str::<serde_json::Value>(&normalized_numeric_keys) {
+            return serde_json::to_string(&value).map_err(|error| {
+                TopicError::Validation(format!(
+                    "Failed to serialize relaxed JSON message body after normalizing numeric keys: {error}"
+                ))
+            });
+        }
+    }
+
+    Err(TopicError::Validation(
+        "Message body looks like JSON but could not be parsed. Standard JSON and relaxed JSON syntax such as numeric \
+         keys are supported."
+            .into(),
+    ))
+}
+
+fn quote_numeric_object_keys(input: &str) -> String {
+    let chars = input.chars().collect::<Vec<_>>();
+    let mut output = String::with_capacity(input.len());
+    let mut index = 0;
+    let mut in_string = false;
+    let mut string_delimiter = '\0';
+    let mut escaped = false;
+    let mut expecting_key = false;
+
+    while index < chars.len() {
+        let current = chars[index];
+
+        if in_string {
+            output.push(current);
+            if escaped {
+                escaped = false;
+            } else if current == '\\' {
+                escaped = true;
+            } else if current == string_delimiter {
+                in_string = false;
+            }
+            index += 1;
+            continue;
+        }
+
+        if current == '"' || current == '\'' {
+            in_string = true;
+            string_delimiter = current;
+            output.push(current);
+            index += 1;
+            continue;
+        }
+
+        match current {
+            '{' | ',' => {
+                expecting_key = true;
+                output.push(current);
+                index += 1;
+            }
+            _ if expecting_key && current.is_whitespace() => {
+                output.push(current);
+                index += 1;
+            }
+            _ if expecting_key && (current.is_ascii_digit() || current == '-') => {
+                let start = index;
+                index += 1;
+                while index < chars.len() && chars[index].is_ascii_digit() {
+                    index += 1;
+                }
+
+                let token = chars[start..index].iter().collect::<String>();
+                let mut probe = index;
+                while probe < chars.len() && chars[probe].is_whitespace() {
+                    probe += 1;
+                }
+
+                if probe < chars.len() && chars[probe] == ':' && token.chars().any(|char| char.is_ascii_digit()) {
+                    output.push('"');
+                    output.push_str(&token);
+                    output.push('"');
+                } else {
+                    output.push_str(&token);
+                }
+                expecting_key = false;
+            }
+            _ => {
+                expecting_key = false;
+                output.push(current);
+                index += 1;
+            }
+        }
+    }
+
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::TopicBrokerConfigSnapshot;
     use super::classify_topic;
     use super::cluster_targets_from_cluster_info;
+    use super::is_reconnect_worthy_error;
     use super::normalize_message_type;
+    use super::normalize_topic_message_body;
+    use super::quote_numeric_object_keys;
     use rocketmq_common::common::config::TopicConfig as RocketMqTopicConfig;
     use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
@@ -1387,6 +1568,46 @@ mod tests {
         assert_eq!(
             items[0].broker_names,
             vec!["broker-a".to_string(), "broker-b".to_string()]
+        );
+    }
+
+    #[test]
+    fn reconnect_error_detection_only_matches_transport_failures() {
+        assert!(is_reconnect_worthy_error("connection refused by broker"));
+        assert!(is_reconnect_worthy_error("request timeout while talking to namesrv"));
+        assert!(!is_reconnect_worthy_error("topic stats info not found"));
+        assert!(!is_reconnect_worthy_error("topic returned no queue offset data"));
+    }
+
+    #[test]
+    fn normalize_topic_message_body_accepts_standard_json() {
+        assert_eq!(
+            normalize_topic_message_body(r#"{"1":"value","name":"rocketmq"}"#).unwrap(),
+            r#"{"1":"value","name":"rocketmq"}"#
+        );
+    }
+
+    #[test]
+    fn normalize_topic_message_body_accepts_relaxed_json_with_numeric_keys() {
+        assert_eq!(
+            normalize_topic_message_body(r#"{1: 'value', nested: {2: true}}"#).unwrap(),
+            r#"{"1":"value","nested":{"2":true}}"#
+        );
+    }
+
+    #[test]
+    fn quote_numeric_object_keys_only_changes_object_keys() {
+        assert_eq!(
+            quote_numeric_object_keys(r#"{1: 'value', nested: {2: true}, list: [1, 2, 3]}"#),
+            r#"{"1": 'value', nested: {"2": true}, list: [1, 2, 3]}"#
+        );
+    }
+
+    #[test]
+    fn normalize_topic_message_body_preserves_plain_text() {
+        assert_eq!(
+            normalize_topic_message_body("plain text body").unwrap(),
+            "plain text body"
         );
     }
 }

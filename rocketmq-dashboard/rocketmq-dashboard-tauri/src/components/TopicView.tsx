@@ -37,7 +37,15 @@ import {toast} from 'sonner@2.0.3';
 import {Button} from '../components/ui/LegacyButton';
 import {Pagination} from './Pagination';
 import {useTopicCatalog} from '../features/topic/hooks/useTopicCatalog';
-import type {TopicCategory, TopicListItem} from '../features/topic/types/topic.types';
+import {TopicService} from '../services/topic.service';
+import type {
+    TopicCategory,
+    TopicConfigView,
+    TopicListItem,
+    TopicRouteView,
+    TopicSendMessageResult,
+    TopicStatusView,
+} from '../features/topic/types/topic.types';
 
 interface Topic {
     name: string;
@@ -102,26 +110,49 @@ interface TopicRouterModalProps {
 }
 
 const TopicRouterModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
+    const [routeData, setRouteData] = useState<TopicRouteView | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState('');
+
+    useEffect(() => {
+        if (!isOpen || !topic?.name) {
+            return;
+        }
+
+        let cancelled = false;
+
+        const loadRoute = async () => {
+            setIsLoading(true);
+            setError('');
+
+            try {
+                const result = await TopicService.getTopicRoute({topic: topic.name});
+                if (!cancelled) {
+                    setRouteData(result);
+                }
+            } catch (loadError) {
+                if (!cancelled) {
+                    setRouteData(null);
+                    setError(loadError instanceof Error ? loadError.message : 'Failed to load topic route.');
+                }
+            } finally {
+                if (!cancelled) {
+                    setIsLoading(false);
+                }
+            }
+        };
+
+        void loadRoute();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [isOpen, topic?.name]);
+
     if (!isOpen) return null;
 
-    // Mock data to match screenshot structure
-    const mockBrokerDatas = [
-        {
-            broker: 'mxsm',
-            addrs: [
-                {index: 0, address: '172.20.48.1:10911'}
-            ]
-        }
-    ];
-
-    const mockQueueDatas = [
-        {
-            brokerName: 'mxsm',
-            readQueueNums: 1,
-            writeQueueNums: 1,
-            perm: 6
-        }
-    ];
+    const brokers = routeData?.brokers ?? [];
+    const queues = routeData?.queues ?? [];
 
     return (
         <AnimatePresence>
@@ -154,29 +185,49 @@ const TopicRouterModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
 
                     {/* Content */}
                     <div className="p-6 overflow-y-auto space-y-8 bg-gray-50/50 dark:bg-gray-950/50">
+                        {isLoading && (
+                            <div className="rounded-xl border border-gray-200 bg-white/80 px-6 py-10 text-center text-sm text-gray-500 shadow-sm dark:border-gray-800 dark:bg-gray-900/80 dark:text-gray-400">
+                                Loading topic route data from the current NameServer...
+                            </div>
+                        )}
+
+                        {!isLoading && error && (
+                            <div className="rounded-xl border border-red-200 bg-red-50/80 px-6 py-6 text-sm text-red-600 shadow-sm dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
+                                {error}
+                            </div>
+                        )}
 
                         {/* Broker Datas Section */}
+                        {!isLoading && !error && (
                         <div>
                             <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
                                 <Server className="w-4 h-4 text-gray-500 dark:text-gray-400"/>
                                 Broker Datas
                             </h4>
+                            {brokers.length === 0 ? (
+                                <div className="rounded-xl border border-dashed border-gray-200 bg-white/80 px-6 py-8 text-center text-sm text-gray-500 shadow-sm dark:border-gray-800 dark:bg-gray-900/80 dark:text-gray-400">
+                                    No broker route data was returned for this topic.
+                                </div>
+                            ) : (
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                {mockBrokerDatas.map((broker, i) => (
+                                {brokers.map((broker, i) => (
                                     <div key={i}
                                          className="bg-white dark:bg-gray-900 p-5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm hover:shadow-md transition-shadow">
                                         <div className="flex items-center justify-between mb-4">
-                                            <span className="text-base font-bold text-gray-900 dark:text-white">{broker.broker}</span>
+                                            <div className="flex flex-col gap-1">
+                                                <span className="text-base font-bold text-gray-900 dark:text-white">{broker.brokerName}</span>
+                                                <span className="text-xs text-gray-500 dark:text-gray-400">{broker.clusterName}</span>
+                                            </div>
                                             <span
                                                 className="text-xs bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 px-2.5 py-1 rounded-full font-medium border border-gray-200 dark:border-gray-700">
-                        {broker.addrs.length} Addrs
+                        {broker.addresses.length} Addrs
                       </span>
                                         </div>
                                         <div className="space-y-2">
-                                            {broker.addrs.map((addr, j) => (
+                                            {broker.addresses.map((addr, j) => (
                                                 <div key={j}
                                                      className="flex items-center justify-between text-xs bg-gray-50 dark:bg-gray-800/50 p-3 rounded-lg border border-gray-100 dark:border-gray-800/50 font-mono">
-                                                    <span className="text-gray-500 dark:text-gray-500 font-semibold">ID: {addr.index}</span>
+                                                    <span className="text-gray-500 dark:text-gray-500 font-semibold">ID: {addr.brokerId}</span>
                                                     <span className="text-gray-700 dark:text-gray-300">{addr.address}</span>
                                                 </div>
                                             ))}
@@ -184,16 +235,24 @@ const TopicRouterModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
                                     </div>
                                 ))}
                             </div>
+                            )}
                         </div>
+                        )}
 
                         {/* Queue Datas Section */}
+                        {!isLoading && !error && (
                         <div>
                             <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
                                 <Database className="w-4 h-4 text-gray-500 dark:text-gray-400"/>
                                 Queue Datas
                             </h4>
+                            {queues.length === 0 ? (
+                                <div className="rounded-xl border border-dashed border-gray-200 bg-white/80 px-6 py-8 text-center text-sm text-gray-500 shadow-sm dark:border-gray-800 dark:bg-gray-900/80 dark:text-gray-400">
+                                    No queue route data was returned for this topic.
+                                </div>
+                            ) : (
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                {mockQueueDatas.map((queue, i) => (
+                                {queues.map((queue, i) => (
                                     <div key={i}
                                          className="bg-white dark:bg-gray-900 p-5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm hover:shadow-md transition-shadow flex flex-col">
                                         <div className="flex items-center space-x-3 mb-5">
@@ -230,7 +289,9 @@ const TopicRouterModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
                                     </div>
                                 ))}
                             </div>
+                            )}
                         </div>
+                        )}
 
                     </div>
 
@@ -249,7 +310,7 @@ const TopicRouterModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
     );
 };
 
-const TopicConfigModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
+const LegacyTopicConfigModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
     const [selectedBrokers, setSelectedBrokers] = useState(['mxsm']);
     const [isBrokerDropdownOpen, setIsBrokerDropdownOpen] = useState(false);
     // Mock broker data
@@ -483,58 +544,418 @@ const TopicConfigModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
     );
 };
 
-const TopicStatusModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
+const TOPIC_CONFIG_FIELD_LABELS: Record<string, string> = {
+    readQueueNums: 'Read Queues',
+    writeQueueNums: 'Write Queues',
+    perm: 'Permission',
+    order: 'Ordered Delivery',
+    messageType: 'Message Type',
+};
+
+const formatAttributeLabel = (key: string) =>
+    key
+        .split(/[._-]/g)
+        .filter(Boolean)
+        .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+        .join(' ');
+
+const TopicConfigModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
+    const [configData, setConfigData] = useState<TopicConfigView | null>(null);
+    const [selectedBroker, setSelectedBroker] = useState<string | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState('');
+
+    useEffect(() => {
+        if (!isOpen || !topic?.name) {
+            return;
+        }
+
+        let cancelled = false;
+
+        const loadConfig = async () => {
+            setIsLoading(true);
+            setError('');
+
+            try {
+                const result = await TopicService.getTopicConfig({
+                    topic: topic.name,
+                    brokerName: selectedBroker,
+                });
+                if (!cancelled) {
+                    setConfigData(result);
+                }
+            } catch (loadError) {
+                if (!cancelled) {
+                    setConfigData(null);
+                    setError(loadError instanceof Error ? loadError.message : 'Failed to load topic configuration.');
+                }
+            } finally {
+                if (!cancelled) {
+                    setIsLoading(false);
+                }
+            }
+        };
+
+        void loadConfig();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [isOpen, topic?.name, selectedBroker]);
+
+    useEffect(() => {
+        if (!isOpen) {
+            return;
+        }
+        setSelectedBroker(null);
+        setConfigData(null);
+        setError('');
+    }, [isOpen, topic?.name]);
+
     if (!isOpen) return null;
 
-    const mockData = [
-        {
-            queueId: 0,
-            brokerName: 'mxsm',
-            minOffset: 0,
-            maxOffset: 0,
-            lastUpdate: '1970-01-01 08:00:00'
-        },
-        {
-            queueId: 1,
-            brokerName: 'mxsm',
-            minOffset: 124,
-            maxOffset: 124,
-            lastUpdate: '2026-01-27 10:30:45'
-        },
-        {
-            queueId: 2,
-            brokerName: 'mxsm',
-            minOffset: 50,
-            maxOffset: 52,
-            lastUpdate: '2026-01-27 10:31:02'
-        },
-        {
-            queueId: 3,
-            brokerName: 'mxsm',
-            minOffset: 1000,
-            maxOffset: 1050,
-            lastUpdate: '2026-01-27 10:32:15'
-        },
-        {
-            queueId: 4,
-            brokerName: 'broker-a',
-            minOffset: 2500,
-            maxOffset: 2510,
-            lastUpdate: '2026-01-27 10:33:00'
-        },
-        {
-            queueId: 5,
-            brokerName: 'broker-b',
-            minOffset: 100,
-            maxOffset: 150,
-            lastUpdate: '2026-01-27 10:33:05'
-        }
-    ];
+    const brokerOptions = configData?.brokerNameList ?? [];
+    const clusterOptions = configData?.clusterNameList ?? [];
+    const attributes = Object.entries(configData?.attributes ?? {}).sort(([left], [right]) => left.localeCompare(right));
+    const inconsistentFields = configData?.inconsistentFields ?? [];
+    const activeBroker = selectedBroker ?? configData?.brokerName ?? '';
 
-    // Calculate summary stats
-    const totalMinOffset = mockData.reduce((acc, curr) => acc + curr.minOffset, 0);
-    const totalMaxOffset = mockData.reduce((acc, curr) => acc + curr.maxOffset, 0);
-    const queueCount = mockData.length;
+    return (
+        <AnimatePresence>
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                <motion.div
+                    initial={{opacity: 0}}
+                    animate={{opacity: 0.3}}
+                    exit={{opacity: 0}}
+                    onClick={onClose}
+                    className="absolute inset-0 bg-black"
+                />
+                <motion.div
+                    initial={{opacity: 0, scale: 0.95, y: 10}}
+                    animate={{opacity: 1, scale: 1, y: 0}}
+                    exit={{opacity: 0, scale: 0.95, y: 10}}
+                    className="relative w-full max-w-4xl bg-white dark:bg-gray-900 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] border border-gray-100 dark:border-gray-800"
+                >
+                    <div className="px-6 py-5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between bg-white dark:bg-gray-900 z-10">
+                        <div>
+                            <h3 className="text-xl font-bold text-gray-800 dark:text-white flex items-center">
+                                <Settings className="w-5 h-5 mr-2 text-blue-500"/>
+                                Topic Configuration
+                            </h3>
+                            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                                Inspect the current broker-side config for <span className="font-mono text-gray-700 dark:text-gray-300 font-medium">{topic?.name || 'undefined'}</span>
+                            </p>
+                        </div>
+                        <button
+                            onClick={onClose}
+                            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors"
+                        >
+                            <X className="w-5 h-5"/>
+                        </button>
+                    </div>
+
+                    <div className="p-6 overflow-y-auto bg-gray-50/50 dark:bg-gray-950/50 space-y-6">
+                        {isLoading && (
+                            <div className="rounded-xl border border-gray-200 bg-white/80 px-6 py-10 text-center text-sm text-gray-500 shadow-sm dark:border-gray-800 dark:bg-gray-900/80 dark:text-gray-400">
+                                Loading topic configuration from the current broker view...
+                            </div>
+                        )}
+
+                        {!isLoading && error && (
+                            <div className="rounded-xl border border-red-200 bg-red-50/80 px-6 py-6 text-sm text-red-600 shadow-sm dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
+                                {error}
+                            </div>
+                        )}
+
+                        {!isLoading && !error && configData && (
+                            <>
+                                <div className="bg-white dark:bg-gray-900 p-5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
+                                    <div className="flex flex-col gap-4">
+                                        <div className="flex flex-col gap-1">
+                                            <h4 className="text-sm font-bold text-gray-900 dark:text-white flex items-center uppercase tracking-wider">
+                                                <Server className="w-4 h-4 mr-2 text-gray-400 dark:text-gray-500"/> Deployment Target
+                                            </h4>
+                                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                                                Switch the anchor broker to inspect the exact config returned by that broker.
+                                            </p>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                            <div>
+                                                <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Cluster Names</label>
+                                                <div className="min-h-[42px] px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg flex flex-wrap gap-1.5 items-center">
+                                                    {clusterOptions.map((clusterName) => (
+                                                        <span
+                                                            key={clusterName}
+                                                            className="bg-blue-50 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded text-xs border border-blue-100 dark:border-blue-800 font-medium"
+                                                        >
+                                                            {clusterName}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Anchor Broker</label>
+                                                <div className="relative">
+                                                    <select
+                                                        value={activeBroker}
+                                                        onChange={(event) => setSelectedBroker(event.target.value)}
+                                                        className="w-full px-3 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all appearance-none cursor-pointer shadow-sm"
+                                                    >
+                                                        {brokerOptions.map((brokerName) => (
+                                                            <option key={brokerName} value={brokerName}>
+                                                                {brokerName}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                    <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none"/>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {brokerOptions.map((brokerName) => (
+                                                <button
+                                                    key={brokerName}
+                                                    type="button"
+                                                    onClick={() => setSelectedBroker(brokerName)}
+                                                    className={`px-2 py-1 rounded text-xs border transition-colors ${
+                                                        brokerName === activeBroker
+                                                            ? 'bg-blue-600 border-blue-600 text-white dark:bg-blue-500 dark:border-blue-500'
+                                                            : 'bg-gray-50 border-gray-200 text-gray-600 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-300'
+                                                    }`}
+                                                >
+                                                    {brokerName}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {inconsistentFields.length > 0 && (
+                                    <div className="rounded-xl border border-amber-200 bg-amber-50/80 px-5 py-4 text-sm text-amber-700 shadow-sm dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
+                                        <div className="flex items-center gap-2 font-semibold">
+                                            <AlertTriangle className="w-4 h-4"/>
+                                            Broker configs are not fully aligned
+                                        </div>
+                                        <div className="mt-2 flex flex-wrap gap-2">
+                                            {inconsistentFields.map((field) => (
+                                                <span
+                                                    key={field}
+                                                    className="rounded-full border border-amber-300/80 bg-white/80 px-2 py-0.5 text-xs dark:border-amber-800 dark:bg-amber-950/40"
+                                                >
+                                                    {TOPIC_CONFIG_FIELD_LABELS[field] ?? field}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="bg-white dark:bg-gray-900 p-5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
+                                    <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-4 flex items-center uppercase tracking-wider">
+                                        <FileText className="w-4 h-4 mr-2 text-gray-400 dark:text-gray-500"/> Topic Definition
+                                    </h4>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                        <div className="md:col-span-2">
+                                            <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Topic Name</label>
+                                            <input
+                                                type="text"
+                                                value={configData.topicName}
+                                                readOnly
+                                                className="w-full px-3 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-500 dark:text-gray-400 font-mono"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Message Type</label>
+                                            <input
+                                                type="text"
+                                                value={configData.messageType}
+                                                readOnly
+                                                className="w-full px-3 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-500 dark:text-gray-400 font-mono"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Ordered Delivery</label>
+                                            <input
+                                                type="text"
+                                                value={configData.order ? 'Enabled' : 'Disabled'}
+                                                readOnly
+                                                className="w-full px-3 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-500 dark:text-gray-400"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-white dark:bg-gray-900 p-5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
+                                    <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-4 flex items-center uppercase tracking-wider">
+                                        <Database className="w-4 h-4 mr-2 text-gray-400 dark:text-gray-500"/> Queue Configuration
+                                    </h4>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Write Queues</label>
+                                            <input
+                                                type="text"
+                                                value={String(configData.writeQueueNums)}
+                                                readOnly
+                                                className="w-full px-3 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-500 dark:text-gray-400 font-mono"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Read Queues</label>
+                                            <input
+                                                type="text"
+                                                value={String(configData.readQueueNums)}
+                                                readOnly
+                                                className="w-full px-3 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-500 dark:text-gray-400 font-mono"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Permission</label>
+                                            <input
+                                                type="text"
+                                                value={String(configData.perm)}
+                                                readOnly
+                                                className="w-full px-3 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-500 dark:text-gray-400 font-mono"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-white dark:bg-gray-900 p-5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
+                                    <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-4 flex items-center uppercase tracking-wider">
+                                        <Key className="w-4 h-4 mr-2 text-gray-400 dark:text-gray-500"/> Topic Attributes
+                                    </h4>
+                                    {attributes.length === 0 ? (
+                                        <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50/80 px-4 py-6 text-center text-sm text-gray-500 dark:border-gray-700 dark:bg-gray-800/60 dark:text-gray-400">
+                                            No extra topic attributes were returned for this broker.
+                                        </div>
+                                    ) : (
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            {attributes.map(([key, value]) => (
+                                                <div
+                                                    key={key}
+                                                    className="rounded-lg border border-gray-200 bg-gray-50/80 px-4 py-3 dark:border-gray-800 dark:bg-gray-800/50"
+                                                >
+                                                    <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                                                        {formatAttributeLabel(key)}
+                                                    </div>
+                                                    <div className="mt-2 break-all font-mono text-sm text-gray-800 dark:text-gray-200">
+                                                        {value}
+                                                    </div>
+                                                    <div className="mt-1 text-[11px] text-gray-400 dark:text-gray-500">
+                                                        {key}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            </>
+                        )}
+                    </div>
+
+                    <div className="px-6 py-4 bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800 flex justify-end space-x-3 z-10">
+                        <button
+                            onClick={onClose}
+                            className="px-4 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm"
+                        >
+                            Close
+                        </button>
+                        <button
+                            disabled
+                            className="px-6 py-2 bg-gray-200 text-gray-500 rounded-lg text-sm font-medium cursor-not-allowed flex items-center dark:bg-gray-800 dark:text-gray-500 dark:border dark:border-gray-700"
+                        >
+                            <Save className="w-4 h-4 mr-2"/>
+                            Edit In Next Step
+                        </button>
+                    </div>
+                </motion.div>
+            </div>
+        </AnimatePresence>
+    );
+};
+
+const TopicStatusModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
+    const [statusData, setStatusData] = useState<TopicStatusView | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState('');
+
+    useEffect(() => {
+        if (!isOpen || !topic?.name) {
+            return;
+        }
+
+        let cancelled = false;
+
+        const loadStatus = async () => {
+            setIsLoading(true);
+            setError('');
+
+            try {
+                const result = await TopicService.getTopicStats({topic: topic.name});
+                if (!cancelled) {
+                    setStatusData(result);
+                }
+            } catch (loadError) {
+                if (!cancelled) {
+                    setStatusData(null);
+                    setError(loadError instanceof Error ? loadError.message : 'Failed to load topic status.');
+                }
+            } finally {
+                if (!cancelled) {
+                    setIsLoading(false);
+                }
+            }
+        };
+
+        void loadStatus();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [isOpen, topic?.name]);
+
+    if (!isOpen) return null;
+
+    const offsets = statusData?.offsets ?? [];
+    const totalMinOffset = offsets.reduce((acc, curr) => acc + curr.minOffset, 0);
+    const totalMaxOffset = offsets.reduce((acc, curr) => acc + curr.maxOffset, 0);
+    const queueCount = statusData?.queueCount ?? offsets.length;
+    const greatestOffset = offsets.reduce((max, row) => Math.max(max, row.maxOffset, row.minOffset), 0);
+
+    const formatTimestamp = (timestamp: number) => {
+        if (!timestamp || timestamp <= 0) {
+            return 'Never updated';
+        }
+        return new Intl.DateTimeFormat('zh-CN', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false,
+        }).format(new Date(timestamp));
+    };
+
+    const formatTimeOnly = (timestamp: number) => {
+        if (!timestamp || timestamp <= 0) {
+            return '--:--:--';
+        }
+        return new Intl.DateTimeFormat('zh-CN', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false,
+        }).format(new Date(timestamp));
+    };
+
+    const calcBarWidth = (value: number) => {
+        if (greatestOffset <= 0) {
+            return '0%';
+        }
+        return `${Math.max(4, Math.round((value / greatestOffset) * 100))}%`;
+    };
 
     return (
         <AnimatePresence>
@@ -574,7 +995,6 @@ const TopicStatusModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
 
                     {/* Content */}
                     <div className="p-6 overflow-auto bg-gray-50/50 dark:bg-gray-950/50 flex-1 space-y-6">
-
                         {/* Summary Cards */}
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div
@@ -612,62 +1032,84 @@ const TopicStatusModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
                             </div>
                         </div>
 
-                        {/* Queue Grid */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                            {mockData.map((row, i) => (
-                                <div key={i}
-                                     className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow duration-200 overflow-hidden flex flex-col">
+                        {isLoading && (
+                            <div className="rounded-xl border border-gray-200 bg-white/80 px-6 py-10 text-center text-sm text-gray-500 shadow-sm dark:border-gray-800 dark:bg-gray-900/80 dark:text-gray-400">
+                                Loading real-time topic status from the current NameServer...
+                            </div>
+                        )}
 
-                                    {/* Card Header */}
-                                    <div
-                                        className="px-4 py-3 border-b border-gray-50 dark:border-gray-800 flex items-center justify-between bg-gray-50/30 dark:bg-gray-800/30">
-                                        <div className="flex items-center space-x-2">
-                                            <div
-                                                className="w-6 h-6 rounded bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 flex items-center justify-center text-xs font-bold text-gray-700 dark:text-gray-300 shadow-sm">
-                                                {row.queueId}
+                        {!isLoading && error && (
+                            <div className="rounded-xl border border-red-200 bg-red-50/80 px-6 py-6 text-sm text-red-600 shadow-sm dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
+                                {error}
+                            </div>
+                        )}
+
+                        {!isLoading && !error && offsets.length === 0 && (
+                            <div className="rounded-xl border border-dashed border-gray-200 bg-white/80 px-6 py-10 text-center text-sm text-gray-500 shadow-sm dark:border-gray-800 dark:bg-gray-900/80 dark:text-gray-400">
+                                No queue offsets were returned for this topic.
+                            </div>
+                        )}
+
+                        {!isLoading && !error && offsets.length > 0 && (
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                {offsets.map((row, i) => (
+                                    <div key={`${row.brokerName}-${row.queueId}-${i}`}
+                                         className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow duration-200 overflow-hidden flex flex-col">
+
+                                        <div
+                                            className="px-4 py-3 border-b border-gray-50 dark:border-gray-800 flex items-center justify-between bg-gray-50/30 dark:bg-gray-800/30">
+                                            <div className="flex items-center space-x-2">
+                                                <div
+                                                    className="w-6 h-6 rounded bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 flex items-center justify-center text-xs font-bold text-gray-700 dark:text-gray-300 shadow-sm">
+                                                    {row.queueId}
+                                                </div>
+                                                <span className="text-sm font-semibold text-gray-900 dark:text-white">{row.brokerName}</span>
                                             </div>
-                                            <span className="text-sm font-semibold text-gray-900 dark:text-white">{row.brokerName}</span>
-                                        </div>
-                                        <span
-                                            className="text-[10px] font-mono text-gray-400 dark:text-gray-500 bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border border-gray-100 dark:border-gray-700">
+                                            <span
+                                                className="text-[10px] font-mono text-gray-400 dark:text-gray-500 bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border border-gray-100 dark:border-gray-700">
                         ID: {row.queueId}
                      </span>
-                                    </div>
+                                        </div>
 
-                                    {/* Body */}
-                                    <div className="p-4 space-y-4 flex-1">
-                                        <div className="space-y-1">
-                                            <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400">
-                                                <span>Min Offset</span>
-                                                <span className="font-mono text-gray-900 dark:text-white">{row.minOffset}</span>
+                                        <div className="p-4 space-y-4 flex-1">
+                                            <div className="space-y-1">
+                                                <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400">
+                                                    <span>Min Offset</span>
+                                                    <span className="font-mono text-gray-900 dark:text-white">{row.minOffset.toLocaleString()}</span>
+                                                </div>
+                                                <div className="w-full bg-gray-100 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden">
+                                                    <div className="bg-green-500 h-1.5 rounded-full" style={{width: calcBarWidth(row.minOffset)}}></div>
+                                                </div>
                                             </div>
-                                            <div className="w-full bg-gray-100 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden">
-                                                <div className="bg-green-500 h-1.5 rounded-full" style={{width: '40%'}}></div>
+                                            <div className="space-y-1">
+                                                <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400">
+                                                    <span>Max Offset</span>
+                                                    <span className="font-mono text-gray-900 dark:text-white">{row.maxOffset.toLocaleString()}</span>
+                                                </div>
+                                                <div className="w-full bg-gray-100 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden">
+                                                    <div className="bg-purple-500 h-1.5 rounded-full" style={{width: calcBarWidth(row.maxOffset)}}></div>
+                                                </div>
+                                            </div>
+                                            <div className="rounded-lg border border-gray-100 bg-gray-50/80 px-3 py-2 text-xs text-gray-500 dark:border-gray-800 dark:bg-gray-800/40 dark:text-gray-400">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <span>Last Updated</span>
+                                                    <span className="font-mono text-right text-gray-700 dark:text-gray-300">{formatTimestamp(row.lastUpdateTimestamp)}</span>
+                                                </div>
                                             </div>
                                         </div>
-                                        <div className="space-y-1">
-                                            <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400">
-                                                <span>Max Offset</span>
-                                                <span className="font-mono text-gray-900 dark:text-white">{row.maxOffset}</span>
-                                            </div>
-                                            <div className="w-full bg-gray-100 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden">
-                                                <div className="bg-purple-500 h-1.5 rounded-full" style={{width: '75%'}}></div>
-                                            </div>
-                                        </div>
-                                    </div>
 
-                                    {/* Footer */}
-                                    <div
-                                        className="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800 text-[10px] text-gray-400 dark:text-gray-500 flex items-center justify-between">
+                                        <div
+                                            className="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-100 dark:border-gray-800 text-[10px] text-gray-400 dark:text-gray-500 flex items-center justify-between">
                     <span className="flex items-center">
                        <Clock className="w-3 h-3 mr-1"/>
                        Updated
                     </span>
-                                        <span className="font-mono">{row.lastUpdate.split(' ')[1]}</span>
+                                            <span className="font-mono">{formatTimeOnly(row.lastUpdateTimestamp)}</span>
+                                        </div>
                                     </div>
-                                </div>
-                            ))}
-                        </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
 
                     {/* Footer */}
@@ -833,6 +1275,59 @@ const TopicConsumerManageModal = ({isOpen, onClose, topic}: TopicRouterModalProp
 };
 
 const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
+    const [tag, setTag] = useState('');
+    const [messageKey, setMessageKey] = useState('');
+    const [messageBody, setMessageBody] = useState('');
+    const [traceEnabled, setTraceEnabled] = useState(false);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [error, setError] = useState('');
+    const [sendResult, setSendResult] = useState<TopicSendMessageResult | null>(null);
+
+    useEffect(() => {
+        if (!isOpen) {
+            return;
+        }
+
+        setTag('');
+        setMessageKey('');
+        setMessageBody('');
+        setTraceEnabled(false);
+        setIsSubmitting(false);
+        setError('');
+        setSendResult(null);
+    }, [isOpen, topic?.name]);
+
+    const handleSubmit = async () => {
+        if (!topic?.name) {
+            return;
+        }
+
+        if (!messageBody.trim()) {
+            setError('Message body is required before sending.');
+            return;
+        }
+
+        setIsSubmitting(true);
+        setError('');
+        setSendResult(null);
+
+        try {
+            const result = await TopicService.sendTopicMessage({
+                topic: topic.name,
+                key: messageKey,
+                tag,
+                messageBody,
+                traceEnabled,
+            });
+            setSendResult(result);
+            toast.success(`Message sent to ${topic.name}`);
+        } catch (submitError) {
+            setError(submitError instanceof Error ? submitError.message : 'Failed to send topic message.');
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
     if (!isOpen) return null;
 
     return (
@@ -895,6 +1390,8 @@ const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
                                 </label>
                                 <input
                                     type="text"
+                                    value={tag}
+                                    onChange={(event) => setTag(event.target.value)}
                                     className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder-gray-400 dark:placeholder-gray-600"
                                     placeholder="Optional tag..."
                                 />
@@ -908,6 +1405,8 @@ const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
                                 </label>
                                 <input
                                     type="text"
+                                    value={messageKey}
+                                    onChange={(event) => setMessageKey(event.target.value)}
                                     className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder-gray-400 dark:placeholder-gray-600"
                                     placeholder="Optional key..."
                                 />
@@ -923,9 +1422,14 @@ const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
                                 </label>
                                 <textarea
                                     rows={5}
+                                    value={messageBody}
+                                    onChange={(event) => setMessageBody(event.target.value)}
                                     className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-mono resize-none placeholder-gray-400 dark:placeholder-gray-600"
-                                    placeholder="{ 'key': 'value' }"
-                                ></textarea>
+                                    placeholder="{ 1: 'value', nested: { 2: true } }"
+                                />
+                            </div>
+                            <div className="col-start-2 rounded-lg border border-blue-100 bg-blue-50/80 px-3 py-2 text-xs text-blue-700 dark:border-blue-900/40 dark:bg-blue-950/30 dark:text-blue-300">
+                                Standard JSON and relaxed JSON are both supported here. Numeric keys like <span className="font-mono">{`{ 1: 'value' }`}</span> will be normalized before sending.
                             </div>
 
                             {/* Enable Message Trace */}
@@ -934,7 +1438,12 @@ const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
                                     className="col-start-2 flex items-center bg-gray-50 dark:bg-gray-800 px-3 py-2 rounded-lg border border-gray-100 dark:border-gray-700">
                                     <label className="flex items-center space-x-3 cursor-pointer select-none w-full">
                                         <div className="relative">
-                                            <input type="checkbox" className="peer sr-only"/>
+                                            <input
+                                                type="checkbox"
+                                                checked={traceEnabled}
+                                                onChange={(event) => setTraceEnabled(event.target.checked)}
+                                                className="peer sr-only"
+                                            />
                                             <div
                                                 className="w-9 h-5 bg-gray-200 dark:bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
                                         </div>
@@ -946,6 +1455,23 @@ const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
                                 </div>
                             </div>
 
+                            {error && (
+                                <div className="rounded-lg border border-red-200 bg-red-50/80 px-3 py-2 text-sm text-red-600 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
+                                    {error}
+                                </div>
+                            )}
+
+                            {sendResult && (
+                                <div className="rounded-lg border border-emerald-200 bg-emerald-50/80 px-3 py-3 text-sm text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-300">
+                                    <div className="font-semibold">Send result: {sendResult.sendStatus}</div>
+                                    <div className="mt-1 font-mono text-xs break-all">
+                                        {sendResult.messageId ? `Message ID: ${sendResult.messageId}` : 'Broker accepted the message without returning a message id.'}
+                                    </div>
+                                    <div className="mt-1 text-xs">
+                                        Queue: {sendResult.brokerName ?? '-'} / {sendResult.queueId ?? '-'} / offset {sendResult.queueOffset}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
 
@@ -958,14 +1484,12 @@ const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
                             Close
                         </button>
                         <button
-                            onClick={() => {
-                                toast.success(`Message sent to ${topic?.name}`);
-                                onClose();
-                            }}
+                            onClick={() => void handleSubmit()}
+                            disabled={isSubmitting}
                             className="px-6 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 transition-all shadow-md hover:shadow-lg flex items-center dark:!bg-gray-900 dark:!text-white dark:border dark:border-gray-700 dark:hover:!bg-gray-800"
                         >
                             <Send className="w-4 h-4 mr-2"/>
-                            Commit
+                            {isSubmitting ? 'Sending...' : 'Commit'}
                         </button>
                     </div>
                 </motion.div>
