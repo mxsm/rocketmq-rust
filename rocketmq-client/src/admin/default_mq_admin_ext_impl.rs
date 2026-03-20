@@ -898,7 +898,30 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         producer_group: CheetahString,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<ProducerConnection> {
-        todo!()
+        let mut result = ProducerConnection::new();
+        let timeout = self.timeout_millis.as_millis() as u64;
+
+        if let Some(topic_route_data) = self.examine_topic_route_info(topic).await? {
+            let brokers = &topic_route_data.broker_datas;
+            let selected_addr = brokers
+                .choose(&mut rand::rng())
+                .and_then(|broker_data| broker_data.select_broker_addr());
+            if let Some(addr) = selected_addr {
+                result = self
+                    .client_instance
+                    .as_ref()
+                    .unwrap()
+                    .get_mq_client_api_impl()
+                    .get_producer_connection_list(addr.as_str(), producer_group.clone(), timeout)
+                    .await?;
+            }
+        }
+
+        if result.connection_set().is_empty() {
+            return Err(mq_client_err!("Not found the producer group connection"));
+        }
+
+        Ok(result)
     }
 
     async fn get_all_producer_info(
@@ -2606,6 +2629,8 @@ mod tests {
     use std::collections::HashMap;
 
     use cheetah_string::CheetahString;
+    use rocketmq_remoting::protocol::body::connection::Connection;
+    use rocketmq_remoting::protocol::body::producer_connection::ProducerConnection;
 
     use super::encode_topic_attributes;
     use super::merge_order_conf_entries;
@@ -2630,5 +2655,21 @@ mod tests {
         let encoded = encode_topic_attributes(&attributes);
 
         assert_eq!(encoded, Some(CheetahString::from("+message.type=NORMAL")));
+    }
+
+    #[test]
+    fn producer_connection_empty_set_represents_offline_group() {
+        let connection = ProducerConnection::new();
+        assert!(connection.connection_set().is_empty());
+    }
+
+    #[test]
+    fn producer_connection_with_entries_represents_online_group() {
+        let mut connection = ProducerConnection::new();
+        let mut entry = Connection::new();
+        entry.set_client_id("client-a".into());
+        connection.connection_set_mut().insert(entry);
+
+        assert_eq!(connection.connection_set().len(), 1);
     }
 }

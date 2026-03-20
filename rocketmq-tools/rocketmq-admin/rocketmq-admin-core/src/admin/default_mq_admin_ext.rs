@@ -452,7 +452,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         producer_group: CheetahString,
         topic: CheetahString,
     ) -> rocketmq_error::RocketMQResult<ProducerConnection> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .examine_producer_connection_info(producer_group, topic)
+            .await
     }
 
     async fn get_name_server_address_list(&self) -> Vec<CheetahString> {

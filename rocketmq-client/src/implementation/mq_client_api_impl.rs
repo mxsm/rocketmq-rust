@@ -81,6 +81,7 @@ use rocketmq_remoting::protocol::body::get_lite_group_info_response_body::GetLit
 use rocketmq_remoting::protocol::body::get_lite_topic_info_response_body::GetLiteTopicInfoResponseBody;
 use rocketmq_remoting::protocol::body::get_parent_topic_info_response_body::GetParentTopicInfoResponseBody;
 use rocketmq_remoting::protocol::body::ha_runtime_info::HARuntimeInfo;
+use rocketmq_remoting::protocol::body::producer_connection::ProducerConnection;
 use rocketmq_remoting::protocol::body::producer_table_info::ProducerTableInfo;
 use rocketmq_remoting::protocol::body::query_assignment_request_body::QueryAssignmentRequestBody;
 use rocketmq_remoting::protocol::body::query_assignment_response_body::QueryAssignmentResponseBody;
@@ -117,6 +118,7 @@ use rocketmq_remoting::protocol::header::get_meta_data_response_header::GetMetaD
 use rocketmq_remoting::protocol::header::get_min_offset_request_header::GetMinOffsetRequestHeader;
 use rocketmq_remoting::protocol::header::get_min_offset_response_header::GetMinOffsetResponseHeader;
 use rocketmq_remoting::protocol::header::get_parent_topic_info_request_header::GetParentTopicInfoRequestHeader;
+use rocketmq_remoting::protocol::header::get_producer_connection_list_request_header::GetProducerConnectionListRequestHeader;
 use rocketmq_remoting::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
 use rocketmq_remoting::protocol::header::get_topic_stats_info_request_header::GetTopicStatsInfoRequestHeader;
 use rocketmq_remoting::protocol::header::get_user_request_headers::GetUserRequestHeader;
@@ -2061,6 +2063,46 @@ impl MQClientAPIImpl {
             ResponseCode::Success => {
                 if let Some(body) = response.body() {
                     return ConsumerConnection::decode(body);
+                }
+            }
+            _ => {
+                return Err(client_broker_err!(
+                    response.code(),
+                    response.remark().map_or("".to_string(), |s| s.to_string()),
+                    addr.to_string()
+                ));
+            }
+        }
+        Err(client_broker_err!(
+            response.code(),
+            response.remark().map_or("".to_string(), |s| s.to_string()),
+            addr.to_string()
+        ))
+    }
+
+    pub async fn get_producer_connection_list(
+        &mut self,
+        addr: &str,
+        producer_group: CheetahString,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<ProducerConnection> {
+        let request_header = GetProducerConnectionListRequestHeader {
+            producer_group,
+            rpc_request_header: None,
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::GetProducerConnectionList, request_header);
+        let response = self
+            .remoting_client
+            .invoke_request(
+                Some(mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr).as_ref()),
+                request,
+                timeout_millis,
+            )
+            .await?;
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                if let Some(body) = response.body() {
+                    return ProducerConnection::decode(body);
                 }
             }
             _ => {

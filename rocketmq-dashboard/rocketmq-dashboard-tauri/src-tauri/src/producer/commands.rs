@@ -1,4 +1,4 @@
-// Copyright 2025 The RocketMQ Rust Authors
+// Copyright 2023 The RocketMQ Rust Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,23 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Common shared code for RocketMQ Dashboard implementations
-//!
-//! This crate provides shared functionality, data models, and business logic
-//! that can be reused across different dashboard implementations (GPUI, Tauri, etc.)
+use crate::producer::service::ProducerManager;
+use crate::producer::types::ProducerConnectionView;
+use rocketmq_dashboard_common::ProducerConnectionQueryRequest;
+use tauri::State;
 
-pub mod api;
-pub mod cluster;
-pub mod models;
-pub mod nameserver;
-pub mod producer;
-pub mod service;
-pub mod topic;
-
-pub use api::*;
-pub use cluster::*;
-pub use models::*;
-pub use nameserver::*;
-pub use producer::*;
-pub use service::*;
-pub use topic::*;
+#[tauri::command]
+pub async fn query_producer_connections(
+    request: ProducerConnectionQueryRequest,
+    producer_manager: State<'_, ProducerManager>,
+) -> Result<ProducerConnectionView, String> {
+    producer_manager
+        .query_producer_connections(request)
+        .await
+        .map_err(|error| error.to_string())
+}
