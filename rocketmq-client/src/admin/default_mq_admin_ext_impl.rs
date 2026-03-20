@@ -23,6 +23,7 @@ use std::time::Duration;
 use crate::admin::mq_admin_ext_async::MQAdminExt;
 use crate::admin::mq_admin_ext_async_inner::MQAdminExtInnerImpl;
 use crate::base::client_config::ClientConfig;
+use crate::base::validators::Validators;
 use crate::common::admin_tool_result::AdminToolResult;
 use crate::consumer::consumer_impl::pull_request_ext::PullResultExt;
 use crate::consumer::pull_callback::PullCallback;
@@ -504,14 +505,34 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         broker_addr: CheetahString,
         properties: HashMap<CheetahString, CheetahString>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        let validator_input = properties
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect::<HashMap<String, String>>();
+        Validators::check_broker_config(&validator_input)?;
+
+        if let Some(ref mq_client_instance) = self.client_instance {
+            mq_client_instance
+                .get_mq_client_api_impl()
+                .update_broker_config(&broker_addr, properties, self.timeout_millis.as_millis() as u64)
+                .await
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn get_broker_config(
         &self,
         broker_addr: CheetahString,
     ) -> rocketmq_error::RocketMQResult<HashMap<CheetahString, CheetahString>> {
-        todo!()
+        if let Some(ref mq_client_instance) = self.client_instance {
+            mq_client_instance
+                .get_mq_client_api_impl()
+                .get_broker_config(&broker_addr, self.timeout_millis.as_millis() as u64)
+                .await
+        } else {
+            Err(rocketmq_error::RocketMQError::ClientNotStarted)
+        }
     }
 
     async fn create_and_update_topic_config(

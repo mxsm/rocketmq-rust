@@ -3158,6 +3158,67 @@ impl MQClientAPIImpl {
         Ok(())
     }
 
+    pub(crate) async fn update_broker_config(
+        &self,
+        addr: &CheetahString,
+        properties: HashMap<CheetahString, CheetahString>,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let validator_input = properties
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect::<HashMap<String, String>>();
+        crate::base::validators::Validators::check_broker_config(&validator_input)?;
+
+        let body = mix_all::properties_to_string(&properties);
+        if body.is_empty() {
+            return Ok(());
+        }
+
+        let request =
+            RemotingCommand::create_remoting_command(RequestCode::UpdateBrokerConfig).set_body(body.to_string());
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => Ok(()),
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
+            )),
+        }
+    }
+
+    pub(crate) async fn get_broker_config(
+        &self,
+        addr: &CheetahString,
+        timeout_millis: u64,
+    ) -> RocketMQResult<HashMap<CheetahString, CheetahString>> {
+        let request = RemotingCommand::create_remoting_command(RequestCode::GetBrokerConfig);
+        let response = self
+            .remoting_client
+            .invoke_request(Some(addr), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                let body = response
+                    .get_body()
+                    .ok_or_else(|| mq_client_err!("Broker config response body is empty".to_string()))?;
+                let body_str = String::from_utf8_lossy(body.as_ref());
+                mix_all::string_to_properties(body_str.as_ref())
+                    .ok_or_else(|| mq_client_err!("Failed to parse broker config response body".to_string()))
+            }
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
+            )),
+        }
+    }
+
     pub async fn get_name_server_config(
         &self,
         name_servers: Option<Vec<CheetahString>>,
