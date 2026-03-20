@@ -225,7 +225,8 @@ impl TopicManager {
             let session = session_guard
                 .as_mut()
                 .expect("topic admin session should be initialized before use");
-            self.create_or_update_topic_with_admin(&mut session.admin, request).await
+            self.create_or_update_topic_with_admin(&mut session.admin, request)
+                .await
         };
 
         if Self::should_reset_session(&result) {
