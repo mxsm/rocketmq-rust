@@ -36,13 +36,18 @@ use rocketmq_admin_core::admin::default_mq_admin_ext::DefaultMQAdminExt;
 use rocketmq_client_rust::admin::mq_admin_ext_async::MQAdminExt;
 use rocketmq_client_rust::base::client_config::ClientConfig;
 use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+use rocketmq_client_rust::producer::local_transaction_state::LocalTransactionState;
 use rocketmq_client_rust::producer::mq_producer::MQProducer;
+use rocketmq_client_rust::producer::transaction_listener::TransactionListener;
+use rocketmq_client_rust::producer::transaction_mq_producer::TransactionMQProducer;
 use rocketmq_common::common::attribute::Attribute;
 use rocketmq_common::common::attribute::topic_attributes::TopicAttributes;
 use rocketmq_common::common::config::TopicConfig as RocketMqTopicConfig;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::topic::TopicValidator;
+use rocketmq_dashboard_common::DeleteTopicByBrokerRequest;
 use rocketmq_dashboard_common::DeleteTopicRequest;
 use rocketmq_dashboard_common::NameServerConfigSnapshot;
 use rocketmq_dashboard_common::ResetOffsetRequest;
@@ -57,6 +62,7 @@ use rocketmq_remoting::protocol::admin::topic_stats_table::TopicStatsTable;
 use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
 use rocketmq_remoting::protocol::body::topic_info_wrapper::TopicConfigSerializeWrapper;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -74,6 +80,22 @@ struct TopicBrokerConfigSnapshot {
     broker_name: String,
     cluster_name: Option<String>,
     config: RocketMqTopicConfig,
+}
+
+struct DashboardTransactionListener;
+
+impl TransactionListener for DashboardTransactionListener {
+    fn execute_local_transaction(
+        &self,
+        _msg: &dyn rocketmq_common::common::message::MessageTrait,
+        _arg: Option<&(dyn Any + Send + Sync)>,
+    ) -> LocalTransactionState {
+        LocalTransactionState::CommitMessage
+    }
+
+    fn check_local_transaction(&self, _msg: &MessageExt) -> LocalTransactionState {
+        LocalTransactionState::CommitMessage
+    }
 }
 
 impl TopicManager {
@@ -251,6 +273,30 @@ impl TopicManager {
 
         if Self::should_reset_session(&result) {
             self.reset_admin_session(&mut session_guard, "delete_topic failed")
+                .await;
+        }
+        drop(session_guard);
+
+        result
+    }
+
+    pub(crate) async fn delete_topic_by_broker(
+        &self,
+        request: DeleteTopicByBrokerRequest,
+    ) -> TopicResult<TopicMutationResult> {
+        let mut session_guard = self.admin_session.lock().await;
+        self.ensure_admin_session(&mut session_guard).await?;
+
+        let result = {
+            let session = session_guard
+                .as_mut()
+                .expect("topic admin session should be initialized before use");
+            self.delete_topic_by_broker_with_admin(&mut session.admin, request)
+                .await
+        };
+
+        if Self::should_reset_session(&result) {
+            self.reset_admin_session(&mut session_guard, "delete_topic_by_broker failed")
                 .await;
         }
         drop(session_guard);
@@ -608,6 +654,11 @@ impl TopicManager {
             format!("+{}", TopicAttributes::topic_message_type_attribute().name()).into(),
             normalize_message_type(request.message_type.as_deref()).into(),
         );
+        let attributes_log = attributes
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join(",");
 
         let topic_config = RocketMqTopicConfig {
             topic_name: Some(request.topic_name.clone().into()),
@@ -618,6 +669,23 @@ impl TopicManager {
             attributes,
             ..RocketMqTopicConfig::default()
         };
+
+        let mut sorted_brokers: Vec<String> = target_broker_names.iter().cloned().collect();
+        sorted_brokers.sort();
+        let mut sorted_addrs: Vec<String> = target_addrs.iter().map(|addr| addr.to_string()).collect();
+        sorted_addrs.sort();
+        log::info!(
+            "create_or_update_topic topic=`{}` clusters={:?} brokers={:?} resolved_brokers={:?} resolved_addrs={:?} \
+             order={} message_type={} attributes={}",
+            request.topic_name,
+            request.cluster_name_list,
+            request.broker_name_list,
+            sorted_brokers,
+            sorted_addrs,
+            request.order,
+            normalize_message_type(request.message_type.as_deref()),
+            attributes_log
+        );
 
         for broker_addr in &target_addrs {
             admin
@@ -683,6 +751,50 @@ impl TopicManager {
         Ok(TopicMutationResult {
             success: true,
             message: format!("Topic `{topic}` was deleted from {} cluster(s).", clusters.len()),
+            topic_name: Some(topic),
+            affected_queues: None,
+        })
+    }
+
+    async fn delete_topic_by_broker_with_admin(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        request: DeleteTopicByBrokerRequest,
+    ) -> TopicResult<TopicMutationResult> {
+        let topic = request.topic.trim().to_string();
+        if topic.is_empty() {
+            return Err(TopicError::Validation("Topic name is required.".into()));
+        }
+
+        let broker_name = request.broker_name.trim().to_string();
+        if broker_name.is_empty() {
+            return Err(TopicError::Validation("Broker name is required.".into()));
+        }
+
+        let cluster_info = admin
+            .examine_broker_cluster_info()
+            .await
+            .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+        let broker_addr = find_master_addr_by_broker_name(&cluster_info, &broker_name).ok_or_else(|| {
+            TopicError::Validation(format!(
+                "Broker `{broker_name}` was not found in the current cluster view."
+            ))
+        })?;
+        log::info!(
+            "delete_topic_by_broker topic=`{}` broker=`{}` addr=`{}`",
+            topic,
+            broker_name,
+            broker_addr
+        );
+
+        admin
+            .delete_topic_in_broker(HashSet::from([broker_addr]), topic.clone().into())
+            .await
+            .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+
+        Ok(TopicMutationResult {
+            success: true,
+            message: format!("Topic `{topic}` was deleted from broker `{broker_name}`."),
             topic_name: Some(topic),
             affected_queues: None,
         })
@@ -841,11 +953,19 @@ impl TopicManager {
                 },
             )
             .await?;
-        if !matches!(topic_config.message_type.as_str(), "NORMAL" | "UNSPECIFIED") {
-            return Err(TopicError::Validation(format!(
-                "Desktop send is currently limited to NORMAL topics. `{}` is `{}`.",
-                request.topic, topic_config.message_type
-            )));
+        log::info!(
+            "send_topic_message topic=`{}` message_type=`{}` trace_enabled={} key_present={} tag_present={}",
+            request.topic,
+            topic_config.message_type,
+            request.trace_enabled,
+            !request.key.trim().is_empty(),
+            !request.tag.trim().is_empty()
+        );
+
+        let normalized_message_body = normalize_topic_message_body(&request.message_body)?;
+
+        if topic_config.message_type == "TRANSACTION" {
+            return send_transaction_message_with_runtime(snapshot.clone(), request, normalized_message_body).await;
         }
 
         let current_namesrv = snapshot.current_namesrv.clone().ok_or_else(|| {
@@ -867,40 +987,117 @@ impl TopicManager {
             .await
             .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
 
-        let normalized_message_body = normalize_topic_message_body(&request.message_body)?;
-        let mut builder = Message::builder()
-            .topic(request.topic.clone())
-            .body_slice(normalized_message_body.as_bytes())
-            .trace_switch(request.trace_enabled);
-        if !request.tag.trim().is_empty() {
-            builder = builder.tags(request.tag.clone());
-        }
-        if !request.key.trim().is_empty() {
-            builder = builder.key(request.key.clone());
-        }
-
+        let message = build_send_message(&request, &normalized_message_body);
         let send_result = producer
-            .send_with_timeout(builder.build_unchecked(), 5_000)
+            .send_with_timeout(message, 5_000)
             .await
             .map_err(|error| TopicError::RocketMQ(error.to_string()));
         producer.shutdown().await;
         let send_result = send_result?
             .ok_or_else(|| TopicError::RocketMQ("Broker acknowledged send without returning a result.".into()))?;
 
-        Ok(TopicSendMessageResult {
-            topic: request.topic,
-            send_status: format!("{:?}", send_result.send_status),
-            message_id: send_result.msg_id.map(|message_id| message_id.to_string()),
-            broker_name: send_result
-                .message_queue
-                .as_ref()
-                .map(|queue| queue.broker_name().to_string()),
-            queue_id: send_result.message_queue.as_ref().map(|queue| queue.queue_id()),
-            queue_offset: send_result.queue_offset,
-            transaction_id: send_result.transaction_id,
-            region_id: send_result.region_id,
-        })
+        Ok(map_send_result(request.topic, send_result))
     }
+}
+
+async fn send_transaction_message_with_runtime(
+    snapshot: NameServerConfigSnapshot,
+    request: SendTopicMessageRequest,
+    normalized_message_body: String,
+) -> TopicResult<TopicSendMessageResult> {
+    tokio::task::spawn_blocking(move || -> TopicResult<TopicSendMessageResult> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+
+        runtime.block_on(async move {
+            let current_namesrv = snapshot.current_namesrv.clone().ok_or_else(|| {
+                TopicError::Configuration(
+                    "No active NameServer is configured. Add and select a NameServer first.".into(),
+                )
+            })?;
+
+            let mut client_config = ClientConfig::new();
+            client_config.set_namesrv_addr(current_namesrv.into());
+            client_config.set_vip_channel_enabled(snapshot.use_vip_channel);
+            client_config.set_use_tls(snapshot.use_tls);
+
+            let mut producer = TransactionMQProducer::builder()
+                .producer_group(format!("dashboard-topic-tx-sender-{}", Uuid::new_v4()))
+                .client_config(client_config)
+                .transaction_listener(DashboardTransactionListener)
+                .build();
+
+            producer
+                .start()
+                .await
+                .map_err(|error| TopicError::RocketMQ(error.to_string()))?;
+
+            let message = build_send_message(&request, &normalized_message_body);
+            let tx_result = producer
+                .send_message_in_transaction::<(), _>(message, None)
+                .await
+                .map_err(|error| TopicError::RocketMQ(error.to_string()));
+            producer.shutdown().await;
+            let tx_result = tx_result?;
+
+            map_transaction_send_result(request.topic, tx_result)
+        })
+    })
+    .await
+    .map_err(|error| TopicError::RocketMQ(error.to_string()))?
+}
+
+fn build_send_message(request: &SendTopicMessageRequest, normalized_message_body: &str) -> Message {
+    let mut builder = Message::builder()
+        .topic(request.topic.clone())
+        .body_slice(normalized_message_body.as_bytes())
+        .trace_switch(request.trace_enabled);
+    if !request.tag.trim().is_empty() {
+        builder = builder.tags(request.tag.clone());
+    }
+    if !request.key.trim().is_empty() {
+        builder = builder.key(request.key.clone());
+    }
+    builder.build_unchecked()
+}
+
+fn map_send_result(
+    topic: String,
+    send_result: rocketmq_client_rust::producer::send_result::SendResult,
+) -> TopicSendMessageResult {
+    TopicSendMessageResult {
+        topic,
+        send_status: format!("{:?}", send_result.send_status),
+        message_id: send_result.msg_id.map(|message_id| message_id.to_string()),
+        broker_name: send_result
+            .message_queue
+            .as_ref()
+            .map(|queue| queue.broker_name().to_string()),
+        queue_id: send_result.message_queue.as_ref().map(|queue| queue.queue_id()),
+        queue_offset: send_result.queue_offset,
+        transaction_id: send_result.transaction_id,
+        region_id: send_result.region_id,
+        local_transaction_state: None,
+    }
+}
+
+fn map_transaction_send_result(
+    topic: String,
+    transaction_result: rocketmq_client_rust::producer::transaction_send_result::TransactionSendResult,
+) -> TopicResult<TopicSendMessageResult> {
+    let send_result = transaction_result.send_result.ok_or_else(|| {
+        TopicError::RocketMQ("Transaction producer completed without returning a send result.".into())
+    })?;
+    let mut result = map_send_result(topic, send_result);
+    result.local_transaction_state = transaction_result
+        .local_transaction_state
+        .map(|state| state.to_string());
+    if let Some(local_state) = result.local_transaction_state.as_deref() {
+        result.send_status = format!("{} ({local_state})", result.send_status);
+    }
+    Ok(result)
 }
 
 fn classify_topic(topic: &str, configs: Option<&[TopicBrokerConfigSnapshot]>) -> (String, String, bool) {
@@ -1514,13 +1711,26 @@ fn quote_numeric_object_keys(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::TopicBrokerConfigSnapshot;
+    use super::build_send_message;
     use super::classify_topic;
     use super::cluster_targets_from_cluster_info;
+    use super::find_master_addr_by_broker_name;
     use super::is_reconnect_worthy_error;
+    use super::map_send_result;
+    use super::map_transaction_send_result;
+    use super::master_targets_by_cluster_name;
     use super::normalize_message_type;
     use super::normalize_topic_message_body;
     use super::quote_numeric_object_keys;
+    use cheetah_string::CheetahString;
+    use rocketmq_client_rust::producer::local_transaction_state::LocalTransactionState;
+    use rocketmq_client_rust::producer::send_result::SendResult;
+    use rocketmq_client_rust::producer::send_status::SendStatus;
+    use rocketmq_client_rust::producer::transaction_send_result::TransactionSendResult;
     use rocketmq_common::common::config::TopicConfig as RocketMqTopicConfig;
+    use rocketmq_common::common::message::message_queue::MessageQueue;
+    use rocketmq_common::common::mix_all;
+    use rocketmq_dashboard_common::SendTopicMessageRequest;
     use rocketmq_remoting::protocol::body::broker_body::cluster_info::ClusterInfo;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
     use std::collections::HashMap;
@@ -1586,6 +1796,84 @@ mod tests {
     }
 
     #[test]
+    fn find_master_addr_by_broker_name_returns_master_address() {
+        let mut broker_addrs = HashMap::new();
+        broker_addrs.insert(mix_all::MASTER_ID, CheetahString::from("10.0.0.1:10911"));
+
+        let mut broker_addr_table = HashMap::new();
+        broker_addr_table.insert(
+            "broker-a".into(),
+            BrokerData::new("cluster-a".into(), "broker-a".into(), broker_addrs, None),
+        );
+
+        let cluster_info = ClusterInfo::new(Some(broker_addr_table), Some(HashMap::new()));
+
+        assert_eq!(
+            find_master_addr_by_broker_name(&cluster_info, "broker-a"),
+            Some(CheetahString::from("10.0.0.1:10911"))
+        );
+    }
+
+    #[test]
+    fn find_master_addr_by_broker_name_returns_none_for_unknown_broker() {
+        let cluster_info = ClusterInfo::new(Some(HashMap::new()), Some(HashMap::new()));
+
+        assert_eq!(find_master_addr_by_broker_name(&cluster_info, "missing-broker"), None);
+    }
+
+    #[test]
+    fn master_targets_by_cluster_name_returns_sorted_master_targets() {
+        let mut broker_addr_table = HashMap::new();
+
+        let mut broker_b_addrs = HashMap::new();
+        broker_b_addrs.insert(mix_all::MASTER_ID, CheetahString::from("10.0.0.2:10911"));
+        broker_addr_table.insert(
+            "broker-b".into(),
+            BrokerData::new("cluster-a".into(), "broker-b".into(), broker_b_addrs, None),
+        );
+
+        let mut broker_a_addrs = HashMap::new();
+        broker_a_addrs.insert(mix_all::MASTER_ID, CheetahString::from("10.0.0.1:10911"));
+        broker_addr_table.insert(
+            "broker-a".into(),
+            BrokerData::new("cluster-a".into(), "broker-a".into(), broker_a_addrs, None),
+        );
+
+        let cluster_addr_table = HashMap::from([(
+            CheetahString::from("cluster-a"),
+            HashSet::from_iter([CheetahString::from("broker-b"), CheetahString::from("broker-a")]),
+        )]);
+        let cluster_info = ClusterInfo::new(Some(broker_addr_table), Some(cluster_addr_table));
+
+        let targets = master_targets_by_cluster_name(&cluster_info, "cluster-a").expect("cluster targets");
+
+        assert_eq!(
+            targets,
+            vec![
+                ("broker-a".to_string(), CheetahString::from("10.0.0.1:10911")),
+                ("broker-b".to_string(), CheetahString::from("10.0.0.2:10911")),
+            ]
+        );
+    }
+
+    #[test]
+    fn master_targets_by_cluster_name_skips_brokers_without_master_addr() {
+        let broker_addr_table = HashMap::from([(
+            CheetahString::from("broker-a"),
+            BrokerData::new("cluster-a".into(), "broker-a".into(), HashMap::new(), None),
+        )]);
+        let cluster_addr_table = HashMap::from([(
+            CheetahString::from("cluster-a"),
+            HashSet::from_iter([CheetahString::from("broker-a")]),
+        )]);
+        let cluster_info = ClusterInfo::new(Some(broker_addr_table), Some(cluster_addr_table));
+
+        let targets = master_targets_by_cluster_name(&cluster_info, "cluster-a").expect("cluster targets");
+
+        assert!(targets.is_empty());
+    }
+
+    #[test]
     fn reconnect_error_detection_only_matches_transport_failures() {
         assert!(is_reconnect_worthy_error("connection refused by broker"));
         assert!(is_reconnect_worthy_error("request timeout while talking to namesrv"));
@@ -1622,6 +1910,89 @@ mod tests {
         assert_eq!(
             normalize_topic_message_body("plain text body").unwrap(),
             "plain text body"
+        );
+    }
+
+    #[test]
+    fn build_send_message_carries_key_tag_and_trace_switch() {
+        let request = SendTopicMessageRequest {
+            topic: "TopicTest".to_string(),
+            key: "order-1".to_string(),
+            tag: "TagA".to_string(),
+            message_body: "payload".to_string(),
+            trace_enabled: true,
+        };
+
+        let message = build_send_message(&request, "payload");
+
+        assert_eq!(message.topic().to_string(), "TopicTest");
+        assert_eq!(message.tags(), Some("TagA"));
+        assert_eq!(message.keys(), Some(vec!["order-1".to_string()]));
+        assert!(message.properties().trace_switch());
+    }
+
+    #[test]
+    fn map_send_result_preserves_queue_and_transaction_metadata() {
+        let mut queue = MessageQueue::new();
+        queue.set_topic("TopicTest".into());
+        queue.set_broker_name("broker-a".into());
+        queue.set_queue_id(3);
+
+        let result = map_send_result(
+            "TopicTest".to_string(),
+            SendResult::new_with_additional_fields(
+                SendStatus::SendOk,
+                Some(CheetahString::from("msg-1")),
+                Some(queue),
+                42,
+                Some("tx-1".to_string()),
+                None,
+                Some("region-a".to_string()),
+            ),
+        );
+
+        assert_eq!(result.topic, "TopicTest");
+        assert_eq!(result.send_status, "SendOk");
+        assert_eq!(result.message_id.as_deref(), Some("msg-1"));
+        assert_eq!(result.broker_name.as_deref(), Some("broker-a"));
+        assert_eq!(result.queue_id, Some(3));
+        assert_eq!(result.queue_offset, 42);
+        assert_eq!(result.transaction_id.as_deref(), Some("tx-1"));
+        assert_eq!(result.region_id.as_deref(), Some("region-a"));
+        assert_eq!(result.local_transaction_state, None);
+    }
+
+    #[test]
+    fn map_transaction_send_result_includes_local_transaction_state() {
+        let result = map_transaction_send_result(
+            "TopicTest".to_string(),
+            TransactionSendResult {
+                local_transaction_state: Some(LocalTransactionState::CommitMessage),
+                send_result: Some(SendResult::default()),
+            },
+        )
+        .expect("transaction send result should map");
+
+        assert_eq!(result.topic, "TopicTest");
+        assert_eq!(result.send_status, "SendOk (COMMIT_MESSAGE)");
+        assert_eq!(result.local_transaction_state.as_deref(), Some("COMMIT_MESSAGE"));
+    }
+
+    #[test]
+    fn map_transaction_send_result_requires_nested_send_result() {
+        let error = map_transaction_send_result(
+            "TopicTest".to_string(),
+            TransactionSendResult {
+                local_transaction_state: Some(LocalTransactionState::CommitMessage),
+                send_result: None,
+            },
+        )
+        .expect_err("missing send result should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Transaction producer completed without returning a send result.")
         );
     }
 }

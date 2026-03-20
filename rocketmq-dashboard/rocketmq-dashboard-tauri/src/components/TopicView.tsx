@@ -348,240 +348,6 @@ const TopicRouterModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
     );
 };
 
-const LegacyTopicConfigModal = ({isOpen, onClose, topic}: TopicRouterModalProps) => {
-    const [selectedBrokers, setSelectedBrokers] = useState(['mxsm']);
-    const [isBrokerDropdownOpen, setIsBrokerDropdownOpen] = useState(false);
-    // Mock broker data
-    const brokers = ['mxsm', 'broker-a', 'broker-b', 'broker-c'];
-
-    const toggleBroker = (broker: string) => {
-        if (selectedBrokers.includes(broker)) {
-            setSelectedBrokers(selectedBrokers.filter(b => b !== broker));
-        } else {
-            setSelectedBrokers([...selectedBrokers, broker]);
-        }
-    };
-
-    if (!isOpen) return null;
-
-    return (
-        <AnimatePresence>
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                <motion.div
-                    initial={{opacity: 0}}
-                    animate={{opacity: 0.3}}
-                    exit={{opacity: 0}}
-                    onClick={onClose}
-                    className="absolute inset-0 bg-black"
-                />
-                <motion.div
-                    initial={{opacity: 0, scale: 0.95, y: 10}}
-                    animate={{opacity: 1, scale: 1, y: 0}}
-                    exit={{opacity: 0, scale: 0.95, y: 10}}
-                    className="relative w-full max-w-2xl bg-white dark:bg-gray-900 rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] border border-gray-100 dark:border-gray-800"
-                >
-                    {/* Header */}
-                    <div className="px-6 py-5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between bg-white dark:bg-gray-900 z-10">
-                        <div>
-                            <h3 className="text-xl font-bold text-gray-800 dark:text-white flex items-center">
-                                <Settings className="w-5 h-5 mr-2 text-blue-500"/>
-                                Topic Configuration
-                            </h3>
-                            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                                Manage settings for <span className="font-mono text-gray-700 dark:text-gray-300 font-medium">{topic?.name || 'undefined'}</span>
-                            </p>
-                        </div>
-                        <button
-                            onClick={onClose}
-                            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors"
-                        >
-                            <X className="w-5 h-5"/>
-                        </button>
-                    </div>
-
-                    {/* Content - Scrollable */}
-                    <div className="p-6 overflow-y-auto bg-gray-50/50 dark:bg-gray-950/50 space-y-6" onClick={() => setIsBrokerDropdownOpen(false)}>
-
-                        {/* Card 1: Deployment Target */}
-                        <div className="bg-white dark:bg-gray-900 p-5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
-                            <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-4 flex items-center uppercase tracking-wider">
-                                <Server className="w-4 h-4 mr-2 text-gray-400 dark:text-gray-500"/> Deployment Target
-                            </h4>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                                <div>
-                                    <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Cluster Name</label>
-                                    <div className="relative">
-                                        <select
-                                            className="w-full px-3 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all appearance-none cursor-pointer hover:bg-white dark:hover:bg-gray-750 hover:shadow-sm">
-                                            <option>DefaultCluster</option>
-                                        </select>
-                                        <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none"/>
-                                    </div>
-                                </div>
-                                <div className="relative">
-                                    <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Broker Name (Multi-select)</label>
-                                    <div
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            setIsBrokerDropdownOpen(!isBrokerDropdownOpen);
-                                        }}
-                                        className="w-full min-h-[42px] px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-700 dark:text-gray-200 cursor-pointer hover:border-blue-500 dark:hover:border-blue-500 hover:shadow-sm flex flex-wrap gap-1.5 items-center transition-all relative"
-                                    >
-                                        {selectedBrokers.length === 0 ? (
-                                            <span className="text-gray-400 dark:text-gray-500">Select brokers...</span>
-                                        ) : (
-                                            selectedBrokers.map(b => (
-                                                <span key={b}
-                                                      className="bg-blue-50 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded text-xs border border-blue-100 dark:border-blue-800 flex items-center font-medium">
-                               {b}
-                                                    <X
-                                                        className="w-3 h-3 ml-1 hover:text-blue-900 dark:hover:text-blue-100 cursor-pointer"
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            toggleBroker(b);
-                                                        }}
-                                                    />
-                             </span>
-                                            ))
-                                        )}
-                                        <ChevronDown
-                                            className={`absolute right-3 top-3 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none transition-transform duration-200 ${isBrokerDropdownOpen ? 'rotate-180' : ''}`}/>
-                                    </div>
-
-                                    {/* Dropdown Menu */}
-                                    <AnimatePresence>
-                                        {isBrokerDropdownOpen && (
-                                            <motion.div
-                                                initial={{opacity: 0, y: 5}}
-                                                animate={{opacity: 1, y: 0}}
-                                                exit={{opacity: 0, y: 5}}
-                                                className="absolute z-20 top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-h-48 overflow-y-auto"
-                                                onClick={(e) => e.stopPropagation()}
-                                            >
-                                                {brokers.map(broker => (
-                                                    <div
-                                                        key={broker}
-                                                        onClick={() => toggleBroker(broker)}
-                                                        className="px-3 py-2.5 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer flex items-center space-x-3 border-b border-gray-50 dark:border-gray-700 last:border-0"
-                                                    >
-                                                        <div
-                                                            className={`w-4 h-4 border rounded flex items-center justify-center transition-colors ${selectedBrokers.includes(broker) ? 'bg-blue-600 border-blue-600 dark:bg-blue-500 dark:border-blue-500' : 'border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900'}`}>
-                                                            {selectedBrokers.includes(broker) && <Check className="w-3 h-3 text-white"/>}
-                                                        </div>
-                                                        <span
-                                                            className={`text-sm ${selectedBrokers.includes(broker) ? 'text-gray-900 dark:text-white font-medium' : 'text-gray-600 dark:text-gray-300'}`}>
-                                {broker}
-                              </span>
-                                                    </div>
-                                                ))}
-                                            </motion.div>
-                                        )}
-                                    </AnimatePresence>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Card 2: Topic Definition */}
-                        <div className="bg-white dark:bg-gray-900 p-5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
-                            <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-4 flex items-center uppercase tracking-wider">
-                                <FileText className="w-4 h-4 mr-2 text-gray-400 dark:text-gray-500"/> Topic Definition
-                            </h4>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                                <div className="md:col-span-2">
-                                    <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">
-                                        Topic Name <span className="text-red-500">*</span>
-                                    </label>
-                                    <input
-                                        type="text"
-                                        value={topic?.name || 'TopicTest'}
-                                        readOnly
-                                        className="w-full px-3 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-500 dark:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-mono"
-                                    />
-                                </div>
-                                <div className="md:col-span-2">
-                                    <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Message Type</label>
-                                    <div className="relative">
-                                        <select
-                                            className="w-full px-3 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all appearance-none cursor-pointer shadow-sm">
-                                            <option>UNSPECIFIED</option>
-                                            <option>NORMAL</option>
-                                            <option>FIFO</option>
-                                            <option>DELAY</option>
-                                            <option>TRANSACTION</option>
-                                        </select>
-                                        <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none"/>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Card 3: Queue Configuration */}
-                        <div className="bg-white dark:bg-gray-900 p-5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
-                            <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-4 flex items-center uppercase tracking-wider">
-                                <Database className="w-4 h-4 mr-2 text-gray-400 dark:text-gray-500"/> Queue Configuration
-                            </h4>
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-                                <div>
-                                    <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">
-                                        Write Queues <span className="text-red-500">*</span>
-                                    </label>
-                                    <input
-                                        type="number"
-                                        defaultValue={4}
-                                        className="w-full px-3 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-sm"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">
-                                        Read Queues <span className="text-red-500">*</span>
-                                    </label>
-                                    <input
-                                        type="number"
-                                        defaultValue={4}
-                                        className="w-full px-3 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-sm"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5">
-                                        Permission (Perm) <span className="text-red-500">*</span>
-                                    </label>
-                                    <input
-                                        type="number"
-                                        defaultValue={6}
-                                        className="w-full px-3 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-sm"
-                                    />
-                                </div>
-                            </div>
-                        </div>
-
-                    </div>
-
-                    {/* Footer */}
-                    <div className="px-6 py-4 bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800 flex justify-end space-x-3 z-10">
-                        <button
-                            onClick={onClose}
-                            className="px-4 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm"
-                        >
-                            Cancel
-                        </button>
-                        <button
-                            onClick={() => {
-                                toast.success(`Topic changes committed for ${selectedBrokers.length} brokers`);
-                                onClose();
-                            }}
-                            className="px-6 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 transition-all shadow-md hover:shadow-lg flex items-center dark:!bg-gray-900 dark:!text-white dark:border dark:border-gray-700 dark:hover:!bg-gray-800"
-                        >
-                            <Save className="w-4 h-4 mr-2"/>
-                            Commit Changes
-                        </button>
-                    </div>
-
-                </motion.div>
-            </div>
-        </AnimatePresence>
-    );
-};
-
 const TOPIC_CONFIG_FIELD_LABELS: Record<string, string> = {
     readQueueNums: 'Read Queues',
     writeQueueNums: 'Write Queues',
@@ -599,13 +365,16 @@ const formatAttributeLabel = (key: string) =>
 
 interface TopicConfigModalProps extends TopicRouterModalProps {
     onEdit: (seed: TopicEditorSeed) => void;
+    onRefresh: () => Promise<void>;
 }
 
-const TopicConfigModal = ({isOpen, onClose, topic, onEdit}: TopicConfigModalProps) => {
+const TopicConfigModal = ({isOpen, onClose, topic, onEdit, onRefresh}: TopicConfigModalProps) => {
     const [configData, setConfigData] = useState<TopicConfigView | null>(null);
     const [selectedBroker, setSelectedBroker] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
+    const [actionError, setActionError] = useState('');
+    const [isDeletingBroker, setIsDeletingBroker] = useState(false);
 
     useEffect(() => {
         if (!isOpen || !topic?.name) {
@@ -652,6 +421,8 @@ const TopicConfigModal = ({isOpen, onClose, topic, onEdit}: TopicConfigModalProp
         setSelectedBroker(null);
         setConfigData(null);
         setError('');
+        setActionError('');
+        setIsDeletingBroker(false);
     }, [isOpen, topic?.name]);
 
     if (!isOpen) return null;
@@ -661,6 +432,36 @@ const TopicConfigModal = ({isOpen, onClose, topic, onEdit}: TopicConfigModalProp
     const attributes = Object.entries(configData?.attributes ?? {}).sort(([left], [right]) => left.localeCompare(right));
     const inconsistentFields = configData?.inconsistentFields ?? [];
     const activeBroker = selectedBroker ?? configData?.brokerName ?? '';
+
+    const handleDeleteByBroker = async () => {
+        if (!configData || !activeBroker) {
+            return;
+        }
+
+        const confirmed = window.confirm(
+            `Delete topic "${configData.topicName}" from broker "${activeBroker}" only? This will not remove the NameServer topic mapping.`,
+        );
+        if (!confirmed) {
+            return;
+        }
+
+        setIsDeletingBroker(true);
+        setActionError('');
+
+        try {
+            const result = await TopicService.deleteTopicByBroker({
+                brokerName: activeBroker,
+                topic: configData.topicName,
+            });
+            toast.success(result.message || `Deleted ${configData.topicName} from ${activeBroker}`);
+            await onRefresh();
+            onClose();
+        } catch (deleteError) {
+            setActionError(getErrorMessage(deleteError, 'Failed to delete topic from the selected broker.'));
+        } finally {
+            setIsDeletingBroker(false);
+        }
+    };
 
     return (
         <AnimatePresence>
@@ -892,6 +693,12 @@ const TopicConfigModal = ({isOpen, onClose, topic, onEdit}: TopicConfigModalProp
                                         </div>
                                     )}
                                 </div>
+
+                                {actionError && (
+                                    <div className="rounded-xl border border-red-200 bg-red-50/80 px-5 py-4 text-sm text-red-600 shadow-sm dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
+                                        {actionError}
+                                    </div>
+                                )}
                             </>
                         )}
                     </div>
@@ -902,6 +709,14 @@ const TopicConfigModal = ({isOpen, onClose, topic, onEdit}: TopicConfigModalProp
                             className="px-4 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm"
                         >
                             Close
+                        </button>
+                        <button
+                            onClick={() => void handleDeleteByBroker()}
+                            disabled={!configData || isLoading || isDeletingBroker || !activeBroker}
+                            className="px-6 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-500 transition-all shadow-md hover:shadow-lg flex items-center disabled:cursor-not-allowed disabled:opacity-50 dark:bg-red-600 dark:text-white dark:hover:bg-red-500"
+                        >
+                            <Trash2 className="w-4 h-4 mr-2"/>
+                            {isDeletingBroker ? 'Deleting...' : 'Delete This Broker'}
                         </button>
                         <button
                             onClick={() => {
@@ -1375,11 +1190,13 @@ const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
     const [messageBody, setMessageBody] = useState('');
     const [traceEnabled, setTraceEnabled] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [isLoadingConfig, setIsLoadingConfig] = useState(false);
     const [error, setError] = useState('');
     const [sendResult, setSendResult] = useState<TopicSendMessageResult | null>(null);
+    const [topicMessageType, setTopicMessageType] = useState('UNSPECIFIED');
 
     useEffect(() => {
-        if (!isOpen) {
+        if (!isOpen || !topic?.name) {
             return;
         }
 
@@ -1390,6 +1207,36 @@ const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
         setIsSubmitting(false);
         setError('');
         setSendResult(null);
+        setIsLoadingConfig(true);
+        setTopicMessageType('UNSPECIFIED');
+
+        let cancelled = false;
+
+        const loadTopicConfig = async () => {
+            try {
+                const result = await TopicService.getTopicConfig({
+                    topic: topic.name,
+                    brokerName: null,
+                });
+                if (!cancelled) {
+                    setTopicMessageType(result.messageType || 'UNSPECIFIED');
+                }
+            } catch (loadError) {
+                if (!cancelled) {
+                    setError(getErrorMessage(loadError, 'Failed to load topic configuration before sending.'));
+                }
+            } finally {
+                if (!cancelled) {
+                    setIsLoadingConfig(false);
+                }
+            }
+        };
+
+        void loadTopicConfig();
+
+        return () => {
+            cancelled = true;
+        };
     }, [isOpen, topic?.name]);
 
     const handleSubmit = async () => {
@@ -1477,6 +1324,19 @@ const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
                                 />
                             </div>
 
+                            <div className="grid grid-cols-[120px_1fr] items-center gap-4">
+                                <label className="flex items-center justify-end gap-2 text-sm font-medium text-gray-600 dark:text-gray-400">
+                                    <Layers className="w-4 h-4 text-gray-400 dark:text-gray-500"/>
+                                    Message Type:
+                                </label>
+                                <input
+                                    type="text"
+                                    value={isLoadingConfig ? 'Loading...' : topicMessageType}
+                                    disabled
+                                    className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-500 dark:text-gray-400 cursor-not-allowed font-mono"
+                                />
+                            </div>
+
                             {/* Tag */}
                             <div className="grid grid-cols-[120px_1fr] items-center gap-4">
                                 <label className="flex items-center justify-end gap-2 text-sm font-medium text-gray-600 dark:text-gray-400">
@@ -1526,6 +1386,11 @@ const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
                             <div className="col-start-2 rounded-lg border border-blue-100 bg-blue-50/80 px-3 py-2 text-xs text-blue-700 dark:border-blue-900/40 dark:bg-blue-950/30 dark:text-blue-300">
                                 Standard JSON and relaxed JSON are both supported here. Numeric keys like <span className="font-mono">{`{ 1: 'value' }`}</span> will be normalized before sending.
                             </div>
+                            <div className="col-start-2 rounded-lg border border-gray-200 bg-gray-50/90 px-3 py-2 text-xs text-gray-600 dark:border-gray-800 dark:bg-gray-800/80 dark:text-gray-300">
+                                {topicMessageType === 'TRANSACTION'
+                                    ? 'This topic uses TRANSACTION semantics. The desktop sender will use a transaction producer and commit the local transaction immediately, matching the Java dashboard test-send flow.'
+                                    : `This topic will be sent through the standard producer path for ${topicMessageType}.`}
+                            </div>
 
                             {/* Enable Message Trace */}
                             <div className="grid grid-cols-[120px_1fr] items-center gap-4 pt-1">
@@ -1562,6 +1427,16 @@ const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
                                     <div className="mt-1 font-mono text-xs break-all">
                                         {sendResult.messageId ? `Message ID: ${sendResult.messageId}` : 'Broker accepted the message without returning a message id.'}
                                     </div>
+                                    {sendResult.localTransactionState && (
+                                        <div className="mt-1 text-xs">
+                                            Local transaction: {sendResult.localTransactionState}
+                                        </div>
+                                    )}
+                                    {sendResult.transactionId && (
+                                        <div className="mt-1 font-mono text-xs break-all">
+                                            Transaction ID: {sendResult.transactionId}
+                                        </div>
+                                    )}
                                     <div className="mt-1 text-xs">
                                         Queue: {sendResult.brokerName ?? '-'} / {sendResult.queueId ?? '-'} / offset {sendResult.queueOffset}
                                     </div>
@@ -1580,11 +1455,11 @@ const TopicSendMessageModal = ({isOpen, onClose, topic}: TopicRouterModalProps) 
                         </button>
                         <button
                             onClick={() => void handleSubmit()}
-                            disabled={isSubmitting}
+                            disabled={isSubmitting || isLoadingConfig}
                             className="px-6 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800 transition-all shadow-md hover:shadow-lg flex items-center dark:!bg-gray-900 dark:!text-white dark:border dark:border-gray-700 dark:hover:!bg-gray-800"
                         >
                             <Send className="w-4 h-4 mr-2"/>
-                            {isSubmitting ? 'Sending...' : 'Commit'}
+                            {isLoadingConfig ? 'Preparing...' : isSubmitting ? 'Sending...' : 'Commit'}
                         </button>
                     </div>
                 </motion.div>
@@ -2496,7 +2371,7 @@ const TopicDeleteModal = ({isOpen, onClose, topic, onDeleted}: TopicDeleteModalP
 };
 
 export const TopicView = () => {
-    const {data, error, isLoading, isRefreshing, refresh} = useTopicCatalog();
+    const {data, error, isLoading, isRefreshPending, isRefreshing, refresh} = useTopicCatalog();
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedFilters, setSelectedFilters] = useState<Record<TopicCategory, boolean>>(buildDefaultTopicFilters);
     const [currentPage, setCurrentPage] = useState(1);
@@ -2645,6 +2520,7 @@ export const TopicView = () => {
                 isOpen={configModal.isOpen}
                 onClose={() => setConfigModal({isOpen: false, topic: null})}
                 topic={configModal.topic}
+                onRefresh={refresh}
                 onEdit={(seed) => {
                     setConfigModal({isOpen: false, topic: null});
                     setEditorModal({isOpen: true, mode: 'update', seed});
@@ -2712,8 +2588,9 @@ export const TopicView = () => {
                         <Button
                             variant="secondary"
                             icon={RefreshCw}
+                            iconClassName={isRefreshPending ? 'rotate-180' : 'rotate-0'}
                             onClick={() => void refresh()}
-                            disabled={isRefreshing || isLoading}
+                            disabled={isRefreshPending || isLoading}
                             className="dark:bg-gray-900 dark:text-white dark:border dark:border-gray-700 dark:hover:bg-gray-800"
                         >
                             {isRefreshing ? 'Refreshing...' : 'Refresh'}

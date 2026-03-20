@@ -182,4 +182,5 @@ pub(crate) struct TopicSendMessageResult {
     pub(crate) queue_offset: u64,
     pub(crate) transaction_id: Option<String>,
     pub(crate) region_id: Option<String>,
+    pub(crate) local_transaction_state: Option<String>,
 }

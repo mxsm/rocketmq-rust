@@ -7,17 +7,24 @@ const defaultListRequest = {
     skipRetryAndDlq: false,
 };
 
+const REFRESH_INDICATOR_DELAY_MS = 180;
+
 export const useTopicCatalog = () => {
     const [data, setData] = useState<TopicListResponse | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [isRefreshPending, setIsRefreshPending] = useState(false);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [error, setError] = useState('');
 
     const load = async (mode: 'initial' | 'refresh' = 'refresh') => {
+        let refreshIndicatorTimer: number | null = null;
         if (mode === 'initial') {
             setIsLoading(true);
         } else {
-            setIsRefreshing(true);
+            setIsRefreshPending(true);
+            refreshIndicatorTimer = window.setTimeout(() => {
+                setIsRefreshing(true);
+            }, REFRESH_INDICATOR_DELAY_MS);
         }
         setError('');
 
@@ -27,7 +34,11 @@ export const useTopicCatalog = () => {
         } catch (loadError) {
             setError(loadError instanceof Error ? loadError.message : 'Failed to load topics');
         } finally {
+            if (refreshIndicatorTimer !== null) {
+                window.clearTimeout(refreshIndicatorTimer);
+            }
             setIsLoading(false);
+            setIsRefreshPending(false);
             setIsRefreshing(false);
         }
     };
@@ -39,6 +50,7 @@ export const useTopicCatalog = () => {
     return {
         data,
         isLoading,
+        isRefreshPending,
         isRefreshing,
         error,
         refresh: () => load('refresh'),

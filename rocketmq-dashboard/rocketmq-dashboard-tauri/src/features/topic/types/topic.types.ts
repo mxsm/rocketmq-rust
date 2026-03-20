@@ -124,6 +124,7 @@ export interface TopicSendMessageResult {
     queueOffset: number;
     transactionId?: string | null;
     regionId?: string | null;
+    localTransactionState?: string | null;
 }
 
 export interface TopicListRequest {
@@ -154,6 +155,11 @@ export interface TopicConfigRequest {
 export interface DeleteTopicRequest {
     topic: string;
     clusterName?: string | null;
+}
+
+export interface DeleteTopicByBrokerRequest {
+    brokerName: string;
+    topic: string;
 }
 
 export interface ResetOffsetRequest {

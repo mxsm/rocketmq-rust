@@ -21,6 +21,7 @@ use crate::topic::types::TopicMutationResult;
 use crate::topic::types::TopicRouteView;
 use crate::topic::types::TopicSendMessageResult;
 use crate::topic::types::TopicStatusView;
+use rocketmq_dashboard_common::DeleteTopicByBrokerRequest;
 use rocketmq_dashboard_common::DeleteTopicRequest;
 use rocketmq_dashboard_common::ResetOffsetRequest;
 use rocketmq_dashboard_common::SendTopicMessageRequest;
@@ -92,6 +93,17 @@ pub async fn delete_topic(
 ) -> Result<TopicMutationResult, String> {
     topic_manager
         .delete_topic(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_topic_by_broker(
+    request: DeleteTopicByBrokerRequest,
+    topic_manager: State<'_, TopicManager>,
+) -> Result<TopicMutationResult, String> {
+    topic_manager
+        .delete_topic_by_broker(request)
         .await
         .map_err(|error| error.to_string())
 }

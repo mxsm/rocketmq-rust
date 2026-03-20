@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
+    DeleteTopicByBrokerRequest,
     DeleteTopicRequest,
     ResetOffsetRequest,
     SendTopicMessageRequest,
@@ -40,6 +41,10 @@ export class TopicService {
 
     static async deleteTopic(request: DeleteTopicRequest): Promise<TopicMutationResult> {
         return invoke<TopicMutationResult>('delete_topic', { request });
+    }
+
+    static async deleteTopicByBroker(request: DeleteTopicByBrokerRequest): Promise<TopicMutationResult> {
+        return invoke<TopicMutationResult>('delete_topic_by_broker', { request });
     }
 
     static async getTopicConsumerGroups(request: TopicQueryRequest): Promise<TopicConsumerGroupListResponse> {

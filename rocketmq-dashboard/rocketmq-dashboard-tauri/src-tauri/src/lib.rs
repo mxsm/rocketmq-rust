@@ -99,6 +99,7 @@ pub fn run() {
             topic::commands::get_topic_config,
             topic::commands::create_or_update_topic,
             topic::commands::delete_topic,
+            topic::commands::delete_topic_by_broker,
             topic::commands::get_topic_consumer_groups,
             topic::commands::get_topic_consumers,
             topic::commands::reset_consumer_offset,
