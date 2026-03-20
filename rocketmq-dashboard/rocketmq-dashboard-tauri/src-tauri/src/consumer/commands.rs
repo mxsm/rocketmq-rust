@@ -13,10 +13,14 @@
 // limitations under the License.
 
 use crate::consumer::service::ConsumerManager;
+use crate::consumer::types::ConsumerConnectionView;
 use crate::consumer::types::ConsumerGroupListItem;
 use crate::consumer::types::ConsumerGroupListResponse;
+use crate::consumer::types::ConsumerTopicDetailView;
+use rocketmq_dashboard_common::ConsumerConnectionQueryRequest;
 use rocketmq_dashboard_common::ConsumerGroupListRequest;
 use rocketmq_dashboard_common::ConsumerGroupRefreshRequest;
+use rocketmq_dashboard_common::ConsumerTopicDetailQueryRequest;
 use tauri::State;
 
 #[tauri::command]
@@ -37,6 +41,28 @@ pub async fn refresh_consumer_group(
 ) -> Result<ConsumerGroupListItem, String> {
     consumer_manager
         .refresh_consumer_group(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn query_consumer_connection(
+    request: ConsumerConnectionQueryRequest,
+    consumer_manager: State<'_, ConsumerManager>,
+) -> Result<ConsumerConnectionView, String> {
+    consumer_manager
+        .query_consumer_connection(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn query_consumer_topic_detail(
+    request: ConsumerTopicDetailQueryRequest,
+    consumer_manager: State<'_, ConsumerManager>,
+) -> Result<ConsumerTopicDetailView, String> {
+    consumer_manager
+        .query_consumer_topic_detail(request)
         .await
         .map_err(|error| error.to_string())
 }

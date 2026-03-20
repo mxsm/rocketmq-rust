@@ -101,6 +101,8 @@ pub fn run() {
             cluster::commands::get_cluster_broker_status,
             consumer::commands::query_consumer_groups,
             consumer::commands::refresh_consumer_group,
+            consumer::commands::query_consumer_connection,
+            consumer::commands::query_consumer_topic_detail,
             producer::commands::get_producer_topic_options,
             producer::commands::query_producer_connections,
             topic::commands::get_topic_list,

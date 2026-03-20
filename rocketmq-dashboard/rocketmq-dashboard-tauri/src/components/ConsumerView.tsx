@@ -25,8 +25,11 @@ import {
 import { toast } from 'sonner@2.0.3';
 import { Pagination } from './Pagination';
 import { useConsumerCatalog } from '../features/consumer/hooks/useConsumerCatalog';
+import { ConsumerClientModal } from '../features/consumer/components/ConsumerClientModal';
+import { ConsumerDetailModal } from '../features/consumer/components/ConsumerDetailModal';
+import type { ConsumerGroupListItem } from '../features/consumer/types/consumer.types';
 
-const ConsumerDetailModal = ({ isOpen, onClose, consumer }: any) => {
+const LegacyConsumerDetailModal = ({ isOpen, onClose, consumer }: any) => {
   if (!isOpen) return null;
 
   return (
@@ -53,7 +56,7 @@ const ConsumerDetailModal = ({ isOpen, onClose, consumer }: any) => {
                 Consumer Details
               </h3>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 flex items-center">
-                <span className="font-mono text-gray-700 dark:text-gray-300 font-medium">{consumer?.group}</span>
+                <span className="font-mono text-gray-700 dark:text-gray-300 font-medium">{consumer?.displayGroupName ?? consumer?.rawGroupName}</span>
                 <span className="mx-2 text-gray-300 dark:text-gray-600">|</span>
                 <span>Address: 172.20.48.1:10911</span>
               </p>
@@ -75,7 +78,7 @@ const ConsumerDetailModal = ({ isOpen, onClose, consumer }: any) => {
                         <div className="p-1.5 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-lg">
                            <Layers className="w-4 h-4" />
                         </div>
-                        <span className="font-mono text-sm font-semibold text-gray-700 dark:text-gray-300">%RETRY%{consumer?.group}</span>
+                        <span className="font-mono text-sm font-semibold text-gray-700 dark:text-gray-300">%RETRY%{consumer?.displayGroupName ?? consumer?.rawGroupName}</span>
                     </div>
                     <div className="flex items-center space-x-6 text-xs font-mono">
                         <div className="flex items-center text-gray-500 dark:text-gray-400">
@@ -211,7 +214,7 @@ const ConsumerConfigModal = ({ isOpen, onClose, consumer }: any) => {
                 Configuration
               </h3>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 flex items-center">
-                 <span className="font-mono font-medium text-gray-700 dark:text-gray-300">{consumer?.group}</span>
+                 <span className="font-mono font-medium text-gray-700 dark:text-gray-300">{consumer?.displayGroupName ?? consumer?.rawGroupName}</span>
               </p>
             </div>
             <button 
@@ -238,7 +241,7 @@ const ConsumerConfigModal = ({ isOpen, onClose, consumer }: any) => {
                      <div className="space-y-1">
                          <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Group Name</label>
                          <div className="px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-lg text-sm font-mono text-gray-600 dark:text-gray-300 break-all">
-                             {consumer?.group}
+                             {consumer?.displayGroupName ?? consumer?.rawGroupName}
                          </div>
                      </div>
 
@@ -400,7 +403,7 @@ const ConsumerConfigModal = ({ isOpen, onClose, consumer }: any) => {
   );
 };
 
-const ConsumerClientModal = ({ isOpen, onClose, consumer }: any) => {
+const LegacyConsumerClientModal = ({ isOpen, onClose, consumer }: any) => {
   if (!isOpen) return null;
 
   return (
@@ -427,7 +430,7 @@ const ConsumerClientModal = ({ isOpen, onClose, consumer }: any) => {
                 Client Information
               </h3>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 flex items-center">
-                 <span className="font-mono font-medium text-gray-700 dark:text-gray-300">{consumer?.group}</span>
+                 <span className="font-mono font-medium text-gray-700 dark:text-gray-300">{consumer?.displayGroupName ?? consumer?.rawGroupName}</span>
               </p>
             </div>
             <button 
@@ -568,9 +571,9 @@ export const ConsumerView = () => {
   });
   const [proxy, setProxy] = useState('127.0.0.1:8080');
   const [enableProxy, setEnableProxy] = useState(false);
-  const [detailModal, setDetailModal] = useState<{isOpen: boolean, consumer: any}>({ isOpen: false, consumer: null });
-  const [configModal, setConfigModal] = useState<{isOpen: boolean, consumer: any}>({ isOpen: false, consumer: null });
-  const [clientModal, setClientModal] = useState<{isOpen: boolean, consumer: any}>({ isOpen: false, consumer: null });
+  const [detailModal, setDetailModal] = useState<{isOpen: boolean, consumer: ConsumerGroupListItem | null}>({ isOpen: false, consumer: null });
+  const [configModal, setConfigModal] = useState<{isOpen: boolean, consumer: ConsumerGroupListItem | null}>({ isOpen: false, consumer: null });
+  const [clientModal, setClientModal] = useState<{isOpen: boolean, consumer: ConsumerGroupListItem | null}>({ isOpen: false, consumer: null });
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 6;
   const sourceAddress = enableProxy ? proxy : undefined;
@@ -627,6 +630,7 @@ export const ConsumerView = () => {
            isOpen={detailModal.isOpen} 
            onClose={() => setDetailModal({ isOpen: false, consumer: null })} 
            consumer={detailModal.consumer} 
+           address={sourceAddress}
         />
         <ConsumerConfigModal
            isOpen={configModal.isOpen}
@@ -637,6 +641,7 @@ export const ConsumerView = () => {
            isOpen={clientModal.isOpen}
            onClose={() => setClientModal({ isOpen: false, consumer: null })}
            consumer={clientModal.consumer}
+           address={sourceAddress}
         />
         {/* Toolbar */}
         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-white dark:bg-gray-900 p-4 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm sticky top-0 z-20 backdrop-blur-xl bg-white/90 dark:bg-gray-900/90 transition-colors">

@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use serde::de;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -27,6 +28,7 @@ use crate::protocol::DataVersion;
 #[derive(Debug, Clone)]
 pub struct SubscriptionGroupWrapper {
     pub subscription_group_table: DashMap<CheetahString, Arc<SubscriptionGroupConfig>>,
+    pub forbidden_table: DashMap<CheetahString, std::collections::HashMap<CheetahString, i32>>,
     pub data_version: DataVersion,
 }
 
@@ -38,7 +40,7 @@ impl Serialize for SubscriptionGroupWrapper {
     {
         use serde::ser::SerializeStruct;
 
-        let mut state = serializer.serialize_struct("SubscriptionGroupWrapper", 2)?;
+        let mut state = serializer.serialize_struct("SubscriptionGroupWrapper", 3)?;
 
         // Serialize DashMap by converting Arc values to direct values
         let table: std::collections::HashMap<CheetahString, SubscriptionGroupConfig> = self
@@ -46,7 +48,13 @@ impl Serialize for SubscriptionGroupWrapper {
             .iter()
             .map(|entry| (entry.key().clone(), (**entry.value()).clone()))
             .collect();
+        let forbidden_table: std::collections::HashMap<CheetahString, std::collections::HashMap<CheetahString, i32>> =
+            self.forbidden_table
+                .iter()
+                .map(|entry| (entry.key().clone(), entry.value().clone()))
+                .collect();
         state.serialize_field("subscriptionGroupTable", &table)?;
+        state.serialize_field("forbiddenTable", &forbidden_table)?;
         state.serialize_field("dataVersion", &self.data_version)?;
         state.end()
     }
@@ -62,13 +70,15 @@ impl<'de> Deserialize<'de> for SubscriptionGroupWrapper {
 
         use serde::de::MapAccess;
         use serde::de::Visitor;
-        use serde::de::{self};
 
         #[derive(Deserialize)]
         #[serde(field_identifier, rename_all = "camelCase")]
         enum Field {
             SubscriptionGroupTable,
+            ForbiddenTable,
             DataVersion,
+            #[serde(other)]
+            Ignore,
         }
 
         struct SubscriptionGroupWrapperVisitor;
@@ -87,6 +97,9 @@ impl<'de> Deserialize<'de> for SubscriptionGroupWrapper {
                 let mut subscription_group_table: Option<
                     std::collections::HashMap<CheetahString, SubscriptionGroupConfig>,
                 > = None;
+                let mut forbidden_table: Option<
+                    std::collections::HashMap<CheetahString, std::collections::HashMap<CheetahString, i32>>,
+                > = None;
                 let mut data_version: Option<DataVersion> = None;
 
                 while let Some(key) = map.next_key()? {
@@ -97,17 +110,27 @@ impl<'de> Deserialize<'de> for SubscriptionGroupWrapper {
                             }
                             subscription_group_table = Some(map.next_value()?);
                         }
+                        Field::ForbiddenTable => {
+                            if forbidden_table.is_some() {
+                                return Err(de::Error::duplicate_field("forbiddenTable"));
+                            }
+                            forbidden_table = Some(map.next_value()?);
+                        }
                         Field::DataVersion => {
                             if data_version.is_some() {
                                 return Err(de::Error::duplicate_field("dataVersion"));
                             }
                             data_version = Some(map.next_value()?);
                         }
+                        Field::Ignore => {
+                            let _: de::IgnoredAny = map.next_value()?;
+                        }
                     }
                 }
 
                 let subscription_group_table =
                     subscription_group_table.ok_or_else(|| de::Error::missing_field("subscriptionGroupTable"))?;
+                let forbidden_table = forbidden_table.unwrap_or_default();
                 let data_version = data_version.ok_or_else(|| de::Error::missing_field("dataVersion"))?;
 
                 // Convert HashMap to DashMap with Arc-wrapped values
@@ -115,15 +138,20 @@ impl<'de> Deserialize<'de> for SubscriptionGroupWrapper {
                 for (key, value) in subscription_group_table {
                     dash_map.insert(key, Arc::new(value));
                 }
+                let forbidden_dash_map = DashMap::new();
+                for (key, value) in forbidden_table {
+                    forbidden_dash_map.insert(key, value);
+                }
 
                 Ok(SubscriptionGroupWrapper {
                     subscription_group_table: dash_map,
+                    forbidden_table: forbidden_dash_map,
                     data_version,
                 })
             }
         }
 
-        const FIELDS: &[&str] = &["subscriptionGroupTable", "dataVersion"];
+        const FIELDS: &[&str] = &["subscriptionGroupTable", "forbiddenTable", "dataVersion"];
         deserializer.deserialize_struct("SubscriptionGroupWrapper", FIELDS, SubscriptionGroupWrapperVisitor)
     }
 }
@@ -138,6 +166,7 @@ impl SubscriptionGroupWrapper {
     pub fn new() -> Self {
         SubscriptionGroupWrapper {
             subscription_group_table: DashMap::with_capacity(1024),
+            forbidden_table: DashMap::with_capacity(1024),
             data_version: DataVersion::default(),
         }
     }
@@ -148,6 +177,17 @@ impl SubscriptionGroupWrapper {
 
     pub fn set_subscription_group_table(&mut self, table: DashMap<CheetahString, Arc<SubscriptionGroupConfig>>) {
         self.subscription_group_table = table;
+    }
+
+    pub fn forbidden_table(&self) -> &DashMap<CheetahString, std::collections::HashMap<CheetahString, i32>> {
+        &self.forbidden_table
+    }
+
+    pub fn set_forbidden_table(
+        &mut self,
+        table: DashMap<CheetahString, std::collections::HashMap<CheetahString, i32>>,
+    ) {
+        self.forbidden_table = table;
     }
 
     pub fn data_version(&self) -> &DataVersion {
@@ -169,6 +209,7 @@ mod tests {
         let wrapper = SubscriptionGroupWrapper::new();
 
         assert_eq!(wrapper.subscription_group_table.len(), 0);
+        assert_eq!(wrapper.forbidden_table.len(), 0);
         assert!(wrapper.data_version.timestamp <= DataVersion::default().timestamp);
     }
 
@@ -182,5 +223,32 @@ mod tests {
         let table = wrapper.get_subscription_group_table();
         assert_eq!(table.len(), 1);
         assert!(table.contains_key("test_group"));
+    }
+
+    #[test]
+    fn deserialize_wrapper_accepts_forbidden_table() {
+        let json = r#"{
+            "subscriptionGroupTable": {
+                "group-a": {
+                    "groupName": "group-a"
+                }
+            },
+            "forbiddenTable": {
+                "group-a": {
+                    "topic-a": 1
+                }
+            },
+            "dataVersion": {
+                "timestamp": 1,
+                "counter": 1,
+                "stateVersion": 0
+            }
+        }"#;
+
+        let wrapper: SubscriptionGroupWrapper =
+            serde_json::from_str(json).expect("subscription group wrapper should deserialize");
+
+        assert!(wrapper.get_subscription_group_table().contains_key("group-a"));
+        assert!(wrapper.forbidden_table().contains_key("group-a"));
     }
 }

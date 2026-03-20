@@ -8,6 +8,16 @@ export interface ConsumerGroupRefreshRequest {
     address?: string;
 }
 
+export interface ConsumerConnectionQueryRequest {
+    consumerGroup: string;
+    address?: string;
+}
+
+export interface ConsumerTopicDetailQueryRequest {
+    consumerGroup: string;
+    address?: string;
+}
+
 export interface ConsumerGroupListSummary {
     totalGroups: number;
     normalGroups: number;
@@ -36,4 +46,55 @@ export interface ConsumerGroupListResponse {
     currentNamesrv: string;
     useVipChannel: boolean;
     useTls: boolean;
+}
+
+export interface ConsumerConnectionItem {
+    clientId: string;
+    clientAddr: string;
+    language: string;
+    version: number;
+    versionDesc: string;
+}
+
+export interface ConsumerSubscriptionItem {
+    topic: string;
+    subString: string;
+    expressionType: string;
+    tagsSet: string[];
+    codeSet: number[];
+    subVersion: number;
+}
+
+export interface ConsumerConnectionView {
+    consumerGroup: string;
+    connectionCount: number;
+    consumeType: string;
+    messageModel: string;
+    consumeFromWhere: string;
+    connections: ConsumerConnectionItem[];
+    subscriptions: ConsumerSubscriptionItem[];
+}
+
+export interface ConsumerTopicDetailQueueItem {
+    brokerName: string;
+    queueId: number;
+    brokerOffset: number;
+    consumerOffset: number;
+    diffTotal: number;
+    clientInfo: string;
+    lastTimestamp: number;
+}
+
+export interface ConsumerTopicDetailItem {
+    topic: string;
+    diffTotal: number;
+    lastTimestamp: number;
+    queueStatInfoList: ConsumerTopicDetailQueueItem[];
+}
+
+export interface ConsumerTopicDetailView {
+    consumerGroup: string;
+    topicCount: number;
+    totalDiff: number;
+    topics: ConsumerTopicDetailItem[];
 }

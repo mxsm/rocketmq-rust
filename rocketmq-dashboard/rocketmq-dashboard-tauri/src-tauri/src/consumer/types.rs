@@ -72,3 +72,66 @@ pub(crate) struct ConsumerGroupListResponse {
     pub(crate) use_vip_channel: bool,
     pub(crate) use_tls: bool,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConsumerConnectionItem {
+    pub(crate) client_id: String,
+    pub(crate) client_addr: String,
+    pub(crate) language: String,
+    pub(crate) version: i32,
+    pub(crate) version_desc: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConsumerSubscriptionItem {
+    pub(crate) topic: String,
+    pub(crate) sub_string: String,
+    pub(crate) expression_type: String,
+    pub(crate) tags_set: Vec<String>,
+    pub(crate) code_set: Vec<i32>,
+    pub(crate) sub_version: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConsumerConnectionView {
+    pub(crate) consumer_group: String,
+    pub(crate) connection_count: usize,
+    pub(crate) consume_type: String,
+    pub(crate) message_model: String,
+    pub(crate) consume_from_where: String,
+    pub(crate) connections: Vec<ConsumerConnectionItem>,
+    pub(crate) subscriptions: Vec<ConsumerSubscriptionItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConsumerTopicDetailQueueItem {
+    pub(crate) broker_name: String,
+    pub(crate) queue_id: i32,
+    pub(crate) broker_offset: i64,
+    pub(crate) consumer_offset: i64,
+    pub(crate) diff_total: i64,
+    pub(crate) client_info: String,
+    pub(crate) last_timestamp: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConsumerTopicDetailItem {
+    pub(crate) topic: String,
+    pub(crate) diff_total: i64,
+    pub(crate) last_timestamp: i64,
+    pub(crate) queue_stat_info_list: Vec<ConsumerTopicDetailQueueItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConsumerTopicDetailView {
+    pub(crate) consumer_group: String,
+    pub(crate) topic_count: usize,
+    pub(crate) total_diff: i64,
+    pub(crate) topics: Vec<ConsumerTopicDetailItem>,
+}
