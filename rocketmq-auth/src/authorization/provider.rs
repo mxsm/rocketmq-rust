@@ -32,6 +32,7 @@ use crate::authorization::context::default_authorization_context::DefaultAuthori
 use crate::authorization::metadata_provider::AuthorizationMetadataProvider;
 use crate::authorization::metadata_provider::LocalAuthorizationMetadataProvider;
 use crate::config::AuthConfig;
+use crate::runtime::ProviderRegistry;
 
 /// Result type for authorization operations.
 pub type AuthorizationResult<T> = Result<T, AuthorizationError>;
@@ -233,7 +234,7 @@ pub trait AuthorizationProvider: Send + Sync {
     #[allow(unused_variables)]
     fn new_contexts_from_remoting_command(
         &self,
-        channel_context: &dyn std::any::Any,
+        channel_context: &(dyn std::any::Any + Send + Sync),
         command: &RemotingCommand,
     ) -> AuthorizationResult<Vec<DefaultAuthorizationContext>> {
         // Default implementation returns empty list (no-op)
@@ -288,7 +289,7 @@ impl AuthorizationProvider for NoopAuthorizationProvider {
 
     fn new_contexts_from_remoting_command(
         &self,
-        _channel_context: &dyn std::any::Any,
+        _channel_context: &(dyn std::any::Any + Send + Sync),
         _command: &RemotingCommand,
     ) -> AuthorizationResult<Vec<DefaultAuthorizationContext>> {
         // Return empty contexts (no authorization needed)
@@ -370,6 +371,19 @@ impl DefaultAuthorizationProvider {
 
     pub fn authorization_metadata_provider(&self) -> Option<Arc<LocalAuthorizationMetadataProvider>> {
         self.authorization_metadata_provider.clone()
+    }
+
+    pub fn initialize_with_registry(
+        &mut self,
+        config: AuthConfig,
+        provider_registry: ProviderRegistry,
+    ) -> AuthorizationResult<()> {
+        self.config = Some(config.clone());
+        self.metadata_service = None;
+        self.context_builder = Some(DefaultAuthorizationContextBuilder::new(config));
+        self.authentication_metadata_provider = Some(provider_registry.authentication_metadata_provider());
+        self.authorization_metadata_provider = Some(provider_registry.authorization_metadata_provider());
+        Ok(())
     }
 
     /// Audit log an authorization decision.
@@ -516,7 +530,7 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
 
     fn new_contexts_from_remoting_command(
         &self,
-        channel_context: &dyn std::any::Any,
+        channel_context: &(dyn std::any::Any + Send + Sync),
         command: &RemotingCommand,
     ) -> AuthorizationResult<Vec<DefaultAuthorizationContext>> {
         let builder = self.context_builder.as_ref().ok_or_else(|| {

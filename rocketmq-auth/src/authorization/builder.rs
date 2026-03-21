@@ -24,7 +24,7 @@ use crate::authorization::provider::AuthorizationResult;
 pub trait AuthorizationContextBuilder: Send + Sync {
     fn build_from_remoting(
         &self,
-        channel_context: &dyn Any,
+        channel_context: &(dyn Any + Send + Sync),
         command: &RemotingCommand,
     ) -> AuthorizationResult<Vec<DefaultAuthorizationContext>>;
 }

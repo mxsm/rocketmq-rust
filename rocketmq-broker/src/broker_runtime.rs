@@ -22,6 +22,9 @@ use std::time::Duration;
 
 use cheetah_string::CheetahString;
 use dashmap::DashMap;
+use rocketmq_auth::config::AuthConfig;
+use rocketmq_auth::AuthRuntime;
+use rocketmq_auth::AuthRuntimeBuilder;
 use rocketmq_common::common::broker::broker_config::BrokerConfig;
 use rocketmq_common::common::broker::broker_role::BrokerRole;
 use rocketmq_common::common::config::TopicConfig;
@@ -60,6 +63,7 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
+use crate::auth::auth_admin_service::AuthAdminService;
 use crate::broker::broker_hook::BrokerShutdownHook;
 use crate::broker::broker_pre_online_service::BrokerPreOnlineService;
 use crate::client::client_housekeeping_service::ClientHousekeepingService;
@@ -124,6 +128,21 @@ type DefaultServerProcessor =
 
 type FasterServerProcessor =
     BrokerRequestProcessor<LocalFileMessageStore, DefaultTransactionalMessageService<LocalFileMessageStore>>;
+
+fn build_auth_config(broker_config: &BrokerConfig) -> AuthConfig {
+    AuthConfig {
+        config_name: broker_config.broker_identity.broker_name.clone(),
+        cluster_name: broker_config.broker_identity.broker_cluster_name.clone(),
+        auth_config_path: broker_config.auth_config_path.clone(),
+        authentication_enabled: broker_config.authentication_enabled,
+        authentication_whitelist: broker_config.authentication_whitelist.clone(),
+        init_authentication_user: broker_config.init_authentication_user.clone(),
+        inner_client_authentication_credentials: broker_config.inner_client_authentication_credentials.clone(),
+        authorization_enabled: broker_config.authorization_enabled,
+        authorization_whitelist: broker_config.authorization_whitelist.clone(),
+        ..AuthConfig::default()
+    }
+}
 
 pub(crate) struct BrokerRuntime {
     #[cfg(feature = "local_file_store")]
@@ -223,6 +242,7 @@ impl BrokerRuntime {
             ack_message_processor: None,
             notification_processor: None,
             query_assignment_processor: None,
+            auth_runtime: None,
             broker_attached_plugins: vec![],
             transactional_message_service: None,
             slave_synchronize: None,
@@ -540,9 +560,11 @@ impl BrokerRuntime {
             self.initialize_resources();
             self.initialize_scheduled_tasks().await;
             self.initial_transaction().await;
-            self.initial_acl();
-            self.initial_rpc_hooks();
-            self.initial_request_pipeline();
+            result &= self.initial_acl().await;
+            if result {
+                self.initial_rpc_hooks();
+                self.initial_request_pipeline();
+            }
         }
         result
     }
@@ -614,6 +636,9 @@ impl BrokerRuntime {
         let notification_processor = NotificationProcessor::new(self.inner.clone());
         self.inner.notification_processor = Some(notification_processor.clone());
         let mut broker_request_processor = BrokerRequestProcessor::new();
+        if let Some(auth_runtime) = &self.inner.auth_runtime {
+            broker_request_processor.set_auth_runtime(auth_runtime.clone());
+        }
         let send_message_processor = ArcMut::new(send_message_processor);
 
         broker_request_processor.register_processor(
@@ -763,7 +788,12 @@ impl BrokerRuntime {
                 self.inner.clone(),
             ))),
         );
-        let admin_broker_processor = ArcMut::new(AdminBrokerProcessor::new(self.inner.clone()));
+        let auth_admin_service = Arc::new(match &self.inner.auth_runtime {
+            Some(auth_runtime) => AuthAdminService::with_provider_registry(auth_runtime.provider_registry().clone()),
+            None => AuthAdminService::new(build_auth_config(self.inner.broker_config()))
+                .expect("broker auth admin service initialization must succeed"),
+        });
+        let admin_broker_processor = ArcMut::new(AdminBrokerProcessor::new(self.inner.clone(), auth_admin_service));
         broker_request_processor.register_default_processor(BrokerProcessorType::AdminBroker(admin_broker_processor));
 
         (broker_request_processor.clone(), broker_request_processor)
@@ -942,7 +972,19 @@ impl BrokerRuntime {
         self.inner.transaction_metrics_flush_service = Some(TransactionMetricsFlushService);
     }
 
-    fn initial_acl(&mut self) {}
+    async fn initial_acl(&mut self) -> bool {
+        let auth_config = build_auth_config(self.inner.broker_config());
+        match AuthRuntimeBuilder::new(auth_config).build().await {
+            Ok(auth_runtime) => {
+                self.inner.auth_runtime = Some(Arc::new(auth_runtime));
+                true
+            }
+            Err(error) => {
+                error!("Initialize auth runtime failed: {error}");
+                false
+            }
+        }
+    }
 
     fn initial_rpc_hooks(&mut self) {}
 
@@ -1418,6 +1460,7 @@ pub(crate) struct BrokerRuntimeInner<MS: MessageStore> {
     ack_message_processor: Option<ArcMut<AckMessageProcessor<MS>>>,
     notification_processor: Option<ArcMut<NotificationProcessor<MS>>>,
     query_assignment_processor: Option<ArcMut<QueryAssignmentProcessor<MS>>>,
+    auth_runtime: Option<Arc<AuthRuntime>>,
     broker_attached_plugins: Vec<Arc<dyn BrokerAttachedPlugin>>,
     transactional_message_service: Option<ArcMut<DefaultTransactionalMessageService<MS>>>,
     slave_synchronize: Option<SlaveSynchronize<MS>>,

@@ -120,7 +120,7 @@ impl DefaultAuthorizationContextBuilder {
 impl AuthorizationContextBuilder for DefaultAuthorizationContextBuilder {
     fn build_from_remoting(
         &self,
-        channel_context: &dyn Any,
+        channel_context: &(dyn Any + Send + Sync),
         command: &RemotingCommand,
     ) -> AuthorizationResult<Vec<DefaultAuthorizationContext>> {
         let mut contexts = Vec::new();

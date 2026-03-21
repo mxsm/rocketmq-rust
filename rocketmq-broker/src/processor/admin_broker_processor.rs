@@ -37,8 +37,6 @@ use crate::processor::admin_broker_processor::topic_request_handler::TopicReques
 use crate::processor::admin_broker_processor::update_broker_ha_handler::UpdateBrokerHaHandler;
 use crate::processor::admin_broker_processor::update_cold_data_flow_ctr_group_config::UpdateColdDataFlowCtrGroupConfigRequestHandler;
 use crate::processor::admin_broker_processor::update_user_request_handler::UpdateUserRequestHandler;
-use cheetah_string::CheetahString;
-use rocketmq_auth::config::AuthConfig;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -119,7 +117,10 @@ where
 }
 
 impl<MS: MessageStore> AdminBrokerProcessor<MS> {
-    pub fn new(broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>) -> Self {
+    pub fn new(
+        broker_runtime_inner: ArcMut<BrokerRuntimeInner<MS>>,
+        auth_admin_service: Arc<AuthAdminService>,
+    ) -> Self {
         let topic_request_handler = TopicRequestHandler::new(broker_runtime_inner.clone());
         let broker_config_request_handler = BrokerConfigRequestHandler::new(broker_runtime_inner.clone());
         let consumer_request_handler = ConsumerRequestHandler::new(broker_runtime_inner.clone());
@@ -139,13 +140,6 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
 
         let message_related_handler = MessageRelatedHandler::new(broker_runtime_inner.clone());
         let producer_request_handler = ProducerRequestHandler::new(broker_runtime_inner.clone());
-        let auth_admin_service = Arc::new(
-            AuthAdminService::new(AuthConfig {
-                auth_config_path: CheetahString::from_static_str("target/rocketmq-broker-auth"),
-                ..AuthConfig::default()
-            })
-            .expect("broker auth admin service initialization must succeed"),
-        );
         let create_user_request_handler =
             CreateUserRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
         let update_user_request_handler =

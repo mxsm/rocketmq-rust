@@ -354,6 +354,41 @@ mod defaults {
     pub fn default_topic_queue_nums() -> u32 {
         8
     }
+
+    pub fn auth_config_path() -> CheetahString {
+        dirs::home_dir()
+            .unwrap_or_default()
+            .join("config")
+            .join("auth")
+            .to_string_lossy()
+            .into_owned()
+            .into()
+    }
+
+    pub fn authentication_enabled() -> bool {
+        false
+    }
+
+    pub fn authorization_enabled() -> bool {
+        false
+    }
+
+    pub fn authentication_whitelist() -> CheetahString {
+        CheetahString::new()
+    }
+
+    pub fn authorization_whitelist() -> CheetahString {
+        CheetahString::new()
+    }
+
+    pub fn init_authentication_user() -> CheetahString {
+        CheetahString::new()
+    }
+
+    pub fn inner_client_authentication_credentials() -> CheetahString {
+        CheetahString::new()
+    }
+
     pub fn transaction_check_interval() -> u64 {
         30_000
     }
@@ -785,6 +820,27 @@ pub struct BrokerConfig {
     /// connection scenarios (1000+ consumer groups).
     #[serde(default)]
     pub enable_fast_channel_event_process: bool,
+
+    #[serde(default = "defaults::auth_config_path")]
+    pub auth_config_path: CheetahString,
+
+    #[serde(default = "defaults::authentication_enabled")]
+    pub authentication_enabled: bool,
+
+    #[serde(default = "defaults::authorization_enabled")]
+    pub authorization_enabled: bool,
+
+    #[serde(default = "defaults::authentication_whitelist")]
+    pub authentication_whitelist: CheetahString,
+
+    #[serde(default = "defaults::authorization_whitelist")]
+    pub authorization_whitelist: CheetahString,
+
+    #[serde(default = "defaults::init_authentication_user")]
+    pub init_authentication_user: CheetahString,
+
+    #[serde(default = "defaults::inner_client_authentication_credentials")]
+    pub inner_client_authentication_credentials: CheetahString,
 }
 
 impl Default for BrokerConfig {
@@ -907,6 +963,13 @@ impl Default for BrokerConfig {
             recall_message_enable: true,
             allow_recall_when_broker_not_writeable: false,
             enable_fast_channel_event_process: false,
+            auth_config_path: defaults::auth_config_path(),
+            authentication_enabled: defaults::authentication_enabled(),
+            authorization_enabled: defaults::authorization_enabled(),
+            authentication_whitelist: defaults::authentication_whitelist(),
+            authorization_whitelist: defaults::authorization_whitelist(),
+            init_authentication_user: defaults::init_authentication_user(),
+            inner_client_authentication_credentials: defaults::inner_client_authentication_credentials(),
         }
     }
 }

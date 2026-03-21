@@ -10,6 +10,7 @@ use rocketmq_auth::authorization::metadata_provider::AuthorizationMetadataProvid
 use rocketmq_auth::authorization::metadata_provider::LocalAuthorizationMetadataProvider;
 use rocketmq_auth::authorization::model::resource::Resource;
 use rocketmq_auth::config::AuthConfig;
+use rocketmq_auth::ProviderRegistry;
 use rocketmq_error::RocketMQError;
 use rocketmq_error::RocketMQResult;
 use rocketmq_remoting::protocol::body::acl_info::AclInfo;
@@ -26,17 +27,15 @@ pub struct AuthAdminService {
 
 impl AuthAdminService {
     pub fn new(auth_config: AuthConfig) -> Result<Self, RocketMQError> {
-        let authentication_provider = Arc::new(LocalAuthenticationMetadataProvider::new());
+        let provider_registry = ProviderRegistry::local(&auth_config)?;
+        Ok(Self::with_provider_registry(provider_registry))
+    }
 
-        let mut authorization_provider = LocalAuthorizationMetadataProvider::new();
-        authorization_provider
-            .initialize(auth_config, None)
-            .map_err(|error| RocketMQError::Internal(error.to_string()))?;
-
-        Ok(Self {
-            authentication_provider,
-            authorization_provider: Arc::new(authorization_provider),
-        })
+    pub fn with_provider_registry(provider_registry: ProviderRegistry) -> Self {
+        Self {
+            authentication_provider: provider_registry.authentication_metadata_provider(),
+            authorization_provider: provider_registry.authorization_metadata_provider(),
+        }
     }
 
     pub fn authentication_provider(&self) -> Arc<LocalAuthenticationMetadataProvider> {

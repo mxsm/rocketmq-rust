@@ -32,6 +32,7 @@ use crate::authentication::context::default_authentication_context::DefaultAuthe
 use crate::authentication::provider::authentication_metadata_provider::AuthenticationMetadataProvider;
 use crate::authentication::provider::local_authentication_metadata_provider::LocalAuthenticationMetadataProvider;
 use crate::config::AuthConfig;
+use crate::runtime::ProviderRegistry;
 
 use super::authentication_provider::AuthenticationProvider;
 
@@ -63,6 +64,18 @@ impl DefaultAuthenticationProvider {
 
     pub fn metadata_provider(&self) -> Option<Arc<LocalAuthenticationMetadataProvider>> {
         self.metadata_provider.clone()
+    }
+
+    pub fn initialize_with_registry(
+        &mut self,
+        config: AuthConfig,
+        provider_registry: ProviderRegistry,
+    ) -> RocketMQResult<()> {
+        self.auth_config = Some(config);
+        self.metadata_service = None;
+        self.authentication_context_builder = DefaultAuthenticationContextBuilder::new();
+        self.metadata_provider = Some(provider_registry.authentication_metadata_provider());
+        Ok(())
     }
 
     /// Perform audit logging.
