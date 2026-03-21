@@ -123,6 +123,10 @@ impl Display for ConsumerRunningInfo {
 }
 
 impl ConsumerRunningInfo {
+    pub fn is_push_type(&self) -> bool {
+        matches!(self.consume_type, ConsumeType::ConsumePassively)
+    }
+
     pub async fn analyze_subscription(
         cri_table: BTreeMap<String /* clientId */, ConsumerRunningInfo>,
     ) -> RocketMQResult<()> {

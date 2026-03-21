@@ -20,6 +20,7 @@ pub mod print_msg_by_queue_sub_command;
 pub mod query_msg_by_id_sub_command;
 pub mod query_msg_by_key_sub_command;
 pub mod query_msg_by_offset_sub_command;
+pub mod query_msg_by_unique_key_sub_command;
 pub mod query_msg_trace_by_id_sub_command;
 pub mod send_message_sub_command;
 
@@ -37,6 +38,7 @@ use crate::commands::message::print_msg_by_queue_sub_command::PrintMsgByQueueSub
 use crate::commands::message::query_msg_by_id_sub_command::QueryMsgByIdSubCommand;
 use crate::commands::message::query_msg_by_key_sub_command::QueryMsgByKeySubCommand;
 use crate::commands::message::query_msg_by_offset_sub_command::QueryMsgByOffsetSubCommand;
+use crate::commands::message::query_msg_by_unique_key_sub_command::QueryMsgByUniqueKeySubCommand;
 use crate::commands::message::query_msg_trace_by_id_sub_command::QueryMsgTraceByIdSubCommand;
 use crate::commands::message::send_message_sub_command::SendMessageSubCommand;
 use crate::commands::CommandExecute;
@@ -99,6 +101,13 @@ pub enum MessageCommands {
     QueryMsgByOffset(QueryMsgByOffsetSubCommand),
 
     #[command(
+        name = "queryMsgByUniqueKey",
+        about = "Query Message by Unique key.",
+        long_about = None,
+    )]
+    QueryMsgByUniqueKey(QueryMsgByUniqueKeySubCommand),
+
+    #[command(
         name = "queryMsgTraceById",
         about = "Query message trace by message ID.",
         long_about = None,
@@ -124,6 +133,7 @@ impl CommandExecute for MessageCommands {
             MessageCommands::QueryMsgById(value) => value.execute(rpc_hook).await,
             MessageCommands::QueryMsgByKey(value) => value.execute(rpc_hook).await,
             MessageCommands::QueryMsgByOffset(value) => value.execute(rpc_hook).await,
+            MessageCommands::QueryMsgByUniqueKey(value) => value.execute(rpc_hook).await,
             MessageCommands::QueryMsgTraceById(value) => value.execute(rpc_hook).await,
             MessageCommands::SendMessage(value) => value.execute(rpc_hook).await,
         }

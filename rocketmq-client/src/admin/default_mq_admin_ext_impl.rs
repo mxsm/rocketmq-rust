@@ -384,6 +384,41 @@ impl DefaultMQAdminExtImpl {
         _key_type: CheetahString,
         _last_key: Option<CheetahString>,
     ) -> rocketmq_error::RocketMQResult<crate::base::query_result::QueryResult> {
+        self.query_message_by_key_internal(cluster_name, topic, key, max_num, begin_timestamp, end_timestamp, false)
+            .await
+    }
+
+    pub async fn query_message_by_unique_key(
+        &self,
+        cluster_name: Option<CheetahString>,
+        topic: CheetahString,
+        unique_key: CheetahString,
+        max_num: i32,
+        begin_timestamp: i64,
+        end_timestamp: i64,
+    ) -> rocketmq_error::RocketMQResult<crate::base::query_result::QueryResult> {
+        self.query_message_by_key_internal(
+            cluster_name,
+            topic,
+            unique_key,
+            max_num,
+            begin_timestamp,
+            end_timestamp,
+            true,
+        )
+        .await
+    }
+
+    async fn query_message_by_key_internal(
+        &self,
+        cluster_name: Option<CheetahString>,
+        topic: CheetahString,
+        key: CheetahString,
+        max_num: i32,
+        begin_timestamp: i64,
+        end_timestamp: i64,
+        unique_key_flag: bool,
+    ) -> rocketmq_error::RocketMQResult<crate::base::query_result::QueryResult> {
         let route_topic = cluster_name.unwrap_or_else(|| topic.clone());
         let topic_route_data = self
             .examine_topic_route_info(route_topic.clone())
@@ -414,7 +449,9 @@ impl DefaultMQAdminExtImpl {
                     topic_request_header: None,
                 };
 
-            match MQClientAPIImpl::query_message(&api_impl, &broker_addr, request_header, timeout).await {
+            match MQClientAPIImpl::query_message(&api_impl, &broker_addr, request_header, unique_key_flag, timeout)
+                .await
+            {
                 Ok(Some((response_header, body))) => {
                     if let Some(mut body_bytes) = body {
                         let msgs = message_decoder::decodes_batch(&mut body_bytes, true, true);

@@ -251,6 +251,20 @@ impl DefaultMQAdminExt {
             )
             .await
     }
+
+    pub async fn query_message_by_unique_key(
+        &self,
+        cluster_name: Option<CheetahString>,
+        topic: CheetahString,
+        unique_key: CheetahString,
+        max_num: i32,
+        begin_timestamp: i64,
+        end_timestamp: i64,
+    ) -> rocketmq_error::RocketMQResult<rocketmq_client_rust::base::query_result::QueryResult> {
+        self.default_mqadmin_ext_impl
+            .query_message_by_unique_key(cluster_name, topic, unique_key, max_num, begin_timestamp, end_timestamp)
+            .await
+    }
 }
 
 impl Default for DefaultMQAdminExt {

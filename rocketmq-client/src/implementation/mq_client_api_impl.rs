@@ -2284,9 +2284,14 @@ impl MQClientAPIImpl {
         this: &ArcMut<Self>,
         addr: &CheetahString,
         request_header: QueryMessageRequestHeader,
+        unique_key_flag: bool,
         timeout_millis: u64,
     ) -> rocketmq_error::RocketMQResult<Option<(QueryMessageResponseHeader, Option<bytes::Bytes>)>> {
-        let request = RemotingCommand::create_request_command(RequestCode::QueryMessage, request_header);
+        let mut request = RemotingCommand::create_request_command(RequestCode::QueryMessage, request_header);
+        if unique_key_flag {
+            request.ensure_ext_fields_initialized();
+            request.add_ext_field(mix_all::UNIQUE_MSG_QUERY_FLAG, "true");
+        }
         let response = this
             .remoting_client
             .invoke_request(Some(addr), request, timeout_millis)

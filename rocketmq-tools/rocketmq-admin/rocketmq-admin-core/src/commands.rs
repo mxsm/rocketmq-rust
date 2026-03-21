@@ -490,6 +490,11 @@ impl CommandExecute for ClassificationTablePrint {
             },
             Command {
                 category: "Message",
+                command: "queryMsgByUniqueKey",
+                remark: "Query Message by Unique key.",
+            },
+            Command {
+                category: "Message",
                 command: "queryMsgTraceById",
                 remark: "Query message trace by message ID.",
             },
