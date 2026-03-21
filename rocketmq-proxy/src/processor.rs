@@ -13,9 +13,12 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
+use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
+use rocketmq_common::common::message::message_single::Message;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 
 use crate::context::ProxyContext;
@@ -52,6 +55,24 @@ pub struct QueryAssignmentPlan {
     pub subscription_group: Option<SubscriptionGroupMetadata>,
 }
 
+#[derive(Debug, Clone)]
+pub struct SendMessageRequest {
+    pub messages: Vec<SendMessageEntry>,
+    pub timeout: Option<Duration>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SendMessageEntry {
+    pub topic: ResourceIdentity,
+    pub client_message_id: String,
+    pub message: Message,
+}
+
+#[derive(Debug, Clone)]
+pub struct SendMessagePlan {
+    pub entries: Vec<SendResult>,
+}
+
 #[async_trait]
 pub trait MessagingProcessor: Send + Sync {
     async fn query_route(&self, context: &ProxyContext, request: QueryRouteRequest) -> ProxyResult<QueryRoutePlan>;
@@ -61,6 +82,8 @@ pub trait MessagingProcessor: Send + Sync {
         context: &ProxyContext,
         request: QueryAssignmentRequest,
     ) -> ProxyResult<QueryAssignmentPlan>;
+
+    async fn send_message(&self, context: &ProxyContext, request: SendMessageRequest) -> ProxyResult<SendMessagePlan>;
 }
 
 #[derive(Clone)]
@@ -119,5 +142,12 @@ impl MessagingProcessor for DefaultMessagingProcessor {
             assignments,
             subscription_group,
         })
+    }
+
+    async fn send_message(&self, context: &ProxyContext, request: SendMessageRequest) -> ProxyResult<SendMessagePlan> {
+        let message_service = self.service_manager.message_service();
+        let entries = message_service.send_message(context, &request).await?;
+
+        Ok(SendMessagePlan { entries })
     }
 }

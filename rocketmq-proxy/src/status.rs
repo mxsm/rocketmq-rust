@@ -41,6 +41,10 @@ impl ProxyStatusMapper {
             ProxyError::TooManyRequests { .. } => v2::Code::TooManyRequests,
             ProxyError::InvalidMetadata { .. } => v2::Code::BadRequest,
             ProxyError::Transport { .. } => v2::Code::InternalError,
+            ProxyError::IllegalMessageId { .. } => v2::Code::IllegalMessageId,
+            ProxyError::IllegalMessageGroup { .. } => v2::Code::IllegalMessageGroup,
+            ProxyError::IllegalDeliveryTime { .. } => v2::Code::IllegalDeliveryTime,
+            ProxyError::MessagePropertyConflictWithType { .. } => v2::Code::MessagePropertyConflictWithType,
             ProxyError::RocketMQ(inner) => Self::from_rocketmq_error(inner),
         };
         Self::from_code(code, error.to_string())

@@ -214,16 +214,26 @@ where
 
     async fn send_message(
         &self,
-        _request: Request<v2::SendMessageRequest>,
+        request: Request<v2::SendMessageRequest>,
     ) -> Result<Response<v2::SendMessageResponse>, Status> {
-        let status = match self.guards.try_producer() {
-            Ok(_permit) => self.not_implemented_status("SendMessage"),
-            Err(error) => ProxyStatusMapper::from_error(&error),
+        let context = self.context("SendMessage", &request);
+        let request = request.into_inner();
+
+        let response = match self
+            .validate_client_context(&context)
+            .and_then(|_| adapter::build_send_message_request(&context, &request))
+        {
+            Ok(input) => match self.guards.try_producer() {
+                Ok(_permit) => match self.processor.send_message(&context, input.clone()).await {
+                    Ok(plan) => adapter::build_send_message_response(&plan, &input),
+                    Err(error) => adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
+                },
+                Err(error) => adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
+            },
+            Err(error) => adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
         };
-        Ok(Response::new(v2::SendMessageResponse {
-            status: Some(status),
-            entries: Vec::new(),
-        }))
+
+        Ok(Response::new(response))
     }
 
     async fn query_assignment(
@@ -414,7 +424,9 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use bytes::Bytes;
     use cheetah_string::CheetahString;
+    use rocketmq_client_rust::producer::send_status::SendStatus;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
     use rocketmq_remoting::protocol::route::route_data_view::QueueData;
     use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
@@ -429,6 +441,7 @@ mod tests {
     use crate::service::ClusterServiceManager;
     use crate::service::ProxyTopicMessageType;
     use crate::service::ResourceIdentity;
+    use crate::service::StaticMessageService;
     use crate::service::StaticMetadataService;
     use crate::service::StaticRouteService;
     use crate::service::SubscriptionGroupMetadata;
@@ -438,7 +451,24 @@ mod tests {
         route_service: StaticRouteService,
         metadata_service: StaticMetadataService,
     ) -> ProxyGrpcService<DefaultMessagingProcessor> {
-        let manager = ClusterServiceManager::new(Arc::new(route_service), Arc::new(metadata_service));
+        test_service_with_message_service(
+            route_service,
+            metadata_service,
+            Arc::new(crate::service::DefaultMessageService),
+        )
+    }
+
+    fn test_service_with_message_service(
+        route_service: StaticRouteService,
+        metadata_service: StaticMetadataService,
+        message_service: Arc<dyn crate::service::MessageService>,
+    ) -> ProxyGrpcService<DefaultMessagingProcessor> {
+        let manager = ClusterServiceManager::with_services(
+            Arc::new(route_service),
+            Arc::new(metadata_service),
+            Arc::new(crate::service::DefaultAssignmentService),
+            message_service,
+        );
         let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(manager)));
         ProxyGrpcService::new(
             Arc::new(ProxyConfig::default()),
@@ -545,5 +575,83 @@ mod tests {
 
         let response = service.heartbeat(request).await.unwrap().into_inner();
         assert_eq!(response.status.unwrap().code, v2::Code::ClientIdRequired as i32);
+    }
+
+    #[tokio::test]
+    async fn send_message_returns_send_result_entry() {
+        let service = test_service_with_message_service(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+        );
+        let mut request = Request::new(v2::SendMessageRequest {
+            messages: vec![v2::Message {
+                topic: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "TopicA".to_owned(),
+                }),
+                user_properties: HashMap::new(),
+                system_properties: Some(v2::SystemProperties {
+                    message_id: "msg-1".to_owned(),
+                    body_encoding: v2::Encoding::Identity as i32,
+                    ..Default::default()
+                }),
+                body: Bytes::from_static(b"hello").to_vec(),
+            }],
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service.send_message(request).await.unwrap().into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
+        assert_eq!(response.entries.len(), 1);
+        assert_eq!(response.entries[0].message_id, "msg-1");
+    }
+
+    #[tokio::test]
+    async fn send_message_rejects_batch_until_partial_results_are_implemented() {
+        let service = test_service_with_message_service(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+        );
+        let mut request = Request::new(v2::SendMessageRequest {
+            messages: vec![
+                v2::Message {
+                    topic: Some(v2::Resource {
+                        resource_namespace: String::new(),
+                        name: "TopicA".to_owned(),
+                    }),
+                    user_properties: HashMap::new(),
+                    system_properties: Some(v2::SystemProperties {
+                        message_id: "msg-1".to_owned(),
+                        body_encoding: v2::Encoding::Identity as i32,
+                        ..Default::default()
+                    }),
+                    body: Bytes::from_static(b"hello").to_vec(),
+                },
+                v2::Message {
+                    topic: Some(v2::Resource {
+                        resource_namespace: String::new(),
+                        name: "TopicA".to_owned(),
+                    }),
+                    user_properties: HashMap::new(),
+                    system_properties: Some(v2::SystemProperties {
+                        message_id: "msg-2".to_owned(),
+                        body_encoding: v2::Encoding::Identity as i32,
+                        ..Default::default()
+                    }),
+                    body: Bytes::from_static(b"world").to_vec(),
+                },
+            ],
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service.send_message(request).await.unwrap().into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::NotImplemented as i32);
+        assert!(response.entries.is_empty());
     }
 }

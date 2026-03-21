@@ -13,12 +13,16 @@
 // limitations under the License.
 
 use std::future::Future;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use cheetah_string::CheetahString;
 use rocketmq_client_rust::base::client_config::ClientConfig as RocketmqClientConfig;
 use rocketmq_client_rust::factory::mq_client_instance::MQClientInstance;
 use rocketmq_client_rust::implementation::mq_client_manager::MQClientManager;
+use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
+use rocketmq_client_rust::producer::mq_producer::MQProducer;
+use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_common::common::mix_all::MASTER_ID;
@@ -29,8 +33,10 @@ use rocketmq_remoting::protocol::subscription::subscription_group_config::Subscr
 use rocketmq_rust::ArcMut;
 
 use crate::config::ClusterConfig;
+use crate::context::ProxyContext;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
+use crate::processor::SendMessageRequest;
 use crate::service::ProxyTopicMessageType;
 use crate::service::ResourceIdentity;
 use crate::service::SubscriptionGroupMetadata;
@@ -53,6 +59,8 @@ pub trait ClusterClient: Send + Sync {
         topic: &ResourceIdentity,
         group: &ResourceIdentity,
     ) -> ProxyResult<Option<SubscriptionGroupMetadata>>;
+
+    async fn send_message(&self, context: &ProxyContext, request: &SendMessageRequest) -> ProxyResult<Vec<SendResult>>;
 }
 
 pub struct RocketmqClusterClient {
@@ -186,6 +194,37 @@ impl ClusterClient for RocketmqClusterClient {
         })
         .await
     }
+
+    async fn send_message(&self, context: &ProxyContext, request: &SendMessageRequest) -> ProxyResult<Vec<SendResult>> {
+        let config = self.config.clone();
+        let request = request.clone();
+        let request_id = context.request_id().to_owned();
+
+        run_cluster_task(move || async move {
+            let timeout = effective_send_timeout_ms(&config, request.timeout);
+            let mut producer = build_send_producer(&config, &request, request_id.as_str(), timeout);
+            producer.start().await?;
+
+            let send_result = async {
+                let mut results = Vec::with_capacity(request.messages.len());
+                for entry in request.messages {
+                    let result = producer
+                        .send_with_timeout(entry.message, timeout)
+                        .await?
+                        .ok_or_else(|| ProxyError::Transport {
+                            message: format!("send result was empty for topic '{}'", entry.topic),
+                        })?;
+                    results.push(result);
+                }
+                Ok(results)
+            }
+            .await;
+
+            producer.shutdown().await;
+            send_result
+        })
+        .await
+    }
 }
 
 async fn run_cluster_task<T, F, Fut>(task: F) -> ProxyResult<T>
@@ -221,6 +260,66 @@ async fn initialize_client_instance(config: ClusterConfig) -> ProxyResult<ArcMut
     let this = instance.clone();
     instance.start(this).await?;
     Ok(instance)
+}
+
+fn build_send_producer(
+    config: &ClusterConfig,
+    request: &SendMessageRequest,
+    request_id: &str,
+    timeout_ms: u64,
+) -> DefaultMQProducer {
+    let mut client_config = RocketmqClientConfig::default();
+    client_config.set_instance_name(CheetahString::from(format!(
+        "{}-{}",
+        config.instance_name,
+        sanitize_group_component(request_id)
+    )));
+    client_config.set_mq_client_api_timeout(config.mq_client_api_timeout_ms);
+    if let Some(namesrv_addr) = config.namesrv_addr.as_ref() {
+        client_config.set_namesrv_addr(CheetahString::from(namesrv_addr.as_str()));
+    }
+
+    let topics = request
+        .messages
+        .iter()
+        .map(|message| CheetahString::from(message.topic.to_string()))
+        .collect();
+
+    DefaultMQProducer::builder()
+        .client_config(client_config)
+        .producer_group(build_send_producer_group(config, request_id))
+        .topics(topics)
+        .send_msg_timeout(timeout_ms as u32)
+        .build()
+}
+
+fn build_send_producer_group(config: &ClusterConfig, request_id: &str) -> String {
+    let prefix = sanitize_group_component(config.producer_group_prefix.as_str());
+    let request = sanitize_group_component(request_id);
+    format!("{prefix}-{request}")
+}
+
+fn sanitize_group_component(value: &str) -> String {
+    let sanitized: String = value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '%' | '|'))
+        .collect();
+
+    if sanitized.is_empty() {
+        "proxy".to_owned()
+    } else {
+        sanitized
+    }
+}
+
+fn effective_send_timeout_ms(config: &ClusterConfig, deadline: Option<Duration>) -> u64 {
+    let configured = config.send_message_timeout_ms.max(1);
+    let Some(deadline) = deadline else {
+        return configured;
+    };
+
+    let deadline_ms = deadline.as_millis().clamp(1, u128::from(u64::MAX)) as u64;
+    configured.min(deadline_ms).max(1)
 }
 
 fn select_master_broker_addr(route: &TopicRouteData) -> Option<CheetahString> {

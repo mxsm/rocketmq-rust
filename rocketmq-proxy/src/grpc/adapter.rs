@@ -17,20 +17,31 @@ use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::str::FromStr;
 
+use cheetah_string::CheetahString;
+use rocketmq_client_rust::producer::send_result::SendResult;
+use rocketmq_client_rust::producer::send_status::SendStatus;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
+use rocketmq_common::common::message::message_single::Message;
+use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_remoting::protocol::route::route_data_view::QueueData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 
 use crate::config::ProxyConfig;
+use crate::context::ProxyContext;
 use crate::context::ResolvedAddressScheme;
 use crate::context::ResolvedEndpoint;
+use crate::error::ProxyError;
 use crate::error::ProxyResult;
 use crate::processor::QueryAssignmentPlan;
 use crate::processor::QueryAssignmentRequest;
 use crate::processor::QueryRoutePlan;
 use crate::processor::QueryRouteRequest;
+use crate::processor::SendMessageEntry;
+use crate::processor::SendMessagePlan;
+use crate::processor::SendMessageRequest;
 use crate::proto::v2;
 use crate::service::ProxyTopicMessageType;
 use crate::service::ResourceIdentity;
@@ -54,6 +65,30 @@ pub fn build_query_assignment_request(
         topic: resource_identity(request.topic.as_ref(), "topic")?,
         group: resource_identity(request.group.as_ref(), "group")?,
         endpoints: resolve_endpoints(config, request.endpoints.as_ref())?,
+    })
+}
+
+pub fn build_send_message_request(
+    context: &ProxyContext,
+    request: &v2::SendMessageRequest,
+) -> ProxyResult<SendMessageRequest> {
+    if request.messages.is_empty() {
+        return Err(rocketmq_error::RocketMQError::illegal_argument("messages must not be empty").into());
+    }
+
+    if request.messages.len() != 1 {
+        return Err(ProxyError::not_implemented("SendMessage(batch)"));
+    }
+
+    let messages = request
+        .messages
+        .iter()
+        .map(build_send_message_entry)
+        .collect::<ProxyResult<Vec<_>>>()?;
+
+    Ok(SendMessageRequest {
+        messages,
+        timeout: context.deadline(),
     })
 }
 
@@ -163,6 +198,25 @@ pub fn build_query_assignment_response(
     }
 }
 
+pub fn build_send_message_response(plan: &SendMessagePlan, request: &SendMessageRequest) -> v2::SendMessageResponse {
+    let entries: Vec<v2::SendResultEntry> = plan
+        .entries
+        .iter()
+        .zip(request.messages.iter())
+        .map(|(result, message)| build_send_result_entry(result, message))
+        .collect();
+
+    let status = entries
+        .first()
+        .and_then(|entry| entry.status.clone())
+        .unwrap_or_else(ProxyStatusMapper::ok);
+
+    v2::SendMessageResponse {
+        status: Some(status),
+        entries,
+    }
+}
+
 fn build_query_assignment_response_from_server(
     request: &v2::QueryAssignmentRequest,
     plan: &QueryAssignmentPlan,
@@ -190,6 +244,13 @@ pub fn error_query_assignment_response(status: v2::Status) -> v2::QueryAssignmen
     v2::QueryAssignmentResponse {
         status: Some(status),
         assignments: Vec::new(),
+    }
+}
+
+pub fn error_send_message_response(status: v2::Status) -> v2::SendMessageResponse {
+    v2::SendMessageResponse {
+        status: Some(status),
+        entries: Vec::new(),
     }
 }
 
@@ -275,6 +336,232 @@ fn build_broker_map(route: &TopicRouteData) -> HashMap<String, HashMap<u64, v2::
     }
 
     broker_map
+}
+
+fn build_send_message_entry(message: &v2::Message) -> ProxyResult<SendMessageEntry> {
+    let topic = resource_identity(message.topic.as_ref(), "topic")?;
+    let system = message
+        .system_properties
+        .as_ref()
+        .ok_or_else(|| rocketmq_error::RocketMQError::illegal_argument("message systemProperties must not be empty"))?;
+    let client_message_id = validate_client_message_id(system.message_id.as_str())?;
+
+    if message.body.is_empty() {
+        return Err(rocketmq_error::RocketMQError::illegal_argument("message body must not be empty").into());
+    }
+
+    let effective_type = infer_message_type(system)?;
+    let mut rocketmq_message = build_rocketmq_message(&topic, message, system, &client_message_id)?;
+    apply_message_type(&mut rocketmq_message, system, effective_type)?;
+
+    Ok(SendMessageEntry {
+        topic,
+        client_message_id,
+        message: rocketmq_message,
+    })
+}
+
+fn validate_client_message_id(message_id: &str) -> ProxyResult<String> {
+    let trimmed = message_id.trim();
+    if trimmed.is_empty() {
+        return Err(ProxyError::illegal_message_id(
+            "message systemProperties.messageId must not be empty",
+        ));
+    }
+
+    Ok(trimmed.to_owned())
+}
+
+fn infer_message_type(system: &v2::SystemProperties) -> ProxyResult<ProxyTopicMessageType> {
+    let has_message_group = system
+        .message_group
+        .as_deref()
+        .map(|group| !group.trim().is_empty())
+        .unwrap_or(false);
+    let has_delivery_timestamp = system.delivery_timestamp.is_some();
+
+    match v2::MessageType::try_from(system.message_type).unwrap_or(v2::MessageType::Unspecified) {
+        v2::MessageType::Unspecified | v2::MessageType::Normal => {
+            if has_message_group && has_delivery_timestamp {
+                return Err(ProxyError::message_property_conflict(
+                    "FIFO and delay properties cannot be set on the same message",
+                ));
+            }
+
+            if has_delivery_timestamp {
+                Ok(ProxyTopicMessageType::Delay)
+            } else if has_message_group {
+                Ok(ProxyTopicMessageType::Fifo)
+            } else {
+                Ok(ProxyTopicMessageType::Normal)
+            }
+        }
+        v2::MessageType::Fifo => {
+            if has_delivery_timestamp {
+                return Err(ProxyError::message_property_conflict(
+                    "FIFO message does not support delivery timestamp",
+                ));
+            }
+
+            Ok(ProxyTopicMessageType::Fifo)
+        }
+        v2::MessageType::Delay => {
+            if has_message_group {
+                return Err(ProxyError::message_property_conflict(
+                    "delay message does not support message group",
+                ));
+            }
+
+            Ok(ProxyTopicMessageType::Delay)
+        }
+        v2::MessageType::Transaction => Err(ProxyError::not_implemented("SendMessage(transaction)")),
+        v2::MessageType::Lite => Err(ProxyError::not_implemented("SendMessage(lite-topic)")),
+        v2::MessageType::Priority => Err(ProxyError::not_implemented("SendMessage(priority)")),
+    }
+}
+
+fn build_rocketmq_message(
+    topic: &ResourceIdentity,
+    message: &v2::Message,
+    system: &v2::SystemProperties,
+    client_message_id: &str,
+) -> ProxyResult<Message> {
+    if !matches!(
+        v2::Encoding::try_from(system.body_encoding).unwrap_or(v2::Encoding::Unspecified),
+        v2::Encoding::Unspecified | v2::Encoding::Identity
+    ) {
+        return Err(ProxyError::not_implemented("SendMessage(non-identity body encoding)"));
+    }
+
+    let mut rocketmq_message = Message::builder()
+        .topic(topic.to_string())
+        .body(message.body.clone())
+        .build_unchecked();
+    rocketmq_message.put_property(
+        CheetahString::from_static_str(MessageConst::PROPERTY_UNIQ_CLIENT_MESSAGE_ID_KEYIDX),
+        CheetahString::from(client_message_id),
+    );
+
+    if let Some(tag) = system.tag.as_deref() {
+        let tag = tag.trim();
+        if !tag.is_empty() {
+            rocketmq_message.set_tags(CheetahString::from(tag));
+        }
+    }
+
+    if !system.keys.is_empty() {
+        rocketmq_message.set_keys(CheetahString::from(system.keys.join(MessageConst::KEY_SEPARATOR)));
+    }
+
+    if let Some(trace_context) = system.trace_context.as_deref() {
+        let trace_context = trace_context.trim();
+        if !trace_context.is_empty() {
+            rocketmq_message.put_property(
+                CheetahString::from_static_str(MessageConst::PROPERTY_TRACE_CONTEXT),
+                CheetahString::from(trace_context),
+            );
+        }
+    }
+
+    for (key, value) in &message.user_properties {
+        rocketmq_message.put_user_property(CheetahString::from(key.as_str()), CheetahString::from(value.as_str()))?;
+    }
+
+    Ok(rocketmq_message)
+}
+
+fn apply_message_type(
+    message: &mut Message,
+    system: &v2::SystemProperties,
+    message_type: ProxyTopicMessageType,
+) -> ProxyResult<()> {
+    match message_type {
+        ProxyTopicMessageType::Normal => Ok(()),
+        ProxyTopicMessageType::Fifo => {
+            let message_group = system
+                .message_group
+                .as_deref()
+                .map(str::trim)
+                .filter(|group| !group.is_empty())
+                .ok_or_else(|| {
+                    ProxyError::illegal_message_group("FIFO message requires systemProperties.messageGroup")
+                })?;
+            message.put_property(
+                CheetahString::from_static_str(MessageConst::PROPERTY_SHARDING_KEY),
+                CheetahString::from(message_group),
+            );
+            Ok(())
+        }
+        ProxyTopicMessageType::Delay => {
+            let deliver_time_ms = system
+                .delivery_timestamp
+                .as_ref()
+                .map(timestamp_to_epoch_millis)
+                .transpose()?
+                .ok_or_else(|| {
+                    ProxyError::illegal_delivery_time("delay message requires systemProperties.deliveryTimestamp")
+                })?;
+            message.set_deliver_time_ms(deliver_time_ms);
+            Ok(())
+        }
+        ProxyTopicMessageType::Transaction => Err(ProxyError::not_implemented("SendMessage(transaction)")),
+        ProxyTopicMessageType::Mixed => Err(ProxyError::not_implemented("SendMessage(mixed-type topic)")),
+        ProxyTopicMessageType::Lite => Err(ProxyError::not_implemented("SendMessage(lite-topic)")),
+        ProxyTopicMessageType::Priority => Err(ProxyError::not_implemented("SendMessage(priority)")),
+        ProxyTopicMessageType::Unspecified => Ok(()),
+    }
+}
+
+fn timestamp_to_epoch_millis(timestamp: &prost_types::Timestamp) -> ProxyResult<u64> {
+    if timestamp.seconds < 0 {
+        return Err(ProxyError::illegal_delivery_time(
+            "delivery timestamp must not be negative",
+        ));
+    }
+
+    if !(0..1_000_000_000).contains(&timestamp.nanos) {
+        return Err(ProxyError::illegal_delivery_time(
+            "delivery timestamp nanos are out of range",
+        ));
+    }
+
+    let millis_from_seconds = (timestamp.seconds as u64)
+        .checked_mul(1_000)
+        .ok_or_else(|| ProxyError::illegal_delivery_time("delivery timestamp overflowed milliseconds"))?;
+    let millis_from_nanos = (timestamp.nanos as u64) / 1_000_000;
+
+    millis_from_seconds
+        .checked_add(millis_from_nanos)
+        .ok_or_else(|| ProxyError::illegal_delivery_time("delivery timestamp overflowed milliseconds"))
+}
+
+fn build_send_result_entry(result: &SendResult, request: &SendMessageEntry) -> v2::SendResultEntry {
+    v2::SendResultEntry {
+        status: Some(map_send_result_status(result)),
+        message_id: result
+            .msg_id
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| request.client_message_id.clone()),
+        transaction_id: result.transaction_id.clone().unwrap_or_default(),
+        offset: result.queue_offset as i64,
+        recall_handle: String::new(),
+    }
+}
+
+fn map_send_result_status(result: &SendResult) -> v2::Status {
+    match result.send_status {
+        SendStatus::SendOk => ProxyStatusMapper::ok(),
+        SendStatus::FlushDiskTimeout => {
+            ProxyStatusMapper::from_code(v2::Code::MasterPersistenceTimeout, "broker flush disk timed out")
+        }
+        SendStatus::FlushSlaveTimeout => {
+            ProxyStatusMapper::from_code(v2::Code::SlavePersistenceTimeout, "broker slave flush timed out")
+        }
+        SendStatus::SlaveNotAvailable => {
+            ProxyStatusMapper::from_code(v2::Code::HaNotAvailable, "slave broker not available")
+        }
+    }
 }
 
 fn gen_message_queue_from_queue_data(
@@ -487,22 +774,33 @@ fn parse_broker_address(address: &str) -> (v2::AddressScheme, v2::Address) {
 mod tests {
     use std::collections::HashMap;
 
+    use bytes::Bytes;
     use cheetah_string::CheetahString;
+    use rocketmq_client_rust::producer::send_result::SendResult;
+    use rocketmq_client_rust::producer::send_status::SendStatus;
     use rocketmq_common::common::message::message_enum::MessageRequestMode;
     use rocketmq_common::common::message::message_queue::MessageQueue;
     use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
+    use rocketmq_common::common::message::message_single::Message;
+    use rocketmq_common::common::message::MessageConst;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
     use rocketmq_remoting::protocol::route::route_data_view::QueueData;
     use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 
     use super::build_query_assignment_response;
     use super::build_query_route_response;
+    use super::build_send_message_request;
+    use super::build_send_message_response;
     use super::gen_message_queue_from_queue_data;
+    use crate::context::ProxyContext;
     use crate::processor::QueryAssignmentPlan;
     use crate::processor::QueryRoutePlan;
+    use crate::processor::SendMessagePlan;
     use crate::proto::v2;
     use crate::service::ProxyTopicMessageType;
+    use crate::service::ResourceIdentity;
     use crate::service::SubscriptionGroupMetadata;
+    use crate::status::ProxyStatusMapper;
 
     #[test]
     fn route_response_preserves_permission_split() {
@@ -601,5 +899,98 @@ mod tests {
         assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
         assert_eq!(response.assignments.len(), 1);
         assert_eq!(response.assignments[0].message_queue.as_ref().unwrap().id, 1);
+    }
+
+    #[test]
+    fn build_send_message_request_maps_fifo_properties() {
+        let context = ProxyContext::from_grpc_request("SendMessage", &tonic::Request::new(()));
+        let request = v2::SendMessageRequest {
+            messages: vec![v2::Message {
+                topic: Some(v2::Resource {
+                    resource_namespace: "ns".to_owned(),
+                    name: "TopicA".to_owned(),
+                }),
+                user_properties: HashMap::from([("k".to_owned(), "v".to_owned())]),
+                system_properties: Some(v2::SystemProperties {
+                    tag: Some("TagA".to_owned()),
+                    keys: vec!["KeyA".to_owned(), "KeyB".to_owned()],
+                    message_id: "msg-1".to_owned(),
+                    body_encoding: v2::Encoding::Identity as i32,
+                    message_group: Some("group-a".to_owned()),
+                    trace_context: Some("trace-a".to_owned()),
+                    ..Default::default()
+                }),
+                body: Bytes::from_static(b"hello").to_vec(),
+            }],
+        };
+
+        let mapped = build_send_message_request(&context, &request).unwrap();
+        let message = &mapped.messages[0].message;
+        assert_eq!(mapped.messages[0].topic, ResourceIdentity::new("ns", "TopicA"));
+        assert_eq!(message.topic().as_str(), "ns%TopicA");
+        assert_eq!(message.get_tags().unwrap().as_str(), "TagA");
+        assert_eq!(
+            message
+                .get_property(&CheetahString::from_static_str(MessageConst::PROPERTY_SHARDING_KEY))
+                .unwrap(),
+            CheetahString::from("group-a")
+        );
+        assert_eq!(
+            message.get_user_property(CheetahString::from("k")).unwrap().as_str(),
+            "v"
+        );
+    }
+
+    #[test]
+    fn build_send_message_request_rejects_missing_message_id() {
+        let context = ProxyContext::from_grpc_request("SendMessage", &tonic::Request::new(()));
+        let request = v2::SendMessageRequest {
+            messages: vec![v2::Message {
+                topic: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "TopicA".to_owned(),
+                }),
+                user_properties: HashMap::new(),
+                system_properties: Some(v2::SystemProperties::default()),
+                body: Bytes::from_static(b"hello").to_vec(),
+            }],
+        };
+
+        let error = build_send_message_request(&context, &request).unwrap_err();
+        let status = ProxyStatusMapper::from_error(&error);
+        assert_eq!(status.code, v2::Code::IllegalMessageId as i32);
+    }
+
+    #[test]
+    fn send_message_response_maps_send_status() {
+        let response = build_send_message_response(
+            &SendMessagePlan {
+                entries: vec![SendResult::new(
+                    SendStatus::FlushDiskTimeout,
+                    Some(CheetahString::from("server-msg-id")),
+                    None,
+                    None,
+                    12,
+                )],
+            },
+            &crate::processor::SendMessageRequest {
+                messages: vec![crate::processor::SendMessageEntry {
+                    topic: ResourceIdentity::new("", "TopicA"),
+                    client_message_id: "client-msg-id".to_owned(),
+                    message: Message::builder()
+                        .topic("TopicA")
+                        .body(Bytes::from_static(b"hello"))
+                        .build_unchecked(),
+                }],
+                timeout: None,
+            },
+        );
+
+        assert_eq!(response.status.unwrap().code, v2::Code::MasterPersistenceTimeout as i32);
+        assert_eq!(response.entries[0].message_id, "server-msg-id");
+        assert_eq!(
+            response.entries[0].status.as_ref().unwrap().code,
+            v2::Code::MasterPersistenceTimeout as i32
+        );
     }
 }

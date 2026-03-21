@@ -39,6 +39,18 @@ pub enum ProxyError {
 
     #[error("transport error: {message}")]
     Transport { message: String },
+
+    #[error("illegal message id: {message}")]
+    IllegalMessageId { message: String },
+
+    #[error("illegal message group: {message}")]
+    IllegalMessageGroup { message: String },
+
+    #[error("illegal delivery time: {message}")]
+    IllegalDeliveryTime { message: String },
+
+    #[error("message property conflicts with message type: {message}")]
+    MessagePropertyConflictWithType { message: String },
 }
 
 impl ProxyError {
@@ -52,6 +64,30 @@ impl ProxyError {
 
     pub fn invalid_metadata(message: impl Into<String>) -> Self {
         Self::InvalidMetadata {
+            message: message.into(),
+        }
+    }
+
+    pub fn illegal_message_id(message: impl Into<String>) -> Self {
+        Self::IllegalMessageId {
+            message: message.into(),
+        }
+    }
+
+    pub fn illegal_message_group(message: impl Into<String>) -> Self {
+        Self::IllegalMessageGroup {
+            message: message.into(),
+        }
+    }
+
+    pub fn illegal_delivery_time(message: impl Into<String>) -> Self {
+        Self::IllegalDeliveryTime {
+            message: message.into(),
+        }
+    }
+
+    pub fn message_property_conflict(message: impl Into<String>) -> Self {
+        Self::MessagePropertyConflictWithType {
             message: message.into(),
         }
     }
