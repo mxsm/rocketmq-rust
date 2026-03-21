@@ -1,0 +1,480 @@
+// Licensed to the Apache Software Foundation (ASF) under one or more
+// contributor license agreements.  See the NOTICE file distributed with
+// this work for additional information regarding copyright ownership.
+// The ASF licenses this file to You under the Apache License, Version 2.0
+// (the "License"); you may not use this file except in compliance with
+// the License.  You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// Source: https://github.com/apache/rocketmq-apis/tree/main/apache/rocketmq/v2
+// Copyright: The Apache Software Foundation (ASF)
+// Adapted for rocketmq-rust namespace and local build layout.
+
+syntax = "proto3";
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+import "definition.proto";
+
+package rocketmq_rust_proxy.v2;
+
+option csharp_namespace = "Rocketmq.Rust.Proxy.V2";
+option java_multiple_files = true;
+option java_package = "rocketmq.rust.proxy.v2";
+option java_generate_equals_and_hash = true;
+option java_string_check_utf8 = true;
+option java_outer_classname = "RocketmqRustProxyService";
+
+// Topics are destination of messages to publish to or subscribe from. Similar
+// to domain names, they will be addressable after resolution through the
+// provided access point.
+//
+// Access points are usually the addresses of name servers, which fulfill
+// service discovery, load-balancing and other auxiliary services. Name servers
+// receive periodic heartbeats from affiliate brokers and erase those which
+// failed to maintain alive status.
+//
+// Name servers answer queries of QueryRouteRequest, responding clients with
+// addressable message-queues, which they may directly publish messages to or
+// subscribe messages from.
+//
+// QueryRouteRequest shall include source endpoints, aka, configured
+// access-point, which annotates tenant-id, instance-id or other
+// vendor-specific settings. Purpose-built name servers may respond customized
+// results based on these particular requirements.
+message QueryRouteRequest {
+  Resource topic = 1;
+  Endpoints endpoints = 2;
+}
+
+message QueryRouteResponse {
+  Status status = 1;
+
+  repeated MessageQueue message_queues = 2;
+}
+
+message SendMessageRequest {
+  repeated Message messages = 1;
+}
+
+message SendResultEntry {
+  Status status = 1;
+  string message_id = 2;
+  string transaction_id = 3;
+  int64 offset = 4;
+  // Unique handle to identify message to recall, support delay message for now.
+  string recall_handle = 5;
+}
+
+message SendMessageResponse {
+  Status status = 1;
+
+  // Some implementation may have partial failure issues. Client SDK developers are expected to inspect
+  // each entry for best certainty.
+  repeated SendResultEntry entries = 2;
+}
+
+message QueryAssignmentRequest {
+  Resource topic = 1;
+  Resource group = 2;
+  Endpoints endpoints = 3;
+}
+
+message QueryAssignmentResponse {
+  Status status = 1;
+  repeated Assignment assignments = 2;
+}
+
+message ReceiveMessageRequest {
+  Resource group = 1;
+  MessageQueue message_queue = 2;
+  FilterExpression filter_expression = 3;
+  int32 batch_size = 4;
+  // Required if client type is simple consumer.
+  optional google.protobuf.Duration invisible_duration = 5;
+  // For message auto renew and clean
+  bool auto_renew = 6;
+  optional google.protobuf.Duration long_polling_timeout = 7;
+  optional string attempt_id = 8;
+}
+
+message ReceiveMessageResponse {
+  oneof content {
+    Status status = 1;
+    Message message = 2;
+    // The timestamp that brokers start to deliver status line or message.
+    google.protobuf.Timestamp delivery_timestamp = 3;
+  }
+}
+
+message AckMessageEntry {
+  string message_id = 1;
+  string receipt_handle = 2;
+  optional string lite_topic = 3;
+}
+
+message AckMessageRequest {
+  Resource group = 1;
+  Resource topic = 2;
+  repeated AckMessageEntry entries = 3;
+}
+
+message AckMessageResultEntry {
+  string message_id = 1;
+  string receipt_handle = 2;
+
+  // Acknowledge result may be acquired through inspecting
+  // `status.code`; In case acknowledgement failed, `status.message`
+  // is the explanation of the failure.
+  Status status = 3;
+}
+
+message AckMessageResponse {
+
+  // RPC tier status, which is used to represent RPC-level errors including
+  // authentication, authorization, throttling and other general failures.
+  Status status = 1;
+
+  repeated AckMessageResultEntry entries = 2;
+}
+
+message ForwardMessageToDeadLetterQueueRequest {
+  Resource group = 1;
+  Resource topic = 2;
+  string receipt_handle = 3;
+  string message_id = 4;
+  int32 delivery_attempt = 5;
+  int32 max_delivery_attempts = 6;
+  optional string lite_topic = 7;
+}
+
+message ForwardMessageToDeadLetterQueueResponse { Status status = 1; }
+
+message HeartbeatRequest {
+  optional Resource group = 1;
+  ClientType client_type = 2;
+}
+
+message HeartbeatResponse { Status status = 1; }
+
+message EndTransactionRequest {
+  Resource topic = 1;
+  string message_id = 2;
+  string transaction_id = 3;
+  TransactionResolution resolution = 4;
+  TransactionSource source = 5;
+  string trace_context = 6;
+}
+
+message EndTransactionResponse { Status status = 1; }
+
+message PrintThreadStackTraceCommand { string nonce = 1; }
+
+message ReconnectEndpointsCommand { string nonce = 1; }
+
+message ThreadStackTrace {
+  string nonce = 1;
+  optional string thread_stack_trace = 2;
+}
+
+message VerifyMessageCommand {
+  string nonce = 1;
+  Message message = 2;
+}
+
+message VerifyMessageResult {
+  string nonce = 1;
+}
+
+message RecoverOrphanedTransactionCommand {
+  Message message = 1;
+  string transaction_id = 2;
+}
+
+message NotifyUnsubscribeLiteCommand {
+  string lite_topic = 1;
+}
+
+message TelemetryCommand {
+  optional Status status = 1;
+
+  oneof command {
+    // Client settings
+    Settings settings = 2;
+
+    // These messages are from client.
+    //
+    // Report thread stack trace to server.
+    ThreadStackTrace thread_stack_trace = 3;
+
+    // Report message verify result to server.
+    VerifyMessageResult verify_message_result = 4;
+
+    // There messages are from server.
+    //
+    // Request client to recover the orphaned transaction message.
+    RecoverOrphanedTransactionCommand recover_orphaned_transaction_command = 5;
+
+    // Request client to print thread stack trace.
+    PrintThreadStackTraceCommand print_thread_stack_trace_command = 6;
+
+    // Request client to verify the consumption of the appointed message.
+    VerifyMessageCommand verify_message_command = 7;
+
+    // Request client to reconnect server use the latest endpoints.
+    ReconnectEndpointsCommand reconnect_endpoints_command = 8;
+
+    // Request client to unsubscribe lite topic.
+    NotifyUnsubscribeLiteCommand notify_unsubscribe_lite_command = 9;
+  }
+}
+
+message NotifyClientTerminationRequest {
+  // Consumer group, which is absent for producer.
+  optional Resource group = 1;
+}
+
+message NotifyClientTerminationResponse { Status status = 1; }
+
+message ChangeInvisibleDurationRequest {
+  Resource group = 1;
+  Resource topic = 2;
+
+  // Unique receipt handle to identify message to change
+  string receipt_handle = 3;
+
+  // New invisible duration
+  google.protobuf.Duration invisible_duration = 4;
+
+  // For message tracing
+  string message_id = 5;
+
+  optional string lite_topic = 6;
+  // If true, server will not increment the retry times for this message
+  optional bool suspend = 7;
+}
+
+message ChangeInvisibleDurationResponse {
+  Status status = 1;
+
+  // Server may generate a new receipt handle for the message.
+  string receipt_handle = 2;
+}
+
+message PullMessageRequest {
+  Resource group = 1;
+  MessageQueue message_queue = 2;
+  int64 offset = 3;
+  int32 batch_size = 4;
+  FilterExpression filter_expression = 5;
+  google.protobuf.Duration long_polling_timeout = 6;
+}
+
+message PullMessageResponse {
+  oneof content {
+    Status status = 1;
+    Message message = 2;
+    int64 next_offset = 3;
+  }
+}
+
+message UpdateOffsetRequest {
+  Resource group = 1;
+  MessageQueue message_queue = 2;
+  int64 offset = 3;
+}
+
+message UpdateOffsetResponse {
+  Status status = 1;
+}
+
+message GetOffsetRequest {
+  Resource group = 1;
+  MessageQueue message_queue = 2;
+}
+
+message GetOffsetResponse {
+  Status status = 1;
+  int64 offset = 2;
+}
+
+message QueryOffsetRequest {
+  MessageQueue message_queue = 1;
+  QueryOffsetPolicy query_offset_policy = 2;
+  optional google.protobuf.Timestamp timestamp = 3;
+}
+
+message QueryOffsetResponse {
+  Status status = 1;
+  int64 offset = 2;
+}
+
+message RecallMessageRequest {
+  Resource topic = 1;
+  // Refer to SendResultEntry.
+  string recall_handle = 2;
+}
+
+message RecallMessageResponse {
+  Status status = 1;
+  string message_id = 2;
+}
+
+message SyncLiteSubscriptionRequest {
+  LiteSubscriptionAction action = 1;
+  // bindTopic for lite push consumer
+  Resource topic = 2;
+  // consumer group
+  Resource group = 3;
+  // lite subscription set of lite topics
+  repeated string lite_topic_set = 4;
+  optional int64 version = 5;
+  optional OffsetOption offset_option = 6;
+}
+
+message SyncLiteSubscriptionResponse {
+  Status status = 1;
+}
+
+// For all the RPCs in MessagingService, the following error handling policies
+// apply:
+//
+// If the request doesn't bear a valid authentication credential, return a
+// response with common.status.code == `UNAUTHENTICATED`. If the authenticated
+// user is not granted with sufficient permission to execute the requested
+// operation, return a response with common.status.code == `PERMISSION_DENIED`.
+// If the per-user-resource-based quota is exhausted, return a response with
+// common.status.code == `RESOURCE_EXHAUSTED`. If any unexpected server-side
+// errors raise, return a response with common.status.code == `INTERNAL`.
+service MessagingService {
+
+  // Queries the route entries of the requested topic in the perspective of the
+  // given endpoints. On success, servers should return a collection of
+  // addressable message-queues. Note servers may return customized route
+  // entries based on endpoints provided.
+  //
+  // If the requested topic doesn't exist, returns `NOT_FOUND`.
+  // If the specific endpoints is empty, returns `INVALID_ARGUMENT`.
+  rpc QueryRoute(QueryRouteRequest) returns (QueryRouteResponse) {}
+
+  // Producer or consumer sends HeartbeatRequest to servers periodically to
+  // keep-alive. Additionally, it also reports client-side configuration,
+  // including topic subscription, load-balancing group name, etc.
+  //
+  // Returns `OK` if success.
+  //
+  // If a client specifies a language that is not yet supported by servers,
+  // returns `INVALID_ARGUMENT`
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse) {}
+
+  // Delivers messages to brokers.
+  // Clients may further:
+  // 1. Refine a message destination to message-queues which fulfills parts of
+  // FIFO semantic;
+  // 2. Flag a message as transactional, which keeps it invisible to consumers
+  // until it commits;
+  // 3. Time a message, making it invisible to consumers till specified
+  // time-point;
+  // 4. And more...
+  //
+  // Returns message-id or transaction-id with status `OK` on success.
+  //
+  // If the destination topic doesn't exist, returns `NOT_FOUND`.
+  rpc SendMessage(SendMessageRequest) returns (SendMessageResponse) {}
+
+  // Queries the assigned route info of a topic for current consumer,
+  // the returned assignment result is decided by server-side load balancer.
+  //
+  // If the corresponding topic doesn't exist, returns `NOT_FOUND`.
+  // If the specific endpoints is empty, returns `INVALID_ARGUMENT`.
+  rpc QueryAssignment(QueryAssignmentRequest) returns (QueryAssignmentResponse) {
+  }
+
+  // Receives messages from the server in batch manner, returns a set of
+  // messages if success. The received messages should be acked or redelivered
+  // after processed.
+  //
+  // If the pending concurrent receive requests exceed the quota of the given
+  // consumer group, returns `UNAVAILABLE`. If the upstream store server hangs,
+  // return `DEADLINE_EXCEEDED` in a timely manner. If the corresponding topic
+  // or consumer group doesn't exist, returns `NOT_FOUND`. If there is no new
+  // message in the specific topic, returns `OK` with an empty message set.
+  // Please note that client may suffer from false empty responses.
+  //
+  // If failed to receive message from remote, server must return only one
+  // `ReceiveMessageResponse` as the reply to the request, whose `Status` indicates
+  // the specific reason of failure, otherwise, the reply is considered successful.
+  rpc ReceiveMessage(ReceiveMessageRequest) returns (stream ReceiveMessageResponse) {
+  }
+
+  // Acknowledges the message associated with the `receipt_handle` or `offset`
+  // in the `AckMessageRequest`, it means the message has been successfully
+  // processed. Returns `OK` if the message server remove the relevant message
+  // successfully.
+  //
+  // If the given receipt_handle is illegal or out of date, returns
+  // `INVALID_ARGUMENT`.
+  rpc AckMessage(AckMessageRequest) returns (AckMessageResponse) {}
+
+  // Forwards one message to dead letter queue if the max delivery attempts is
+  // exceeded by this message at client-side, return `OK` if success.
+  rpc ForwardMessageToDeadLetterQueue(ForwardMessageToDeadLetterQueueRequest)
+      returns (ForwardMessageToDeadLetterQueueResponse) {}
+
+  // PullMessage and ReceiveMessage RPCs serve a similar purpose,
+  // which is to attempt to get messages from the server, but with different semantics.
+  rpc PullMessage(PullMessageRequest) returns (stream PullMessageResponse) {}
+
+  // Update the consumption progress of the designated queue of the
+  // consumer group to the remote.
+  rpc UpdateOffset(UpdateOffsetRequest) returns (UpdateOffsetResponse) {}
+
+  // Query the consumption progress of the designated queue of the
+  // consumer group to the remote.
+  rpc GetOffset(GetOffsetRequest) returns (GetOffsetResponse) {}
+
+  // Query the offset of the designated queue by the query offset policy.
+  rpc QueryOffset(QueryOffsetRequest) returns (QueryOffsetResponse) {}
+
+  // Commits or rollback one transactional message.
+  rpc EndTransaction(EndTransactionRequest) returns (EndTransactionResponse) {}
+
+  // Once a client starts, it would immediately establishes bi-lateral stream
+  // RPCs with brokers, reporting its settings as the initiative command.
+  //
+  // When servers have need of inspecting client status, they would issue
+  // telemetry commands to clients. After executing received instructions,
+  // clients shall report command execution results through client-side streams.
+  rpc Telemetry(stream TelemetryCommand) returns (stream TelemetryCommand) {}
+
+  // Notify the server that the client is terminated.
+  rpc NotifyClientTermination(NotifyClientTerminationRequest) returns (NotifyClientTerminationResponse) {
+  }
+
+  // Once a message is retrieved from consume queue on behalf of the group, it
+  // will be kept invisible to other clients of the same group for a period of
+  // time. The message is supposed to be processed within the invisible
+  // duration. If the client, which is in charge of the invisible message, is
+  // not capable of processing the message timely, it may use
+  // ChangeInvisibleDuration to lengthen invisible duration.
+  rpc ChangeInvisibleDuration(ChangeInvisibleDurationRequest) returns (ChangeInvisibleDurationResponse) {
+  }
+
+  // Recall a message,
+  // for delay message, should recall before delivery time, like the rollback operation of transaction message,
+  // for normal message, not supported for now.
+  rpc RecallMessage(RecallMessageRequest) returns (RecallMessageResponse) {
+  }
+
+  // Sync lite subscription info, lite push consumer only
+  rpc SyncLiteSubscription(SyncLiteSubscriptionRequest) returns (SyncLiteSubscriptionResponse) {}
+
+}

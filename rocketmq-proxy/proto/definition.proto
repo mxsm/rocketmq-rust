@@ -1,0 +1,624 @@
+// Licensed to the Apache Software Foundation (ASF) under one or more
+// contributor license agreements.  See the NOTICE file distributed with
+// this work for additional information regarding copyright ownership.
+// The ASF licenses this file to You under the Apache License, Version 2.0
+// (the "License"); you may not use this file except in compliance with
+// the License.  You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// Source: https://github.com/apache/rocketmq-apis/tree/main/apache/rocketmq/v2
+// Copyright: The Apache Software Foundation (ASF)
+// Adapted for rocketmq-rust namespace and local build layout.
+
+syntax = "proto3";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+
+package rocketmq_rust_proxy.v2;
+
+option csharp_namespace = "Rocketmq.Rust.Proxy.V2";
+option java_multiple_files = true;
+option java_package = "rocketmq.rust.proxy.v2";
+option java_generate_equals_and_hash = true;
+option java_string_check_utf8 = true;
+option java_outer_classname = "RocketmqRustProxyDomain";
+
+enum TransactionResolution {
+  TRANSACTION_RESOLUTION_UNSPECIFIED = 0;
+  COMMIT = 1;
+  ROLLBACK = 2;
+}
+
+enum TransactionSource {
+  SOURCE_UNSPECIFIED = 0;
+  SOURCE_CLIENT = 1;
+  SOURCE_SERVER_CHECK = 2;
+}
+
+enum Permission {
+  PERMISSION_UNSPECIFIED = 0;
+  NONE = 1;
+  READ = 2;
+  WRITE = 3;
+  READ_WRITE = 4;
+}
+
+enum FilterType {
+  FILTER_TYPE_UNSPECIFIED = 0;
+  TAG = 1;
+  SQL = 2;
+}
+
+message FilterExpression {
+  FilterType type = 1;
+  string expression = 2;
+}
+
+message RetryPolicy {
+  int32 max_attempts = 1;
+  oneof strategy {
+    ExponentialBackoff exponential_backoff = 2;
+    CustomizedBackoff customized_backoff = 3;
+  }
+}
+
+// https://en.wikipedia.org/wiki/Exponential_backoff
+message ExponentialBackoff {
+  google.protobuf.Duration initial = 1;
+  google.protobuf.Duration max = 2;
+  float multiplier = 3;
+}
+
+message CustomizedBackoff {
+  // To support classic backoff strategy which is arbitrary defined by end users.
+  // Typical values are: `1s 5s 10s 30s 1m 2m 3m 4m 5m 6m 7m 8m 9m 10m 20m 30m 1h 2h`
+  repeated google.protobuf.Duration next = 1;
+}
+
+message Resource {
+  string resource_namespace = 1;
+
+  // Resource name identifier, which remains unique within the abstract resource
+  // namespace.
+  string name = 2;
+}
+
+message SubscriptionEntry {
+  Resource topic = 1;
+  FilterExpression expression = 2;
+}
+
+enum AddressScheme {
+  ADDRESS_SCHEME_UNSPECIFIED = 0;
+  IPv4 = 1;
+  IPv6 = 2;
+  DOMAIN_NAME = 3;
+}
+
+message Address {
+  string host = 1;
+  int32 port = 2;
+}
+
+message Endpoints {
+  AddressScheme scheme = 1;
+  repeated Address addresses = 2;
+}
+
+message Broker {
+  // Name of the broker
+  string name = 1;
+
+  // Broker index. Canonically, index = 0 implies that the broker is playing
+  // leader role while brokers with index > 0 play follower role.
+  int32 id = 2;
+
+  // Address of the broker, complying with the following scheme
+  // 1. dns:[//authority/]host[:port]
+  // 2. ipv4:address[:port][,address[:port],...] – IPv4 addresses
+  // 3. ipv6:address[:port][,address[:port],...] – IPv6 addresses
+  Endpoints endpoints = 3;
+}
+
+message MessageQueue {
+  Resource topic = 1;
+  int32 id = 2;
+  Permission permission = 3;
+  Broker broker = 4;
+  repeated MessageType accept_message_types = 5;
+}
+
+enum MessageType {
+  MESSAGE_TYPE_UNSPECIFIED = 0;
+
+  NORMAL = 1;
+
+  // Sequenced message
+  FIFO = 2;
+
+  // Messages that are delivered after the specified duration.
+  DELAY = 3;
+
+  // Messages that are transactional. Only committed messages are delivered to
+  // subscribers.
+  TRANSACTION = 4;
+
+  // lite topic
+  LITE = 5;
+
+  // Messages that lower prioritised ones may need to wait for higher priority messages to be processed first
+  PRIORITY = 6;
+}
+
+enum DigestType {
+  DIGEST_TYPE_UNSPECIFIED = 0;
+
+  // CRC algorithm achieves goal of detecting random data error with lowest
+  // computation overhead.
+  CRC32 = 1;
+
+  // MD5 algorithm achieves good balance between collision rate and computation
+  // overhead.
+  MD5 = 2;
+
+  // SHA-family has substantially fewer collision with fair amount of
+  // computation.
+  SHA1 = 3;
+}
+
+// When publishing messages to or subscribing messages from brokers, clients
+// shall include or validate digests of message body to ensure data integrity.
+//
+// For message publishing, when an invalid digest were detected, brokers need
+// respond client with BAD_REQUEST.
+//
+// For messages subscription, when an invalid digest were detected, consumers
+// need to handle this case according to message type:
+// 1) Standard messages should be negatively acknowledged instantly, causing
+// immediate re-delivery; 2) FIFO messages require special RPC, to re-fetch
+// previously acquired messages batch;
+message Digest {
+  DigestType type = 1;
+  string checksum = 2;
+}
+
+enum ClientType {
+  CLIENT_TYPE_UNSPECIFIED = 0;
+  PRODUCER = 1;
+  PUSH_CONSUMER = 2;
+  SIMPLE_CONSUMER = 3;
+  PULL_CONSUMER = 4;
+  LITE_PUSH_CONSUMER = 5;
+  LITE_SIMPLE_CONSUMER = 6;
+}
+
+enum Encoding {
+  ENCODING_UNSPECIFIED = 0;
+
+  IDENTITY = 1;
+
+  GZIP = 2;
+}
+
+message SystemProperties {
+  // Tag, which is optional.
+  optional string tag = 1;
+
+  // Message keys
+  repeated string keys = 2;
+
+  // Message identifier, client-side generated, remains unique.
+  // if message_id is empty, the send message request will be aborted with
+  // status `INVALID_ARGUMENT`
+  string message_id = 3;
+
+  // Message body digest
+  Digest body_digest = 4;
+
+  // Message body encoding. Candidate options are identity, gzip, snappy etc.
+  Encoding body_encoding = 5;
+
+  // Message type, normal, FIFO or transactional.
+  MessageType message_type = 6;
+
+  // Message born time-point.
+  google.protobuf.Timestamp born_timestamp = 7;
+
+  // Message born host. Valid options are IPv4, IPv6 or client host domain name.
+  string born_host = 8;
+
+  // Time-point at which the message is stored in the broker, which is absent
+  // for message publishing.
+  optional google.protobuf.Timestamp store_timestamp = 9;
+
+  // The broker that stores this message. It may be broker name, IP or arbitrary
+  // identifier that uniquely identify the server.
+  string store_host = 10;
+
+  // Time-point at which broker delivers to clients, which is optional.
+  optional google.protobuf.Timestamp delivery_timestamp = 11;
+
+  // If a message is acquired by way of POP, this field holds the receipt,
+  // which is absent for message publishing.
+  // Clients use the receipt to acknowledge or negatively acknowledge the
+  // message.
+  optional string receipt_handle = 12;
+
+  // Message queue identifier in which a message is physically stored.
+  int32 queue_id = 13;
+
+  // Message-queue offset at which a message is stored, which is absent for
+  // message publishing.
+  optional int64 queue_offset = 14;
+
+  // Period of time servers would remain invisible once a message is acquired.
+  optional google.protobuf.Duration invisible_duration = 15;
+
+  // Business code may failed to process messages for the moment. Hence, clients
+  // may request servers to deliver them again using certain back-off strategy,
+  // the attempt is 1 not 0 if message is delivered first time, and it is absent
+  // for message publishing.
+  optional int32 delivery_attempt = 16;
+
+  // Define the group name of message in the same topic, which is optional.
+  optional string message_group = 17;
+
+  // Trace context for each message, which is optional.
+  optional string trace_context = 18;
+
+  // If a transactional message stay unresolved for more than
+  // `transaction_orphan_threshold`, it would be regarded as an
+  // orphan. Servers that manages orphan messages would pick up
+  // a capable publisher to resolve
+  optional google.protobuf.Duration orphaned_transaction_recovery_duration = 19;
+
+  // Information to identify whether this message is from dead letter queue.
+  optional DeadLetterQueue dead_letter_queue = 20;
+
+  // lite topic
+  optional string lite_topic = 21;
+
+  // Priority of message, which is optional
+  optional int32 priority = 22;
+}
+
+message DeadLetterQueue {
+  // Original topic for this DLQ message.
+  string topic = 1;
+  // Original message id for this DLQ message.
+  string message_id = 2;
+}
+
+message Message {
+
+  Resource topic = 1;
+
+  // User defined key-value pairs.
+  // If user_properties contain the reserved keys by RocketMQ,
+  // the send message request will be aborted with status `INVALID_ARGUMENT`.
+  // See below links for the reserved keys
+  // https://github.com/apache/rocketmq/blob/master/common/src/main/java/org/apache/rocketmq/common/message/MessageConst.java#L58
+  map<string, string> user_properties = 2;
+
+  SystemProperties system_properties = 3;
+
+  bytes body = 4;
+}
+
+message Assignment {
+  MessageQueue message_queue = 1;
+}
+
+enum Code {
+  CODE_UNSPECIFIED = 0;
+
+  // Generic code for success.
+  OK = 20000;
+
+  // Generic code for multiple return results.
+  MULTIPLE_RESULTS = 30000;
+
+  // Generic code for bad request, indicating that required fields or headers are missing.
+  BAD_REQUEST = 40000;
+  // Format of access point is illegal.
+  ILLEGAL_ACCESS_POINT = 40001;
+  // Format of topic is illegal.
+  ILLEGAL_TOPIC = 40002;
+  // Format of consumer group is illegal.
+  ILLEGAL_CONSUMER_GROUP = 40003;
+  // Format of message tag is illegal.
+  ILLEGAL_MESSAGE_TAG = 40004;
+  // Format of message key is illegal.
+  ILLEGAL_MESSAGE_KEY = 40005;
+  // Format of message group is illegal.
+  ILLEGAL_MESSAGE_GROUP = 40006;
+  // Format of message property key is illegal.
+  ILLEGAL_MESSAGE_PROPERTY_KEY = 40007;
+  // Transaction id is invalid.
+  INVALID_TRANSACTION_ID = 40008;
+  // Format of message id is illegal.
+  ILLEGAL_MESSAGE_ID = 40009;
+  // Format of filter expression is illegal.
+  ILLEGAL_FILTER_EXPRESSION = 40010;
+  // The invisible time of request is invalid.
+  ILLEGAL_INVISIBLE_TIME = 40011;
+  // The delivery timestamp of message is invalid.
+  ILLEGAL_DELIVERY_TIME = 40012;
+  // Receipt handle of message is invalid.
+  INVALID_RECEIPT_HANDLE = 40013;
+  // Message property conflicts with its type.
+  MESSAGE_PROPERTY_CONFLICT_WITH_TYPE = 40014;
+  // Client type could not be recognized.
+  UNRECOGNIZED_CLIENT_TYPE = 40015;
+  // Message is corrupted.
+  MESSAGE_CORRUPTED = 40016;
+  // Request is rejected due to missing of x-mq-client-id header.
+  CLIENT_ID_REQUIRED = 40017;
+  // Polling time is illegal.
+  ILLEGAL_POLLING_TIME = 40018;
+  // Offset is illegal.
+  ILLEGAL_OFFSET = 40019;
+  // Format of lite topic is illegal.
+  ILLEGAL_LITE_TOPIC = 40020;
+
+  // Generic code indicates that the client request lacks valid authentication
+  // credentials for the requested resource.
+  UNAUTHORIZED = 40100;
+
+  // Generic code indicates that the account is suspended due to overdue of payment.
+  PAYMENT_REQUIRED = 40200;
+
+  // Generic code for the case that user does not have the permission to operate.
+  FORBIDDEN = 40300;
+
+  // Generic code for resource not found.
+  NOT_FOUND = 40400;
+  // Message not found from server.
+  MESSAGE_NOT_FOUND = 40401;
+  // Topic resource does not exist.
+  TOPIC_NOT_FOUND = 40402;
+  // Consumer group resource does not exist.
+  CONSUMER_GROUP_NOT_FOUND = 40403;
+  // Offset not found from server.
+  OFFSET_NOT_FOUND = 40404;
+
+  // Generic code representing client side timeout when connecting to, reading data from, or write data to server.
+  REQUEST_TIMEOUT = 40800;
+
+  // Generic code represents that the request entity is larger than limits defined by server.
+  PAYLOAD_TOO_LARGE = 41300;
+  // Message body size exceeds the threshold.
+  MESSAGE_BODY_TOO_LARGE = 41301;
+  // Message body is empty.
+  MESSAGE_BODY_EMPTY = 41302;
+
+  // Generic code for use cases where pre-conditions are not met.
+  // For example, if a producer instance is used to publish messages without prior start() invocation,
+  // this error code will be raised.
+  PRECONDITION_FAILED = 42800;
+
+  // Generic code indicates that too many requests are made in short period of duration.
+  // Requests are throttled.
+  TOO_MANY_REQUESTS = 42900;
+
+  // LiteTopic related quota exceeded
+  LITE_TOPIC_QUOTA_EXCEEDED = 42901;
+  LITE_SUBSCRIPTION_QUOTA_EXCEEDED = 42902;
+
+  // Generic code for the case that the server is unwilling to process the request because its header fields are too large.
+  // The request may be resubmitted after reducing the size of the request header fields.
+  REQUEST_HEADER_FIELDS_TOO_LARGE = 43100;
+  // Message properties total size exceeds the threshold.
+  MESSAGE_PROPERTIES_TOO_LARGE = 43101;
+
+  // Generic code indicates that server/client encountered an unexpected
+  // condition that prevented it from fulfilling the request.
+  INTERNAL_ERROR = 50000;
+  // Code indicates that the server encountered an unexpected condition
+  // that prevented it from fulfilling the request.
+  // This error response is a generic "catch-all" response.
+  // Usually, this indicates the server cannot find a better alternative
+  // error code to response. Sometimes, server administrators log error
+  // responses like the 500 status code with more details about the request
+  // to prevent the error from happening again in the future.
+  //
+  // See https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500
+  INTERNAL_SERVER_ERROR = 50001;
+  // The HA-mechanism is not working now.
+  HA_NOT_AVAILABLE = 50002;
+
+  // Generic code means that the server or client does not support the
+  // functionality required to fulfill the request.
+  NOT_IMPLEMENTED = 50100;
+
+  // Generic code represents that the server, which acts as a gateway or proxy,
+  // does not get an satisfied response in time from its upstream servers.
+  // See https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/504
+  PROXY_TIMEOUT = 50400;
+  // Message persistence timeout.
+  MASTER_PERSISTENCE_TIMEOUT = 50401;
+  // Slave persistence timeout.
+  SLAVE_PERSISTENCE_TIMEOUT = 50402;
+
+  // Generic code for unsupported operation.
+  UNSUPPORTED = 50500;
+  // Operation is not allowed in current version.
+  VERSION_UNSUPPORTED = 50501;
+  // Not allowed to verify message. Chances are that you are verifying
+  // a FIFO message, as is violating FIFO semantics.
+  VERIFY_FIFO_MESSAGE_UNSUPPORTED = 50502;
+
+  // Generic code for failed message consumption.
+  FAILED_TO_CONSUME_MESSAGE = 60000;
+}
+
+message Status {
+  Code code = 1;
+  string message = 2;
+}
+
+enum Language {
+  LANGUAGE_UNSPECIFIED = 0;
+  JAVA = 1;
+  CPP = 2;
+  DOT_NET = 3;
+  GOLANG = 4;
+  RUST = 5;
+  PYTHON = 6;
+  PHP = 7;
+  NODE_JS = 8;
+  RUBY = 9;
+  OBJECTIVE_C = 10;
+  DART = 11;
+  KOTLIN = 12;
+}
+
+// User Agent
+message UA {
+  // SDK language
+  Language language = 1;
+
+  // SDK version
+  string version = 2;
+
+  // Platform details, including OS name, version, arch etc.
+  string platform = 3;
+
+  // Hostname of the node
+  string hostname = 4;
+}
+
+message Settings {
+  // Configurations for all clients.
+  optional ClientType client_type = 1;
+
+  optional Endpoints access_point = 2;
+
+  // If publishing of messages encounters throttling or server internal errors,
+  // publishers should implement automatic retries after progressive longer
+  // back-offs for consecutive errors.
+  //
+  // When processing message fails, `backoff_policy` describes an interval
+  // after which the message should be available to consume again.
+  //
+  // For FIFO messages, the interval should be relatively small because
+  // messages of the same message group would not be readily available until
+  // the prior one depletes its lifecycle.
+  optional RetryPolicy backoff_policy = 3;
+
+  // Request timeout for RPCs excluding long-polling.
+  optional google.protobuf.Duration request_timeout = 4;
+
+  oneof pub_sub {
+    Publishing publishing = 5;
+
+    Subscription subscription = 6;
+  }
+
+  // User agent details
+  UA user_agent = 7;
+
+  Metric metric = 8;
+}
+
+message Publishing {
+  // Publishing settings below here is appointed by client, thus it is
+  // unnecessary for server to push at present.
+  //
+  // List of topics to which messages will publish to.
+  repeated Resource topics = 1;
+
+  // If the message body size exceeds `max_body_size`, broker servers would
+  // reject the request. As a result, it is advisable that Producer performs
+  // client-side check validation.
+  int32 max_body_size = 2;
+
+  // When `validate_message_type` flag set `false`, no need to validate message's type
+  // with messageQueue's `accept_message_types` before publishing.
+  bool validate_message_type = 3;
+}
+
+message Subscription {
+  // Subscription settings below here is appointed by client, thus it is
+  // unnecessary for server to push at present.
+  //
+  // Consumer group.
+  optional Resource group = 1;
+
+  // Subscription for consumer.
+  repeated SubscriptionEntry subscriptions = 2;
+
+  // Subscription settings below here are from server, it is essential for
+  // server to push.
+  //
+  // When FIFO flag is `true`, messages of the same message group are processed
+  // in first-in-first-out manner.
+  //
+  // Brokers will not deliver further messages of the same group until prior
+  // ones are completely acknowledged.
+  optional bool fifo = 3;
+
+  // Message receive batch size here is essential for push consumer.
+  optional int32 receive_batch_size = 4;
+
+  // Long-polling timeout for `ReceiveMessageRequest`, which is essential for
+  // push consumer.
+  optional google.protobuf.Duration long_polling_timeout = 5;
+
+  // Only lite push consumer
+  // client-side lite subscription quota limit
+  optional int32 lite_subscription_quota = 6;
+
+  // Only lite push consumer
+  // Maximum length limit for lite topic
+  optional int32 max_lite_topic_size = 7;
+}
+
+enum LiteSubscriptionAction {
+  PARTIAL_ADD = 0;
+  PARTIAL_REMOVE = 1;
+  COMPLETE_ADD = 2;
+  COMPLETE_REMOVE = 3;
+}
+
+message Metric {
+  // Indicates that if client should export local metrics to server.
+  bool on = 1;
+
+  // The endpoint that client metrics should be exported to, which is required if the switch is on.
+  optional Endpoints endpoints = 2;
+}
+
+enum QueryOffsetPolicy {
+  // Use this option if client wishes to playback all existing messages.
+  BEGINNING = 0;
+
+  // Use this option if client wishes to skip all existing messages.
+  END = 1;
+
+  // Use this option if time-based seek is targeted.
+  TIMESTAMP = 2;
+}
+
+message OffsetOption {
+  oneof offset_type {
+    Policy policy = 1;
+    int64 offset = 2;
+    int64 tail_n = 3;
+    int64 timestamp = 4;
+  }
+
+  enum Policy {
+    LAST = 0;
+    MIN = 1;
+    MAX = 2;
+  }
+}

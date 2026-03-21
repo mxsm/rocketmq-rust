@@ -21,10 +21,37 @@ edition.workspace      = true
 homepage.workspace     = true
 repository.workspace   = true
 license.workspace      = true
-keywords.workspace     = true
-categories.workspace   = true
+keywords               = ["rocketmq", "proxy", "grpc", "messaging", "async"]
+categories             = ["network-programming", "asynchronous"]
 readme                 = "README.md"
-description.workspace  = true
+description            = "RocketMQ Proxy Module - gRPC proxy runtime for the Rust implementation"
 rust-version.workspace = true
 
 [dependencies]
+rocketmq-common   = { workspace = true }
+rocketmq-error    = { workspace = true }
+rocketmq-remoting = { workspace = true }
+
+tokio        = { workspace = true }
+tokio-stream = { workspace = true }
+tokio-util   = { workspace = true }
+
+serde  = { workspace = true }
+config = { workspace = true }
+
+dashmap        = { workspace = true }
+bytes          = { workspace = true }
+tracing        = { workspace = true }
+futures        = { workspace = true }
+uuid           = { workspace = true }
+cheetah-string = { workspace = true }
+thiserror      = { workspace = true }
+
+async-trait = "0.1"
+prost       = "0.14"
+prost-types = "0.14"
+tonic       = { version = "0.14.5", features = ["transport", "codegen"] }
+tonic-prost = "0.14"
+
+[build-dependencies]
+tonic-prost-build = "0.14.5"

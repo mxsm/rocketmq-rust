@@ -1,14 +1,65 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+// Copyright 2023 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#![warn(rust_2018_idioms)]
+#![warn(clippy::all)]
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+//! RocketMQ Proxy runtime for the Rust implementation.
+//!
+//! This crate now provides the Phase 1 gRPC foundation and the first
+//! route/assignment/heartbeat slice of the Java proxy architecture.
+
+pub mod bootstrap;
+pub mod config;
+pub mod context;
+pub mod error;
+pub mod grpc;
+pub mod processor;
+pub mod proto;
+pub mod service;
+pub mod session;
+pub mod status;
+
+pub use bootstrap::ProxyRuntime;
+pub use bootstrap::ProxyRuntimeBuilder;
+pub use config::GrpcConfig;
+pub use config::ProxyConfig;
+pub use config::ProxyMode;
+pub use config::RuntimeConfig;
+pub use config::SessionConfig;
+pub use error::ProxyError;
+pub use error::ProxyResult;
+pub use processor::DefaultMessagingProcessor;
+pub use processor::MessagingProcessor;
+pub use processor::QueryAssignmentPlan;
+pub use processor::QueryAssignmentRequest;
+pub use processor::QueryRoutePlan;
+pub use processor::QueryRouteRequest;
+pub use service::ClusterServiceManager;
+pub use service::DefaultMetadataService;
+pub use service::LocalServiceManager;
+pub use service::MetadataService;
+pub use service::ProxyTopicMessageType;
+pub use service::ResourceIdentity;
+pub use service::RouteService;
+pub use service::ServiceManager;
+pub use service::StaticMetadataService;
+pub use service::StaticRouteService;
+pub use service::SubscriptionGroupMetadata;
+pub use service::UnsupportedRouteService;
+pub use session::ClientSession;
+pub use session::ClientSessionRegistry;
+
+/// Default gRPC port used by the proxy runtime.
+pub const DEFAULT_PROXY_GRPC_PORT: u16 = 8081;

@@ -1,0 +1,108 @@
+// Copyright 2023 The RocketMQ Rust Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::future;
+use std::future::Future;
+use std::sync::Arc;
+
+use crate::config::ProxyConfig;
+use crate::config::ProxyMode;
+use crate::error::ProxyResult;
+use crate::grpc::server;
+use crate::grpc::ProxyGrpcService;
+use crate::processor::DefaultMessagingProcessor;
+use crate::processor::MessagingProcessor;
+use crate::service::ClusterServiceManager;
+use crate::service::LocalServiceManager;
+use crate::service::ServiceManager;
+use crate::session::ClientSessionRegistry;
+
+pub struct ProxyRuntimeBuilder {
+    config: ProxyConfig,
+    service_manager: Option<Arc<dyn ServiceManager>>,
+    session_registry: Option<ClientSessionRegistry>,
+}
+
+impl ProxyRuntimeBuilder {
+    pub fn with_service_manager(mut self, service_manager: Arc<dyn ServiceManager>) -> Self {
+        self.service_manager = Some(service_manager);
+        self
+    }
+
+    pub fn with_session_registry(mut self, session_registry: ClientSessionRegistry) -> Self {
+        self.session_registry = Some(session_registry);
+        self
+    }
+
+    pub fn build(self) -> ProxyRuntime<DefaultMessagingProcessor> {
+        let service_manager = self
+            .service_manager
+            .unwrap_or_else(|| default_service_manager(self.config.mode));
+        let session_registry = self.session_registry.unwrap_or_default();
+        let processor = Arc::new(DefaultMessagingProcessor::new(service_manager));
+        ProxyRuntime::from_processor(self.config, processor, session_registry)
+    }
+}
+
+pub struct ProxyRuntime<P = DefaultMessagingProcessor> {
+    config: Arc<ProxyConfig>,
+    grpc_service: ProxyGrpcService<P>,
+}
+
+impl ProxyRuntime<DefaultMessagingProcessor> {
+    pub fn builder(config: ProxyConfig) -> ProxyRuntimeBuilder {
+        ProxyRuntimeBuilder {
+            config,
+            service_manager: None,
+            session_registry: None,
+        }
+    }
+
+    pub fn new(config: ProxyConfig) -> Self {
+        Self::builder(config).build()
+    }
+}
+
+impl<P> ProxyRuntime<P>
+where
+    P: MessagingProcessor + 'static,
+{
+    pub fn from_processor(config: ProxyConfig, processor: Arc<P>, session_registry: ClientSessionRegistry) -> Self {
+        let config = Arc::new(config);
+        let grpc_service = ProxyGrpcService::new(Arc::clone(&config), processor, session_registry);
+        Self { config, grpc_service }
+    }
+
+    pub fn config(&self) -> &ProxyConfig {
+        self.config.as_ref()
+    }
+
+    pub async fn serve(self) -> ProxyResult<()> {
+        self.serve_with_shutdown(future::pending::<()>()).await
+    }
+
+    pub async fn serve_with_shutdown<F>(self, shutdown: F) -> ProxyResult<()>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        server::serve(self.config, self.grpc_service, shutdown).await
+    }
+}
+
+fn default_service_manager(mode: ProxyMode) -> Arc<dyn ServiceManager> {
+    match mode {
+        ProxyMode::Cluster => Arc::new(ClusterServiceManager::default()),
+        ProxyMode::Local => Arc::new(LocalServiceManager::default()),
+    }
+}

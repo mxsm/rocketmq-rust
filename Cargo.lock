@@ -3712,6 +3712,29 @@ dependencies = [
 [[package]]
 name = "rocketmq-proxy"
 version = "0.8.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "cheetah-string",
+ "config",
+ "dashmap",
+ "futures",
+ "prost",
+ "prost-types",
+ "rocketmq-common",
+ "rocketmq-error",
+ "rocketmq-remoting",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tracing",
+ "uuid",
+]
 
 [[package]]
 name = "rocketmq-remoting"
