@@ -102,6 +102,10 @@ impl ProxyStatusMapper {
             ProxyError::IllegalMessageId { .. } => v2::Code::IllegalMessageId,
             ProxyError::IllegalMessageGroup { .. } => v2::Code::IllegalMessageGroup,
             ProxyError::IllegalDeliveryTime { .. } => v2::Code::IllegalDeliveryTime,
+            ProxyError::IllegalPollingTime { .. } => v2::Code::IllegalPollingTime,
+            ProxyError::IllegalInvisibleTime { .. } => v2::Code::IllegalInvisibleTime,
+            ProxyError::IllegalFilterExpression { .. } => v2::Code::IllegalFilterExpression,
+            ProxyError::InvalidReceiptHandle { .. } => v2::Code::InvalidReceiptHandle,
             ProxyError::MessagePropertyConflictWithType { .. } => v2::Code::MessagePropertyConflictWithType,
             ProxyError::RocketMQ(inner) => Self::from_rocketmq_error(inner),
         };

@@ -31,6 +31,12 @@ use crate::context::ProxyContext;
 use crate::context::ResolvedEndpoint;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
+use crate::processor::AckMessageRequest;
+use crate::processor::AckMessageResultEntry;
+use crate::processor::ChangeInvisibleDurationPlan;
+use crate::processor::ChangeInvisibleDurationRequest;
+use crate::processor::ReceiveMessagePlan;
+use crate::processor::ReceiveMessageRequest;
 use crate::processor::SendMessageRequest;
 use crate::processor::SendMessageResultEntry;
 use crate::status::ProxyStatusMapper;
@@ -133,6 +139,27 @@ pub trait MessageService: Send + Sync {
     ) -> ProxyResult<Vec<SendMessageResultEntry>>;
 }
 
+#[async_trait]
+pub trait ConsumerService: Send + Sync {
+    async fn receive_message(
+        &self,
+        context: &ProxyContext,
+        request: &ReceiveMessageRequest,
+    ) -> ProxyResult<ReceiveMessagePlan>;
+
+    async fn ack_message(
+        &self,
+        context: &ProxyContext,
+        request: &AckMessageRequest,
+    ) -> ProxyResult<Vec<AckMessageResultEntry>>;
+
+    async fn change_invisible_duration(
+        &self,
+        context: &ProxyContext,
+        request: &ChangeInvisibleDurationRequest,
+    ) -> ProxyResult<ChangeInvisibleDurationPlan>;
+}
+
 pub trait ServiceManager: Send + Sync {
     fn mode(&self) -> ProxyMode;
 
@@ -143,6 +170,8 @@ pub trait ServiceManager: Send + Sync {
     fn assignment_service(&self) -> Arc<dyn AssignmentService>;
 
     fn message_service(&self) -> Arc<dyn MessageService>;
+
+    fn consumer_service(&self) -> Arc<dyn ConsumerService>;
 }
 
 #[derive(Debug, Default)]
@@ -212,6 +241,36 @@ impl MessageService for DefaultMessageService {
         _request: &SendMessageRequest,
     ) -> ProxyResult<Vec<SendMessageResultEntry>> {
         Err(ProxyError::not_implemented("message service"))
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct DefaultConsumerService;
+
+#[async_trait]
+impl ConsumerService for DefaultConsumerService {
+    async fn receive_message(
+        &self,
+        _context: &ProxyContext,
+        _request: &ReceiveMessageRequest,
+    ) -> ProxyResult<ReceiveMessagePlan> {
+        Err(ProxyError::not_implemented("consumer service"))
+    }
+
+    async fn ack_message(
+        &self,
+        _context: &ProxyContext,
+        _request: &AckMessageRequest,
+    ) -> ProxyResult<Vec<AckMessageResultEntry>> {
+        Err(ProxyError::not_implemented("consumer service"))
+    }
+
+    async fn change_invisible_duration(
+        &self,
+        _context: &ProxyContext,
+        _request: &ChangeInvisibleDurationRequest,
+    ) -> ProxyResult<ChangeInvisibleDurationPlan> {
+        Err(ProxyError::not_implemented("consumer service"))
     }
 }
 
@@ -418,11 +477,49 @@ impl MessageService for ClusterMessageService {
     }
 }
 
+pub struct ClusterConsumerService {
+    client: Arc<dyn ClusterClient>,
+}
+
+impl ClusterConsumerService {
+    pub fn new(client: Arc<dyn ClusterClient>) -> Self {
+        Self { client }
+    }
+}
+
+#[async_trait]
+impl ConsumerService for ClusterConsumerService {
+    async fn receive_message(
+        &self,
+        context: &ProxyContext,
+        request: &ReceiveMessageRequest,
+    ) -> ProxyResult<ReceiveMessagePlan> {
+        self.client.receive_message(context, request).await
+    }
+
+    async fn ack_message(
+        &self,
+        context: &ProxyContext,
+        request: &AckMessageRequest,
+    ) -> ProxyResult<Vec<AckMessageResultEntry>> {
+        self.client.ack_message(context, request).await
+    }
+
+    async fn change_invisible_duration(
+        &self,
+        context: &ProxyContext,
+        request: &ChangeInvisibleDurationRequest,
+    ) -> ProxyResult<ChangeInvisibleDurationPlan> {
+        self.client.change_invisible_duration(context, request).await
+    }
+}
+
 pub struct ClusterServiceManager {
     route_service: Arc<dyn RouteService>,
     metadata_service: Arc<dyn MetadataService>,
     assignment_service: Arc<dyn AssignmentService>,
     message_service: Arc<dyn MessageService>,
+    consumer_service: Arc<dyn ConsumerService>,
 }
 
 impl ClusterServiceManager {
@@ -432,6 +529,7 @@ impl ClusterServiceManager {
             metadata_service,
             Arc::new(DefaultAssignmentService),
             Arc::new(DefaultMessageService),
+            Arc::new(DefaultConsumerService),
         )
     }
 
@@ -445,6 +543,7 @@ impl ClusterServiceManager {
             metadata_service,
             assignment_service,
             Arc::new(DefaultMessageService),
+            Arc::new(DefaultConsumerService),
         )
     }
 
@@ -453,12 +552,14 @@ impl ClusterServiceManager {
         metadata_service: Arc<dyn MetadataService>,
         assignment_service: Arc<dyn AssignmentService>,
         message_service: Arc<dyn MessageService>,
+        consumer_service: Arc<dyn ConsumerService>,
     ) -> Self {
         Self {
             route_service,
             metadata_service,
             assignment_service,
             message_service,
+            consumer_service,
         }
     }
 
@@ -466,11 +567,13 @@ impl ClusterServiceManager {
         let route_client = Arc::clone(&client);
         let metadata_client = Arc::clone(&client);
         let assignment_client = Arc::clone(&client);
+        let consumer_client = Arc::clone(&client);
         Self::with_services(
             Arc::new(ClusterRouteService::new(route_client)),
             Arc::new(ClusterMetadataService::new(metadata_client)),
             Arc::new(ClusterAssignmentService::new(assignment_client)),
             Arc::new(ClusterMessageService::new(client)),
+            Arc::new(ClusterConsumerService::new(consumer_client)),
         )
     }
 
@@ -505,6 +608,10 @@ impl ServiceManager for ClusterServiceManager {
     fn message_service(&self) -> Arc<dyn MessageService> {
         Arc::clone(&self.message_service)
     }
+
+    fn consumer_service(&self) -> Arc<dyn ConsumerService> {
+        Arc::clone(&self.consumer_service)
+    }
 }
 
 pub struct LocalServiceManager {
@@ -512,6 +619,7 @@ pub struct LocalServiceManager {
     metadata_service: Arc<dyn MetadataService>,
     assignment_service: Arc<dyn AssignmentService>,
     message_service: Arc<dyn MessageService>,
+    consumer_service: Arc<dyn ConsumerService>,
 }
 
 impl LocalServiceManager {
@@ -521,6 +629,7 @@ impl LocalServiceManager {
             metadata_service,
             Arc::new(DefaultAssignmentService),
             Arc::new(DefaultMessageService),
+            Arc::new(DefaultConsumerService),
         )
     }
 
@@ -534,6 +643,7 @@ impl LocalServiceManager {
             metadata_service,
             assignment_service,
             Arc::new(DefaultMessageService),
+            Arc::new(DefaultConsumerService),
         )
     }
 
@@ -542,12 +652,14 @@ impl LocalServiceManager {
         metadata_service: Arc<dyn MetadataService>,
         assignment_service: Arc<dyn AssignmentService>,
         message_service: Arc<dyn MessageService>,
+        consumer_service: Arc<dyn ConsumerService>,
     ) -> Self {
         Self {
             route_service,
             metadata_service,
             assignment_service,
             message_service,
+            consumer_service,
         }
     }
 }
@@ -580,5 +692,9 @@ impl ServiceManager for LocalServiceManager {
 
     fn message_service(&self) -> Arc<dyn MessageService> {
         Arc::clone(&self.message_service)
+    }
+
+    fn consumer_service(&self) -> Arc<dyn ConsumerService> {
+        Arc::clone(&self.consumer_service)
     }
 }

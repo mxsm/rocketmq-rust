@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) mod ack_callback;
-pub(crate) mod ack_result;
-pub(crate) mod ack_status;
+pub mod ack_callback;
+pub mod ack_result;
+pub mod ack_status;
 pub mod allocate_message_queue_strategy;
 pub mod consumer_impl;
 pub mod default_lite_pull_consumer;
@@ -29,9 +29,9 @@ pub mod message_selector;
 pub mod mq_consumer;
 pub(crate) mod mq_consumer_inner;
 pub mod mq_push_consumer;
-pub(crate) mod pop_callback;
-pub(crate) mod pop_result;
-pub(crate) mod pop_status;
+pub mod pop_callback;
+pub mod pop_result;
+pub mod pop_status;
 pub(crate) mod pull_callback;
 pub mod pull_result;
 pub mod pull_status;

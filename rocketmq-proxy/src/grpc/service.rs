@@ -110,6 +110,13 @@ impl<P> ProxyGrpcService<P> {
     {
         Box::pin(stream::iter(vec![Ok(item)]))
     }
+
+    fn items_stream<T>(&self, items: Vec<T>) -> ResponseStream<T>
+    where
+        T: Send + 'static,
+    {
+        Box::pin(stream::iter(items.into_iter().map(Ok)))
+    }
 }
 
 impl<P> ProxyGrpcService<P>
@@ -135,12 +142,6 @@ where
             | Ok(v2::ClientType::LitePushConsumer)
             | Ok(v2::ClientType::LiteSimpleConsumer) => Ok(()),
             _ => Err(ProxyError::UnrecognizedClientType(client_type)),
-        }
-    }
-
-    fn receive_status(status: v2::Status) -> v2::ReceiveMessageResponse {
-        v2::ReceiveMessageResponse {
-            content: Some(v2::receive_message_response::Content::Status(status)),
         }
     }
 
@@ -265,25 +266,49 @@ where
         request: Request<v2::ReceiveMessageRequest>,
     ) -> Result<Response<Self::ReceiveMessageStream>, Status> {
         let context = self.context("ReceiveMessage", &request);
-        let status = match self
+        let request = request.into_inner();
+        let responses = match self
             .validate_client_context(&context)
-            .and_then(|_| self.guards.try_consumer().map(|_| ()))
+            .and_then(|_| adapter::build_receive_message_request(&request))
         {
-            Ok(()) => self.not_implemented_status("ReceiveMessage"),
-            Err(error) => ProxyStatusMapper::from_error(&error),
+            Ok(input) => match self.guards.try_consumer() {
+                Ok(_permit) => {
+                    self.sessions.upsert_from_context(&context);
+                    match self.processor.receive_message(&context, input).await {
+                        Ok(plan) => adapter::build_receive_message_responses(&plan),
+                        Err(error) => adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error)),
+                    }
+                }
+                Err(error) => adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error)),
+            },
+            Err(error) => adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error)),
         };
 
-        Ok(Response::new(self.status_stream(Self::receive_status(status))))
+        Ok(Response::new(self.items_stream(responses)))
     }
 
     async fn ack_message(
         &self,
-        _request: Request<v2::AckMessageRequest>,
+        request: Request<v2::AckMessageRequest>,
     ) -> Result<Response<v2::AckMessageResponse>, Status> {
-        Ok(Response::new(v2::AckMessageResponse {
-            status: Some(self.not_implemented_status("AckMessage")),
-            entries: Vec::new(),
-        }))
+        let context = self.context("AckMessage", &request);
+        let request = request.into_inner();
+
+        let response = match self
+            .validate_client_context(&context)
+            .and_then(|_| adapter::build_ack_message_request(&request))
+        {
+            Ok(input) => match self.guards.try_consumer() {
+                Ok(_permit) => match self.processor.ack_message(&context, input).await {
+                    Ok(plan) => adapter::build_ack_message_response(&plan),
+                    Err(error) => adapter::error_ack_message_response(ProxyStatusMapper::from_error(&error)),
+                },
+                Err(error) => adapter::error_ack_message_response(ProxyStatusMapper::from_error(&error)),
+            },
+            Err(error) => adapter::error_ack_message_response(ProxyStatusMapper::from_error(&error)),
+        };
+
+        Ok(Response::new(response))
     }
 
     async fn forward_message_to_dead_letter_queue(
@@ -391,12 +416,28 @@ where
 
     async fn change_invisible_duration(
         &self,
-        _request: Request<v2::ChangeInvisibleDurationRequest>,
+        request: Request<v2::ChangeInvisibleDurationRequest>,
     ) -> Result<Response<v2::ChangeInvisibleDurationResponse>, Status> {
-        Ok(Response::new(v2::ChangeInvisibleDurationResponse {
-            status: Some(self.not_implemented_status("ChangeInvisibleDuration")),
-            receipt_handle: String::new(),
-        }))
+        let context = self.context("ChangeInvisibleDuration", &request);
+        let request = request.into_inner();
+
+        let response = match self
+            .validate_client_context(&context)
+            .and_then(|_| adapter::build_change_invisible_duration_request(&request))
+        {
+            Ok(input) => match self.guards.try_consumer() {
+                Ok(_permit) => match self.processor.change_invisible_duration(&context, input).await {
+                    Ok(plan) => adapter::build_change_invisible_duration_response(&plan),
+                    Err(error) => {
+                        adapter::error_change_invisible_duration_response(ProxyStatusMapper::from_error(&error))
+                    }
+                },
+                Err(error) => adapter::error_change_invisible_duration_response(ProxyStatusMapper::from_error(&error)),
+            },
+            Err(error) => adapter::error_change_invisible_duration_response(ProxyStatusMapper::from_error(&error)),
+        };
+
+        Ok(Response::new(response))
     }
 
     async fn recall_message(
@@ -427,8 +468,12 @@ mod tests {
     use async_trait::async_trait;
     use bytes::Bytes;
     use cheetah_string::CheetahString;
+    use futures::StreamExt;
     use rocketmq_client_rust::producer::send_result::SendResult;
     use rocketmq_client_rust::producer::send_status::SendStatus;
+    use rocketmq_common::common::message::message_ext::MessageExt;
+    use rocketmq_common::common::message::MessageConst;
+    use rocketmq_common::common::message::MessageTrait;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
     use rocketmq_remoting::protocol::route::route_data_view::QueueData;
     use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
@@ -437,12 +482,21 @@ mod tests {
 
     use super::ProxyGrpcService;
     use crate::config::ProxyConfig;
+    use crate::processor::AckMessageRequest;
+    use crate::processor::AckMessageResultEntry;
+    use crate::processor::ChangeInvisibleDurationPlan;
+    use crate::processor::ChangeInvisibleDurationRequest;
     use crate::processor::DefaultMessagingProcessor;
+    use crate::processor::ReceiveMessagePlan;
+    use crate::processor::ReceiveMessageRequest;
+    use crate::processor::ReceivedMessage;
     use crate::processor::SendMessageRequest;
     use crate::processor::SendMessageResultEntry;
     use crate::proto::v2;
     use crate::proto::v2::messaging_service_server::MessagingService;
     use crate::service::ClusterServiceManager;
+    use crate::service::ConsumerService;
+    use crate::service::DefaultConsumerService;
     use crate::service::MessageService;
     use crate::service::ProxyTopicMessageType;
     use crate::service::ResourceIdentity;
@@ -455,6 +509,8 @@ mod tests {
     use crate::status::ProxyStatusMapper;
 
     struct PartialMessageService;
+
+    struct TestConsumerService;
 
     #[async_trait]
     impl MessageService for PartialMessageService {
@@ -494,6 +550,63 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl ConsumerService for TestConsumerService {
+        async fn receive_message(
+            &self,
+            _context: &crate::context::ProxyContext,
+            _request: &ReceiveMessageRequest,
+        ) -> crate::error::ProxyResult<ReceiveMessagePlan> {
+            let mut message = MessageExt::default();
+            message.set_topic(CheetahString::from("TopicA"));
+            message.set_body(Bytes::from_static(b"hello"));
+            message.set_msg_id(CheetahString::from("server-msg-id"));
+            message.set_queue_id(3);
+            message.set_queue_offset(42);
+            message.set_reconsume_times(1);
+            message.put_property(
+                CheetahString::from_static_str(MessageConst::PROPERTY_POP_CK),
+                CheetahString::from("receipt-handle"),
+            );
+
+            Ok(ReceiveMessagePlan {
+                status: ProxyStatusMapper::ok_payload(),
+                delivery_timestamp_ms: Some(1_710_000_000_000),
+                messages: vec![ReceivedMessage {
+                    message,
+                    invisible_duration: std::time::Duration::from_secs(30),
+                }],
+            })
+        }
+
+        async fn ack_message(
+            &self,
+            _context: &crate::context::ProxyContext,
+            request: &AckMessageRequest,
+        ) -> crate::error::ProxyResult<Vec<AckMessageResultEntry>> {
+            Ok(request
+                .entries
+                .iter()
+                .map(|entry| AckMessageResultEntry {
+                    message_id: entry.message_id.clone(),
+                    receipt_handle: entry.receipt_handle.clone(),
+                    status: ProxyStatusMapper::ok_payload(),
+                })
+                .collect())
+        }
+
+        async fn change_invisible_duration(
+            &self,
+            _context: &crate::context::ProxyContext,
+            request: &ChangeInvisibleDurationRequest,
+        ) -> crate::error::ProxyResult<ChangeInvisibleDurationPlan> {
+            Ok(ChangeInvisibleDurationPlan {
+                status: ProxyStatusMapper::ok_payload(),
+                receipt_handle: format!("{}-renewed", request.receipt_handle),
+            })
+        }
+    }
+
     fn test_service(
         route_service: StaticRouteService,
         metadata_service: StaticMetadataService,
@@ -510,11 +623,26 @@ mod tests {
         metadata_service: StaticMetadataService,
         message_service: Arc<dyn crate::service::MessageService>,
     ) -> ProxyGrpcService<DefaultMessagingProcessor> {
+        test_service_with_services(
+            route_service,
+            metadata_service,
+            message_service,
+            Arc::new(DefaultConsumerService),
+        )
+    }
+
+    fn test_service_with_services(
+        route_service: StaticRouteService,
+        metadata_service: StaticMetadataService,
+        message_service: Arc<dyn crate::service::MessageService>,
+        consumer_service: Arc<dyn crate::service::ConsumerService>,
+    ) -> ProxyGrpcService<DefaultMessagingProcessor> {
         let manager = ClusterServiceManager::with_services(
             Arc::new(route_service),
             Arc::new(metadata_service),
             Arc::new(crate::service::DefaultAssignmentService),
             message_service,
+            consumer_service,
         );
         let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(manager)));
         ProxyGrpcService::new(
@@ -753,5 +881,135 @@ mod tests {
             response.entries[1].status.as_ref().unwrap().code,
             v2::Code::TopicNotFound as i32
         );
+    }
+
+    #[tokio::test]
+    async fn receive_message_streams_delivery_timestamp_message_and_status() {
+        let service = test_service_with_services(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+            Arc::new(TestConsumerService),
+        );
+        let mut request = Request::new(v2::ReceiveMessageRequest {
+            group: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "GroupA".to_owned(),
+            }),
+            message_queue: Some(v2::MessageQueue {
+                topic: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "TopicA".to_owned(),
+                }),
+                id: 3,
+                permission: v2::Permission::ReadWrite as i32,
+                broker: Some(v2::Broker {
+                    name: "broker-a".to_owned(),
+                    id: 0,
+                    endpoints: Some(v2::Endpoints {
+                        scheme: v2::AddressScheme::IPv4 as i32,
+                        addresses: vec![v2::Address {
+                            host: "127.0.0.1".to_owned(),
+                            port: 10911,
+                        }],
+                    }),
+                }),
+                accept_message_types: vec![v2::MessageType::Normal as i32],
+            }),
+            filter_expression: None,
+            batch_size: 1,
+            invisible_duration: Some(prost_types::Duration { seconds: 30, nanos: 0 }),
+            auto_renew: false,
+            long_polling_timeout: Some(prost_types::Duration { seconds: 1, nanos: 0 }),
+            attempt_id: None,
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let mut stream = service.receive_message(request).await.unwrap().into_inner();
+        let responses: Vec<_> = stream.by_ref().collect::<Vec<_>>().await;
+
+        assert_eq!(responses.len(), 3);
+        assert!(matches!(
+            responses[0].as_ref().unwrap().content,
+            Some(v2::receive_message_response::Content::DeliveryTimestamp(_))
+        ));
+        assert!(matches!(
+            responses[1].as_ref().unwrap().content,
+            Some(v2::receive_message_response::Content::Message(_))
+        ));
+        assert_eq!(
+            match responses[2].as_ref().unwrap().content.as_ref().unwrap() {
+                v2::receive_message_response::Content::Status(status) => status.code,
+                _ => 0,
+            },
+            v2::Code::Ok as i32
+        );
+    }
+
+    #[tokio::test]
+    async fn ack_message_returns_entry_results() {
+        let service = test_service_with_services(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+            Arc::new(TestConsumerService),
+        );
+        let mut request = Request::new(v2::AckMessageRequest {
+            group: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "GroupA".to_owned(),
+            }),
+            topic: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "TopicA".to_owned(),
+            }),
+            entries: vec![v2::AckMessageEntry {
+                message_id: "msg-1".to_owned(),
+                receipt_handle: "handle-1".to_owned(),
+                lite_topic: None,
+            }],
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service.ack_message(request).await.unwrap().into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
+        assert_eq!(response.entries.len(), 1);
+        assert_eq!(response.entries[0].message_id, "msg-1");
+    }
+
+    #[tokio::test]
+    async fn change_invisible_duration_returns_new_receipt_handle() {
+        let service = test_service_with_services(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+            Arc::new(TestConsumerService),
+        );
+        let mut request = Request::new(v2::ChangeInvisibleDurationRequest {
+            group: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "GroupA".to_owned(),
+            }),
+            topic: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "TopicA".to_owned(),
+            }),
+            receipt_handle: "handle-1".to_owned(),
+            invisible_duration: Some(prost_types::Duration { seconds: 30, nanos: 0 }),
+            message_id: "msg-1".to_owned(),
+            lite_topic: None,
+            suspend: None,
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service.change_invisible_duration(request).await.unwrap().into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
+        assert_eq!(response.receipt_handle, "handle-1-renewed");
     }
 }

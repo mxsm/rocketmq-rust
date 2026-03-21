@@ -49,6 +49,18 @@ pub enum ProxyError {
     #[error("illegal delivery time: {message}")]
     IllegalDeliveryTime { message: String },
 
+    #[error("illegal polling time: {message}")]
+    IllegalPollingTime { message: String },
+
+    #[error("illegal invisible time: {message}")]
+    IllegalInvisibleTime { message: String },
+
+    #[error("illegal filter expression: {message}")]
+    IllegalFilterExpression { message: String },
+
+    #[error("invalid receipt handle: {message}")]
+    InvalidReceiptHandle { message: String },
+
     #[error("message property conflicts with message type: {message}")]
     MessagePropertyConflictWithType { message: String },
 }
@@ -82,6 +94,30 @@ impl ProxyError {
 
     pub fn illegal_delivery_time(message: impl Into<String>) -> Self {
         Self::IllegalDeliveryTime {
+            message: message.into(),
+        }
+    }
+
+    pub fn illegal_polling_time(message: impl Into<String>) -> Self {
+        Self::IllegalPollingTime {
+            message: message.into(),
+        }
+    }
+
+    pub fn illegal_invisible_time(message: impl Into<String>) -> Self {
+        Self::IllegalInvisibleTime {
+            message: message.into(),
+        }
+    }
+
+    pub fn illegal_filter_expression(message: impl Into<String>) -> Self {
+        Self::IllegalFilterExpression {
+            message: message.into(),
+        }
+    }
+
+    pub fn invalid_receipt_handle(message: impl Into<String>) -> Self {
+        Self::InvalidReceiptHandle {
             message: message.into(),
         }
     }

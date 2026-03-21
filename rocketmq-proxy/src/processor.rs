@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use rocketmq_client_rust::producer::send_result::SendResult;
+use rocketmq_common::common::message::message_ext::MessageExt;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_common::common::message::message_single::Message;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
@@ -81,6 +82,89 @@ pub struct SendMessageResultEntry {
     pub send_result: Option<SendResult>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ConsumerFilterExpression {
+    pub expression_type: String,
+    pub expression: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReceiveTarget {
+    pub topic: ResourceIdentity,
+    pub queue_id: i32,
+    pub broker_name: Option<String>,
+    pub broker_addr: Option<String>,
+    pub fifo: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReceiveMessageRequest {
+    pub group: ResourceIdentity,
+    pub target: ReceiveTarget,
+    pub filter_expression: ConsumerFilterExpression,
+    pub batch_size: u32,
+    pub invisible_duration: Duration,
+    pub auto_renew: bool,
+    pub long_polling_timeout: Duration,
+    pub attempt_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReceivedMessage {
+    pub message: MessageExt,
+    pub invisible_duration: Duration,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReceiveMessagePlan {
+    pub status: ProxyPayloadStatus,
+    pub delivery_timestamp_ms: Option<i64>,
+    pub messages: Vec<ReceivedMessage>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AckMessageEntry {
+    pub message_id: String,
+    pub receipt_handle: String,
+    pub lite_topic: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AckMessageRequest {
+    pub group: ResourceIdentity,
+    pub topic: ResourceIdentity,
+    pub entries: Vec<AckMessageEntry>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AckMessageResultEntry {
+    pub message_id: String,
+    pub receipt_handle: String,
+    pub status: ProxyPayloadStatus,
+}
+
+#[derive(Debug, Clone)]
+pub struct AckMessagePlan {
+    pub entries: Vec<AckMessageResultEntry>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChangeInvisibleDurationRequest {
+    pub group: ResourceIdentity,
+    pub topic: ResourceIdentity,
+    pub receipt_handle: String,
+    pub invisible_duration: Duration,
+    pub message_id: String,
+    pub lite_topic: Option<String>,
+    pub suspend: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChangeInvisibleDurationPlan {
+    pub status: ProxyPayloadStatus,
+    pub receipt_handle: String,
+}
+
 #[async_trait]
 pub trait MessagingProcessor: Send + Sync {
     async fn query_route(&self, context: &ProxyContext, request: QueryRouteRequest) -> ProxyResult<QueryRoutePlan>;
@@ -92,6 +176,20 @@ pub trait MessagingProcessor: Send + Sync {
     ) -> ProxyResult<QueryAssignmentPlan>;
 
     async fn send_message(&self, context: &ProxyContext, request: SendMessageRequest) -> ProxyResult<SendMessagePlan>;
+
+    async fn receive_message(
+        &self,
+        context: &ProxyContext,
+        request: ReceiveMessageRequest,
+    ) -> ProxyResult<ReceiveMessagePlan>;
+
+    async fn ack_message(&self, context: &ProxyContext, request: AckMessageRequest) -> ProxyResult<AckMessagePlan>;
+
+    async fn change_invisible_duration(
+        &self,
+        context: &ProxyContext,
+        request: ChangeInvisibleDurationRequest,
+    ) -> ProxyResult<ChangeInvisibleDurationPlan>;
 }
 
 #[derive(Clone)]
@@ -157,5 +255,29 @@ impl MessagingProcessor for DefaultMessagingProcessor {
         let entries = message_service.send_message(context, &request).await?;
 
         Ok(SendMessagePlan { entries })
+    }
+
+    async fn receive_message(
+        &self,
+        context: &ProxyContext,
+        request: ReceiveMessageRequest,
+    ) -> ProxyResult<ReceiveMessagePlan> {
+        let consumer_service = self.service_manager.consumer_service();
+        consumer_service.receive_message(context, &request).await
+    }
+
+    async fn ack_message(&self, context: &ProxyContext, request: AckMessageRequest) -> ProxyResult<AckMessagePlan> {
+        let consumer_service = self.service_manager.consumer_service();
+        let entries = consumer_service.ack_message(context, &request).await?;
+        Ok(AckMessagePlan { entries })
+    }
+
+    async fn change_invisible_duration(
+        &self,
+        context: &ProxyContext,
+        request: ChangeInvisibleDurationRequest,
+    ) -> ProxyResult<ChangeInvisibleDurationPlan> {
+        let consumer_service = self.service_manager.consumer_service();
+        consumer_service.change_invisible_duration(context, &request).await
     }
 }
