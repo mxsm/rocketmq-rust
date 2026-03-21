@@ -451,13 +451,12 @@ impl ClientSessionRegistry {
     ) -> Option<PreparedTransactionHandle> {
         let transaction_id = transaction_id.trim();
         if !transaction_id.is_empty() {
-            return self
-                .prepared_transactions
-                .remove(&PreparedTransactionKey::new(
-                    client_id.to_owned(),
-                    transaction_id.to_owned(),
-                ))
-                .map(|(_, tracked)| tracked);
+            if let Some((_, tracked)) = self.prepared_transactions.remove(&PreparedTransactionKey::new(
+                client_id.to_owned(),
+                transaction_id.to_owned(),
+            )) {
+                return Some(tracked);
+            }
         }
 
         let trimmed_message_id = message_id.trim();
@@ -849,6 +848,7 @@ mod tests {
     use super::ClientSessionRegistry;
     use super::ClientSettingsSnapshot;
     use super::LiteSubscriptionSyncRequest;
+    use super::PreparedTransactionRegistration;
     use super::ReceiptHandleRegistration;
     use super::SubscriptionSettingsSnapshot;
     use super::TrackedReceiptHandle;
@@ -876,6 +876,22 @@ mod tests {
             message_id: message_id.to_owned(),
             receipt_handle: receipt_handle.to_owned(),
             invisible_duration: Duration::from_secs(30),
+        }
+    }
+
+    fn prepared_transaction(
+        client_id: &str,
+        message_id: &str,
+        transaction_id: &str,
+    ) -> PreparedTransactionRegistration {
+        PreparedTransactionRegistration {
+            client_id: client_id.to_owned(),
+            topic: ResourceIdentity::new("", "TopicA"),
+            message_id: message_id.to_owned(),
+            transaction_id: transaction_id.to_owned(),
+            producer_group: format!("PROXY_SEND-{client_id}"),
+            transaction_state_table_offset: 7,
+            commit_log_message_id: format!("offset-{message_id}"),
         }
     }
 
@@ -1038,11 +1054,30 @@ mod tests {
     }
 
     #[test]
+    fn prepared_transaction_can_be_looked_up_and_removed_by_message_id() {
+        let registry = ClientSessionRegistry::default();
+        registry.track_prepared_transaction(prepared_transaction("client-a", "msg-1", "tx-1"));
+
+        let tracked = registry
+            .prepared_transaction("client-a", "missing", "msg-1")
+            .expect("prepared transaction should fall back to message id");
+        assert_eq!(tracked.transaction_id, "tx-1");
+        assert_eq!(tracked.commit_log_message_id, "offset-msg-1");
+
+        let removed = registry
+            .remove_prepared_transaction("client-a", "missing", "msg-1")
+            .expect("prepared transaction should be removable by message id");
+        assert_eq!(removed.producer_group, "PROXY_SEND-client-a");
+        assert_eq!(registry.prepared_transaction_count(), 0);
+    }
+
+    #[test]
     fn remove_client_clears_receipt_handles() {
         let registry = ClientSessionRegistry::default();
         let context = context("client-a");
         registry.upsert_from_context(&context);
         let tracked = registry.track_receipt_handle(tracked_handle("client-a", "msg-1", "handle-1"));
+        registry.track_prepared_transaction(prepared_transaction("client-a", "msg-2", "tx-2"));
         let _ = registry.sync_lite_subscription(
             "client-a",
             lite_sync_request(v2::LiteSubscriptionAction::CompleteAdd, &["lite-a"]),
@@ -1055,6 +1090,7 @@ mod tests {
         assert!(registry.get("client-a").is_none());
         assert_eq!(registry.tracked_handle_count(), 0);
         assert_eq!(registry.lite_subscription_count(), 0);
+        assert_eq!(registry.prepared_transaction_count(), 0);
     }
 
     #[test]
@@ -1092,13 +1128,22 @@ mod tests {
                 cancellation: CancellationToken::new(),
             },
         );
+        registry.track_prepared_transaction(prepared_transaction("client-c", "msg-2", "tx-2"));
+        if let Some(mut tracked) = registry
+            .prepared_transactions
+            .get_mut(&super::PreparedTransactionKey::new("client-c", "tx-2"))
+        {
+            tracked.last_touched = SystemTime::UNIX_EPOCH;
+        }
 
         let summary = registry.reap_expired(Duration::from_secs(1), Duration::from_secs(1));
 
         assert_eq!(summary.removed_sessions, 1);
         assert_eq!(summary.removed_receipt_handles, 1);
         assert_eq!(summary.removed_lite_subscriptions, 0);
+        assert_eq!(summary.removed_prepared_transactions, 1);
         assert!(registry.is_empty());
         assert_eq!(registry.tracked_handle_count(), 0);
+        assert_eq!(registry.prepared_transaction_count(), 0);
     }
 }

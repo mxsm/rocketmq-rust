@@ -984,6 +984,7 @@ where
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::sync::Mutex;
 
     use async_trait::async_trait;
     use bytes::Bytes;
@@ -1008,6 +1009,8 @@ mod tests {
     use crate::processor::ChangeInvisibleDurationPlan;
     use crate::processor::ChangeInvisibleDurationRequest;
     use crate::processor::DefaultMessagingProcessor;
+    use crate::processor::EndTransactionPlan;
+    use crate::processor::EndTransactionRequest;
     use crate::processor::ReceiveMessagePlan;
     use crate::processor::ReceiveMessageRequest;
     use crate::processor::ReceivedMessage;
@@ -1018,6 +1021,7 @@ mod tests {
     use crate::service::ClusterServiceManager;
     use crate::service::ConsumerService;
     use crate::service::DefaultConsumerService;
+    use crate::service::DefaultTransactionService;
     use crate::service::MessageService;
     use crate::service::ProxyTopicMessageType;
     use crate::service::ResourceIdentity;
@@ -1025,6 +1029,7 @@ mod tests {
     use crate::service::StaticMetadataService;
     use crate::service::StaticRouteService;
     use crate::service::SubscriptionGroupMetadata;
+    use crate::service::TransactionService;
     use crate::session::ClientSessionRegistry;
     use crate::status::ProxyPayloadStatus;
     use crate::status::ProxyStatusMapper;
@@ -1032,6 +1037,11 @@ mod tests {
     struct PartialMessageService;
 
     struct TestConsumerService;
+
+    #[derive(Default)]
+    struct TestTransactionService {
+        requests: Mutex<Vec<EndTransactionRequest>>,
+    }
 
     #[async_trait]
     impl MessageService for PartialMessageService {
@@ -1128,6 +1138,23 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl TransactionService for TestTransactionService {
+        async fn end_transaction(
+            &self,
+            _context: &crate::context::ProxyContext,
+            request: &EndTransactionRequest,
+        ) -> crate::error::ProxyResult<EndTransactionPlan> {
+            self.requests
+                .lock()
+                .expect("transaction service mutex poisoned")
+                .push(request.clone());
+            Ok(EndTransactionPlan {
+                status: ProxyStatusMapper::ok_payload(),
+            })
+        }
+    }
+
     fn test_service(
         route_service: StaticRouteService,
         metadata_service: StaticMetadataService,
@@ -1152,11 +1179,12 @@ mod tests {
         )
     }
 
-    fn test_service_with_services(
+    fn test_service_with_all_services(
         route_service: StaticRouteService,
         metadata_service: StaticMetadataService,
         message_service: Arc<dyn crate::service::MessageService>,
         consumer_service: Arc<dyn crate::service::ConsumerService>,
+        transaction_service: Arc<dyn crate::service::TransactionService>,
     ) -> ProxyGrpcService<DefaultMessagingProcessor> {
         let manager = ClusterServiceManager::with_services(
             Arc::new(route_service),
@@ -1164,13 +1192,28 @@ mod tests {
             Arc::new(crate::service::DefaultAssignmentService),
             message_service,
             consumer_service,
-            Arc::new(crate::service::DefaultTransactionService),
+            transaction_service,
         );
         let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(manager)));
         ProxyGrpcService::new(
             Arc::new(ProxyConfig::default()),
             processor,
             ClientSessionRegistry::default(),
+        )
+    }
+
+    fn test_service_with_services(
+        route_service: StaticRouteService,
+        metadata_service: StaticMetadataService,
+        message_service: Arc<dyn crate::service::MessageService>,
+        consumer_service: Arc<dyn crate::service::ConsumerService>,
+    ) -> ProxyGrpcService<DefaultMessagingProcessor> {
+        test_service_with_all_services(
+            route_service,
+            metadata_service,
+            message_service,
+            consumer_service,
+            Arc::new(DefaultTransactionService),
         )
     }
 
@@ -1304,6 +1347,47 @@ mod tests {
         assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
         assert_eq!(response.entries.len(), 1);
         assert_eq!(response.entries[0].message_id, "msg-1");
+    }
+
+    #[tokio::test]
+    async fn send_message_tracks_prepared_transactions_for_transactional_entries() {
+        let service = test_service_with_message_service(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+        );
+        let mut request = Request::new(v2::SendMessageRequest {
+            messages: vec![v2::Message {
+                topic: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "TopicA".to_owned(),
+                }),
+                user_properties: HashMap::new(),
+                system_properties: Some(v2::SystemProperties {
+                    message_id: "msg-1".to_owned(),
+                    body_encoding: v2::Encoding::Identity as i32,
+                    message_type: v2::MessageType::Transaction as i32,
+                    ..Default::default()
+                }),
+                body: Bytes::from_static(b"hello").to_vec(),
+            }],
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service.send_message(request).await.unwrap().into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
+        assert_eq!(service.sessions.prepared_transaction_count(), 1);
+        assert_eq!(response.entries[0].transaction_id, "tx-msg-1");
+
+        let tracked = service
+            .sessions
+            .prepared_transaction("client-a", "tx-msg-1", "msg-1")
+            .expect("transaction should be tracked in session registry");
+        assert_eq!(tracked.producer_group, "PROXY_SEND-client-a");
+        assert_eq!(tracked.transaction_state_table_offset, 0);
+        assert_eq!(tracked.commit_log_message_id, "offset-msg-1");
     }
 
     #[tokio::test]
@@ -1851,6 +1935,105 @@ mod tests {
         assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
         assert!(service.sessions.get("client-a").is_none());
         assert_eq!(service.sessions.tracked_handle_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn end_transaction_uses_prepared_transaction_state_and_clears_it() {
+        let transaction_service = Arc::new(TestTransactionService::default());
+        let service = test_service_with_all_services(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+            Arc::new(DefaultConsumerService),
+            transaction_service.clone(),
+        );
+        let mut send_request = Request::new(v2::SendMessageRequest {
+            messages: vec![v2::Message {
+                topic: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "TopicA".to_owned(),
+                }),
+                user_properties: HashMap::new(),
+                system_properties: Some(v2::SystemProperties {
+                    message_id: "msg-1".to_owned(),
+                    body_encoding: v2::Encoding::Identity as i32,
+                    message_type: v2::MessageType::Transaction as i32,
+                    ..Default::default()
+                }),
+                body: Bytes::from_static(b"hello").to_vec(),
+            }],
+        });
+        send_request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let send_response = service.send_message(send_request).await.unwrap().into_inner();
+        assert_eq!(service.sessions.prepared_transaction_count(), 1);
+
+        let mut request = Request::new(v2::EndTransactionRequest {
+            topic: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "TopicA".to_owned(),
+            }),
+            message_id: send_response.entries[0].message_id.clone(),
+            transaction_id: send_response.entries[0].transaction_id.clone(),
+            resolution: v2::TransactionResolution::Commit as i32,
+            source: v2::TransactionSource::SourceClient as i32,
+            trace_context: "trace-a".to_owned(),
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service.end_transaction(request).await.unwrap().into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
+        assert_eq!(service.sessions.prepared_transaction_count(), 0);
+
+        let recorded = transaction_service
+            .requests
+            .lock()
+            .expect("transaction service mutex poisoned");
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].producer_group.as_deref(), Some("PROXY_SEND-client-a"));
+        assert_eq!(recorded[0].transaction_state_table_offset, Some(0));
+        assert_eq!(recorded[0].commit_log_message_id.as_deref(), Some("offset-msg-1"));
+    }
+
+    #[tokio::test]
+    async fn end_transaction_rejects_unknown_transaction_id() {
+        let transaction_service = Arc::new(TestTransactionService::default());
+        let service = test_service_with_all_services(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+            Arc::new(DefaultConsumerService),
+            transaction_service.clone(),
+        );
+        let mut request = Request::new(v2::EndTransactionRequest {
+            topic: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "TopicA".to_owned(),
+            }),
+            message_id: "msg-1".to_owned(),
+            transaction_id: "tx-missing".to_owned(),
+            resolution: v2::TransactionResolution::Commit as i32,
+            source: v2::TransactionSource::SourceClient as i32,
+            trace_context: String::new(),
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service.end_transaction(request).await.unwrap().into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::InvalidTransactionId as i32);
+        assert_eq!(
+            transaction_service
+                .requests
+                .lock()
+                .expect("transaction service mutex poisoned")
+                .len(),
+            0
+        );
     }
 
     #[tokio::test]

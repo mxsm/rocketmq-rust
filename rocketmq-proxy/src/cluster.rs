@@ -34,6 +34,9 @@ use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
 use rocketmq_common::common::message::message_id::MessageId;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
+use rocketmq_common::common::message::message_single::Message;
+use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
@@ -949,9 +952,10 @@ async fn send_message_entry(
 
 async fn send_message_entry_inner(
     producer: &mut DefaultMQProducer,
-    entry: SendMessageEntry,
+    mut entry: SendMessageEntry,
     timeout: u64,
 ) -> ProxyResult<SendResult> {
+    attach_transaction_producer_group(&mut entry.message, producer.producer_group());
     let queue = resolve_target_queue(producer, &entry).await?;
     let result = if let Some(queue) = queue {
         producer
@@ -1006,6 +1010,26 @@ fn failure_send_result_entry(error: &ProxyError) -> SendMessageResultEntry {
         status: ProxyStatusMapper::from_error_payload(error),
         send_result: None,
     }
+}
+
+fn attach_transaction_producer_group(message: &mut Message, producer_group: &str) {
+    if !is_transaction_prepared(message) {
+        return;
+    }
+
+    message.put_property(
+        CheetahString::from_static_str(MessageConst::PROPERTY_PRODUCER_GROUP),
+        CheetahString::from(producer_group),
+    );
+}
+
+fn is_transaction_prepared(message: &Message) -> bool {
+    message
+        .property_ref(&CheetahString::from_static_str(
+            MessageConst::PROPERTY_TRANSACTION_PREPARED,
+        ))
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(false)
 }
 
 fn sanitize_group_component(value: &str) -> String {

@@ -21,6 +21,8 @@ use dashmap::DashMap;
 use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_client_rust::producer::send_status::SendStatus;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
+use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::message::MessageTrait;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 
@@ -390,13 +392,24 @@ impl MessageService for StaticMessageService {
             .iter()
             .enumerate()
             .map(|(index, message)| {
-                let send_result = SendResult::new(
+                let mut send_result = SendResult::new(
                     self.send_status,
                     Some(CheetahString::from(message.client_message_id.as_str())),
                     None,
                     None,
                     index as u64,
                 );
+                if message
+                    .message
+                    .property_ref(&CheetahString::from_static_str(
+                        MessageConst::PROPERTY_TRANSACTION_PREPARED,
+                    ))
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(false)
+                {
+                    send_result.set_transaction_id(format!("tx-{}", message.client_message_id));
+                    send_result.set_offset_msg_id(format!("offset-{}", message.client_message_id));
+                }
                 SendMessageResultEntry {
                     status: ProxyStatusMapper::from_send_result_payload(&send_result),
                     send_result: Some(send_result),
