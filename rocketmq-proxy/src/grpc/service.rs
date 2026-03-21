@@ -231,6 +231,11 @@ where
                 self.config.session.min_long_polling_timeout(),
                 self.config.session.max_long_polling_timeout(),
             )));
+
+            if is_lite_client(merged.client_type) {
+                subscription.lite_subscription_quota.get_or_insert(1200);
+                subscription.max_lite_topic_size.get_or_insert(64);
+            }
         }
         merged
     }
@@ -484,6 +489,13 @@ fn duration_to_proto_duration(duration: Duration) -> prost_types::Duration {
         seconds: duration.as_secs() as i64,
         nanos: duration.subsec_nanos() as i32,
     }
+}
+
+fn is_lite_client(client_type: Option<i32>) -> bool {
+    matches!(
+        client_type.and_then(|client_type| v2::ClientType::try_from(client_type).ok()),
+        Some(v2::ClientType::LitePushConsumer | v2::ClientType::LiteSimpleConsumer)
+    )
 }
 
 #[tonic::async_trait]
@@ -824,11 +836,26 @@ where
 
     async fn sync_lite_subscription(
         &self,
-        _request: Request<v2::SyncLiteSubscriptionRequest>,
+        request: Request<v2::SyncLiteSubscriptionRequest>,
     ) -> Result<Response<v2::SyncLiteSubscriptionResponse>, Status> {
-        Ok(Response::new(v2::SyncLiteSubscriptionResponse {
-            status: Some(self.not_implemented_status("SyncLiteSubscription")),
-        }))
+        self.reap_session_state();
+        let context = self.context("SyncLiteSubscription", &request);
+        let request = request.into_inner();
+
+        let status = match self.validate_client_context(&context).and_then(|client_id| {
+            let _permit = self.guards.try_client_manager()?;
+            let input = crate::session::build_lite_subscription_sync_request(&request)?;
+            self.sessions.upsert_from_context(&context);
+            let settings = self.sessions.settings_for_client(client_id);
+            self.sessions
+                .sync_lite_subscription(client_id, input, settings.as_ref())
+                .map(|_| ProxyStatusMapper::ok())
+        }) {
+            Ok(status) => status,
+            Err(error) => ProxyStatusMapper::from_error(&error),
+        };
+
+        Ok(Response::new(v2::SyncLiteSubscriptionResponse { status: Some(status) }))
     }
 }
 
@@ -1422,6 +1449,38 @@ mod tests {
     }
 
     #[test]
+    fn telemetry_settings_fill_lite_subscription_defaults_for_lite_clients() {
+        let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
+        let merged = service.merged_telemetry_settings(&v2::Settings {
+            client_type: Some(v2::ClientType::LitePushConsumer as i32),
+            access_point: None,
+            backoff_policy: None,
+            request_timeout: None,
+            pub_sub: Some(v2::settings::PubSub::Subscription(v2::Subscription {
+                group: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "GroupA".to_owned(),
+                }),
+                subscriptions: Vec::new(),
+                fifo: Some(false),
+                receive_batch_size: Some(8),
+                long_polling_timeout: Some(prost_types::Duration { seconds: 6, nanos: 0 }),
+                lite_subscription_quota: None,
+                max_lite_topic_size: None,
+            })),
+            user_agent: None,
+            metric: None,
+        });
+
+        let subscription = match merged.pub_sub.unwrap() {
+            v2::settings::PubSub::Subscription(subscription) => subscription,
+            _ => panic!("expected subscription settings"),
+        };
+        assert_eq!(subscription.lite_subscription_quota, Some(1200));
+        assert_eq!(subscription.max_lite_topic_size, Some(64));
+    }
+
+    #[test]
     fn effective_receive_request_uses_telemetry_settings() {
         let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
         let mut request = Request::new(());
@@ -1670,5 +1729,127 @@ mod tests {
         assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
         assert!(service.sessions.get("client-a").is_none());
         assert_eq!(service.sessions.tracked_handle_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn sync_lite_subscription_updates_registry() {
+        let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
+        let mut context_request = Request::new(());
+        context_request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+        let context = service.context("Telemetry", &context_request);
+        let _ = service.sessions.update_settings_from_telemetry(
+            &context,
+            &service.merged_telemetry_settings(&v2::Settings {
+                client_type: Some(v2::ClientType::LitePushConsumer as i32),
+                access_point: None,
+                backoff_policy: None,
+                request_timeout: None,
+                pub_sub: Some(v2::settings::PubSub::Subscription(v2::Subscription {
+                    group: Some(v2::Resource {
+                        resource_namespace: String::new(),
+                        name: "GroupA".to_owned(),
+                    }),
+                    subscriptions: Vec::new(),
+                    fifo: Some(false),
+                    receive_batch_size: Some(8),
+                    long_polling_timeout: Some(prost_types::Duration { seconds: 6, nanos: 0 }),
+                    lite_subscription_quota: Some(2),
+                    max_lite_topic_size: Some(64),
+                })),
+                user_agent: None,
+                metric: None,
+            }),
+        );
+
+        let mut request = Request::new(v2::SyncLiteSubscriptionRequest {
+            action: v2::LiteSubscriptionAction::CompleteAdd as i32,
+            topic: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "TopicA".to_owned(),
+            }),
+            group: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "GroupA".to_owned(),
+            }),
+            lite_topic_set: vec!["lite-a".to_owned(), "lite-b".to_owned()],
+            version: Some(1),
+            offset_option: None,
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service.sync_lite_subscription(request).await.unwrap().into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
+        let snapshot = service
+            .sessions
+            .lite_subscription(
+                "client-a",
+                &ResourceIdentity::new("", "GroupA"),
+                &ResourceIdentity::new("", "TopicA"),
+            )
+            .expect("lite subscription should be tracked");
+        assert_eq!(snapshot.lite_topic_set.len(), 2);
+        assert!(snapshot.lite_topic_set.contains("lite-a"));
+        assert!(snapshot.lite_topic_set.contains("lite-b"));
+    }
+
+    #[tokio::test]
+    async fn sync_lite_subscription_rejects_quota_exceeded() {
+        let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
+        let mut context_request = Request::new(());
+        context_request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+        let context = service.context("Telemetry", &context_request);
+        let _ = service.sessions.update_settings_from_telemetry(
+            &context,
+            &service.merged_telemetry_settings(&v2::Settings {
+                client_type: Some(v2::ClientType::LitePushConsumer as i32),
+                access_point: None,
+                backoff_policy: None,
+                request_timeout: None,
+                pub_sub: Some(v2::settings::PubSub::Subscription(v2::Subscription {
+                    group: Some(v2::Resource {
+                        resource_namespace: String::new(),
+                        name: "GroupA".to_owned(),
+                    }),
+                    subscriptions: Vec::new(),
+                    fifo: Some(false),
+                    receive_batch_size: Some(8),
+                    long_polling_timeout: Some(prost_types::Duration { seconds: 6, nanos: 0 }),
+                    lite_subscription_quota: Some(1),
+                    max_lite_topic_size: Some(64),
+                })),
+                user_agent: None,
+                metric: None,
+            }),
+        );
+
+        let mut request = Request::new(v2::SyncLiteSubscriptionRequest {
+            action: v2::LiteSubscriptionAction::CompleteAdd as i32,
+            topic: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "TopicA".to_owned(),
+            }),
+            group: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "GroupA".to_owned(),
+            }),
+            lite_topic_set: vec!["lite-a".to_owned(), "lite-b".to_owned()],
+            version: Some(1),
+            offset_option: None,
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service.sync_lite_subscription(request).await.unwrap().into_inner();
+        assert_eq!(
+            response.status.unwrap().code,
+            v2::Code::LiteSubscriptionQuotaExceeded as i32
+        );
     }
 }

@@ -106,6 +106,8 @@ impl ProxyStatusMapper {
             ProxyError::IllegalInvisibleTime { .. } => v2::Code::IllegalInvisibleTime,
             ProxyError::IllegalFilterExpression { .. } => v2::Code::IllegalFilterExpression,
             ProxyError::InvalidReceiptHandle { .. } => v2::Code::InvalidReceiptHandle,
+            ProxyError::IllegalLiteTopic { .. } => v2::Code::IllegalLiteTopic,
+            ProxyError::LiteSubscriptionQuotaExceeded { .. } => v2::Code::LiteSubscriptionQuotaExceeded,
             ProxyError::MessagePropertyConflictWithType { .. } => v2::Code::MessagePropertyConflictWithType,
             ProxyError::RocketMQ(inner) => Self::from_rocketmq_error(inner),
         };

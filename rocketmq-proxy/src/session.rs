@@ -12,14 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 
 use dashmap::DashMap;
+use rocketmq_common::get_parent_and_lite_topic;
+use rocketmq_common::to_lmq_name;
 use tokio_util::sync::CancellationToken;
 
 use crate::context::ProxyContext;
+use crate::error::ProxyError;
+use crate::error::ProxyResult;
 use crate::proto::v2;
 use crate::service::ResourceIdentity;
 
@@ -29,6 +34,8 @@ pub struct SubscriptionSettingsSnapshot {
     pub fifo: bool,
     pub receive_batch_size: Option<u32>,
     pub long_polling_timeout: Option<Duration>,
+    pub lite_subscription_quota: Option<u32>,
+    pub max_lite_topic_size: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +56,14 @@ impl ClientSettingsSnapshot {
                     .and_then(|value| u32::try_from(value).ok())
                     .filter(|value| *value > 0),
                 long_polling_timeout: subscription.long_polling_timeout.as_ref().and_then(proto_duration),
+                lite_subscription_quota: subscription
+                    .lite_subscription_quota
+                    .and_then(|value| u32::try_from(value).ok())
+                    .filter(|value| *value > 0),
+                max_lite_topic_size: subscription
+                    .max_lite_topic_size
+                    .and_then(|value| u32::try_from(value).ok())
+                    .filter(|value| *value > 0),
             }),
             _ => None,
         };
@@ -96,10 +111,32 @@ pub struct TrackedReceiptHandle {
     pub cancellation: CancellationToken,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiteSubscriptionSyncRequest {
+    pub action: v2::LiteSubscriptionAction,
+    pub topic: ResourceIdentity,
+    pub group: ResourceIdentity,
+    pub lite_topic_set: BTreeSet<String>,
+    pub version: Option<i64>,
+    pub offset_option: Option<v2::OffsetOption>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiteSubscriptionSnapshot {
+    pub client_id: String,
+    pub topic: ResourceIdentity,
+    pub group: ResourceIdentity,
+    pub lite_topic_set: BTreeSet<String>,
+    pub version: Option<i64>,
+    pub offset_option: Option<v2::OffsetOption>,
+    pub last_touched: SystemTime,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ReapSummary {
     pub removed_sessions: usize,
     pub removed_receipt_handles: usize,
+    pub removed_lite_subscriptions: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -126,6 +163,23 @@ impl ReceiptHandleKey {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct LiteSubscriptionKey {
+    client_id: String,
+    group: ResourceIdentity,
+    topic: ResourceIdentity,
+}
+
+impl LiteSubscriptionKey {
+    fn new(client_id: impl Into<String>, group: ResourceIdentity, topic: ResourceIdentity) -> Self {
+        Self {
+            client_id: client_id.into(),
+            group,
+            topic,
+        }
+    }
+}
+
 impl From<&TrackedReceiptHandle> for ReceiptHandleKey {
     fn from(value: &TrackedReceiptHandle) -> Self {
         Self::new(
@@ -141,6 +195,7 @@ impl From<&TrackedReceiptHandle> for ReceiptHandleKey {
 pub struct ClientSessionRegistry {
     sessions: Arc<DashMap<String, ClientSession>>,
     receipt_handles: Arc<DashMap<ReceiptHandleKey, TrackedReceiptHandle>>,
+    lite_subscriptions: Arc<DashMap<LiteSubscriptionKey, LiteSubscriptionSnapshot>>,
 }
 
 impl ClientSessionRegistry {
@@ -203,6 +258,98 @@ impl ClientSessionRegistry {
 
     pub fn settings_for_client(&self, client_id: &str) -> Option<ClientSettingsSnapshot> {
         self.sessions.get(client_id).and_then(|entry| entry.settings.clone())
+    }
+
+    pub fn sync_lite_subscription(
+        &self,
+        client_id: &str,
+        request: LiteSubscriptionSyncRequest,
+        settings: Option<&ClientSettingsSnapshot>,
+    ) -> ProxyResult<LiteSubscriptionSnapshot> {
+        validate_lite_subscription_request(&request, settings)?;
+
+        let key = LiteSubscriptionKey::new(client_id.to_owned(), request.group.clone(), request.topic.clone());
+        let mut current = self
+            .lite_subscriptions
+            .get(&key)
+            .map(|entry| entry.clone())
+            .unwrap_or_else(|| LiteSubscriptionSnapshot {
+                client_id: client_id.to_owned(),
+                topic: request.topic.clone(),
+                group: request.group.clone(),
+                lite_topic_set: BTreeSet::new(),
+                version: None,
+                offset_option: None,
+                last_touched: SystemTime::now(),
+            });
+
+        match request.action {
+            v2::LiteSubscriptionAction::PartialAdd => {
+                let mut merged = current.lite_topic_set.clone();
+                merged.extend(request.lite_topic_set.iter().cloned());
+                ensure_lite_subscription_quota(merged.len(), settings)?;
+                current.lite_topic_set = merged;
+            }
+            v2::LiteSubscriptionAction::PartialRemove => {
+                for lite_topic in &request.lite_topic_set {
+                    current.lite_topic_set.remove(lite_topic);
+                }
+            }
+            v2::LiteSubscriptionAction::CompleteAdd => {
+                ensure_lite_subscription_quota(request.lite_topic_set.len(), settings)?;
+                current.lite_topic_set = request.lite_topic_set.clone();
+            }
+            v2::LiteSubscriptionAction::CompleteRemove => {
+                current.lite_topic_set.clear();
+            }
+        }
+
+        current.version = request.version;
+        current.offset_option = request.offset_option;
+        current.last_touched = SystemTime::now();
+
+        if current.lite_topic_set.is_empty() {
+            self.lite_subscriptions.remove(&key);
+        } else {
+            self.lite_subscriptions.insert(key, current.clone());
+        }
+
+        Ok(current)
+    }
+
+    pub fn lite_subscription(
+        &self,
+        client_id: &str,
+        group: &ResourceIdentity,
+        topic: &ResourceIdentity,
+    ) -> Option<LiteSubscriptionSnapshot> {
+        self.lite_subscriptions
+            .get(&LiteSubscriptionKey::new(
+                client_id.to_owned(),
+                group.clone(),
+                topic.clone(),
+            ))
+            .map(|entry| entry.clone())
+    }
+
+    pub fn remove_lite_topic(
+        &self,
+        client_id: &str,
+        group: &ResourceIdentity,
+        topic: &ResourceIdentity,
+        lite_topic: &str,
+    ) -> Option<LiteSubscriptionSnapshot> {
+        let key = LiteSubscriptionKey::new(client_id.to_owned(), group.clone(), topic.clone());
+        let mut snapshot = self.lite_subscriptions.get_mut(&key)?;
+        snapshot.lite_topic_set.remove(lite_topic);
+        snapshot.last_touched = SystemTime::now();
+        let result = snapshot.clone();
+        let remove_entry = snapshot.lite_topic_set.is_empty();
+        drop(snapshot);
+        if remove_entry {
+            self.lite_subscriptions.remove(&key);
+        }
+        Some(result)
     }
 
     pub fn track_receipt_handle(&self, registration: ReceiptHandleRegistration) -> TrackedReceiptHandle {
@@ -308,6 +455,15 @@ impl ClientSessionRegistry {
         for key in keys {
             let _ = self.remove_receipt_handle_by_key(&key);
         }
+        let lite_keys = self
+            .lite_subscriptions
+            .iter()
+            .filter(|entry| entry.key().client_id == client_id)
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>();
+        for key in lite_keys {
+            let _ = self.lite_subscriptions.remove(&key);
+        }
         session
     }
 
@@ -323,8 +479,12 @@ impl ClientSessionRegistry {
         self.receipt_handles.len()
     }
 
+    pub fn lite_subscription_count(&self) -> usize {
+        self.lite_subscriptions.len()
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.sessions.is_empty()
+        self.sessions.is_empty() && self.receipt_handles.is_empty() && self.lite_subscriptions.is_empty()
     }
 
     pub fn reap_expired(&self, client_ttl: Duration, receipt_handle_ttl: Duration) -> ReapSummary {
@@ -352,6 +512,18 @@ impl ClientSessionRegistry {
         for key in expired_receipt_handles {
             if self.remove_receipt_handle_by_key(&key).is_some() {
                 summary.removed_receipt_handles += 1;
+            }
+        }
+
+        let expired_lite_subscriptions = self
+            .lite_subscriptions
+            .iter()
+            .filter(|entry| is_expired(entry.last_touched, now, client_ttl))
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>();
+        for key in expired_lite_subscriptions {
+            if self.lite_subscriptions.remove(&key).is_some() {
+                summary.removed_lite_subscriptions += 1;
             }
         }
 
@@ -403,6 +575,41 @@ fn resource_identity(resource: &v2::Resource) -> ResourceIdentity {
     ResourceIdentity::new(resource.resource_namespace.clone(), resource.name.clone())
 }
 
+pub fn build_lite_subscription_sync_request(
+    request: &v2::SyncLiteSubscriptionRequest,
+) -> ProxyResult<LiteSubscriptionSyncRequest> {
+    let action = v2::LiteSubscriptionAction::try_from(request.action)
+        .map_err(|_| ProxyError::illegal_lite_topic(format!("unknown lite subscription action: {}", request.action)))?;
+    let topic = resource_identity(
+        request
+            .topic
+            .as_ref()
+            .ok_or_else(|| ProxyError::illegal_lite_topic("topic must not be empty"))?,
+    );
+    let group = resource_identity(
+        request
+            .group
+            .as_ref()
+            .ok_or_else(|| ProxyError::illegal_lite_topic("group must not be empty"))?,
+    );
+    let lite_topic_set = request
+        .lite_topic_set
+        .iter()
+        .map(|lite_topic| lite_topic.trim())
+        .filter(|lite_topic| !lite_topic.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>();
+
+    Ok(LiteSubscriptionSyncRequest {
+        action,
+        topic,
+        group,
+        lite_topic_set,
+        version: request.version,
+        offset_option: request.offset_option,
+    })
+}
+
 fn proto_duration(duration: &prost_types::Duration) -> Option<Duration> {
     if duration.seconds < 0 || duration.nanos < 0 || duration.nanos >= 1_000_000_000 {
         return None;
@@ -420,6 +627,66 @@ fn is_expired(instant: SystemTime, now: SystemTime, ttl: Duration) -> bool {
     }
 }
 
+fn validate_lite_subscription_request(
+    request: &LiteSubscriptionSyncRequest,
+    settings: Option<&ClientSettingsSnapshot>,
+) -> ProxyResult<()> {
+    if request.topic.name().is_empty() {
+        return Err(ProxyError::illegal_lite_topic("topic name must not be empty"));
+    }
+    if request.group.name().is_empty() {
+        return Err(ProxyError::illegal_lite_topic("group name must not be empty"));
+    }
+
+    let max_lite_topic_size = settings
+        .and_then(|settings| settings.subscription.as_ref())
+        .and_then(|subscription| subscription.max_lite_topic_size)
+        .unwrap_or(64) as usize;
+
+    for lite_topic in &request.lite_topic_set {
+        if lite_topic.is_empty() {
+            return Err(ProxyError::illegal_lite_topic("lite topic must not be empty"));
+        }
+        if lite_topic.len() > max_lite_topic_size {
+            return Err(ProxyError::illegal_lite_topic(format!(
+                "lite topic '{lite_topic}' exceeds max length {max_lite_topic_size}"
+            )));
+        }
+
+        let Some(lmq_name) = to_lmq_name(request.topic.name(), lite_topic) else {
+            return Err(ProxyError::illegal_lite_topic(format!(
+                "failed to compose lite topic '{lite_topic}' for topic '{}'",
+                request.topic.name()
+            )));
+        };
+        let Some((parent_topic, parsed_lite_topic)) = get_parent_and_lite_topic(&lmq_name) else {
+            return Err(ProxyError::illegal_lite_topic(format!(
+                "lite topic '{lite_topic}' cannot be encoded as LMQ name"
+            )));
+        };
+        if parent_topic != request.topic.name() || parsed_lite_topic != *lite_topic {
+            return Err(ProxyError::illegal_lite_topic(format!(
+                "lite topic '{lite_topic}' contains unsupported characters"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn ensure_lite_subscription_quota(size: usize, settings: Option<&ClientSettingsSnapshot>) -> ProxyResult<()> {
+    let quota = settings
+        .and_then(|settings| settings.subscription.as_ref())
+        .and_then(|subscription| subscription.lite_subscription_quota)
+        .unwrap_or(1200) as usize;
+    if size > quota {
+        return Err(ProxyError::lite_subscription_quota_exceeded(format!(
+            "lite subscription count {size} exceeds quota {quota}"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -429,7 +696,10 @@ mod tests {
 
     use super::ClientSession;
     use super::ClientSessionRegistry;
+    use super::ClientSettingsSnapshot;
+    use super::LiteSubscriptionSyncRequest;
     use super::ReceiptHandleRegistration;
+    use super::SubscriptionSettingsSnapshot;
     use super::TrackedReceiptHandle;
     use crate::context::ProxyContext;
     use crate::proto::v2;
@@ -455,6 +725,17 @@ mod tests {
             message_id: message_id.to_owned(),
             receipt_handle: receipt_handle.to_owned(),
             invisible_duration: Duration::from_secs(30),
+        }
+    }
+
+    fn lite_sync_request(action: v2::LiteSubscriptionAction, topics: &[&str]) -> LiteSubscriptionSyncRequest {
+        LiteSubscriptionSyncRequest {
+            action,
+            topic: ResourceIdentity::new("", "TopicA"),
+            group: ResourceIdentity::new("", "GroupA"),
+            lite_topic_set: topics.iter().map(|topic| (*topic).to_owned()).collect(),
+            version: Some(1),
+            offset_option: None,
         }
     }
 
@@ -532,17 +813,97 @@ mod tests {
     }
 
     #[test]
+    fn sync_lite_subscription_tracks_partial_and_complete_actions() {
+        let registry = ClientSessionRegistry::default();
+
+        let snapshot = registry
+            .sync_lite_subscription(
+                "client-a",
+                lite_sync_request(v2::LiteSubscriptionAction::PartialAdd, &["lite-a", "lite-b"]),
+                None,
+            )
+            .expect("partial add should succeed");
+        assert_eq!(snapshot.lite_topic_set.len(), 2);
+
+        let snapshot = registry
+            .sync_lite_subscription(
+                "client-a",
+                lite_sync_request(v2::LiteSubscriptionAction::PartialRemove, &["lite-a"]),
+                None,
+            )
+            .expect("partial remove should succeed");
+        assert_eq!(snapshot.lite_topic_set.len(), 1);
+        assert!(snapshot.lite_topic_set.contains("lite-b"));
+
+        let snapshot = registry
+            .sync_lite_subscription(
+                "client-a",
+                lite_sync_request(v2::LiteSubscriptionAction::CompleteAdd, &["lite-c"]),
+                None,
+            )
+            .expect("complete add should replace existing set");
+        assert_eq!(snapshot.lite_topic_set.len(), 1);
+        assert!(snapshot.lite_topic_set.contains("lite-c"));
+
+        let snapshot = registry
+            .sync_lite_subscription(
+                "client-a",
+                lite_sync_request(v2::LiteSubscriptionAction::CompleteRemove, &[]),
+                None,
+            )
+            .expect("complete remove should succeed");
+        assert!(snapshot.lite_topic_set.is_empty());
+        assert_eq!(registry.lite_subscription_count(), 0);
+    }
+
+    #[test]
+    fn sync_lite_subscription_enforces_quota() {
+        let registry = ClientSessionRegistry::default();
+        let settings = ClientSettingsSnapshot {
+            client_type: Some(v2::ClientType::LitePushConsumer as i32),
+            request_timeout: None,
+            subscription: Some(SubscriptionSettingsSnapshot {
+                group: Some(ResourceIdentity::new("", "GroupA")),
+                fifo: false,
+                receive_batch_size: None,
+                long_polling_timeout: None,
+                lite_subscription_quota: Some(1),
+                max_lite_topic_size: Some(64),
+            }),
+        };
+
+        let error = registry
+            .sync_lite_subscription(
+                "client-a",
+                lite_sync_request(v2::LiteSubscriptionAction::CompleteAdd, &["lite-a", "lite-b"]),
+                Some(&settings),
+            )
+            .expect_err("quota should be enforced");
+
+        assert!(matches!(
+            error,
+            crate::error::ProxyError::LiteSubscriptionQuotaExceeded { .. }
+        ));
+    }
+
+    #[test]
     fn remove_client_clears_receipt_handles() {
         let registry = ClientSessionRegistry::default();
         let context = context("client-a");
         registry.upsert_from_context(&context);
         let tracked = registry.track_receipt_handle(tracked_handle("client-a", "msg-1", "handle-1"));
+        let _ = registry.sync_lite_subscription(
+            "client-a",
+            lite_sync_request(v2::LiteSubscriptionAction::CompleteAdd, &["lite-a"]),
+            None,
+        );
 
         registry.remove_client("client-a");
 
         assert!(tracked.cancellation.is_cancelled());
         assert!(registry.get("client-a").is_none());
         assert_eq!(registry.tracked_handle_count(), 0);
+        assert_eq!(registry.lite_subscription_count(), 0);
     }
 
     #[test]
@@ -585,6 +946,7 @@ mod tests {
 
         assert_eq!(summary.removed_sessions, 1);
         assert_eq!(summary.removed_receipt_handles, 1);
+        assert_eq!(summary.removed_lite_subscriptions, 0);
         assert!(registry.is_empty());
         assert_eq!(registry.tracked_handle_count(), 0);
     }

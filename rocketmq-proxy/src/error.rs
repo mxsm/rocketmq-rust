@@ -61,6 +61,12 @@ pub enum ProxyError {
     #[error("invalid receipt handle: {message}")]
     InvalidReceiptHandle { message: String },
 
+    #[error("illegal lite topic: {message}")]
+    IllegalLiteTopic { message: String },
+
+    #[error("lite subscription quota exceeded: {message}")]
+    LiteSubscriptionQuotaExceeded { message: String },
+
     #[error("message property conflicts with message type: {message}")]
     MessagePropertyConflictWithType { message: String },
 }
@@ -118,6 +124,18 @@ impl ProxyError {
 
     pub fn invalid_receipt_handle(message: impl Into<String>) -> Self {
         Self::InvalidReceiptHandle {
+            message: message.into(),
+        }
+    }
+
+    pub fn illegal_lite_topic(message: impl Into<String>) -> Self {
+        Self::IllegalLiteTopic {
+            message: message.into(),
+        }
+    }
+
+    pub fn lite_subscription_quota_exceeded(message: impl Into<String>) -> Self {
+        Self::LiteSubscriptionQuotaExceeded {
             message: message.into(),
         }
     }
