@@ -28,6 +28,7 @@ use crate::service::ProxyTopicMessageType;
 use crate::service::ResourceIdentity;
 use crate::service::ServiceManager;
 use crate::service::SubscriptionGroupMetadata;
+use crate::status::ProxyPayloadStatus;
 
 #[derive(Debug, Clone)]
 pub struct QueryRouteRequest {
@@ -66,11 +67,18 @@ pub struct SendMessageEntry {
     pub topic: ResourceIdentity,
     pub client_message_id: String,
     pub message: Message,
+    pub queue_id: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
 pub struct SendMessagePlan {
-    pub entries: Vec<SendResult>,
+    pub entries: Vec<SendMessageResultEntry>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SendMessageResultEntry {
+    pub status: ProxyPayloadStatus,
+    pub send_result: Option<SendResult>,
 }
 
 #[async_trait]

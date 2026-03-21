@@ -32,6 +32,8 @@ use crate::context::ResolvedEndpoint;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
 use crate::processor::SendMessageRequest;
+use crate::processor::SendMessageResultEntry;
+use crate::status::ProxyStatusMapper;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResourceIdentity {
@@ -124,7 +126,11 @@ pub trait AssignmentService: Send + Sync {
 
 #[async_trait]
 pub trait MessageService: Send + Sync {
-    async fn send_message(&self, context: &ProxyContext, request: &SendMessageRequest) -> ProxyResult<Vec<SendResult>>;
+    async fn send_message(
+        &self,
+        context: &ProxyContext,
+        request: &SendMessageRequest,
+    ) -> ProxyResult<Vec<SendMessageResultEntry>>;
 }
 
 pub trait ServiceManager: Send + Sync {
@@ -204,7 +210,7 @@ impl MessageService for DefaultMessageService {
         &self,
         _context: &ProxyContext,
         _request: &SendMessageRequest,
-    ) -> ProxyResult<Vec<SendResult>> {
+    ) -> ProxyResult<Vec<SendMessageResultEntry>> {
         Err(ProxyError::not_implemented("message service"))
     }
 }
@@ -292,19 +298,23 @@ impl MessageService for StaticMessageService {
         &self,
         _context: &ProxyContext,
         request: &SendMessageRequest,
-    ) -> ProxyResult<Vec<SendResult>> {
+    ) -> ProxyResult<Vec<SendMessageResultEntry>> {
         Ok(request
             .messages
             .iter()
             .enumerate()
             .map(|(index, message)| {
-                SendResult::new(
+                let send_result = SendResult::new(
                     self.send_status,
                     Some(CheetahString::from(message.client_message_id.as_str())),
                     None,
                     None,
                     index as u64,
-                )
+                );
+                SendMessageResultEntry {
+                    status: ProxyStatusMapper::from_send_result_payload(&send_result),
+                    send_result: Some(send_result),
+                }
             })
             .collect())
     }
@@ -399,7 +409,11 @@ impl ClusterMessageService {
 
 #[async_trait]
 impl MessageService for ClusterMessageService {
-    async fn send_message(&self, context: &ProxyContext, request: &SendMessageRequest) -> ProxyResult<Vec<SendResult>> {
+    async fn send_message(
+        &self,
+        context: &ProxyContext,
+        request: &SendMessageRequest,
+    ) -> ProxyResult<Vec<SendMessageResultEntry>> {
         self.client.send_message(context, request).await
     }
 }

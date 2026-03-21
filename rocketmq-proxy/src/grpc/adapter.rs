@@ -18,8 +18,6 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 
 use cheetah_string::CheetahString;
-use rocketmq_client_rust::producer::send_result::SendResult;
-use rocketmq_client_rust::producer::send_status::SendStatus;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_common::common::message::message_single::Message;
@@ -42,9 +40,11 @@ use crate::processor::QueryRouteRequest;
 use crate::processor::SendMessageEntry;
 use crate::processor::SendMessagePlan;
 use crate::processor::SendMessageRequest;
+use crate::processor::SendMessageResultEntry;
 use crate::proto::v2;
 use crate::service::ProxyTopicMessageType;
 use crate::service::ResourceIdentity;
+use crate::status::ProxyPayloadStatus;
 use crate::status::ProxyStatusMapper;
 
 pub fn build_query_route_request(
@@ -74,10 +74,6 @@ pub fn build_send_message_request(
 ) -> ProxyResult<SendMessageRequest> {
     if request.messages.is_empty() {
         return Err(rocketmq_error::RocketMQError::illegal_argument("messages must not be empty").into());
-    }
-
-    if request.messages.len() != 1 {
-        return Err(ProxyError::not_implemented("SendMessage(batch)"));
     }
 
     let messages = request
@@ -206,13 +202,8 @@ pub fn build_send_message_response(plan: &SendMessagePlan, request: &SendMessage
         .map(|(result, message)| build_send_result_entry(result, message))
         .collect();
 
-    let status = entries
-        .first()
-        .and_then(|entry| entry.status.clone())
-        .unwrap_or_else(ProxyStatusMapper::ok);
-
     v2::SendMessageResponse {
-        status: Some(status),
+        status: Some(summarize_send_response_status(&plan.entries).into()),
         entries,
     }
 }
@@ -358,6 +349,7 @@ fn build_send_message_entry(message: &v2::Message) -> ProxyResult<SendMessageEnt
         topic,
         client_message_id,
         message: rocketmq_message,
+        queue_id: explicit_queue_id(system.queue_id),
     })
 }
 
@@ -535,32 +527,41 @@ fn timestamp_to_epoch_millis(timestamp: &prost_types::Timestamp) -> ProxyResult<
         .ok_or_else(|| ProxyError::illegal_delivery_time("delivery timestamp overflowed milliseconds"))
 }
 
-fn build_send_result_entry(result: &SendResult, request: &SendMessageEntry) -> v2::SendResultEntry {
+fn explicit_queue_id(queue_id: i32) -> Option<i32> {
+    (queue_id > 0).then_some(queue_id)
+}
+
+fn build_send_result_entry(result: &SendMessageResultEntry, request: &SendMessageEntry) -> v2::SendResultEntry {
     v2::SendResultEntry {
-        status: Some(map_send_result_status(result)),
+        status: Some(result.status.clone().into()),
         message_id: result
-            .msg_id
+            .send_result
             .as_ref()
-            .map(ToString::to_string)
+            .and_then(|send_result| send_result.msg_id.as_ref().map(ToString::to_string))
             .unwrap_or_else(|| request.client_message_id.clone()),
-        transaction_id: result.transaction_id.clone().unwrap_or_default(),
-        offset: result.queue_offset as i64,
+        transaction_id: result
+            .send_result
+            .as_ref()
+            .and_then(|send_result| send_result.transaction_id.clone())
+            .unwrap_or_default(),
+        offset: result
+            .send_result
+            .as_ref()
+            .map(|send_result| send_result.queue_offset as i64)
+            .unwrap_or_default(),
         recall_handle: String::new(),
     }
 }
 
-fn map_send_result_status(result: &SendResult) -> v2::Status {
-    match result.send_status {
-        SendStatus::SendOk => ProxyStatusMapper::ok(),
-        SendStatus::FlushDiskTimeout => {
-            ProxyStatusMapper::from_code(v2::Code::MasterPersistenceTimeout, "broker flush disk timed out")
-        }
-        SendStatus::FlushSlaveTimeout => {
-            ProxyStatusMapper::from_code(v2::Code::SlavePersistenceTimeout, "broker slave flush timed out")
-        }
-        SendStatus::SlaveNotAvailable => {
-            ProxyStatusMapper::from_code(v2::Code::HaNotAvailable, "slave broker not available")
-        }
+fn summarize_send_response_status(entries: &[SendMessageResultEntry]) -> ProxyPayloadStatus {
+    match entries {
+        [] => ProxyStatusMapper::ok_payload(),
+        [entry] => entry.status.clone(),
+        _ if entries.iter().all(|entry| entry.status.is_ok()) => ProxyStatusMapper::ok_payload(),
+        _ => ProxyStatusMapper::from_payload_code(
+            v2::Code::MultipleResults,
+            "send message entries contain mixed success or failure results",
+        ),
     }
 }
 
@@ -796,6 +797,7 @@ mod tests {
     use crate::processor::QueryAssignmentPlan;
     use crate::processor::QueryRoutePlan;
     use crate::processor::SendMessagePlan;
+    use crate::processor::SendMessageResultEntry;
     use crate::proto::v2;
     use crate::service::ProxyTopicMessageType;
     use crate::service::ResourceIdentity;
@@ -965,13 +967,22 @@ mod tests {
     fn send_message_response_maps_send_status() {
         let response = build_send_message_response(
             &SendMessagePlan {
-                entries: vec![SendResult::new(
-                    SendStatus::FlushDiskTimeout,
-                    Some(CheetahString::from("server-msg-id")),
-                    None,
-                    None,
-                    12,
-                )],
+                entries: vec![SendMessageResultEntry {
+                    status: ProxyStatusMapper::from_send_result_payload(&SendResult::new(
+                        SendStatus::FlushDiskTimeout,
+                        Some(CheetahString::from("server-msg-id")),
+                        None,
+                        None,
+                        12,
+                    )),
+                    send_result: Some(SendResult::new(
+                        SendStatus::FlushDiskTimeout,
+                        Some(CheetahString::from("server-msg-id")),
+                        None,
+                        None,
+                        12,
+                    )),
+                }],
             },
             &crate::processor::SendMessageRequest {
                 messages: vec![crate::processor::SendMessageEntry {
@@ -981,6 +992,7 @@ mod tests {
                         .topic("TopicA")
                         .body(Bytes::from_static(b"hello"))
                         .build_unchecked(),
+                    queue_id: None,
                 }],
                 timeout: None,
             },

@@ -24,6 +24,7 @@ use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
+use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_error::RocketMQError;
@@ -36,10 +37,13 @@ use crate::config::ClusterConfig;
 use crate::context::ProxyContext;
 use crate::error::ProxyError;
 use crate::error::ProxyResult;
+use crate::processor::SendMessageEntry;
 use crate::processor::SendMessageRequest;
+use crate::processor::SendMessageResultEntry;
 use crate::service::ProxyTopicMessageType;
 use crate::service::ResourceIdentity;
 use crate::service::SubscriptionGroupMetadata;
+use crate::status::ProxyStatusMapper;
 
 #[async_trait]
 pub trait ClusterClient: Send + Sync {
@@ -60,7 +64,11 @@ pub trait ClusterClient: Send + Sync {
         group: &ResourceIdentity,
     ) -> ProxyResult<Option<SubscriptionGroupMetadata>>;
 
-    async fn send_message(&self, context: &ProxyContext, request: &SendMessageRequest) -> ProxyResult<Vec<SendResult>>;
+    async fn send_message(
+        &self,
+        context: &ProxyContext,
+        request: &SendMessageRequest,
+    ) -> ProxyResult<Vec<SendMessageResultEntry>>;
 }
 
 pub struct RocketmqClusterClient {
@@ -195,7 +203,11 @@ impl ClusterClient for RocketmqClusterClient {
         .await
     }
 
-    async fn send_message(&self, context: &ProxyContext, request: &SendMessageRequest) -> ProxyResult<Vec<SendResult>> {
+    async fn send_message(
+        &self,
+        context: &ProxyContext,
+        request: &SendMessageRequest,
+    ) -> ProxyResult<Vec<SendMessageResultEntry>> {
         let config = self.config.clone();
         let request = request.clone();
         let request_id = context.request_id().to_owned();
@@ -203,18 +215,19 @@ impl ClusterClient for RocketmqClusterClient {
         run_cluster_task(move || async move {
             let timeout = effective_send_timeout_ms(&config, request.timeout);
             let mut producer = build_send_producer(&config, &request, request_id.as_str(), timeout);
-            producer.start().await?;
+            if let Err(error) = producer.start().await {
+                let error = ProxyError::from(error);
+                return Ok(request
+                    .messages
+                    .iter()
+                    .map(|_| failure_send_result_entry(&error))
+                    .collect());
+            }
 
             let send_result = async {
                 let mut results = Vec::with_capacity(request.messages.len());
                 for entry in request.messages {
-                    let result = producer
-                        .send_with_timeout(entry.message, timeout)
-                        .await?
-                        .ok_or_else(|| ProxyError::Transport {
-                            message: format!("send result was empty for topic '{}'", entry.topic),
-                        })?;
-                    results.push(result);
+                    results.push(send_message_entry(&mut producer, entry, timeout).await);
                 }
                 Ok(results)
             }
@@ -291,6 +304,81 @@ fn build_send_producer(
         .topics(topics)
         .send_msg_timeout(timeout_ms as u32)
         .build()
+}
+
+async fn send_message_entry(
+    producer: &mut DefaultMQProducer,
+    entry: SendMessageEntry,
+    timeout: u64,
+) -> SendMessageResultEntry {
+    match send_message_entry_inner(producer, entry, timeout).await {
+        Ok(send_result) => SendMessageResultEntry {
+            status: ProxyStatusMapper::from_send_result_payload(&send_result),
+            send_result: Some(send_result),
+        },
+        Err(error) => failure_send_result_entry(&error),
+    }
+}
+
+async fn send_message_entry_inner(
+    producer: &mut DefaultMQProducer,
+    entry: SendMessageEntry,
+    timeout: u64,
+) -> ProxyResult<SendResult> {
+    let queue = resolve_target_queue(producer, &entry).await?;
+    let result = if let Some(queue) = queue {
+        producer
+            .send_to_queue_with_timeout(entry.message, queue, timeout)
+            .await?
+    } else {
+        producer.send_with_timeout(entry.message, timeout).await?
+    };
+
+    result.ok_or_else(|| ProxyError::Transport {
+        message: format!("send result was empty for topic '{}'", entry.topic),
+    })
+}
+
+async fn resolve_target_queue(
+    producer: &mut DefaultMQProducer,
+    entry: &SendMessageEntry,
+) -> ProxyResult<Option<MessageQueue>> {
+    let Some(queue_id) = entry.queue_id else {
+        return Ok(None);
+    };
+
+    let queues = producer
+        .fetch_publish_message_queues(entry.topic.to_string().as_str())
+        .await?;
+    let max_queue_id = queues.iter().map(MessageQueue::queue_id).max().unwrap_or(-1);
+
+    queues
+        .into_iter()
+        .find(|queue| queue.queue_id() == queue_id)
+        .map(Some)
+        .ok_or_else(|| {
+            if max_queue_id >= 0 {
+                RocketMQError::QueueIdOutOfRange {
+                    topic: entry.topic.to_string(),
+                    queue_id,
+                    max: max_queue_id,
+                }
+                .into()
+            } else {
+                RocketMQError::QueueNotExist {
+                    topic: entry.topic.to_string(),
+                    queue_id,
+                }
+                .into()
+            }
+        })
+}
+
+fn failure_send_result_entry(error: &ProxyError) -> SendMessageResultEntry {
+    SendMessageResultEntry {
+        status: ProxyStatusMapper::from_error_payload(error),
+        send_result: None,
+    }
 }
 
 fn build_send_producer_group(config: &ClusterConfig, request_id: &str) -> String {

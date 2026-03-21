@@ -53,6 +53,7 @@ pub use processor::QueryRouteRequest;
 pub use processor::SendMessageEntry;
 pub use processor::SendMessagePlan;
 pub use processor::SendMessageRequest;
+pub use processor::SendMessageResultEntry;
 pub use service::AssignmentService;
 pub use service::ClusterServiceManager;
 pub use service::DefaultAssignmentService;
@@ -73,6 +74,7 @@ pub use service::SubscriptionGroupMetadata;
 pub use service::UnsupportedRouteService;
 pub use session::ClientSession;
 pub use session::ClientSessionRegistry;
+pub use status::ProxyPayloadStatus;
 
 /// Default gRPC port used by the proxy runtime.
 pub const DEFAULT_PROXY_GRPC_PORT: u16 = 8081;

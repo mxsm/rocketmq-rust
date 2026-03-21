@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use rocketmq_client_rust::producer::send_result::SendResult;
+use rocketmq_client_rust::producer::send_status::SendStatus;
 use rocketmq_error::RocketMQError;
 use tonic::Code as TonicCode;
 use tonic::Status as TonicStatus;
@@ -19,21 +21,77 @@ use tonic::Status as TonicStatus;
 use crate::error::ProxyError;
 use crate::proto::v2;
 
-pub struct ProxyStatusMapper;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProxyPayloadStatus {
+    code: i32,
+    message: String,
+}
 
-impl ProxyStatusMapper {
-    pub fn ok() -> v2::Status {
-        Self::from_code(v2::Code::Ok, "OK")
-    }
-
-    pub fn from_code(code: v2::Code, message: impl Into<String>) -> v2::Status {
-        v2::Status {
-            code: code as i32,
+impl ProxyPayloadStatus {
+    pub fn new(code: i32, message: impl Into<String>) -> Self {
+        Self {
+            code,
             message: message.into(),
         }
     }
 
-    pub fn from_error(error: &ProxyError) -> v2::Status {
+    pub fn code(&self) -> i32 {
+        self.code
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub fn is_ok(&self) -> bool {
+        self.code == v2::Code::Ok as i32
+    }
+}
+
+impl From<ProxyPayloadStatus> for v2::Status {
+    fn from(value: ProxyPayloadStatus) -> Self {
+        Self {
+            code: value.code,
+            message: value.message,
+        }
+    }
+}
+
+pub struct ProxyStatusMapper;
+
+impl ProxyStatusMapper {
+    pub fn ok_payload() -> ProxyPayloadStatus {
+        Self::from_payload_code(v2::Code::Ok, "OK")
+    }
+
+    pub fn ok() -> v2::Status {
+        Self::ok_payload().into()
+    }
+
+    pub fn from_payload_code(code: v2::Code, message: impl Into<String>) -> ProxyPayloadStatus {
+        ProxyPayloadStatus::new(code as i32, message)
+    }
+
+    pub fn from_code(code: v2::Code, message: impl Into<String>) -> v2::Status {
+        Self::from_payload_code(code, message).into()
+    }
+
+    pub fn from_send_result_payload(result: &SendResult) -> ProxyPayloadStatus {
+        match result.send_status {
+            SendStatus::SendOk => Self::ok_payload(),
+            SendStatus::FlushDiskTimeout => {
+                Self::from_payload_code(v2::Code::MasterPersistenceTimeout, "broker flush disk timed out")
+            }
+            SendStatus::FlushSlaveTimeout => {
+                Self::from_payload_code(v2::Code::SlavePersistenceTimeout, "broker slave flush timed out")
+            }
+            SendStatus::SlaveNotAvailable => {
+                Self::from_payload_code(v2::Code::HaNotAvailable, "slave broker not available")
+            }
+        }
+    }
+
+    pub fn from_error_payload(error: &ProxyError) -> ProxyPayloadStatus {
         let code = match error {
             ProxyError::ClientIdRequired => v2::Code::ClientIdRequired,
             ProxyError::UnrecognizedClientType(_) => v2::Code::UnrecognizedClientType,
@@ -47,7 +105,11 @@ impl ProxyStatusMapper {
             ProxyError::MessagePropertyConflictWithType { .. } => v2::Code::MessagePropertyConflictWithType,
             ProxyError::RocketMQ(inner) => Self::from_rocketmq_error(inner),
         };
-        Self::from_code(code, error.to_string())
+        Self::from_payload_code(code, error.to_string())
+    }
+
+    pub fn from_error(error: &ProxyError) -> v2::Status {
+        Self::from_error_payload(error).into()
     }
 
     pub fn to_tonic_status(error: &ProxyError) -> TonicStatus {

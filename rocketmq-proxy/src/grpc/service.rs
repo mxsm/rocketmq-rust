@@ -424,8 +424,10 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use async_trait::async_trait;
     use bytes::Bytes;
     use cheetah_string::CheetahString;
+    use rocketmq_client_rust::producer::send_result::SendResult;
     use rocketmq_client_rust::producer::send_status::SendStatus;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
     use rocketmq_remoting::protocol::route::route_data_view::QueueData;
@@ -436,9 +438,12 @@ mod tests {
     use super::ProxyGrpcService;
     use crate::config::ProxyConfig;
     use crate::processor::DefaultMessagingProcessor;
+    use crate::processor::SendMessageRequest;
+    use crate::processor::SendMessageResultEntry;
     use crate::proto::v2;
     use crate::proto::v2::messaging_service_server::MessagingService;
     use crate::service::ClusterServiceManager;
+    use crate::service::MessageService;
     use crate::service::ProxyTopicMessageType;
     use crate::service::ResourceIdentity;
     use crate::service::StaticMessageService;
@@ -446,6 +451,48 @@ mod tests {
     use crate::service::StaticRouteService;
     use crate::service::SubscriptionGroupMetadata;
     use crate::session::ClientSessionRegistry;
+    use crate::status::ProxyPayloadStatus;
+    use crate::status::ProxyStatusMapper;
+
+    struct PartialMessageService;
+
+    #[async_trait]
+    impl MessageService for PartialMessageService {
+        async fn send_message(
+            &self,
+            _context: &crate::context::ProxyContext,
+            request: &SendMessageRequest,
+        ) -> crate::error::ProxyResult<Vec<SendMessageResultEntry>> {
+            Ok(request
+                .messages
+                .iter()
+                .enumerate()
+                .map(|(index, message)| {
+                    if index == 0 {
+                        let send_result = SendResult::new(
+                            SendStatus::SendOk,
+                            Some(CheetahString::from(message.client_message_id.as_str())),
+                            None,
+                            None,
+                            0,
+                        );
+                        SendMessageResultEntry {
+                            status: ProxyStatusMapper::from_send_result_payload(&send_result),
+                            send_result: Some(send_result),
+                        }
+                    } else {
+                        SendMessageResultEntry {
+                            status: ProxyPayloadStatus::new(
+                                v2::Code::TopicNotFound as i32,
+                                "Topic 'TopicA' does not exist",
+                            ),
+                            send_result: None,
+                        }
+                    }
+                })
+                .collect())
+        }
+    }
 
     fn test_service(
         route_service: StaticRouteService,
@@ -610,7 +657,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_message_rejects_batch_until_partial_results_are_implemented() {
+    async fn send_message_accepts_batch_requests() {
         let service = test_service_with_message_service(
             StaticRouteService::default(),
             StaticMetadataService::default(),
@@ -651,7 +698,60 @@ mod tests {
             .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
 
         let response = service.send_message(request).await.unwrap().into_inner();
-        assert_eq!(response.status.unwrap().code, v2::Code::NotImplemented as i32);
-        assert!(response.entries.is_empty());
+        assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
+        assert_eq!(response.entries.len(), 2);
+        assert_eq!(response.entries[0].message_id, "msg-1");
+        assert_eq!(response.entries[1].message_id, "msg-2");
+    }
+
+    #[tokio::test]
+    async fn send_message_uses_multiple_results_for_partial_failures() {
+        let service = test_service_with_message_service(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(PartialMessageService),
+        );
+        let mut request = Request::new(v2::SendMessageRequest {
+            messages: vec![
+                v2::Message {
+                    topic: Some(v2::Resource {
+                        resource_namespace: String::new(),
+                        name: "TopicA".to_owned(),
+                    }),
+                    user_properties: HashMap::new(),
+                    system_properties: Some(v2::SystemProperties {
+                        message_id: "msg-1".to_owned(),
+                        body_encoding: v2::Encoding::Identity as i32,
+                        ..Default::default()
+                    }),
+                    body: Bytes::from_static(b"hello").to_vec(),
+                },
+                v2::Message {
+                    topic: Some(v2::Resource {
+                        resource_namespace: String::new(),
+                        name: "TopicA".to_owned(),
+                    }),
+                    user_properties: HashMap::new(),
+                    system_properties: Some(v2::SystemProperties {
+                        message_id: "msg-2".to_owned(),
+                        body_encoding: v2::Encoding::Identity as i32,
+                        ..Default::default()
+                    }),
+                    body: Bytes::from_static(b"world").to_vec(),
+                },
+            ],
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service.send_message(request).await.unwrap().into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::MultipleResults as i32);
+        assert_eq!(response.entries.len(), 2);
+        assert_eq!(response.entries[0].status.as_ref().unwrap().code, v2::Code::Ok as i32);
+        assert_eq!(
+            response.entries[1].status.as_ref().unwrap().code,
+            v2::Code::TopicNotFound as i32
+        );
     }
 }
