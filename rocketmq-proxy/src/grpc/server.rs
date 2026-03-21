@@ -15,6 +15,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use tokio::sync::watch;
 use tonic::transport::Server;
 
 use crate::config::ProxyConfig;
@@ -30,15 +31,38 @@ where
     F: Future<Output = ()> + Send + 'static,
 {
     let addr = config.grpc.socket_addr()?;
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let shutdown_signal = shutdown_tx.clone();
+    let housekeeping_service = service.clone();
+    tokio::spawn(async move {
+        let mut shutdown_rx = shutdown_rx;
+        housekeeping_service
+            .run_housekeeping_until(async move {
+                loop {
+                    if *shutdown_rx.borrow() {
+                        break;
+                    }
+                    if shutdown_rx.changed().await.is_err() {
+                        break;
+                    }
+                }
+            })
+            .await;
+    });
     let service = MessagingServiceServer::new(service)
         .max_decoding_message_size(config.grpc.max_decoding_message_size)
         .max_encoding_message_size(config.grpc.max_encoding_message_size);
 
-    Server::builder()
+    let result = Server::builder()
         .add_service(service)
-        .serve_with_shutdown(addr, shutdown)
-        .await
-        .map_err(|error| ProxyError::Transport {
-            message: format!("proxy gRPC server failed: {error}"),
+        .serve_with_shutdown(addr, async move {
+            shutdown.await;
+            let _ = shutdown_signal.send(true);
         })
+        .await;
+    let _ = shutdown_tx.send(true);
+
+    result.map_err(|error| ProxyError::Transport {
+        message: format!("proxy gRPC server failed: {error}"),
+    })
 }

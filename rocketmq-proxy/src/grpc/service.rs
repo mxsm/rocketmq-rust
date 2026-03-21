@@ -14,11 +14,18 @@
 
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::stream;
 use futures::Stream;
+use futures::StreamExt;
+use rocketmq_common::common::message::MessageConst;
+use rocketmq_common::common::message::MessageTrait;
+use tokio::sync::mpsc;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
+use tokio::time::MissedTickBehavior;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
@@ -30,7 +37,11 @@ use crate::error::ProxyResult;
 use crate::grpc::adapter;
 use crate::processor::MessagingProcessor;
 use crate::proto::v2;
+use crate::service::ResourceIdentity;
 use crate::session::ClientSessionRegistry;
+use crate::session::ClientSettingsSnapshot;
+use crate::session::ReceiptHandleRegistration;
+use crate::session::TrackedReceiptHandle;
 use crate::status::ProxyStatusMapper;
 
 type ResponseStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
@@ -82,12 +93,22 @@ impl ExecutionGuards {
     }
 }
 
-#[derive(Clone)]
 pub struct ProxyGrpcService<P> {
     config: Arc<ProxyConfig>,
     processor: Arc<P>,
     sessions: ClientSessionRegistry,
     guards: ExecutionGuards,
+}
+
+impl<P> Clone for ProxyGrpcService<P> {
+    fn clone(&self) -> Self {
+        Self {
+            config: Arc::clone(&self.config),
+            processor: Arc::clone(&self.processor),
+            sessions: self.sessions.clone(),
+            guards: self.guards.clone(),
+        }
+    }
 }
 
 impl<P> ProxyGrpcService<P> {
@@ -116,6 +137,41 @@ impl<P> ProxyGrpcService<P> {
         T: Send + 'static,
     {
         Box::pin(stream::iter(items.into_iter().map(Ok)))
+    }
+
+    pub async fn run_housekeeping_until<F>(&self, shutdown: F)
+    where
+        F: std::future::Future<Output = ()> + Send,
+    {
+        let mut interval = tokio::time::interval(self.housekeeping_interval());
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        tokio::pin!(shutdown);
+
+        loop {
+            tokio::select! {
+                _ = &mut shutdown => break,
+                _ = interval.tick() => {
+                    self.reap_session_state();
+                }
+            }
+        }
+    }
+
+    fn housekeeping_interval(&self) -> Duration {
+        let min_ttl = self
+            .config
+            .session
+            .client_ttl()
+            .min(self.config.session.receipt_handle_ttl());
+        let half_ttl_ms = min_ttl.as_millis().saturating_div(2).clamp(1_000, 30_000) as u64;
+        Duration::from_millis(half_ttl_ms)
+    }
+
+    fn reap_session_state(&self) {
+        let _ = self.sessions.reap_expired(
+            self.config.session.client_ttl(),
+            self.config.session.receipt_handle_ttl(),
+        );
     }
 }
 
@@ -157,6 +213,277 @@ where
             command: None,
         }
     }
+
+    fn merged_telemetry_settings(&self, settings: &v2::Settings) -> v2::Settings {
+        let mut merged = settings.clone();
+        if let Some(v2::settings::PubSub::Subscription(subscription)) = merged.pub_sub.as_mut() {
+            if subscription.receive_batch_size.is_some_and(|value| value <= 0) {
+                subscription.receive_batch_size = Some(1);
+            }
+
+            let timeout = subscription
+                .long_polling_timeout
+                .as_ref()
+                .and_then(proto_duration)
+                .unwrap_or_else(|| self.config.session.min_long_polling_timeout());
+            subscription.long_polling_timeout = Some(duration_to_proto_duration(clamp_duration(
+                timeout,
+                self.config.session.min_long_polling_timeout(),
+                self.config.session.max_long_polling_timeout(),
+            )));
+        }
+        merged
+    }
+
+    fn effective_receive_request(
+        &self,
+        context: &ProxyContext,
+        mut request: crate::processor::ReceiveMessageRequest,
+    ) -> ProxyResult<crate::processor::ReceiveMessageRequest> {
+        if let Some(client_id) = context.client_id() {
+            if let Some(settings) = self.sessions.settings_for_client(client_id) {
+                self.apply_receive_settings(&mut request, &settings);
+            }
+        }
+
+        if let Some(deadline) = context.deadline() {
+            request.long_polling_timeout = request.long_polling_timeout.min(deadline);
+        }
+
+        Ok(request)
+    }
+
+    fn apply_receive_settings(
+        &self,
+        request: &mut crate::processor::ReceiveMessageRequest,
+        settings: &ClientSettingsSnapshot,
+    ) {
+        let Some(subscription) = settings.subscription.as_ref() else {
+            return;
+        };
+
+        if let Some(receive_batch_size) = subscription.receive_batch_size {
+            request.batch_size = request.batch_size.min(receive_batch_size.max(1));
+        }
+
+        if let Some(long_polling_timeout) = subscription.long_polling_timeout {
+            request.long_polling_timeout = clamp_duration(
+                long_polling_timeout,
+                self.config.session.min_long_polling_timeout(),
+                self.config.session.max_long_polling_timeout(),
+            );
+        }
+
+        request.target.fifo |= subscription.fifo;
+    }
+
+    fn track_received_receipt_handles(
+        &self,
+        context: &ProxyContext,
+        request: &crate::processor::ReceiveMessageRequest,
+        plan: &crate::processor::ReceiveMessagePlan,
+    ) {
+        if !(self.config.session.auto_renew_enabled && request.auto_renew) {
+            return;
+        }
+        let Some(client_id) = context.client_id() else {
+            return;
+        };
+
+        for message in &plan.messages {
+            let Some(receipt_handle) = message
+                .message
+                .property(&cheetah_string::CheetahString::from_static_str(
+                    MessageConst::PROPERTY_POP_CK,
+                ))
+                .map(|value| value.to_string())
+            else {
+                continue;
+            };
+
+            let tracked = self.sessions.track_receipt_handle(ReceiptHandleRegistration {
+                client_id: client_id.to_owned(),
+                group: request.group.clone(),
+                topic: ResourceIdentity::new(
+                    request.target.topic.namespace().to_owned(),
+                    message.message.topic().to_string(),
+                ),
+                message_id: message.message.msg_id().to_string(),
+                receipt_handle,
+                invisible_duration: message.invisible_duration,
+            });
+            self.spawn_auto_renew_task(context.clone(), tracked);
+        }
+    }
+
+    fn reconcile_ack_result(
+        &self,
+        context: &ProxyContext,
+        request: &crate::processor::AckMessageRequest,
+        plan: &crate::processor::AckMessagePlan,
+    ) {
+        let Some(client_id) = context.client_id() else {
+            return;
+        };
+
+        for entry in &plan.entries {
+            if entry.status.is_ok() {
+                let _ = self.sessions.remove_receipt_handle_matching(
+                    client_id,
+                    &request.group,
+                    &request.topic,
+                    entry.message_id.as_str(),
+                    entry.receipt_handle.as_str(),
+                );
+            }
+        }
+    }
+
+    fn reconcile_change_invisible_result(
+        &self,
+        context: &ProxyContext,
+        request: &crate::processor::ChangeInvisibleDurationRequest,
+        plan: &crate::processor::ChangeInvisibleDurationPlan,
+    ) {
+        let Some(client_id) = context.client_id() else {
+            return;
+        };
+        if !plan.status.is_ok() {
+            return;
+        }
+
+        let _ = self.sessions.update_receipt_handle_matching(
+            client_id,
+            &request.group,
+            &request.topic,
+            request.message_id.as_str(),
+            request.receipt_handle.as_str(),
+            plan.receipt_handle.as_str(),
+            request.invisible_duration,
+        );
+    }
+
+    fn spawn_auto_renew_task(&self, context: ProxyContext, tracked: TrackedReceiptHandle) {
+        let processor = Arc::clone(&self.processor);
+        let sessions = self.sessions.clone();
+        tokio::spawn(async move {
+            let client_id = tracked.client_id.clone();
+            let group = tracked.group.clone();
+            let topic = tracked.topic.clone();
+            let message_id = tracked.message_id.clone();
+
+            loop {
+                let Some(current) =
+                    sessions.tracked_receipt_handle(client_id.as_str(), &group, &topic, message_id.as_str())
+                else {
+                    break;
+                };
+                let delay = auto_renew_interval(current.invisible_duration);
+                let cancellation = current.cancellation.clone();
+
+                tokio::select! {
+                    _ = cancellation.cancelled() => break,
+                    _ = tokio::time::sleep(delay) => {}
+                }
+
+                let Some(current) =
+                    sessions.tracked_receipt_handle(client_id.as_str(), &group, &topic, message_id.as_str())
+                else {
+                    break;
+                };
+
+                let renew_request = crate::processor::ChangeInvisibleDurationRequest {
+                    group: group.clone(),
+                    topic: topic.clone(),
+                    receipt_handle: current.receipt_handle.clone(),
+                    invisible_duration: current.invisible_duration,
+                    message_id: message_id.clone(),
+                    lite_topic: None,
+                    suspend: None,
+                };
+
+                match processor
+                    .change_invisible_duration(&context, renew_request.clone())
+                    .await
+                {
+                    Ok(plan) if plan.status.is_ok() => {
+                        let next_receipt_handle = if plan.receipt_handle.is_empty() {
+                            renew_request.receipt_handle
+                        } else {
+                            plan.receipt_handle
+                        };
+                        let _ = sessions.update_receipt_handle(
+                            client_id.as_str(),
+                            &group,
+                            &topic,
+                            message_id.as_str(),
+                            next_receipt_handle.as_str(),
+                            renew_request.invisible_duration,
+                        );
+                    }
+                    Ok(plan) if plan.status.code() == v2::Code::InvalidReceiptHandle as i32 => {
+                        let _ = sessions.remove_receipt_handle(client_id.as_str(), &group, &topic, message_id.as_str());
+                        break;
+                    }
+                    Ok(_) | Err(_) => {}
+                }
+            }
+        });
+    }
+
+    async fn handle_telemetry_command(
+        &self,
+        context: &ProxyContext,
+        command: v2::TelemetryCommand,
+    ) -> v2::TelemetryCommand {
+        self.sessions.upsert_from_context(context);
+
+        match command.command {
+            Some(v2::telemetry_command::Command::Settings(settings)) => {
+                let merged = self.merged_telemetry_settings(&settings);
+                let _ = self.sessions.update_settings_from_telemetry(context, &merged);
+                v2::TelemetryCommand {
+                    status: Some(ProxyStatusMapper::ok()),
+                    command: Some(v2::telemetry_command::Command::Settings(merged)),
+                }
+            }
+            Some(v2::telemetry_command::Command::ThreadStackTrace(_))
+            | Some(v2::telemetry_command::Command::VerifyMessageResult(_)) => {
+                Self::telemetry_status(ProxyStatusMapper::ok())
+            }
+            Some(_) => Self::telemetry_status(ProxyStatusMapper::from_code(
+                v2::Code::BadRequest,
+                "client sent an unsupported telemetry command",
+            )),
+            None => Self::telemetry_status(ProxyStatusMapper::ok()),
+        }
+    }
+}
+
+fn clamp_duration(duration: Duration, minimum: Duration, maximum: Duration) -> Duration {
+    duration.max(minimum).min(maximum)
+}
+
+fn auto_renew_interval(invisible_duration: Duration) -> Duration {
+    let half_millis = invisible_duration.as_millis().saturating_div(2).clamp(1_000, 15_000) as u64;
+    Duration::from_millis(half_millis)
+}
+
+fn proto_duration(duration: &prost_types::Duration) -> Option<Duration> {
+    if duration.seconds < 0 || duration.nanos < 0 || duration.nanos >= 1_000_000_000 {
+        return None;
+    }
+
+    let seconds = u64::try_from(duration.seconds).ok()?;
+    let nanos = u32::try_from(duration.nanos).ok()?;
+    Some(Duration::new(seconds, nanos))
+}
+
+fn duration_to_proto_duration(duration: Duration) -> prost_types::Duration {
+    prost_types::Duration {
+        seconds: duration.as_secs() as i64,
+        nanos: duration.subsec_nanos() as i32,
+    }
 }
 
 #[tonic::async_trait]
@@ -172,6 +499,7 @@ where
         &self,
         request: Request<v2::QueryRouteRequest>,
     ) -> Result<Response<v2::QueryRouteResponse>, Status> {
+        self.reap_session_state();
         let context = self.context("QueryRoute", &request);
         let request = request.into_inner();
 
@@ -196,13 +524,15 @@ where
         &self,
         request: Request<v2::HeartbeatRequest>,
     ) -> Result<Response<v2::HeartbeatResponse>, Status> {
+        self.reap_session_state();
         let context = self.context("Heartbeat", &request);
         let request = request.into_inner();
 
         let status = match self.guards.try_client_manager() {
             Ok(_permit) => match self.validate_heartbeat_request(&context, request.client_type) {
                 Ok(()) => {
-                    self.sessions.upsert_from_context(&context);
+                    self.sessions
+                        .upsert_from_context_with_client_type(&context, Some(request.client_type));
                     ProxyStatusMapper::ok()
                 }
                 Err(error) => ProxyStatusMapper::from_error(&error),
@@ -217,6 +547,7 @@ where
         &self,
         request: Request<v2::SendMessageRequest>,
     ) -> Result<Response<v2::SendMessageResponse>, Status> {
+        self.reap_session_state();
         let context = self.context("SendMessage", &request);
         let request = request.into_inner();
 
@@ -241,6 +572,7 @@ where
         &self,
         request: Request<v2::QueryAssignmentRequest>,
     ) -> Result<Response<v2::QueryAssignmentResponse>, Status> {
+        self.reap_session_state();
         let context = self.context("QueryAssignment", &request);
         let request = request.into_inner();
 
@@ -265,17 +597,22 @@ where
         &self,
         request: Request<v2::ReceiveMessageRequest>,
     ) -> Result<Response<Self::ReceiveMessageStream>, Status> {
+        self.reap_session_state();
         let context = self.context("ReceiveMessage", &request);
         let request = request.into_inner();
         let responses = match self
             .validate_client_context(&context)
             .and_then(|_| adapter::build_receive_message_request(&request))
+            .and_then(|input| self.effective_receive_request(&context, input))
         {
             Ok(input) => match self.guards.try_consumer() {
                 Ok(_permit) => {
                     self.sessions.upsert_from_context(&context);
-                    match self.processor.receive_message(&context, input).await {
-                        Ok(plan) => adapter::build_receive_message_responses(&plan),
+                    match self.processor.receive_message(&context, input.clone()).await {
+                        Ok(plan) => {
+                            self.track_received_receipt_handles(&context, &input, &plan);
+                            adapter::build_receive_message_responses(&plan)
+                        }
                         Err(error) => adapter::error_receive_message_responses(ProxyStatusMapper::from_error(&error)),
                     }
                 }
@@ -291,6 +628,7 @@ where
         &self,
         request: Request<v2::AckMessageRequest>,
     ) -> Result<Response<v2::AckMessageResponse>, Status> {
+        self.reap_session_state();
         let context = self.context("AckMessage", &request);
         let request = request.into_inner();
 
@@ -299,8 +637,11 @@ where
             .and_then(|_| adapter::build_ack_message_request(&request))
         {
             Ok(input) => match self.guards.try_consumer() {
-                Ok(_permit) => match self.processor.ack_message(&context, input).await {
-                    Ok(plan) => adapter::build_ack_message_response(&plan),
+                Ok(_permit) => match self.processor.ack_message(&context, input.clone()).await {
+                    Ok(plan) => {
+                        self.reconcile_ack_result(&context, &input, &plan);
+                        adapter::build_ack_message_response(&plan)
+                    }
                     Err(error) => adapter::error_ack_message_response(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_ack_message_response(ProxyStatusMapper::from_error(&error)),
@@ -324,6 +665,7 @@ where
         &self,
         request: Request<v2::PullMessageRequest>,
     ) -> Result<Response<Self::PullMessageStream>, Status> {
+        self.reap_session_state();
         let context = self.context("PullMessage", &request);
         let status = match self
             .validate_client_context(&context)
@@ -377,25 +719,51 @@ where
         &self,
         request: Request<tonic::Streaming<v2::TelemetryCommand>>,
     ) -> Result<Response<Self::TelemetryStream>, Status> {
+        self.reap_session_state();
         let context = self.context("Telemetry", &request);
-        let status = match self
+        let mut inbound = request.into_inner();
+        let permit = match self
             .validate_client_context(&context)
-            .and_then(|_| self.guards.try_client_manager().map(|_| ()))
+            .and_then(|_| self.guards.try_client_manager())
         {
-            Ok(()) => {
-                self.sessions.upsert_from_context(&context);
-                self.not_implemented_status("Telemetry")
+            Ok(permit) => permit,
+            Err(error) => {
+                return Ok(Response::new(
+                    self.status_stream(Self::telemetry_status(ProxyStatusMapper::from_error(&error))),
+                ));
             }
-            Err(error) => ProxyStatusMapper::from_error(&error),
         };
 
-        Ok(Response::new(self.status_stream(Self::telemetry_status(status))))
+        self.sessions.upsert_from_context(&context);
+        let service = self.clone();
+        let (sender, receiver) = mpsc::channel(16);
+        tokio::spawn(async move {
+            let _permit = permit;
+            loop {
+                match inbound.next().await {
+                    Some(Ok(command)) => {
+                        let response = service.handle_telemetry_command(&context, command).await;
+                        if sender.send(Ok(response)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Err(error)) => {
+                        let _ = sender.send(Err(error)).await;
+                        break;
+                    }
+                    None => break,
+                }
+            }
+        });
+
+        Ok(Response::new(Box::pin(ReceiverStream::new(receiver))))
     }
 
     async fn notify_client_termination(
         &self,
         request: Request<v2::NotifyClientTerminationRequest>,
     ) -> Result<Response<v2::NotifyClientTerminationResponse>, Status> {
+        self.reap_session_state();
         let context = self.context("NotifyClientTermination", &request);
         let status = match self
             .guards
@@ -403,7 +771,7 @@ where
             .and_then(|_| self.validate_client_context(&context))
         {
             Ok(client_id) => {
-                self.sessions.remove(client_id);
+                self.sessions.remove_client(client_id);
                 ProxyStatusMapper::ok()
             }
             Err(error) => ProxyStatusMapper::from_error(&error),
@@ -418,6 +786,7 @@ where
         &self,
         request: Request<v2::ChangeInvisibleDurationRequest>,
     ) -> Result<Response<v2::ChangeInvisibleDurationResponse>, Status> {
+        self.reap_session_state();
         let context = self.context("ChangeInvisibleDuration", &request);
         let request = request.into_inner();
 
@@ -426,8 +795,11 @@ where
             .and_then(|_| adapter::build_change_invisible_duration_request(&request))
         {
             Ok(input) => match self.guards.try_consumer() {
-                Ok(_permit) => match self.processor.change_invisible_duration(&context, input).await {
-                    Ok(plan) => adapter::build_change_invisible_duration_response(&plan),
+                Ok(_permit) => match self.processor.change_invisible_duration(&context, input.clone()).await {
+                    Ok(plan) => {
+                        self.reconcile_change_invisible_result(&context, &input, &plan);
+                        adapter::build_change_invisible_duration_response(&plan)
+                    }
                     Err(error) => {
                         adapter::error_change_invisible_duration_response(ProxyStatusMapper::from_error(&error))
                     }
@@ -482,6 +854,7 @@ mod tests {
 
     use super::ProxyGrpcService;
     use crate::config::ProxyConfig;
+    use crate::grpc::adapter;
     use crate::processor::AckMessageRequest;
     use crate::processor::AckMessageResultEntry;
     use crate::processor::ChangeInvisibleDurationPlan;
@@ -1011,5 +1384,291 @@ mod tests {
         let response = service.change_invisible_duration(request).await.unwrap().into_inner();
         assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
         assert_eq!(response.receipt_handle, "handle-1-renewed");
+    }
+
+    #[test]
+    fn telemetry_settings_are_merged_with_proxy_bounds() {
+        let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
+        let merged = service.merged_telemetry_settings(&v2::Settings {
+            client_type: Some(v2::ClientType::PushConsumer as i32),
+            access_point: None,
+            backoff_policy: None,
+            request_timeout: None,
+            pub_sub: Some(v2::settings::PubSub::Subscription(v2::Subscription {
+                group: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "GroupA".to_owned(),
+                }),
+                subscriptions: Vec::new(),
+                fifo: Some(true),
+                receive_batch_size: Some(64),
+                long_polling_timeout: Some(prost_types::Duration { seconds: 1, nanos: 0 }),
+                lite_subscription_quota: None,
+                max_lite_topic_size: None,
+            })),
+            user_agent: None,
+            metric: None,
+        });
+
+        let subscription = match merged.pub_sub.unwrap() {
+            v2::settings::PubSub::Subscription(subscription) => subscription,
+            _ => panic!("expected subscription settings"),
+        };
+        assert_eq!(subscription.receive_batch_size, Some(64));
+        assert_eq!(
+            subscription.long_polling_timeout,
+            Some(prost_types::Duration { seconds: 5, nanos: 0 })
+        );
+    }
+
+    #[test]
+    fn effective_receive_request_uses_telemetry_settings() {
+        let service = test_service(StaticRouteService::default(), StaticMetadataService::default());
+        let mut request = Request::new(());
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+        let context = service.context("ReceiveMessage", &request);
+
+        let merged = service.merged_telemetry_settings(&v2::Settings {
+            client_type: Some(v2::ClientType::PushConsumer as i32),
+            access_point: None,
+            backoff_policy: None,
+            request_timeout: None,
+            pub_sub: Some(v2::settings::PubSub::Subscription(v2::Subscription {
+                group: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "GroupA".to_owned(),
+                }),
+                subscriptions: Vec::new(),
+                fifo: Some(true),
+                receive_batch_size: Some(32),
+                long_polling_timeout: Some(prost_types::Duration { seconds: 1, nanos: 0 }),
+                lite_subscription_quota: None,
+                max_lite_topic_size: None,
+            })),
+            user_agent: None,
+            metric: None,
+        });
+        let _ = service.sessions.update_settings_from_telemetry(&context, &merged);
+
+        let request = service
+            .effective_receive_request(
+                &context,
+                adapter::build_receive_message_request(&v2::ReceiveMessageRequest {
+                    group: Some(v2::Resource {
+                        resource_namespace: String::new(),
+                        name: "GroupA".to_owned(),
+                    }),
+                    message_queue: Some(v2::MessageQueue {
+                        topic: Some(v2::Resource {
+                            resource_namespace: String::new(),
+                            name: "TopicA".to_owned(),
+                        }),
+                        id: 3,
+                        permission: v2::Permission::ReadWrite as i32,
+                        broker: None,
+                        accept_message_types: vec![v2::MessageType::Normal as i32],
+                    }),
+                    filter_expression: None,
+                    batch_size: 64,
+                    invisible_duration: Some(prost_types::Duration { seconds: 30, nanos: 0 }),
+                    auto_renew: false,
+                    long_polling_timeout: Some(prost_types::Duration { seconds: 30, nanos: 0 }),
+                    attempt_id: None,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(request.batch_size, 32);
+        assert_eq!(request.long_polling_timeout, std::time::Duration::from_secs(5));
+        assert!(request.target.fifo);
+    }
+
+    #[tokio::test]
+    async fn receive_message_with_auto_renew_tracks_receipt_handles() {
+        let service = test_service_with_services(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+            Arc::new(TestConsumerService),
+        );
+        let mut request = Request::new(v2::ReceiveMessageRequest {
+            group: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "GroupA".to_owned(),
+            }),
+            message_queue: Some(v2::MessageQueue {
+                topic: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "TopicA".to_owned(),
+                }),
+                id: 3,
+                permission: v2::Permission::ReadWrite as i32,
+                broker: None,
+                accept_message_types: vec![v2::MessageType::Normal as i32],
+            }),
+            filter_expression: None,
+            batch_size: 1,
+            invisible_duration: Some(prost_types::Duration { seconds: 30, nanos: 0 }),
+            auto_renew: true,
+            long_polling_timeout: Some(prost_types::Duration { seconds: 1, nanos: 0 }),
+            attempt_id: None,
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let mut stream = service.receive_message(request).await.unwrap().into_inner();
+        let _ = stream.next().await;
+        let _ = stream.next().await;
+        let _ = stream.next().await;
+
+        let tracked = service
+            .sessions
+            .tracked_receipt_handle(
+                "client-a",
+                &ResourceIdentity::new("", "GroupA"),
+                &ResourceIdentity::new("", "TopicA"),
+                "server-msg-id",
+            )
+            .expect("receipt handle should be tracked");
+        assert_eq!(tracked.receipt_handle, "receipt-handle");
+        tracked.cancellation.cancel();
+    }
+
+    #[tokio::test]
+    async fn ack_message_success_clears_tracked_receipt_handle() {
+        let service = test_service_with_services(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+            Arc::new(TestConsumerService),
+        );
+        service
+            .sessions
+            .track_receipt_handle(crate::session::ReceiptHandleRegistration {
+                client_id: "client-a".to_owned(),
+                group: ResourceIdentity::new("", "GroupA"),
+                topic: ResourceIdentity::new("", "TopicA"),
+                message_id: "msg-1".to_owned(),
+                receipt_handle: "handle-1".to_owned(),
+                invisible_duration: std::time::Duration::from_secs(30),
+            });
+
+        let mut request = Request::new(v2::AckMessageRequest {
+            group: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "GroupA".to_owned(),
+            }),
+            topic: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "TopicA".to_owned(),
+            }),
+            entries: vec![v2::AckMessageEntry {
+                message_id: "msg-1".to_owned(),
+                receipt_handle: "handle-1".to_owned(),
+                lite_topic: None,
+            }],
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service.ack_message(request).await.unwrap().into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
+        assert_eq!(service.sessions.tracked_handle_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn change_invisible_duration_updates_tracked_receipt_handle() {
+        let service = test_service_with_services(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+            Arc::new(TestConsumerService),
+        );
+        service
+            .sessions
+            .track_receipt_handle(crate::session::ReceiptHandleRegistration {
+                client_id: "client-a".to_owned(),
+                group: ResourceIdentity::new("", "GroupA"),
+                topic: ResourceIdentity::new("", "TopicA"),
+                message_id: "msg-1".to_owned(),
+                receipt_handle: "handle-1".to_owned(),
+                invisible_duration: std::time::Duration::from_secs(30),
+            });
+
+        let mut request = Request::new(v2::ChangeInvisibleDurationRequest {
+            group: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "GroupA".to_owned(),
+            }),
+            topic: Some(v2::Resource {
+                resource_namespace: String::new(),
+                name: "TopicA".to_owned(),
+            }),
+            receipt_handle: "handle-1".to_owned(),
+            invisible_duration: Some(prost_types::Duration { seconds: 45, nanos: 0 }),
+            message_id: "msg-1".to_owned(),
+            lite_topic: None,
+            suspend: None,
+        });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service.change_invisible_duration(request).await.unwrap().into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
+        let tracked = service
+            .sessions
+            .tracked_receipt_handle(
+                "client-a",
+                &ResourceIdentity::new("", "GroupA"),
+                &ResourceIdentity::new("", "TopicA"),
+                "msg-1",
+            )
+            .expect("receipt handle should remain tracked");
+        assert_eq!(tracked.receipt_handle, "handle-1-renewed");
+        assert_eq!(tracked.invisible_duration, std::time::Duration::from_secs(45));
+    }
+
+    #[tokio::test]
+    async fn notify_client_termination_clears_session_and_receipt_handles() {
+        let service = test_service_with_services(
+            StaticRouteService::default(),
+            StaticMetadataService::default(),
+            Arc::new(StaticMessageService::with_send_status(SendStatus::SendOk)),
+            Arc::new(TestConsumerService),
+        );
+        let mut heartbeat = Request::new(v2::HeartbeatRequest {
+            group: None,
+            client_type: v2::ClientType::SimpleConsumer as i32,
+        });
+        heartbeat
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+        let _ = service.heartbeat(heartbeat).await.unwrap();
+        service
+            .sessions
+            .track_receipt_handle(crate::session::ReceiptHandleRegistration {
+                client_id: "client-a".to_owned(),
+                group: ResourceIdentity::new("", "GroupA"),
+                topic: ResourceIdentity::new("", "TopicA"),
+                message_id: "msg-1".to_owned(),
+                receipt_handle: "handle-1".to_owned(),
+                invisible_duration: std::time::Duration::from_secs(30),
+            });
+
+        let mut request = Request::new(v2::NotifyClientTerminationRequest { group: None });
+        request
+            .metadata_mut()
+            .insert("x-mq-client-id", MetadataValue::from_static("client-a"));
+
+        let response = service.notify_client_termination(request).await.unwrap().into_inner();
+        assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
+        assert!(service.sessions.get("client-a").is_none());
+        assert_eq!(service.sessions.tracked_handle_count(), 0);
     }
 }

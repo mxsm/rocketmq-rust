@@ -86,6 +86,11 @@ pub use service::SubscriptionGroupMetadata;
 pub use service::UnsupportedRouteService;
 pub use session::ClientSession;
 pub use session::ClientSessionRegistry;
+pub use session::ClientSettingsSnapshot;
+pub use session::ReapSummary;
+pub use session::ReceiptHandleRegistration;
+pub use session::SubscriptionSettingsSnapshot;
+pub use session::TrackedReceiptHandle;
 pub use status::ProxyPayloadStatus;
 
 /// Default gRPC port used by the proxy runtime.
