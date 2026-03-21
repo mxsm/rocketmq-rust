@@ -334,10 +334,12 @@ impl LocalAuthorizationMetadataProvider {
                 // Filter by resource
                 if let Some(filter) = resource_filter {
                     let has_matching_resource = acl.policies().iter().any(|policy| {
-                        policy
-                            .entries()
-                            .iter()
-                            .any(|entry| format!("{:?}", entry.resource()).contains(filter))
+                        policy.entries().iter().any(|entry| {
+                            entry
+                                .resource()
+                                .resource_key()
+                                .is_some_and(|resource| resource.contains(filter))
+                        })
                     });
 
                     if !has_matching_resource {
@@ -527,8 +529,25 @@ impl AuthorizationMetadataProvider for LocalAuthorizationMetadataProvider {
             subject_filter, resource_filter
         );
 
-        // Load all ACLs from storage
-        let acls = self.list_from_storage()?;
+        // Load all ACLs from storage, then overlay live cache entries.
+        let mut acls = self.list_from_storage()?;
+        let cache_snapshot: Vec<Acl> = self
+            .cache
+            .read()
+            .unwrap()
+            .values()
+            .filter_map(|cached| cached.acl.clone())
+            .collect();
+        for cached_acl in cache_snapshot {
+            if let Some(existing) = acls
+                .iter_mut()
+                .find(|existing_acl| existing_acl.subject_key() == cached_acl.subject_key())
+            {
+                *existing = cached_acl;
+            } else {
+                acls.push(cached_acl);
+            }
+        }
 
         // Apply filters
         let filtered_acls = self.filter_acls(acls, subject_filter, resource_filter);

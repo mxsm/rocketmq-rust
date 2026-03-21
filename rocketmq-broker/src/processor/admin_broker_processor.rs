@@ -12,14 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::auth::auth_admin_service::AuthAdminService;
 use crate::broker_runtime::BrokerRuntimeInner;
 use crate::processor::admin_broker_processor::batch_mq_handler::BatchMqHandler;
 use crate::processor::admin_broker_processor::broker_config_request_handler::BrokerConfigRequestHandler;
 use crate::processor::admin_broker_processor::broker_epoch_cache_handler::BrokerEpochCacheHandler;
 use crate::processor::admin_broker_processor::broker_stats_handler::BrokerStatsHandler;
 use crate::processor::admin_broker_processor::consumer_request_handler::ConsumerRequestHandler;
+use crate::processor::admin_broker_processor::create_user_request_handler::CreateUserRequestHandler;
+use crate::processor::admin_broker_processor::delete_acl_request_handler::DeleteAclRequestHandler;
+use crate::processor::admin_broker_processor::delete_user_request_handler::DeleteUserRequestHandler;
 use crate::processor::admin_broker_processor::get_broker_ha_status_handler::GetBrokerHaStatusHandler;
 use crate::processor::admin_broker_processor::get_user_request_handler::GetUserRequestHandler;
+use crate::processor::admin_broker_processor::list_acl_request_handler::ListAclRequestHandler;
 use crate::processor::admin_broker_processor::list_users_request_handler::ListUsersRequestHandler;
 use crate::processor::admin_broker_processor::message_related_handler::MessageRelatedHandler;
 use crate::processor::admin_broker_processor::notify_broker_role_change_handler::NotifyBrokerRoleChangeHandler;
@@ -32,6 +37,8 @@ use crate::processor::admin_broker_processor::topic_request_handler::TopicReques
 use crate::processor::admin_broker_processor::update_broker_ha_handler::UpdateBrokerHaHandler;
 use crate::processor::admin_broker_processor::update_cold_data_flow_ctr_group_config::UpdateColdDataFlowCtrGroupConfigRequestHandler;
 use crate::processor::admin_broker_processor::update_user_request_handler::UpdateUserRequestHandler;
+use cheetah_string::CheetahString;
+use rocketmq_auth::config::AuthConfig;
 use rocketmq_remoting::code::request_code::RequestCode;
 use rocketmq_remoting::code::response_code::ResponseCode;
 use rocketmq_remoting::net::channel::Channel;
@@ -40,6 +47,7 @@ use rocketmq_remoting::runtime::connection_handler_context::ConnectionHandlerCon
 use rocketmq_remoting::runtime::processor::RequestProcessor;
 use rocketmq_rust::ArcMut;
 use rocketmq_store::base::message_store::MessageStore;
+use std::sync::Arc;
 use tracing::warn;
 
 mod batch_mq_handler;
@@ -47,8 +55,12 @@ mod broker_config_request_handler;
 mod broker_epoch_cache_handler;
 mod broker_stats_handler;
 mod consumer_request_handler;
+mod create_user_request_handler;
+mod delete_acl_request_handler;
+mod delete_user_request_handler;
 mod get_broker_ha_status_handler;
 mod get_user_request_handler;
+mod list_acl_request_handler;
 mod list_users_request_handler;
 mod message_related_handler;
 mod notify_broker_role_change_handler;
@@ -79,9 +91,13 @@ pub struct AdminBrokerProcessor<MS: MessageStore> {
     notify_broker_role_change_handler: NotifyBrokerRoleChangeHandler<MS>,
     message_related_handler: MessageRelatedHandler<MS>,
     producer_request_handler: ProducerRequestHandler<MS>,
+    create_user_request_handler: CreateUserRequestHandler<MS>,
     update_user_request_handler: UpdateUserRequestHandler<MS>,
+    delete_user_request_handler: DeleteUserRequestHandler<MS>,
     list_users_request_handler: ListUsersRequestHandler<MS>,
     get_user_request_handler: GetUserRequestHandler<MS>,
+    delete_acl_request_handler: DeleteAclRequestHandler<MS>,
+    list_acl_request_handler: ListAclRequestHandler<MS>,
     update_cold_data_flow_ctr_group_config_request_handler: UpdateColdDataFlowCtrGroupConfigRequestHandler<MS>,
     get_broker_ha_status_handler: GetBrokerHaStatusHandler<MS>,
     broker_stats_handler: BrokerStatsHandler<MS>,
@@ -123,9 +139,26 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
 
         let message_related_handler = MessageRelatedHandler::new(broker_runtime_inner.clone());
         let producer_request_handler = ProducerRequestHandler::new(broker_runtime_inner.clone());
-        let update_user_request_handler = UpdateUserRequestHandler::new(broker_runtime_inner.clone());
-        let list_users_request_handler = ListUsersRequestHandler::new(broker_runtime_inner.clone());
-        let get_user_request_handler = GetUserRequestHandler::new(broker_runtime_inner.clone());
+        let auth_admin_service = Arc::new(
+            AuthAdminService::new(AuthConfig {
+                auth_config_path: CheetahString::from_static_str("target/rocketmq-broker-auth"),
+                ..AuthConfig::default()
+            })
+            .expect("broker auth admin service initialization must succeed"),
+        );
+        let create_user_request_handler =
+            CreateUserRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
+        let update_user_request_handler =
+            UpdateUserRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
+        let delete_user_request_handler =
+            DeleteUserRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
+        let list_users_request_handler =
+            ListUsersRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
+        let get_user_request_handler =
+            GetUserRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
+        let delete_acl_request_handler =
+            DeleteAclRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service.clone());
+        let list_acl_request_handler = ListAclRequestHandler::new(broker_runtime_inner.clone(), auth_admin_service);
         let update_cold_data_flow_ctr_group_config_request_handler =
             UpdateColdDataFlowCtrGroupConfigRequestHandler::new(broker_runtime_inner.clone());
         let get_broker_ha_status_handler = GetBrokerHaStatusHandler::new(broker_runtime_inner.clone());
@@ -146,9 +179,13 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             notify_broker_role_change_handler,
             message_related_handler,
             producer_request_handler,
+            create_user_request_handler,
             update_user_request_handler,
+            delete_user_request_handler,
             list_users_request_handler,
             get_user_request_handler,
+            delete_acl_request_handler,
+            list_acl_request_handler,
             update_cold_data_flow_ctr_group_config_request_handler,
             get_broker_ha_status_handler,
             broker_stats_handler,
@@ -365,9 +402,21 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
                     .notify_broker_role_changed(channel, ctx, request_code, request)
                     .await
             }
-            RequestCode::AuthCreateUser => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::AuthUpdateUser => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::AuthDeleteUser => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::AuthCreateUser => {
+                self.create_user_request_handler
+                    .create_user(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::AuthUpdateUser => {
+                self.update_user_request_handler
+                    .update_user(channel, ctx, request_code, request)
+                    .await
+            }
+            RequestCode::AuthDeleteUser => {
+                self.delete_user_request_handler
+                    .delete_user(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::AuthGetUser => {
                 self.get_user_request_handler
                     .get_user(channel, ctx, request_code, request)
@@ -380,9 +429,17 @@ impl<MS: MessageStore> AdminBrokerProcessor<MS> {
             }
             RequestCode::AuthCreateAcl => Ok(get_unknown_cmd_response(request_code)),
             RequestCode::AuthUpdateAcl => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::AuthDeleteAcl => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::AuthDeleteAcl => {
+                self.delete_acl_request_handler
+                    .delete_acl(channel, ctx, request_code, request)
+                    .await
+            }
             RequestCode::AuthGetAcl => Ok(get_unknown_cmd_response(request_code)),
-            RequestCode::AuthListAcl => Ok(get_unknown_cmd_response(request_code)),
+            RequestCode::AuthListAcl => {
+                self.list_acl_request_handler
+                    .list_acl(channel, ctx, request_code, request)
+                    .await
+            }
             _ => Ok(get_unknown_cmd_response(request_code)),
         }
     }

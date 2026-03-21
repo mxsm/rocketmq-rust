@@ -470,10 +470,14 @@ mod tests {
         ext_fields.insert(CheetahString::from("AccessKey"), CheetahString::from("alice"));
 
         let mut heartbeat = HeartbeatData::default();
-        let mut consumer = rocketmq_remoting::protocol::heartbeat::consumer_data::ConsumerData::default();
-        consumer.group_name = CheetahString::from("group-a");
-        let mut subscription = rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData::default();
-        subscription.topic = CheetahString::from("topic-a");
+        let mut consumer = rocketmq_remoting::protocol::heartbeat::consumer_data::ConsumerData {
+            group_name: CheetahString::from("group-a"),
+            ..Default::default()
+        };
+        let subscription = rocketmq_remoting::protocol::heartbeat::subscription_data::SubscriptionData {
+            topic: CheetahString::from("topic-a"),
+            ..Default::default()
+        };
         consumer.subscription_data_set.insert(subscription);
         heartbeat.consumer_data_set.insert(consumer);
 
