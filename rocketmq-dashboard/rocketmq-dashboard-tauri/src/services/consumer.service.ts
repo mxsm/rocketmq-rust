@@ -2,12 +2,15 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
     ConsumerConfigQueryRequest,
     ConsumerConfigView,
+    ConsumerCreateOrUpdateRequest,
+    ConsumerDeleteRequest,
     ConsumerConnectionQueryRequest,
     ConsumerConnectionView,
     ConsumerGroupListItem,
     ConsumerGroupListRequest,
     ConsumerGroupListResponse,
     ConsumerGroupRefreshRequest,
+    ConsumerMutationResult,
     ConsumerTopicDetailQueryRequest,
     ConsumerTopicDetailView,
 } from '../features/consumer/types/consumer.types';
@@ -31,5 +34,15 @@ export class ConsumerService {
 
     static async queryConsumerConfig(request: ConsumerConfigQueryRequest): Promise<ConsumerConfigView> {
         return invoke<ConsumerConfigView>('query_consumer_config', { request });
+    }
+
+    static async createOrUpdateConsumerGroup(
+        request: ConsumerCreateOrUpdateRequest,
+    ): Promise<ConsumerMutationResult> {
+        return invoke<ConsumerMutationResult>('create_or_update_consumer_group', { request });
+    }
+
+    static async deleteConsumerGroup(request: ConsumerDeleteRequest): Promise<ConsumerMutationResult> {
+        return invoke<ConsumerMutationResult>('delete_consumer_group', { request });
     }
 }

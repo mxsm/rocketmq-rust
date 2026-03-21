@@ -59,6 +59,7 @@ pub(crate) struct ConsumerGroupListItem {
     pub(crate) consume_type: String,
     pub(crate) version: Option<i32>,
     pub(crate) version_desc: String,
+    pub(crate) broker_names: Vec<String>,
     pub(crate) broker_addresses: Vec<String>,
     pub(crate) update_timestamp: i64,
 }
@@ -164,4 +165,12 @@ pub(crate) struct ConsumerConfigView {
     pub(crate) subscription_topic_count: usize,
     pub(crate) subscription_topics: Vec<String>,
     pub(crate) attributes: Vec<ConsumerConfigAttributeItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConsumerMutationResult {
+    pub(crate) consumer_group: String,
+    pub(crate) broker_names: Vec<String>,
+    pub(crate) updated: bool,
 }

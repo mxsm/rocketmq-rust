@@ -21,6 +21,7 @@ interface ConsumerConfigModalProps {
     isOpen: boolean;
     onClose: () => void;
     consumer: ConsumerGroupListItem | null;
+    onEdit?: (consumer: ConsumerGroupListItem, preferredBrokerAddress?: string) => void;
 }
 
 const getConsumerLabel = (consumer: ConsumerGroupListItem | null) =>
@@ -42,12 +43,11 @@ const getErrorMessage = (error: unknown, fallback: string) => {
     return fallback;
 };
 
-const formatBoolean = (value: boolean) => (value ? 'Enabled' : 'Disabled');
-
 export const ConsumerConfigModal = ({
     isOpen,
     onClose,
     consumer,
+    onEdit,
 }: ConsumerConfigModalProps) => {
     const brokerAddresses = useMemo(() => consumer?.brokerAddresses ?? [], [consumer]);
     const [selectedBrokerAddress, setSelectedBrokerAddress] = useState('');
@@ -206,22 +206,22 @@ export const ConsumerConfigModal = ({
                                         </div>
                                         <h4 className="font-semibold text-gray-900 dark:text-white">Control Settings</h4>
                                     </div>
-                                    <ConfigField label="Consume Enable" value={formatBoolean(data.consumeEnable)} />
+                                    <ConfigToggleField label="Consume Enable" enabled={data.consumeEnable} />
                                     <ConfigField
                                         label="Consume From Min"
-                                        value={formatBoolean(data.consumeFromMinEnable)}
+                                        value={data.consumeFromMinEnable ? 'Enabled' : 'Disabled'}
                                     />
-                                    <ConfigField
-                                        label="Broadcast Mode"
-                                        value={formatBoolean(data.consumeBroadcastEnable)}
+                                    <ConfigToggleField
+                                        label="Broadcast Consumption"
+                                        enabled={data.consumeBroadcastEnable}
                                     />
-                                    <ConfigField
+                                    <ConfigToggleField
                                         label="Orderly Consumption"
-                                        value={formatBoolean(data.consumeMessageOrderly)}
+                                        enabled={data.consumeMessageOrderly}
                                     />
                                     <ConfigField
                                         label="Notify Client Change"
-                                        value={formatBoolean(data.notifyConsumerIdsChangedEnable)}
+                                        value={data.notifyConsumerIdsChangedEnable ? 'Enabled' : 'Disabled'}
                                     />
                                 </section>
 
@@ -313,7 +313,15 @@ export const ConsumerConfigModal = ({
                         )}
                     </div>
 
-                    <div className="z-10 flex shrink-0 justify-end border-t border-gray-100 bg-white px-6 py-4 dark:border-gray-800 dark:bg-gray-900">
+                    <div className="z-10 flex shrink-0 justify-end gap-3 border-t border-gray-100 bg-white px-6 py-4 dark:border-gray-800 dark:bg-gray-900">
+                        {consumer && !isLoading && !error && onEdit ? (
+                            <button
+                                onClick={() => onEdit(consumer, selectedBrokerAddress)}
+                                className="rounded-lg bg-gray-900 px-6 py-2 text-sm font-medium text-white shadow-md transition-all hover:bg-gray-800 hover:shadow-lg dark:border dark:border-gray-700 dark:!bg-gray-900 dark:!text-white dark:hover:!bg-gray-800"
+                            >
+                                Edit Group
+                            </button>
+                        ) : null}
                         <button
                             onClick={onClose}
                             className="rounded-lg bg-gray-900 px-6 py-2 text-sm font-medium text-white shadow-md transition-all hover:bg-gray-800 hover:shadow-lg dark:border dark:border-gray-700 dark:!bg-gray-900 dark:!text-white dark:hover:!bg-gray-800"
@@ -344,6 +352,36 @@ const ConfigField = ({ label, value, mono = false }: ConfigFieldProps) => (
             }`}
         >
             {value}
+        </div>
+    </div>
+);
+
+const ConfigToggleField = ({
+    label,
+    enabled,
+}: {
+    label: string;
+    enabled: boolean;
+}) => (
+    <div className="space-y-1">
+        <label className="block text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">
+            {label}
+        </label>
+        <div className="flex items-center justify-between rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-800">
+            <span className="text-sm text-gray-600 dark:text-gray-300">
+                {enabled ? 'Enabled' : 'Disabled'}
+            </span>
+            <div
+                className={`h-6 w-11 rounded-full p-0.5 transition ${
+                    enabled ? 'bg-blue-500' : 'bg-gray-200 dark:bg-gray-700'
+                }`}
+            >
+                <div
+                    className={`h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+                        enabled ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                />
+            </div>
         </div>
     </div>
 );

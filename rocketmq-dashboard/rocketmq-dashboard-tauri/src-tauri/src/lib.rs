@@ -104,6 +104,8 @@ pub fn run() {
             consumer::commands::query_consumer_connection,
             consumer::commands::query_consumer_topic_detail,
             consumer::commands::query_consumer_config,
+            consumer::commands::create_or_update_consumer_group,
+            consumer::commands::delete_consumer_group,
             producer::commands::get_producer_topic_options,
             producer::commands::query_producer_connections,
             topic::commands::get_topic_list,

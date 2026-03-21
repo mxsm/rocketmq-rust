@@ -109,6 +109,7 @@ use rocketmq_remoting::protocol::header::empty_header::EmptyHeader;
 use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_remoting::protocol::header::get_consumer_listby_group_request_header::GetConsumerListByGroupRequestHeader;
+use rocketmq_remoting::protocol::header::get_consumer_running_info_request_header::GetConsumerRunningInfoRequestHeader;
 use rocketmq_remoting::protocol::header::get_consumer_status_request_header::GetConsumerStatusRequestHeader;
 use rocketmq_remoting::protocol::header::get_lite_group_info_request_header::GetLiteGroupInfoRequestHeader;
 use rocketmq_remoting::protocol::header::get_lite_topic_info_request_header::GetLiteTopicInfoRequestHeader;
@@ -3583,6 +3584,69 @@ impl MQClientAPIImpl {
             response.code(),
             response.remark().map_or("".to_string(), |s| s.to_string())
         ))
+    }
+
+    pub(crate) async fn create_subscription_group(
+        &self,
+        addr: &CheetahString,
+        config: &rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig,
+        timeout_millis: u64,
+    ) -> RocketMQResult<()> {
+        let request =
+            RemotingCommand::create_request_command(RequestCode::UpdateAndCreateSubscriptionGroup, EmptyHeader {})
+                .set_body(config.encode()?);
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => Ok(()),
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
+            )),
+        }
+    }
+
+    pub(crate) async fn get_consumer_running_info(
+        &self,
+        addr: &CheetahString,
+        consumer_group: CheetahString,
+        client_id: CheetahString,
+        jstack: bool,
+        timeout_millis: u64,
+    ) -> RocketMQResult<rocketmq_remoting::protocol::body::consumer_running_info::ConsumerRunningInfo> {
+        let request_header = GetConsumerRunningInfoRequestHeader {
+            consumer_group,
+            client_id,
+            jstack_enable: jstack,
+            rpc_request_header: None,
+        };
+        let request = RemotingCommand::create_request_command(RequestCode::GetConsumerRunningInfo, request_header);
+        let broker_addr = mix_all::broker_vip_channel(self.client_config.vip_channel_enabled, addr.as_str());
+        let mut response = self
+            .remoting_client
+            .invoke_request(Some(&broker_addr), request, timeout_millis)
+            .await?;
+
+        match ResponseCode::from(response.code()) {
+            ResponseCode::Success => {
+                if response.take_body().is_some() {
+                    return Err(mq_client_err!("get_consumer_running_info response decoding is not \
+                                               implemented yet"
+                        .to_string()));
+                }
+                Err(mq_client_err!(
+                    "get_consumer_running_info response body is empty".to_string()
+                ))
+            }
+            _ => Err(mq_client_err!(
+                response.code(),
+                response.remark().map_or_else(String::new, |remark| remark.to_string())
+            )),
+        }
     }
 
     pub async fn view_message(

@@ -17,9 +17,12 @@ use crate::consumer::types::ConsumerConfigView;
 use crate::consumer::types::ConsumerConnectionView;
 use crate::consumer::types::ConsumerGroupListItem;
 use crate::consumer::types::ConsumerGroupListResponse;
+use crate::consumer::types::ConsumerMutationResult;
 use crate::consumer::types::ConsumerTopicDetailView;
 use rocketmq_dashboard_common::ConsumerConfigQueryRequest;
 use rocketmq_dashboard_common::ConsumerConnectionQueryRequest;
+use rocketmq_dashboard_common::ConsumerCreateOrUpdateRequest;
+use rocketmq_dashboard_common::ConsumerDeleteRequest;
 use rocketmq_dashboard_common::ConsumerGroupListRequest;
 use rocketmq_dashboard_common::ConsumerGroupRefreshRequest;
 use rocketmq_dashboard_common::ConsumerTopicDetailQueryRequest;
@@ -76,6 +79,28 @@ pub async fn query_consumer_config(
 ) -> Result<ConsumerConfigView, String> {
     consumer_manager
         .query_consumer_config(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn create_or_update_consumer_group(
+    request: ConsumerCreateOrUpdateRequest,
+    consumer_manager: State<'_, ConsumerManager>,
+) -> Result<ConsumerMutationResult, String> {
+    consumer_manager
+        .create_or_update_consumer_group(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_consumer_group(
+    request: ConsumerDeleteRequest,
+    consumer_manager: State<'_, ConsumerManager>,
+) -> Result<ConsumerMutationResult, String> {
+    consumer_manager
+        .delete_consumer_group(request)
         .await
         .map_err(|error| error.to_string())
 }

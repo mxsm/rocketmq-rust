@@ -362,7 +362,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         addr: CheetahString,
         config: SubscriptionGroupConfig,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .create_and_update_subscription_group_config(addr, config)
+            .await
     }
 
     async fn create_and_update_subscription_group_config_list(
@@ -370,7 +372,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         broker_addr: CheetahString,
         configs: Vec<SubscriptionGroupConfig>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .create_and_update_subscription_group_config_list(broker_addr, configs)
+            .await
     }
 
     async fn examine_subscription_group_config(
@@ -647,7 +651,9 @@ impl MQAdminExt for DefaultMQAdminExt {
         jstack: bool,
         metrics: Option<bool>,
     ) -> rocketmq_error::RocketMQResult<ConsumerRunningInfo> {
-        todo!()
+        self.default_mqadmin_ext_impl
+            .get_consumer_running_info(consumer_group, client_id, jstack, metrics)
+            .await
     }
 
     async fn consume_message_directly(

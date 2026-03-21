@@ -23,6 +23,28 @@ export interface ConsumerConfigQueryRequest {
     address?: string;
 }
 
+export interface ConsumerCreateOrUpdateRequest {
+    clusterNameList: string[];
+    brokerNameList: string[];
+    consumerGroup: string;
+    consumeEnable: boolean;
+    consumeFromMinEnable: boolean;
+    consumeBroadcastEnable: boolean;
+    consumeMessageOrderly: boolean;
+    retryQueueNums: number;
+    retryMaxTimes: number;
+    brokerId: number;
+    whichBrokerWhenConsumeSlowly: number;
+    notifyConsumerIdsChangedEnable: boolean;
+    groupSysFlag: number;
+    consumeTimeoutMinute: number;
+}
+
+export interface ConsumerDeleteRequest {
+    consumerGroup: string;
+    brokerNameList: string[];
+}
+
 export interface ConsumerGroupListSummary {
     totalGroups: number;
     normalGroups: number;
@@ -41,6 +63,7 @@ export interface ConsumerGroupListItem {
     consumeType: string;
     version?: number | null;
     versionDesc: string;
+    brokerNames: string[];
     brokerAddresses: string[];
     updateTimestamp: number;
 }
@@ -128,4 +151,10 @@ export interface ConsumerConfigView {
     subscriptionTopicCount: number;
     subscriptionTopics: string[];
     attributes: ConsumerConfigAttributeItem[];
+}
+
+export interface ConsumerMutationResult {
+    consumerGroup: string;
+    brokerNames: string[];
+    updated: boolean;
 }

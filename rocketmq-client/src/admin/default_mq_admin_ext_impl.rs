@@ -636,7 +636,12 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         addr: CheetahString,
         config: SubscriptionGroupConfig,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        self.client_instance
+            .as_ref()
+            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?
+            .get_mq_client_api_impl()
+            .create_subscription_group(&addr, &config, self.timeout_millis.as_millis() as u64)
+            .await
     }
 
     async fn create_and_update_subscription_group_config_list(
@@ -644,7 +649,11 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         broker_addr: CheetahString,
         configs: Vec<SubscriptionGroupConfig>,
     ) -> rocketmq_error::RocketMQResult<()> {
-        todo!()
+        for config in configs {
+            self.create_and_update_subscription_group_config(broker_addr.clone(), config)
+                .await?;
+        }
+        Ok(())
     }
 
     async fn examine_subscription_group_config(
@@ -1317,9 +1326,34 @@ impl MQAdminExt for DefaultMQAdminExtImpl {
         consumer_group: CheetahString,
         client_id: CheetahString,
         jstack: bool,
-        metrics: Option<bool>,
+        _metrics: Option<bool>,
     ) -> rocketmq_error::RocketMQResult<ConsumerRunningInfo> {
-        todo!()
+        let broker_addr = self
+            .examine_consumer_connection_info(consumer_group.clone(), None)
+            .await?
+            .get_connection_set()
+            .iter()
+            .find(|connection| connection.get_client_id() == client_id)
+            .map(|connection| connection.get_client_addr().clone())
+            .ok_or_else(|| {
+                rocketmq_error::RocketMQError::IllegalArgument(format!(
+                    "Client `{}` was not found in consumer group `{}`",
+                    client_id, consumer_group
+                ))
+            })?;
+
+        self.client_instance
+            .as_ref()
+            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?
+            .get_mq_client_api_impl()
+            .get_consumer_running_info(
+                &broker_addr,
+                consumer_group,
+                client_id,
+                jstack,
+                self.timeout_millis.as_millis() as u64,
+            )
+            .await
     }
 
     async fn consume_message_directly(

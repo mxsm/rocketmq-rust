@@ -21,6 +21,7 @@ use crate::consumer::types::ConsumerError;
 use crate::consumer::types::ConsumerGroupListItem;
 use crate::consumer::types::ConsumerGroupListResponse;
 use crate::consumer::types::ConsumerGroupListSummary;
+use crate::consumer::types::ConsumerMutationResult;
 use crate::consumer::types::ConsumerResult;
 use crate::consumer::types::ConsumerSubscriptionItem;
 use crate::consumer::types::ConsumerTopicDetailItem;
@@ -36,6 +37,8 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mq_version::RocketMqVersion;
 use rocketmq_dashboard_common::ConsumerConfigQueryRequest;
 use rocketmq_dashboard_common::ConsumerConnectionQueryRequest;
+use rocketmq_dashboard_common::ConsumerCreateOrUpdateRequest;
+use rocketmq_dashboard_common::ConsumerDeleteRequest;
 use rocketmq_dashboard_common::ConsumerGroupListRequest;
 use rocketmq_dashboard_common::ConsumerGroupRefreshRequest;
 use rocketmq_dashboard_common::ConsumerTopicDetailQueryRequest;
@@ -62,6 +65,7 @@ pub(crate) struct ConsumerManager {
 
 #[derive(Clone, Debug, Default)]
 struct ConsumerGroupMeta {
+    broker_names: HashSet<String>,
     broker_addresses: HashSet<String>,
     orderly_flags: Vec<bool>,
 }
@@ -264,6 +268,67 @@ impl ConsumerManager {
         }
     }
 
+    pub(crate) async fn create_or_update_consumer_group(
+        &self,
+        request: ConsumerCreateOrUpdateRequest,
+    ) -> ConsumerResult<ConsumerMutationResult> {
+        let group_name = validate_consumer_group_name(&request.consumer_group)?;
+        validate_consumer_targets(&request.cluster_name_list, &request.broker_name_list)?;
+        validate_consumer_limits(&request)?;
+
+        let mut session_guard = self.admin_session.lock().await;
+        self.ensure_admin_session(&mut session_guard).await?;
+
+        let result = {
+            let session = session_guard
+                .as_mut()
+                .expect("consumer admin session should be initialized before use");
+            self.create_or_update_consumer_group_with_admin(&mut session.admin, &group_name, request)
+                .await
+        };
+
+        let should_reset = Self::should_reset_session(&result);
+        if should_reset {
+            self.reset_admin_session(&mut session_guard, "create_or_update_consumer_group failed")
+                .await;
+        }
+        drop(session_guard);
+
+        result
+    }
+
+    pub(crate) async fn delete_consumer_group(
+        &self,
+        request: ConsumerDeleteRequest,
+    ) -> ConsumerResult<ConsumerMutationResult> {
+        let group_name = validate_consumer_group_name(&request.consumer_group)?;
+        if request.broker_name_list.is_empty() {
+            return Err(ConsumerError::Validation(
+                "Select at least one broker before deleting the consumer group.".into(),
+            ));
+        }
+
+        let mut session_guard = self.admin_session.lock().await;
+        self.ensure_admin_session(&mut session_guard).await?;
+
+        let result = {
+            let session = session_guard
+                .as_mut()
+                .expect("consumer admin session should be initialized before use");
+            self.delete_consumer_group_with_admin(&mut session.admin, &group_name, request)
+                .await
+        };
+
+        let should_reset = Self::should_reset_session(&result);
+        if should_reset {
+            self.reset_admin_session(&mut session_guard, "delete_consumer_group failed")
+                .await;
+        }
+        drop(session_guard);
+
+        result
+    }
+
     async fn ensure_admin_session(&self, session_slot: &mut Option<ManagedConsumerAdmin>) -> ConsumerResult<()> {
         let generation = self.runtime.generation();
         let needs_reconnect = session_slot
@@ -457,6 +522,124 @@ impl ConsumerManager {
             &config,
         ))
     }
+
+    async fn create_or_update_consumer_group_with_admin(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        raw_group_name: &str,
+        request: ConsumerCreateOrUpdateRequest,
+    ) -> ConsumerResult<ConsumerMutationResult> {
+        let cluster_info = admin
+            .examine_broker_cluster_info()
+            .await
+            .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?;
+        let broker_names =
+            resolve_consumer_target_broker_names(&cluster_info, &request.cluster_name_list, &request.broker_name_list)?;
+
+        let mut config = SubscriptionGroupConfig::default();
+        config.set_group_name(raw_group_name.into());
+        config.set_consume_enable(request.consume_enable);
+        config.set_consume_from_min_enable(request.consume_from_min_enable);
+        config.set_consume_broadcast_enable(request.consume_broadcast_enable);
+        config.set_consume_message_orderly(request.consume_message_orderly);
+        config.set_retry_queue_nums(request.retry_queue_nums);
+        config.set_retry_max_times(request.retry_max_times);
+        config.set_broker_id(request.broker_id);
+        config.set_which_broker_when_consume_slowly(request.which_broker_when_consume_slowly);
+        config.set_notify_consumer_ids_changed_enable(request.notify_consumer_ids_changed_enable);
+        config.set_group_sys_flag(request.group_sys_flag);
+        config.set_consume_timeout_minute(request.consume_timeout_minute);
+
+        for broker_name in &broker_names {
+            let broker_addr = resolve_master_broker_addr(&cluster_info, broker_name).ok_or_else(|| {
+                ConsumerError::Validation(format!(
+                    "Broker `{}` does not have a reachable master address.",
+                    broker_name
+                ))
+            })?;
+            admin
+                .create_and_update_subscription_group_config(broker_addr, config.clone())
+                .await
+                .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?;
+        }
+
+        Ok(ConsumerMutationResult {
+            consumer_group: raw_group_name.to_string(),
+            broker_names,
+            updated: true,
+        })
+    }
+
+    async fn delete_consumer_group_with_admin(
+        &self,
+        admin: &mut DefaultMQAdminExt,
+        raw_group_name: &str,
+        request: ConsumerDeleteRequest,
+    ) -> ConsumerResult<ConsumerMutationResult> {
+        let cluster_info = admin
+            .examine_broker_cluster_info()
+            .await
+            .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?;
+        let group_map = collect_consumer_group_meta(admin, &cluster_info).await?;
+        let meta = group_map.get(raw_group_name).ok_or_else(|| {
+            ConsumerError::Validation(format!(
+                "Consumer group `{}` was not found in the current cluster view.",
+                raw_group_name
+            ))
+        })?;
+
+        let mut selected_broker_names: Vec<String> = request
+            .broker_name_list
+            .into_iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect();
+        selected_broker_names.sort();
+        selected_broker_names.dedup();
+
+        let current_broker_names = meta.broker_names.clone();
+        let delete_in_namesrv = !current_broker_names.is_empty()
+            && current_broker_names
+                .iter()
+                .all(|broker_name| selected_broker_names.contains(broker_name));
+
+        for broker_name in &selected_broker_names {
+            let broker_addr = resolve_master_broker_addr(&cluster_info, broker_name).ok_or_else(|| {
+                ConsumerError::Validation(format!(
+                    "Broker `{}` does not have a reachable master address.",
+                    broker_name
+                ))
+            })?;
+
+            admin
+                .delete_subscription_group(broker_addr.clone(), raw_group_name.into(), Some(true))
+                .await
+                .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?;
+
+            for topic in consumer_internal_topics(raw_group_name) {
+                let broker_targets = HashSet::from([broker_addr.clone()]);
+                admin
+                    .delete_topic_in_broker(broker_targets, topic.clone().into())
+                    .await
+                    .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?;
+
+                if delete_in_namesrv {
+                    let namesrv_targets: HashSet<CheetahString> =
+                        admin.get_name_server_address_list().await.into_iter().collect();
+                    admin
+                        .delete_topic_in_name_server(namesrv_targets, None, topic.into())
+                        .await
+                        .map_err(|error| ConsumerError::RocketMQ(error.to_string()))?;
+                }
+            }
+        }
+
+        Ok(ConsumerMutationResult {
+            consumer_group: raw_group_name.to_string(),
+            broker_names: selected_broker_names,
+            updated: false,
+        })
+    }
 }
 
 async fn collect_consumer_group_meta(
@@ -466,7 +649,7 @@ async fn collect_consumer_group_meta(
     let mut group_map = HashMap::new();
     let mut successful_brokers = 0usize;
     let mut last_error = None;
-    for (_broker_name, broker_addr) in collect_master_broker_targets(cluster_info) {
+    for (broker_name, broker_addr) in collect_master_broker_targets(cluster_info) {
         let wrapper = match admin.get_all_subscription_group(broker_addr.clone(), 5_000).await {
             Ok(wrapper) => {
                 successful_brokers += 1;
@@ -487,6 +670,7 @@ async fn collect_consumer_group_meta(
             let group_name = entry.key().to_string();
             let config = entry.value();
             let meta = group_map.entry(group_name).or_insert_with(ConsumerGroupMeta::default);
+            meta.broker_names.insert(broker_name.clone());
             meta.broker_addresses.insert(broker_addr.to_string());
             meta.orderly_flags.push(config.consume_message_orderly());
         }
@@ -551,6 +735,8 @@ async fn build_consumer_group_item(
 
     let mut broker_addresses: Vec<String> = meta.broker_addresses.iter().cloned().collect();
     broker_addresses.sort();
+    let mut broker_names: Vec<String> = meta.broker_names.iter().cloned().collect();
+    broker_names.sort();
 
     ConsumerGroupListItem {
         display_group_name,
@@ -563,6 +749,7 @@ async fn build_consumer_group_item(
         consume_type,
         version,
         version_desc,
+        broker_names,
         broker_addresses,
         update_timestamp: now_timestamp_millis(),
     }
@@ -635,6 +822,64 @@ fn resolve_first_consumer_broker_address(meta: &ConsumerGroupMeta) -> Option<Che
         .map(|value| CheetahString::from(value.as_str()))
 }
 
+fn resolve_master_broker_addr(cluster_info: &ClusterInfo, broker_name: &str) -> Option<CheetahString> {
+    cluster_info
+        .broker_addr_table
+        .as_ref()
+        .and_then(|table| table.get(broker_name))
+        .and_then(|broker_data| broker_data.broker_addrs().get(&mix_all::MASTER_ID).cloned())
+}
+
+fn resolve_consumer_target_broker_names(
+    cluster_info: &ClusterInfo,
+    cluster_name_list: &[String],
+    broker_name_list: &[String],
+) -> ConsumerResult<Vec<String>> {
+    let mut targets = HashSet::new();
+
+    if let Some(cluster_addr_table) = cluster_info.cluster_addr_table.as_ref() {
+        for cluster_name in cluster_name_list {
+            let normalized = cluster_name.trim();
+            if normalized.is_empty() {
+                continue;
+            }
+            let broker_names = cluster_addr_table.get(normalized).ok_or_else(|| {
+                ConsumerError::Validation(format!(
+                    "Cluster `{}` was not found in the current cluster view.",
+                    normalized
+                ))
+            })?;
+            for broker_name in broker_names {
+                targets.insert(broker_name.to_string());
+            }
+        }
+    }
+
+    for broker_name in broker_name_list {
+        let normalized = broker_name.trim();
+        if normalized.is_empty() {
+            continue;
+        }
+        if resolve_master_broker_addr(cluster_info, normalized).is_none() {
+            return Err(ConsumerError::Validation(format!(
+                "Broker `{}` was not found in the current cluster view.",
+                normalized
+            )));
+        }
+        targets.insert(normalized.to_string());
+    }
+
+    if targets.is_empty() {
+        return Err(ConsumerError::Validation(
+            "Select at least one cluster or broker before saving the consumer group.".into(),
+        ));
+    }
+
+    let mut values: Vec<String> = targets.into_iter().collect();
+    values.sort();
+    Ok(values)
+}
+
 fn first_address(address: Option<&str>) -> Option<CheetahString> {
     parse_addresses(address).into_iter().next()
 }
@@ -654,6 +899,41 @@ fn validate_consumer_group_name(group_name: &str) -> ConsumerResult<String> {
     } else {
         Ok(normalized)
     }
+}
+
+fn validate_consumer_targets(cluster_name_list: &[String], broker_name_list: &[String]) -> ConsumerResult<()> {
+    if cluster_name_list.iter().all(|value| value.trim().is_empty())
+        && broker_name_list.iter().all(|value| value.trim().is_empty())
+    {
+        return Err(ConsumerError::Validation(
+            "Select at least one cluster or broker before saving the consumer group.".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_consumer_limits(request: &ConsumerCreateOrUpdateRequest) -> ConsumerResult<()> {
+    if request.retry_queue_nums < 0 {
+        return Err(ConsumerError::Validation(
+            "Retry queues must be zero or greater.".into(),
+        ));
+    }
+    if request.retry_max_times < -1 {
+        return Err(ConsumerError::Validation("Max retries must be -1 or greater.".into()));
+    }
+    if request.consume_timeout_minute <= 0 {
+        return Err(ConsumerError::Validation(
+            "Consume timeout must be greater than zero.".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn consumer_internal_topics(raw_group_name: &str) -> [String; 2] {
+    [
+        format!("{}{}", mix_all::RETRY_GROUP_TOPIC_PREFIX, raw_group_name),
+        format!("{}{}", mix_all::DLQ_GROUP_TOPIC_PREFIX, raw_group_name),
+    ]
 }
 
 fn is_system_consumer_group(group_name: &str) -> bool {
@@ -988,12 +1268,14 @@ mod tests {
         assert_eq!(classify_consumer_group("CID_RMQ_SYS_TRANS", &system), "SYSTEM");
 
         let fifo = ConsumerGroupMeta {
+            broker_names: Default::default(),
             broker_addresses: Default::default(),
             orderly_flags: vec![true, true],
         };
         assert_eq!(classify_consumer_group("group-fifo", &fifo), "FIFO");
 
         let normal = ConsumerGroupMeta {
+            broker_names: Default::default(),
             broker_addresses: Default::default(),
             orderly_flags: vec![true, false],
         };
@@ -1123,6 +1405,7 @@ mod tests {
     #[test]
     fn resolve_first_consumer_broker_address_returns_sorted_first_value() {
         let meta = ConsumerGroupMeta {
+            broker_names: HashSet::new(),
             broker_addresses: HashSet::from(["172.19.80.2:10911".to_string(), "172.19.80.1:10911".to_string()]),
             orderly_flags: Vec::new(),
         };
@@ -1223,6 +1506,7 @@ mod tests {
             consume_type: "UNKNOWN".to_string(),
             version: None,
             version_desc: "OFFLINE".to_string(),
+            broker_names: Vec::new(),
             broker_addresses: Vec::new(),
             update_timestamp: 0,
         }

@@ -27,7 +27,9 @@ import { Pagination } from './Pagination';
 import { useConsumerCatalog } from '../features/consumer/hooks/useConsumerCatalog';
 import { ConsumerClientModal } from '../features/consumer/components/ConsumerClientModal';
 import { ConsumerConfigModal } from '../features/consumer/components/ConsumerConfigModal';
+import { ConsumerDeleteModal } from '../features/consumer/components/ConsumerDeleteModal';
 import { ConsumerDetailModal } from '../features/consumer/components/ConsumerDetailModal';
+import { ConsumerEditorModal } from '../features/consumer/components/ConsumerEditorModal';
 import type { ConsumerGroupListItem } from '../features/consumer/types/consumer.types';
 
 const LegacyConsumerDetailModal = ({ isOpen, onClose, consumer }: any) => {
@@ -575,6 +577,8 @@ export const ConsumerView = () => {
   const [detailModal, setDetailModal] = useState<{isOpen: boolean, consumer: ConsumerGroupListItem | null}>({ isOpen: false, consumer: null });
   const [configModal, setConfigModal] = useState<{isOpen: boolean, consumer: ConsumerGroupListItem | null}>({ isOpen: false, consumer: null });
   const [clientModal, setClientModal] = useState<{isOpen: boolean, consumer: ConsumerGroupListItem | null}>({ isOpen: false, consumer: null });
+  const [editorModal, setEditorModal] = useState<{isOpen: boolean, consumer: ConsumerGroupListItem | null, preferredBrokerAddress?: string}>({ isOpen: false, consumer: null });
+  const [deleteModal, setDeleteModal] = useState<{isOpen: boolean, consumer: ConsumerGroupListItem | null}>({ isOpen: false, consumer: null });
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 6;
   const sourceAddress = enableProxy ? proxy : undefined;
@@ -625,6 +629,21 @@ export const ConsumerView = () => {
     }
   };
 
+  const handleEditorSaved = async () => {
+    setEditorModal({ isOpen: false, consumer: null });
+    await refresh();
+  };
+
+  const handleDeleteSaved = async () => {
+    setDeleteModal({ isOpen: false, consumer: null });
+    await refresh();
+  };
+
+  const handleEditFromConfig = (consumer: ConsumerGroupListItem, preferredBrokerAddress?: string) => {
+    setConfigModal({ isOpen: false, consumer: null });
+    setEditorModal({ isOpen: true, consumer, preferredBrokerAddress });
+  };
+
   return (
     <div className="max-w-[1600px] mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-12">
         <ConsumerDetailModal 
@@ -637,12 +656,26 @@ export const ConsumerView = () => {
            isOpen={configModal.isOpen}
            onClose={() => setConfigModal({ isOpen: false, consumer: null })}
            consumer={configModal.consumer}
+           onEdit={handleEditFromConfig}
         />
         <ConsumerClientModal
            isOpen={clientModal.isOpen}
            onClose={() => setClientModal({ isOpen: false, consumer: null })}
            consumer={clientModal.consumer}
            address={sourceAddress}
+        />
+        <ConsumerEditorModal
+           isOpen={editorModal.isOpen}
+           onClose={() => setEditorModal({ isOpen: false, consumer: null })}
+           consumer={editorModal.consumer}
+           preferredBrokerAddress={editorModal.preferredBrokerAddress}
+           onSaved={() => void handleEditorSaved()}
+        />
+        <ConsumerDeleteModal
+           isOpen={deleteModal.isOpen}
+           onClose={() => setDeleteModal({ isOpen: false, consumer: null })}
+           consumer={deleteModal.consumer}
+           onDeleted={() => void handleDeleteSaved()}
         />
         {/* Toolbar */}
         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 bg-white dark:bg-gray-900 p-4 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm sticky top-0 z-20 backdrop-blur-xl bg-white/90 dark:bg-gray-900/90 transition-colors">
@@ -707,7 +740,7 @@ export const ConsumerView = () => {
                  <div className="h-8 w-px bg-gray-200 dark:bg-gray-700 mx-2"></div>
 
                  <button
-                    onClick={() => toast.info('Add/Update will be connected in the next Consumer migration step.')}
+                    onClick={() => setEditorModal({ isOpen: true, consumer: null })}
                     className="flex items-center px-4 py-2 bg-gray-900 text-white rounded-xl text-sm font-medium hover:bg-gray-800 transition-all shadow-md hover:shadow-lg active:scale-95 dark:!bg-gray-900 dark:!text-white dark:border dark:border-gray-700 dark:hover:!bg-gray-800"
                  >
                     <Plus className="w-4 h-4 mr-2" />
@@ -882,7 +915,7 @@ export const ConsumerView = () => {
                                 <span className="text-[9px] font-medium">Sync</span>
                              </button>
                              <button 
-                                onClick={() => toast.info('Delete will be connected in a later Consumer migration step.')}
+                                onClick={() => setDeleteModal({ isOpen: true, consumer })}
                                 className="col-span-1 flex flex-col items-center justify-center p-2 rounded-lg bg-white dark:bg-gray-800 border border-red-100 dark:border-red-900/30 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 hover:border-red-200 dark:hover:border-red-800 transition-all shadow-sm group/btn"
                                 title="Delete"
                              >
