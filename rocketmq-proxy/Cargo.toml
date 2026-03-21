@@ -31,6 +31,8 @@ rust-version.workspace = true
 rocketmq-common   = { workspace = true }
 rocketmq-error    = { workspace = true }
 rocketmq-remoting = { workspace = true }
+rocketmq-client-rust = { workspace = true }
+rocketmq-rust = { workspace = true }
 
 tokio        = { workspace = true }
 tokio-stream = { workspace = true }

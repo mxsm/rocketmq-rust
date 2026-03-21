@@ -17,9 +17,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
+use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 
+use crate::cluster::ClusterClient;
+use crate::config::ClusterConfig;
 use crate::config::ProxyMode;
 use crate::context::ProxyContext;
 use crate::context::ResolvedEndpoint;
@@ -99,8 +102,20 @@ pub trait MetadataService: Send + Sync {
     async fn subscription_group(
         &self,
         context: &ProxyContext,
+        topic: &ResourceIdentity,
         group: &ResourceIdentity,
     ) -> ProxyResult<Option<SubscriptionGroupMetadata>>;
+}
+
+#[async_trait]
+pub trait AssignmentService: Send + Sync {
+    async fn query_assignment(
+        &self,
+        context: &ProxyContext,
+        topic: &ResourceIdentity,
+        group: &ResourceIdentity,
+        endpoints: &[ResolvedEndpoint],
+    ) -> ProxyResult<Option<Vec<MessageQueueAssignment>>>;
 }
 
 pub trait ServiceManager: Send + Sync {
@@ -109,10 +124,14 @@ pub trait ServiceManager: Send + Sync {
     fn route_service(&self) -> Arc<dyn RouteService>;
 
     fn metadata_service(&self) -> Arc<dyn MetadataService>;
+
+    fn assignment_service(&self) -> Arc<dyn AssignmentService>;
 }
 
 #[derive(Debug, Default)]
 pub struct UnsupportedRouteService;
+
+pub type DefaultRouteService = UnsupportedRouteService;
 
 #[async_trait]
 impl RouteService for UnsupportedRouteService {
@@ -142,8 +161,25 @@ impl MetadataService for DefaultMetadataService {
     async fn subscription_group(
         &self,
         _context: &ProxyContext,
+        _topic: &ResourceIdentity,
         _group: &ResourceIdentity,
     ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
+        Ok(None)
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct DefaultAssignmentService;
+
+#[async_trait]
+impl AssignmentService for DefaultAssignmentService {
+    async fn query_assignment(
+        &self,
+        _context: &ProxyContext,
+        _topic: &ResourceIdentity,
+        _group: &ResourceIdentity,
+        _endpoints: &[ResolvedEndpoint],
+    ) -> ProxyResult<Option<Vec<MessageQueueAssignment>>> {
         Ok(None)
     }
 }
@@ -207,32 +243,129 @@ impl MetadataService for StaticMetadataService {
     async fn subscription_group(
         &self,
         _context: &ProxyContext,
+        _topic: &ResourceIdentity,
         group: &ResourceIdentity,
     ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
         Ok(self.subscription_groups.get(group).map(|entry| entry.clone()))
     }
 }
 
+pub struct ClusterRouteService {
+    client: Arc<dyn ClusterClient>,
+}
+
+impl ClusterRouteService {
+    pub fn new(client: Arc<dyn ClusterClient>) -> Self {
+        Self { client }
+    }
+}
+
+#[async_trait]
+impl RouteService for ClusterRouteService {
+    async fn query_route(
+        &self,
+        _context: &ProxyContext,
+        topic: &ResourceIdentity,
+        _endpoints: &[ResolvedEndpoint],
+    ) -> ProxyResult<TopicRouteData> {
+        self.client.query_route(topic).await
+    }
+}
+
+pub struct ClusterMetadataService {
+    client: Arc<dyn ClusterClient>,
+}
+
+impl ClusterMetadataService {
+    pub fn new(client: Arc<dyn ClusterClient>) -> Self {
+        Self { client }
+    }
+}
+
+#[async_trait]
+impl MetadataService for ClusterMetadataService {
+    async fn topic_message_type(
+        &self,
+        _context: &ProxyContext,
+        topic: &ResourceIdentity,
+    ) -> ProxyResult<ProxyTopicMessageType> {
+        self.client.query_topic_message_type(topic).await
+    }
+
+    async fn subscription_group(
+        &self,
+        _context: &ProxyContext,
+        topic: &ResourceIdentity,
+        group: &ResourceIdentity,
+    ) -> ProxyResult<Option<SubscriptionGroupMetadata>> {
+        self.client.query_subscription_group(topic, group).await
+    }
+}
+
+pub struct ClusterAssignmentService {
+    client: Arc<dyn ClusterClient>,
+}
+
+impl ClusterAssignmentService {
+    pub fn new(client: Arc<dyn ClusterClient>) -> Self {
+        Self { client }
+    }
+}
+
+#[async_trait]
+impl AssignmentService for ClusterAssignmentService {
+    async fn query_assignment(
+        &self,
+        context: &ProxyContext,
+        topic: &ResourceIdentity,
+        group: &ResourceIdentity,
+        _endpoints: &[ResolvedEndpoint],
+    ) -> ProxyResult<Option<Vec<MessageQueueAssignment>>> {
+        self.client
+            .query_assignment(topic, group, context.require_client_id()?)
+            .await
+    }
+}
+
 pub struct ClusterServiceManager {
     route_service: Arc<dyn RouteService>,
     metadata_service: Arc<dyn MetadataService>,
+    assignment_service: Arc<dyn AssignmentService>,
 }
 
 impl ClusterServiceManager {
     pub fn new(route_service: Arc<dyn RouteService>, metadata_service: Arc<dyn MetadataService>) -> Self {
+        Self::with_assignment_service(route_service, metadata_service, Arc::new(DefaultAssignmentService))
+    }
+
+    pub fn with_assignment_service(
+        route_service: Arc<dyn RouteService>,
+        metadata_service: Arc<dyn MetadataService>,
+        assignment_service: Arc<dyn AssignmentService>,
+    ) -> Self {
         Self {
             route_service,
             metadata_service,
+            assignment_service,
         }
+    }
+
+    pub fn from_cluster_client(client: Arc<dyn ClusterClient>) -> Self {
+        Self::with_assignment_service(
+            Arc::new(ClusterRouteService::new(Arc::clone(&client))),
+            Arc::new(ClusterMetadataService::new(Arc::clone(&client))),
+            Arc::new(ClusterAssignmentService::new(client)),
+        )
+    }
+
+    pub fn from_cluster_config(config: ClusterConfig) -> Self {
+        Self::from_cluster_client(Arc::new(crate::cluster::RocketmqClusterClient::new(config)))
     }
 }
 
 impl Default for ClusterServiceManager {
     fn default() -> Self {
-        Self::new(
-            Arc::new(StaticRouteService::default()),
-            Arc::new(StaticMetadataService::default()),
-        )
+        Self::from_cluster_config(ClusterConfig::default())
     }
 }
 
@@ -248,18 +381,32 @@ impl ServiceManager for ClusterServiceManager {
     fn metadata_service(&self) -> Arc<dyn MetadataService> {
         Arc::clone(&self.metadata_service)
     }
+
+    fn assignment_service(&self) -> Arc<dyn AssignmentService> {
+        Arc::clone(&self.assignment_service)
+    }
 }
 
 pub struct LocalServiceManager {
     route_service: Arc<dyn RouteService>,
     metadata_service: Arc<dyn MetadataService>,
+    assignment_service: Arc<dyn AssignmentService>,
 }
 
 impl LocalServiceManager {
     pub fn new(route_service: Arc<dyn RouteService>, metadata_service: Arc<dyn MetadataService>) -> Self {
+        Self::with_assignment_service(route_service, metadata_service, Arc::new(DefaultAssignmentService))
+    }
+
+    pub fn with_assignment_service(
+        route_service: Arc<dyn RouteService>,
+        metadata_service: Arc<dyn MetadataService>,
+        assignment_service: Arc<dyn AssignmentService>,
+    ) -> Self {
         Self {
             route_service,
             metadata_service,
+            assignment_service,
         }
     }
 }
@@ -284,5 +431,9 @@ impl ServiceManager for LocalServiceManager {
 
     fn metadata_service(&self) -> Arc<dyn MetadataService> {
         Arc::clone(&self.metadata_service)
+    }
+
+    fn assignment_service(&self) -> Arc<dyn AssignmentService> {
+        Arc::clone(&self.assignment_service)
     }
 }

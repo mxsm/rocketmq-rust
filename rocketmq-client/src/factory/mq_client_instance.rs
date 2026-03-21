@@ -24,6 +24,7 @@ use dashmap::DashMap;
 use futures::future;
 use rand::seq::IndexedRandom;
 use rocketmq_common::common::base::service_state::ServiceState;
+use rocketmq_common::common::config::TopicConfig;
 use rocketmq_common::common::constant::PermName;
 use rocketmq_common::common::filter::expression_type::ExpressionType;
 use rocketmq_common::common::message::message_ext::MessageExt;
@@ -33,11 +34,13 @@ use rocketmq_common::common::mix_all;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_remoting::base::connection_net_event::ConnectionNetEvent;
 use rocketmq_remoting::protocol::body::consume_message_directly_result::ConsumeMessageDirectlyResult;
+use rocketmq_remoting::protocol::header::get_topic_config_request_header::GetTopicConfigRequestHeader;
 use rocketmq_remoting::protocol::heartbeat::consumer_data::ConsumerData;
 use rocketmq_remoting::protocol::heartbeat::heartbeat_data::HeartbeatData;
 use rocketmq_remoting::protocol::heartbeat::message_model::MessageModel;
 use rocketmq_remoting::protocol::heartbeat::producer_data::ProducerData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
+use rocketmq_remoting::protocol::subscription::subscription_group_config::SubscriptionGroupConfig;
 use rocketmq_remoting::rpc::client_metadata::ClientMetadata;
 use rocketmq_remoting::runtime::config::client_config::TokioClientConfig;
 use rocketmq_remoting::runtime::RPCHook;
@@ -761,6 +764,41 @@ impl MQClientInstance {
 
     pub fn get_mq_client_api_impl(&self) -> ArcMut<MQClientAPIImpl> {
         self.mq_client_api_impl.as_ref().unwrap().clone()
+    }
+
+    pub async fn get_topic_config(
+        &self,
+        broker_addr: &CheetahString,
+        topic: CheetahString,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<TopicConfig> {
+        let request_header = GetTopicConfigRequestHeader {
+            topic,
+            topic_request_header: None,
+        };
+        let api_impl = self
+            .mq_client_api_impl
+            .as_ref()
+            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+        let topic_mapping = api_impl
+            .get_topic_config(broker_addr, request_header, timeout_millis)
+            .await?;
+        Ok(topic_mapping.topic_config)
+    }
+
+    pub async fn get_subscription_group_config(
+        &self,
+        broker_addr: &CheetahString,
+        group: CheetahString,
+        timeout_millis: u64,
+    ) -> rocketmq_error::RocketMQResult<SubscriptionGroupConfig> {
+        let api_impl = self
+            .mq_client_api_impl
+            .as_ref()
+            .ok_or(rocketmq_error::RocketMQError::ClientNotStarted)?;
+        api_impl
+            .get_subscription_group_config(broker_addr, group, timeout_millis)
+            .await
     }
 
     pub async fn get_broker_name_from_message_queue(&self, message_queue: &MessageQueue) -> CheetahString {

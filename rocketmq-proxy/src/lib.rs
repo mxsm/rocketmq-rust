@@ -21,6 +21,7 @@
 //! route/assignment/heartbeat slice of the Java proxy architecture.
 
 pub mod bootstrap;
+pub mod cluster;
 pub mod config;
 pub mod context;
 pub mod error;
@@ -33,6 +34,9 @@ pub mod status;
 
 pub use bootstrap::ProxyRuntime;
 pub use bootstrap::ProxyRuntimeBuilder;
+pub use cluster::ClusterClient;
+pub use cluster::RocketmqClusterClient;
+pub use config::ClusterConfig;
 pub use config::GrpcConfig;
 pub use config::ProxyConfig;
 pub use config::ProxyMode;
@@ -46,8 +50,11 @@ pub use processor::QueryAssignmentPlan;
 pub use processor::QueryAssignmentRequest;
 pub use processor::QueryRoutePlan;
 pub use processor::QueryRouteRequest;
+pub use service::AssignmentService;
 pub use service::ClusterServiceManager;
+pub use service::DefaultAssignmentService;
 pub use service::DefaultMetadataService;
+pub use service::DefaultRouteService;
 pub use service::LocalServiceManager;
 pub use service::MetadataService;
 pub use service::ProxyTopicMessageType;

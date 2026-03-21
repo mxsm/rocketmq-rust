@@ -18,6 +18,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 
 use rocketmq_common::common::constant::PermName;
+use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_common::common::mix_all::MASTER_ID;
 use rocketmq_remoting::protocol::route::route_data_view::QueueData;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
@@ -87,6 +88,13 @@ pub fn build_query_assignment_response(
     request: &v2::QueryAssignmentRequest,
     plan: &QueryAssignmentPlan,
 ) -> v2::QueryAssignmentResponse {
+    if let Some(assignments) = build_query_assignment_response_from_server(request, plan) {
+        return v2::QueryAssignmentResponse {
+            status: Some(ProxyStatusMapper::ok()),
+            assignments,
+        };
+    }
+
     let broker_map = build_broker_map(&plan.route);
     let topic = request.topic.clone().unwrap_or_default();
     let is_fifo = plan
@@ -153,6 +161,22 @@ pub fn build_query_assignment_response(
         status: Some(ProxyStatusMapper::ok()),
         assignments,
     }
+}
+
+fn build_query_assignment_response_from_server(
+    request: &v2::QueryAssignmentRequest,
+    plan: &QueryAssignmentPlan,
+) -> Option<Vec<v2::Assignment>> {
+    let assignments = plan.assignments.as_ref()?;
+    let broker_map = build_broker_map(&plan.route);
+    let topic = request.topic.clone().unwrap_or_default();
+
+    Some(
+        assignments
+            .iter()
+            .filter_map(|assignment| build_assignment_from_server(&topic, &broker_map, &plan.route, assignment))
+            .collect(),
+    )
 }
 
 pub fn error_query_route_response(status: v2::Status) -> v2::QueryRouteResponse {
@@ -357,6 +381,64 @@ fn convert_permission(perm: u32) -> i32 {
     v2::Permission::None as i32
 }
 
+fn build_assignment_from_server(
+    topic: &v2::Resource,
+    broker_map: &HashMap<String, HashMap<u64, v2::Broker>>,
+    route: &TopicRouteData,
+    assignment: &MessageQueueAssignment,
+) -> Option<v2::Assignment> {
+    let message_queue = assignment.message_queue.as_ref()?;
+    let broker_name = message_queue.broker_name().to_string();
+    let broker = broker_map
+        .get(broker_name.as_str())
+        .and_then(|entries| entries.get(&MASTER_ID))
+        .cloned()
+        .or_else(|| {
+            broker_map
+                .get(broker_name.as_str())
+                .and_then(|entries| entries.values().next().cloned())
+        })?;
+    let permission = route
+        .queue_datas
+        .iter()
+        .find(|queue_data| queue_data.broker_name.as_str() == broker_name)
+        .map(|queue_data| permission_for_queue_id(queue_data, message_queue.queue_id()))
+        .unwrap_or(v2::Permission::ReadWrite as i32);
+
+    Some(v2::Assignment {
+        message_queue: Some(v2::MessageQueue {
+            topic: Some(topic.clone()),
+            id: message_queue.queue_id(),
+            permission,
+            broker: Some(broker),
+            accept_message_types: Vec::new(),
+        }),
+    })
+}
+
+fn permission_for_queue_id(queue_data: &QueueData, queue_id: i32) -> i32 {
+    if queue_id < 0 {
+        return convert_permission(queue_data.perm);
+    }
+
+    let queue_id = queue_id as u32;
+    if PermName::is_readable(queue_data.perm) && PermName::is_writeable(queue_data.perm) {
+        let read_write = queue_data.write_queue_nums.min(queue_data.read_queue_nums);
+        if queue_id < read_write {
+            return v2::Permission::ReadWrite as i32;
+        }
+        if queue_id < queue_data.read_queue_nums {
+            return v2::Permission::Read as i32;
+        }
+        if queue_id < queue_data.write_queue_nums {
+            return v2::Permission::Write as i32;
+        }
+        return v2::Permission::None as i32;
+    }
+
+    convert_permission(queue_data.perm)
+}
+
 fn parse_broker_address(address: &str) -> (v2::AddressScheme, v2::Address) {
     if let Ok(parsed) = SocketAddr::from_str(address) {
         let scheme = match parsed.ip() {
@@ -406,15 +488,21 @@ mod tests {
     use std::collections::HashMap;
 
     use cheetah_string::CheetahString;
+    use rocketmq_common::common::message::message_enum::MessageRequestMode;
+    use rocketmq_common::common::message::message_queue::MessageQueue;
+    use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
     use rocketmq_remoting::protocol::route::route_data_view::BrokerData;
     use rocketmq_remoting::protocol::route::route_data_view::QueueData;
     use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 
+    use super::build_query_assignment_response;
     use super::build_query_route_response;
     use super::gen_message_queue_from_queue_data;
+    use crate::processor::QueryAssignmentPlan;
     use crate::processor::QueryRoutePlan;
     use crate::proto::v2;
     use crate::service::ProxyTopicMessageType;
+    use crate::service::SubscriptionGroupMetadata;
 
     #[test]
     fn route_response_preserves_permission_split() {
@@ -470,5 +558,48 @@ mod tests {
 
         assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
         assert_eq!(response.message_queues.len(), 1);
+    }
+
+    #[test]
+    fn query_assignment_prefers_server_side_assignments_when_present() {
+        let mut broker_addrs = HashMap::new();
+        broker_addrs.insert(0_u64, CheetahString::from("127.0.0.1:10911"));
+        let route = TopicRouteData {
+            queue_datas: vec![QueueData::new(CheetahString::from("broker-a"), 2, 2, 6, 0)],
+            broker_datas: vec![BrokerData::new(
+                CheetahString::from("cluster-a"),
+                CheetahString::from("broker-a"),
+                broker_addrs,
+                None,
+            )],
+            ..Default::default()
+        };
+
+        let response = build_query_assignment_response(
+            &v2::QueryAssignmentRequest {
+                topic: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "TopicA".to_owned(),
+                }),
+                group: Some(v2::Resource {
+                    resource_namespace: String::new(),
+                    name: "GroupA".to_owned(),
+                }),
+                endpoints: Some(v2::Endpoints::default()),
+            },
+            &QueryAssignmentPlan {
+                route,
+                assignments: Some(vec![MessageQueueAssignment {
+                    message_queue: Some(MessageQueue::from_parts("TopicA", "broker-a", 1)),
+                    mode: MessageRequestMode::Pull,
+                    attachments: None,
+                }]),
+                subscription_group: Some(SubscriptionGroupMetadata::default()),
+            },
+        );
+
+        assert_eq!(response.status.unwrap().code, v2::Code::Ok as i32);
+        assert_eq!(response.assignments.len(), 1);
+        assert_eq!(response.assignments[0].message_queue.as_ref().unwrap().id, 1);
     }
 }

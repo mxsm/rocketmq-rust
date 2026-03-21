@@ -48,7 +48,7 @@ impl ProxyRuntimeBuilder {
     pub fn build(self) -> ProxyRuntime<DefaultMessagingProcessor> {
         let service_manager = self
             .service_manager
-            .unwrap_or_else(|| default_service_manager(self.config.mode));
+            .unwrap_or_else(|| default_service_manager(&self.config));
         let session_registry = self.session_registry.unwrap_or_default();
         let processor = Arc::new(DefaultMessagingProcessor::new(service_manager));
         ProxyRuntime::from_processor(self.config, processor, session_registry)
@@ -100,9 +100,9 @@ where
     }
 }
 
-fn default_service_manager(mode: ProxyMode) -> Arc<dyn ServiceManager> {
-    match mode {
-        ProxyMode::Cluster => Arc::new(ClusterServiceManager::default()),
+fn default_service_manager(config: &ProxyConfig) -> Arc<dyn ServiceManager> {
+    match config.mode {
+        ProxyMode::Cluster => Arc::new(ClusterServiceManager::from_cluster_config(config.cluster.clone())),
         ProxyMode::Local => Arc::new(LocalServiceManager::default()),
     }
 }

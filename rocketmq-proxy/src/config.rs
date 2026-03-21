@@ -70,6 +70,26 @@ impl GrpcConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
+pub struct ClusterConfig {
+    pub namesrv_addr: Option<String>,
+    pub instance_name: String,
+    pub mq_client_api_timeout_ms: u64,
+    pub query_assignment_strategy_name: String,
+}
+
+impl Default for ClusterConfig {
+    fn default() -> Self {
+        Self {
+            namesrv_addr: None,
+            instance_name: "rocketmq-proxy-cluster".to_owned(),
+            mq_client_api_timeout_ms: 3_000,
+            query_assignment_strategy_name: "AVG".to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
 pub struct RuntimeConfig {
     pub route_permits: usize,
     pub producer_permits: usize,
@@ -111,6 +131,7 @@ impl Default for SessionConfig {
 pub struct ProxyConfig {
     pub mode: ProxyMode,
     pub grpc: GrpcConfig,
+    pub cluster: ClusterConfig,
     pub runtime: RuntimeConfig,
     pub session: SessionConfig,
 }

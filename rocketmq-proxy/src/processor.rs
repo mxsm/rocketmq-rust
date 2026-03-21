@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_remoting::protocol::route::topic_route_data::TopicRouteData;
 
 use crate::context::ProxyContext;
@@ -47,6 +48,7 @@ pub struct QueryAssignmentRequest {
 #[derive(Debug, Clone)]
 pub struct QueryAssignmentPlan {
     pub route: TopicRouteData,
+    pub assignments: Option<Vec<MessageQueueAssignment>>,
     pub subscription_group: Option<SubscriptionGroupMetadata>,
 }
 
@@ -99,15 +101,22 @@ impl MessagingProcessor for DefaultMessagingProcessor {
         request: QueryAssignmentRequest,
     ) -> ProxyResult<QueryAssignmentPlan> {
         let route_service = self.service_manager.route_service();
+        let assignment_service = self.service_manager.assignment_service();
         let metadata_service = self.service_manager.metadata_service();
 
         let route = route_service
             .query_route(context, &request.topic, &request.endpoints)
             .await?;
-        let subscription_group = metadata_service.subscription_group(context, &request.group).await?;
+        let assignments = assignment_service
+            .query_assignment(context, &request.topic, &request.group, &request.endpoints)
+            .await?;
+        let subscription_group = metadata_service
+            .subscription_group(context, &request.topic, &request.group)
+            .await?;
 
         Ok(QueryAssignmentPlan {
             route,
+            assignments,
             subscription_group,
         })
     }
