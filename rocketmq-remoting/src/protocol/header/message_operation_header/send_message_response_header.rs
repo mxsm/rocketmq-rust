@@ -29,6 +29,8 @@ pub struct SendMessageResponseHeader {
     queue_offset: i64,
     transaction_id: Option<CheetahString>,
     batch_uniq_id: Option<CheetahString>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recall_handle: Option<CheetahString>,
 }
 
 impl SendMessageResponseHeader {
@@ -38,6 +40,7 @@ impl SendMessageResponseHeader {
         queue_offset: i64,
         transaction_id: Option<CheetahString>,
         batch_uniq_id: Option<CheetahString>,
+        recall_handle: Option<CheetahString>,
     ) -> Self {
         SendMessageResponseHeader {
             msg_id,
@@ -45,6 +48,7 @@ impl SendMessageResponseHeader {
             queue_offset,
             transaction_id,
             batch_uniq_id,
+            recall_handle,
         }
     }
 
@@ -68,6 +72,10 @@ impl SendMessageResponseHeader {
         self.batch_uniq_id.as_deref()
     }
 
+    pub fn recall_handle(&self) -> Option<&str> {
+        self.recall_handle.as_deref()
+    }
+
     pub fn set_msg_id(&mut self, msg_id: impl Into<CheetahString>) {
         self.msg_id = msg_id.into();
     }
@@ -87,6 +95,10 @@ impl SendMessageResponseHeader {
     pub fn set_batch_uniq_id(&mut self, batch_uniq_id: Option<CheetahString>) {
         self.batch_uniq_id = batch_uniq_id;
     }
+
+    pub fn set_recall_handle(&mut self, recall_handle: Option<CheetahString>) {
+        self.recall_handle = recall_handle;
+    }
 }
 
 impl FastCodesHeader for SendMessageResponseHeader {
@@ -99,6 +111,9 @@ impl FastCodesHeader for SendMessageResponseHeader {
         }
         if let Some(ref batch_uniq_id) = self.batch_uniq_id {
             Self::write_if_not_null(out, "batchUniqId", batch_uniq_id.as_str());
+        }
+        if let Some(ref recall_handle) = self.recall_handle {
+            Self::write_if_not_null(out, "recallHandle", recall_handle.as_str());
         }
     }
 
@@ -122,6 +137,10 @@ impl FastCodesHeader for SendMessageResponseHeader {
         if let Some(str) = fields.get(&CheetahString::from_slice("batchUniqId")) {
             self.batch_uniq_id = Some(str.clone());
         }
+
+        if let Some(str) = fields.get(&CheetahString::from_slice("recallHandle")) {
+            self.recall_handle = Some(str.clone());
+        }
     }
 }
 
@@ -137,6 +156,7 @@ mod tests {
             100,
             Some(CheetahString::from("tx456")),
             Some(CheetahString::from("batch789")),
+            Some(CheetahString::from("recall-handle")),
         );
 
         assert_eq!(header.msg_id(), "msg123");
@@ -144,6 +164,7 @@ mod tests {
         assert_eq!(header.queue_offset(), 100);
         assert_eq!(header.transaction_id(), Some("tx456"));
         assert_eq!(header.batch_uniq_id(), Some("batch789"));
+        assert_eq!(header.recall_handle(), Some("recall-handle"));
 
         let header = SendMessageResponseHeader::default();
 
@@ -152,6 +173,7 @@ mod tests {
         assert_eq!(header.queue_offset(), 0);
         assert_eq!(header.transaction_id(), None);
         assert_eq!(header.batch_uniq_id(), None);
+        assert_eq!(header.recall_handle(), None);
     }
 
     #[test]
@@ -162,12 +184,14 @@ mod tests {
         header.set_queue_offset(200);
         header.set_transaction_id(Some(CheetahString::from("newTxId")));
         header.set_batch_uniq_id(Some(CheetahString::from("newBatchId")));
+        header.set_recall_handle(Some(CheetahString::from("recall-123")));
 
         assert_eq!(header.msg_id(), "newMsgId");
         assert_eq!(header.queue_id(), 2);
         assert_eq!(header.queue_offset(), 200);
         assert_eq!(header.transaction_id(), Some("newTxId"));
         assert_eq!(header.batch_uniq_id(), Some("newBatchId"));
+        assert_eq!(header.recall_handle(), Some("recall-123"));
     }
 
     #[test]
@@ -178,12 +202,13 @@ mod tests {
             100,
             Some(CheetahString::from("tx456")),
             Some(CheetahString::from("batch789")),
+            Some(CheetahString::from("recall-handle")),
         );
 
         let json = serde_json::to_string(&header).unwrap();
         assert_eq!(
             json,
-            r#"{"msgId":"msg123","queueId":1,"queueOffset":100,"transactionId":"tx456","batchUniqId":"batch789"}"#
+            r#"{"msgId":"msg123","queueId":1,"queueOffset":100,"transactionId":"tx456","batchUniqId":"batch789","recallHandle":"recall-handle"}"#
         );
 
         let header: SendMessageResponseHeader = serde_json::from_str(&json).unwrap();
@@ -192,6 +217,7 @@ mod tests {
         assert_eq!(header.queue_offset(), 100);
         assert_eq!(header.transaction_id(), Some("tx456"));
         assert_eq!(header.batch_uniq_id(), Some("batch789"));
+        assert_eq!(header.recall_handle(), Some("recall-handle"));
     }
 
     #[test]
@@ -202,6 +228,7 @@ mod tests {
             100,
             Some(CheetahString::from("tx456")),
             Some(CheetahString::from("batch789")),
+            Some(CheetahString::from("recall-handle")),
         );
 
         let mut out = bytes::BytesMut::new();
@@ -214,6 +241,10 @@ mod tests {
         fields.insert(CheetahString::from("queueOffset"), CheetahString::from("100"));
         fields.insert(CheetahString::from("transactionId"), CheetahString::from("tx456"));
         fields.insert(CheetahString::from("batchUniqId"), CheetahString::from("batch789"));
+        fields.insert(
+            CheetahString::from("recallHandle"),
+            CheetahString::from("recall-handle"),
+        );
 
         let mut header = SendMessageResponseHeader::default();
         header.decode_fast(&fields);
@@ -223,5 +254,6 @@ mod tests {
         assert_eq!(header.queue_offset(), 100);
         assert_eq!(header.transaction_id(), Some("tx456"));
         assert_eq!(header.batch_uniq_id(), Some("batch789"));
+        assert_eq!(header.recall_handle(), Some("recall-handle"));
     }
 }

@@ -1564,7 +1564,7 @@ pub fn process_send_response(
             Some(uniq_msg_id),
             Some(response_header.msg_id().to_string()),
             Some(message_queue),
-            response_header.queue_id() as u64,
+            response_header.queue_offset() as u64,
         );
 
         send_result.set_transaction_id(
@@ -1572,6 +1572,9 @@ pub fn process_send_response(
                 .transaction_id()
                 .map_or("".to_string(), |s| s.to_string()),
         );
+        if let Some(recall_handle) = response_header.recall_handle() {
+            send_result.set_recall_handle(recall_handle.to_string());
+        }
         if let Some(region_id) = response
             .get_ext_fields()
             .unwrap()
@@ -1585,7 +1588,7 @@ pub fn process_send_response(
         if let Some(trace_on) = response
             .get_ext_fields()
             .unwrap()
-            .get(&CheetahString::from_static_str(MessageConst::PROPERTY_MSG_REGION))
+            .get(&CheetahString::from_static_str(MessageConst::PROPERTY_TRACE_SWITCH))
         {
             send_result.set_trace_on(trace_on == "true");
         } else {

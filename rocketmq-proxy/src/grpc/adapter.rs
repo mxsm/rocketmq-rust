@@ -549,7 +549,11 @@ fn build_send_result_entry(result: &SendMessageResultEntry, request: &SendMessag
             .as_ref()
             .map(|send_result| send_result.queue_offset as i64)
             .unwrap_or_default(),
-        recall_handle: String::new(),
+        recall_handle: result
+            .send_result
+            .as_ref()
+            .and_then(|send_result| send_result.recall_handle().map(ToOwned::to_owned))
+            .unwrap_or_default(),
     }
 }
 
@@ -557,7 +561,12 @@ fn summarize_send_response_status(entries: &[SendMessageResultEntry]) -> ProxyPa
     match entries {
         [] => ProxyStatusMapper::ok_payload(),
         [entry] => entry.status.clone(),
-        _ if entries.iter().all(|entry| entry.status.is_ok()) => ProxyStatusMapper::ok_payload(),
+        _ if entries
+            .iter()
+            .all(|entry| entry.status.code() == entries[0].status.code()) =>
+        {
+            entries[0].status.clone()
+        }
         _ => ProxyStatusMapper::from_payload_code(
             v2::Code::MultipleResults,
             "send message entries contain mixed success or failure results",
@@ -965,23 +974,19 @@ mod tests {
 
     #[test]
     fn send_message_response_maps_send_status() {
+        let mut send_result = SendResult::new(
+            SendStatus::FlushDiskTimeout,
+            Some(CheetahString::from("server-msg-id")),
+            None,
+            None,
+            12,
+        );
+        send_result.set_recall_handle("recall-handle".to_string());
         let response = build_send_message_response(
             &SendMessagePlan {
                 entries: vec![SendMessageResultEntry {
-                    status: ProxyStatusMapper::from_send_result_payload(&SendResult::new(
-                        SendStatus::FlushDiskTimeout,
-                        Some(CheetahString::from("server-msg-id")),
-                        None,
-                        None,
-                        12,
-                    )),
-                    send_result: Some(SendResult::new(
-                        SendStatus::FlushDiskTimeout,
-                        Some(CheetahString::from("server-msg-id")),
-                        None,
-                        None,
-                        12,
-                    )),
+                    status: ProxyStatusMapper::from_send_result_payload(&send_result),
+                    send_result: Some(send_result),
                 }],
             },
             &crate::processor::SendMessageRequest {
@@ -1000,9 +1005,53 @@ mod tests {
 
         assert_eq!(response.status.unwrap().code, v2::Code::MasterPersistenceTimeout as i32);
         assert_eq!(response.entries[0].message_id, "server-msg-id");
+        assert_eq!(response.entries[0].recall_handle, "recall-handle");
         assert_eq!(
             response.entries[0].status.as_ref().unwrap().code,
             v2::Code::MasterPersistenceTimeout as i32
         );
+    }
+
+    #[test]
+    fn send_message_response_uses_shared_failure_code_when_all_entries_fail_same_way() {
+        let response = build_send_message_response(
+            &SendMessagePlan {
+                entries: vec![
+                    SendMessageResultEntry {
+                        status: ProxyStatusMapper::from_payload_code(v2::Code::TopicNotFound, "topic a missing"),
+                        send_result: None,
+                    },
+                    SendMessageResultEntry {
+                        status: ProxyStatusMapper::from_payload_code(v2::Code::TopicNotFound, "topic b missing"),
+                        send_result: None,
+                    },
+                ],
+            },
+            &crate::processor::SendMessageRequest {
+                messages: vec![
+                    crate::processor::SendMessageEntry {
+                        topic: ResourceIdentity::new("", "TopicA"),
+                        client_message_id: "client-msg-id-1".to_owned(),
+                        message: Message::builder()
+                            .topic("TopicA")
+                            .body(Bytes::from_static(b"hello"))
+                            .build_unchecked(),
+                        queue_id: None,
+                    },
+                    crate::processor::SendMessageEntry {
+                        topic: ResourceIdentity::new("", "TopicA"),
+                        client_message_id: "client-msg-id-2".to_owned(),
+                        message: Message::builder()
+                            .topic("TopicA")
+                            .body(Bytes::from_static(b"world"))
+                            .build_unchecked(),
+                        queue_id: None,
+                    },
+                ],
+                timeout: None,
+            },
+        );
+
+        assert_eq!(response.status.unwrap().code, v2::Code::TopicNotFound as i32);
     }
 }

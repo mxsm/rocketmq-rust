@@ -32,6 +32,7 @@ use rocketmq_common::common::message::MessageTrait;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::RETRY_GROUP_TOPIC_PREFIX;
 use rocketmq_common::common::mq_version::RocketMqVersion;
+use rocketmq_common::common::producer::HandleV1;
 use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
 use rocketmq_common::common::topic::TopicValidator;
 use rocketmq_common::common::FAQUrl;
@@ -397,6 +398,7 @@ where
                 request,
                 topic.as_str(),
                 transaction_id,
+                None,
                 &mut send_message_context,
                 ctx,
                 queue_id,
@@ -549,6 +551,7 @@ where
         let start = Instant::now();
         let topic = message_ext.topic().clone();
         let transaction_id = MessageClientIDSetter::get_uniq_id(&message_ext.message_ext_inner.message);
+        let recall_handle = self.build_recall_handle(&message_ext);
         let put_message_result = if send_transaction_prepare_message {
             self.inner
                 .transactional_message_service
@@ -568,6 +571,7 @@ where
                 request,
                 topic.as_str(),
                 transaction_id,
+                recall_handle,
                 &mut send_message_context,
                 ctx,
                 queue_id,
@@ -732,6 +736,7 @@ where
         put_message_result: &PutMessageResult,
         queue_id: i32,
         transaction_id: Option<CheetahString>,
+        recall_handle: Option<CheetahString>,
     ) {
         // SAFETY: When send_ok is true, append_message_result must exist
         let result = put_message_result
@@ -746,6 +751,7 @@ where
         response_header.set_queue_id(queue_id);
         response_header.set_queue_offset(result.logics_offset);
         response_header.set_transaction_id(transaction_id);
+        response_header.set_recall_handle(recall_handle);
     }
 
     /// Update send message context for hooks
@@ -828,6 +834,7 @@ where
         request: &RemotingCommand,
         topic: &str,
         transaction_id: Option<CheetahString>,
+        recall_handle: Option<CheetahString>,
         send_message_context: &mut SendMessageContext,
         ctx: &mut ConnectionHandlerContext,
         queue_id_int: i32,
@@ -857,6 +864,7 @@ where
                     &put_message_result,
                     queue_id_int,
                     transaction_id.clone(),
+                    recall_handle.clone(),
                 );
 
                 let rewrite_result = rewrite_response_for_static_topic(response_header, mapping_context);
@@ -899,6 +907,37 @@ where
             }
             (None, false)
         }
+    }
+
+    fn build_recall_handle(&self, message: &MessageExtBrokerInner) -> Option<CheetahString> {
+        let timestamp_str = message
+            .message_ext_inner
+            .message
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_TIMER_OUT_MS))?;
+        let real_topic = message
+            .message_ext_inner
+            .message
+            .property(&CheetahString::from_static_str(MessageConst::PROPERTY_REAL_TOPIC))?;
+        if real_topic.starts_with(RETRY_GROUP_TOPIC_PREFIX) {
+            return None;
+        }
+
+        let uniq_id = MessageClientIDSetter::get_uniq_id(&message.message_ext_inner.message)?;
+        let timestamp = timestamp_str.parse::<i64>().ok()?.checked_add(1)?;
+        let broker_name = self
+            .inner
+            .broker_runtime_inner
+            .broker_config()
+            .broker_identity
+            .broker_name
+            .clone();
+
+        Some(CheetahString::from_string(HandleV1::build_handle(
+            real_topic,
+            broker_name,
+            timestamp.to_string(),
+            uniq_id,
+        )))
     }
 
     pub async fn pre_send(

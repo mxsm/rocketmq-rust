@@ -1703,6 +1703,7 @@ impl MQClientAPIImpl {
                             message_queue: Some(message_queue),
                             queue_offset: response_header.queue_offset() as u64,
                             transaction_id: response_header.transaction_id().map(|s| s.to_string()),
+                            recall_handle: response_header.recall_handle().map(|s| s.to_string()),
                             region_id: Some(region_id),
                             trace_on,
                             ..Default::default()
@@ -1802,6 +1803,7 @@ impl MQClientAPIImpl {
             message_queue: Some(message_queue),
             queue_offset: response_header.queue_offset() as u64,
             transaction_id: response_header.transaction_id().map(|s| s.to_string()),
+            recall_handle: response_header.recall_handle().map(|s| s.to_string()),
             region_id: Some(region_id),
             trace_on,
             ..Default::default()
