@@ -132,11 +132,35 @@ pub struct LiteSubscriptionSnapshot {
     pub last_touched: SystemTime,
 }
 
+#[derive(Debug, Clone)]
+pub struct PreparedTransactionRegistration {
+    pub client_id: String,
+    pub topic: ResourceIdentity,
+    pub message_id: String,
+    pub transaction_id: String,
+    pub producer_group: String,
+    pub transaction_state_table_offset: u64,
+    pub commit_log_message_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedTransactionHandle {
+    pub client_id: String,
+    pub topic: ResourceIdentity,
+    pub message_id: String,
+    pub transaction_id: String,
+    pub producer_group: String,
+    pub transaction_state_table_offset: u64,
+    pub commit_log_message_id: String,
+    pub last_touched: SystemTime,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ReapSummary {
     pub removed_sessions: usize,
     pub removed_receipt_handles: usize,
     pub removed_lite_subscriptions: usize,
+    pub removed_prepared_transactions: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -180,6 +204,21 @@ impl LiteSubscriptionKey {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PreparedTransactionKey {
+    client_id: String,
+    transaction_id: String,
+}
+
+impl PreparedTransactionKey {
+    fn new(client_id: impl Into<String>, transaction_id: impl Into<String>) -> Self {
+        Self {
+            client_id: client_id.into(),
+            transaction_id: transaction_id.into(),
+        }
+    }
+}
+
 impl From<&TrackedReceiptHandle> for ReceiptHandleKey {
     fn from(value: &TrackedReceiptHandle) -> Self {
         Self::new(
@@ -196,6 +235,7 @@ pub struct ClientSessionRegistry {
     sessions: Arc<DashMap<String, ClientSession>>,
     receipt_handles: Arc<DashMap<ReceiptHandleKey, TrackedReceiptHandle>>,
     lite_subscriptions: Arc<DashMap<LiteSubscriptionKey, LiteSubscriptionSnapshot>>,
+    prepared_transactions: Arc<DashMap<PreparedTransactionKey, PreparedTransactionHandle>>,
 }
 
 impl ClientSessionRegistry {
@@ -352,6 +392,89 @@ impl ClientSessionRegistry {
         Some(result)
     }
 
+    pub fn track_prepared_transaction(
+        &self,
+        registration: PreparedTransactionRegistration,
+    ) -> PreparedTransactionHandle {
+        let tracked = PreparedTransactionHandle {
+            client_id: registration.client_id.clone(),
+            topic: registration.topic,
+            message_id: registration.message_id,
+            transaction_id: registration.transaction_id.clone(),
+            producer_group: registration.producer_group,
+            transaction_state_table_offset: registration.transaction_state_table_offset,
+            commit_log_message_id: registration.commit_log_message_id,
+            last_touched: SystemTime::now(),
+        };
+        self.prepared_transactions.insert(
+            PreparedTransactionKey::new(registration.client_id, registration.transaction_id),
+            tracked.clone(),
+        );
+        tracked
+    }
+
+    pub fn prepared_transaction(
+        &self,
+        client_id: &str,
+        transaction_id: &str,
+        message_id: &str,
+    ) -> Option<PreparedTransactionHandle> {
+        let transaction_id = transaction_id.trim();
+        if !transaction_id.is_empty() {
+            let key = PreparedTransactionKey::new(client_id.to_owned(), transaction_id.to_owned());
+            if let Some(mut tracked) = self.prepared_transactions.get_mut(&key) {
+                tracked.last_touched = SystemTime::now();
+                return Some(tracked.clone());
+            }
+        }
+
+        let trimmed_message_id = message_id.trim();
+        if trimmed_message_id.is_empty() {
+            return None;
+        }
+
+        let matching_key = self
+            .prepared_transactions
+            .iter()
+            .find(|entry| entry.key().client_id == client_id && entry.value().message_id == trimmed_message_id)
+            .map(|entry| entry.key().clone())?;
+        let mut tracked = self.prepared_transactions.get_mut(&matching_key)?;
+        tracked.last_touched = SystemTime::now();
+        Some(tracked.clone())
+    }
+
+    pub fn remove_prepared_transaction(
+        &self,
+        client_id: &str,
+        transaction_id: &str,
+        message_id: &str,
+    ) -> Option<PreparedTransactionHandle> {
+        let transaction_id = transaction_id.trim();
+        if !transaction_id.is_empty() {
+            return self
+                .prepared_transactions
+                .remove(&PreparedTransactionKey::new(
+                    client_id.to_owned(),
+                    transaction_id.to_owned(),
+                ))
+                .map(|(_, tracked)| tracked);
+        }
+
+        let trimmed_message_id = message_id.trim();
+        if trimmed_message_id.is_empty() {
+            return None;
+        }
+
+        let matching_key = self
+            .prepared_transactions
+            .iter()
+            .find(|entry| entry.key().client_id == client_id && entry.value().message_id == trimmed_message_id)
+            .map(|entry| entry.key().clone())?;
+        self.prepared_transactions
+            .remove(&matching_key)
+            .map(|(_, tracked)| tracked)
+    }
+
     pub fn track_receipt_handle(&self, registration: ReceiptHandleRegistration) -> TrackedReceiptHandle {
         let tracked = TrackedReceiptHandle {
             client_id: registration.client_id,
@@ -464,6 +587,15 @@ impl ClientSessionRegistry {
         for key in lite_keys {
             let _ = self.lite_subscriptions.remove(&key);
         }
+        let prepared_transaction_keys = self
+            .prepared_transactions
+            .iter()
+            .filter(|entry| entry.key().client_id == client_id)
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>();
+        for key in prepared_transaction_keys {
+            let _ = self.prepared_transactions.remove(&key);
+        }
         session
     }
 
@@ -483,8 +615,15 @@ impl ClientSessionRegistry {
         self.lite_subscriptions.len()
     }
 
+    pub fn prepared_transaction_count(&self) -> usize {
+        self.prepared_transactions.len()
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.sessions.is_empty() && self.receipt_handles.is_empty() && self.lite_subscriptions.is_empty()
+        self.sessions.is_empty()
+            && self.receipt_handles.is_empty()
+            && self.lite_subscriptions.is_empty()
+            && self.prepared_transactions.is_empty()
     }
 
     pub fn reap_expired(&self, client_ttl: Duration, receipt_handle_ttl: Duration) -> ReapSummary {
@@ -524,6 +663,18 @@ impl ClientSessionRegistry {
         for key in expired_lite_subscriptions {
             if self.lite_subscriptions.remove(&key).is_some() {
                 summary.removed_lite_subscriptions += 1;
+            }
+        }
+
+        let expired_prepared_transactions = self
+            .prepared_transactions
+            .iter()
+            .filter(|entry| is_expired(entry.last_touched, now, client_ttl))
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>();
+        for key in expired_prepared_transactions {
+            if self.prepared_transactions.remove(&key).is_some() {
+                summary.removed_prepared_transactions += 1;
             }
         }
 

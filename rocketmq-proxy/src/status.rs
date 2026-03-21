@@ -100,6 +100,7 @@ impl ProxyStatusMapper {
             ProxyError::InvalidMetadata { .. } => v2::Code::BadRequest,
             ProxyError::Transport { .. } => v2::Code::InternalError,
             ProxyError::IllegalMessageId { .. } => v2::Code::IllegalMessageId,
+            ProxyError::InvalidTransactionId { .. } => v2::Code::InvalidTransactionId,
             ProxyError::IllegalMessageGroup { .. } => v2::Code::IllegalMessageGroup,
             ProxyError::IllegalDeliveryTime { .. } => v2::Code::IllegalDeliveryTime,
             ProxyError::IllegalPollingTime { .. } => v2::Code::IllegalPollingTime,

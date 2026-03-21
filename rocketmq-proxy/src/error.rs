@@ -43,6 +43,9 @@ pub enum ProxyError {
     #[error("illegal message id: {message}")]
     IllegalMessageId { message: String },
 
+    #[error("invalid transaction id: {message}")]
+    InvalidTransactionId { message: String },
+
     #[error("illegal message group: {message}")]
     IllegalMessageGroup { message: String },
 
@@ -88,6 +91,12 @@ impl ProxyError {
 
     pub fn illegal_message_id(message: impl Into<String>) -> Self {
         Self::IllegalMessageId {
+            message: message.into(),
+        }
+    }
+
+    pub fn invalid_transaction_id(message: impl Into<String>) -> Self {
+        Self::InvalidTransactionId {
             message: message.into(),
         }
     }

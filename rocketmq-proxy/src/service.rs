@@ -35,6 +35,8 @@ use crate::processor::AckMessageRequest;
 use crate::processor::AckMessageResultEntry;
 use crate::processor::ChangeInvisibleDurationPlan;
 use crate::processor::ChangeInvisibleDurationRequest;
+use crate::processor::EndTransactionPlan;
+use crate::processor::EndTransactionRequest;
 use crate::processor::ReceiveMessagePlan;
 use crate::processor::ReceiveMessageRequest;
 use crate::processor::SendMessageRequest;
@@ -160,6 +162,15 @@ pub trait ConsumerService: Send + Sync {
     ) -> ProxyResult<ChangeInvisibleDurationPlan>;
 }
 
+#[async_trait]
+pub trait TransactionService: Send + Sync {
+    async fn end_transaction(
+        &self,
+        context: &ProxyContext,
+        request: &EndTransactionRequest,
+    ) -> ProxyResult<EndTransactionPlan>;
+}
+
 pub trait ServiceManager: Send + Sync {
     fn mode(&self) -> ProxyMode;
 
@@ -172,6 +183,8 @@ pub trait ServiceManager: Send + Sync {
     fn message_service(&self) -> Arc<dyn MessageService>;
 
     fn consumer_service(&self) -> Arc<dyn ConsumerService>;
+
+    fn transaction_service(&self) -> Arc<dyn TransactionService>;
 }
 
 #[derive(Debug, Default)]
@@ -271,6 +284,20 @@ impl ConsumerService for DefaultConsumerService {
         _request: &ChangeInvisibleDurationRequest,
     ) -> ProxyResult<ChangeInvisibleDurationPlan> {
         Err(ProxyError::not_implemented("consumer service"))
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct DefaultTransactionService;
+
+#[async_trait]
+impl TransactionService for DefaultTransactionService {
+    async fn end_transaction(
+        &self,
+        _context: &ProxyContext,
+        _request: &EndTransactionRequest,
+    ) -> ProxyResult<EndTransactionPlan> {
+        Err(ProxyError::not_implemented("transaction service"))
     }
 }
 
@@ -514,12 +541,34 @@ impl ConsumerService for ClusterConsumerService {
     }
 }
 
+pub struct ClusterTransactionService {
+    client: Arc<dyn ClusterClient>,
+}
+
+impl ClusterTransactionService {
+    pub fn new(client: Arc<dyn ClusterClient>) -> Self {
+        Self { client }
+    }
+}
+
+#[async_trait]
+impl TransactionService for ClusterTransactionService {
+    async fn end_transaction(
+        &self,
+        context: &ProxyContext,
+        request: &EndTransactionRequest,
+    ) -> ProxyResult<EndTransactionPlan> {
+        self.client.end_transaction(context, request).await
+    }
+}
+
 pub struct ClusterServiceManager {
     route_service: Arc<dyn RouteService>,
     metadata_service: Arc<dyn MetadataService>,
     assignment_service: Arc<dyn AssignmentService>,
     message_service: Arc<dyn MessageService>,
     consumer_service: Arc<dyn ConsumerService>,
+    transaction_service: Arc<dyn TransactionService>,
 }
 
 impl ClusterServiceManager {
@@ -530,6 +579,7 @@ impl ClusterServiceManager {
             Arc::new(DefaultAssignmentService),
             Arc::new(DefaultMessageService),
             Arc::new(DefaultConsumerService),
+            Arc::new(DefaultTransactionService),
         )
     }
 
@@ -544,6 +594,7 @@ impl ClusterServiceManager {
             assignment_service,
             Arc::new(DefaultMessageService),
             Arc::new(DefaultConsumerService),
+            Arc::new(DefaultTransactionService),
         )
     }
 
@@ -553,6 +604,7 @@ impl ClusterServiceManager {
         assignment_service: Arc<dyn AssignmentService>,
         message_service: Arc<dyn MessageService>,
         consumer_service: Arc<dyn ConsumerService>,
+        transaction_service: Arc<dyn TransactionService>,
     ) -> Self {
         Self {
             route_service,
@@ -560,6 +612,7 @@ impl ClusterServiceManager {
             assignment_service,
             message_service,
             consumer_service,
+            transaction_service,
         }
     }
 
@@ -568,12 +621,14 @@ impl ClusterServiceManager {
         let metadata_client = Arc::clone(&client);
         let assignment_client = Arc::clone(&client);
         let consumer_client = Arc::clone(&client);
+        let transaction_client = Arc::clone(&client);
         Self::with_services(
             Arc::new(ClusterRouteService::new(route_client)),
             Arc::new(ClusterMetadataService::new(metadata_client)),
             Arc::new(ClusterAssignmentService::new(assignment_client)),
             Arc::new(ClusterMessageService::new(client)),
             Arc::new(ClusterConsumerService::new(consumer_client)),
+            Arc::new(ClusterTransactionService::new(transaction_client)),
         )
     }
 
@@ -612,6 +667,10 @@ impl ServiceManager for ClusterServiceManager {
     fn consumer_service(&self) -> Arc<dyn ConsumerService> {
         Arc::clone(&self.consumer_service)
     }
+
+    fn transaction_service(&self) -> Arc<dyn TransactionService> {
+        Arc::clone(&self.transaction_service)
+    }
 }
 
 pub struct LocalServiceManager {
@@ -620,6 +679,7 @@ pub struct LocalServiceManager {
     assignment_service: Arc<dyn AssignmentService>,
     message_service: Arc<dyn MessageService>,
     consumer_service: Arc<dyn ConsumerService>,
+    transaction_service: Arc<dyn TransactionService>,
 }
 
 impl LocalServiceManager {
@@ -630,6 +690,7 @@ impl LocalServiceManager {
             Arc::new(DefaultAssignmentService),
             Arc::new(DefaultMessageService),
             Arc::new(DefaultConsumerService),
+            Arc::new(DefaultTransactionService),
         )
     }
 
@@ -644,6 +705,7 @@ impl LocalServiceManager {
             assignment_service,
             Arc::new(DefaultMessageService),
             Arc::new(DefaultConsumerService),
+            Arc::new(DefaultTransactionService),
         )
     }
 
@@ -653,6 +715,7 @@ impl LocalServiceManager {
         assignment_service: Arc<dyn AssignmentService>,
         message_service: Arc<dyn MessageService>,
         consumer_service: Arc<dyn ConsumerService>,
+        transaction_service: Arc<dyn TransactionService>,
     ) -> Self {
         Self {
             route_service,
@@ -660,6 +723,7 @@ impl LocalServiceManager {
             assignment_service,
             message_service,
             consumer_service,
+            transaction_service,
         }
     }
 }
@@ -696,5 +760,9 @@ impl ServiceManager for LocalServiceManager {
 
     fn consumer_service(&self) -> Arc<dyn ConsumerService> {
         Arc::clone(&self.consumer_service)
+    }
+
+    fn transaction_service(&self) -> Arc<dyn TransactionService> {
+        Arc::clone(&self.transaction_service)
     }
 }

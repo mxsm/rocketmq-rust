@@ -165,6 +165,36 @@ pub struct ChangeInvisibleDurationPlan {
     pub receipt_handle: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionResolution {
+    Commit,
+    Rollback,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionSource {
+    Client,
+    ServerCheck,
+}
+
+#[derive(Debug, Clone)]
+pub struct EndTransactionRequest {
+    pub topic: ResourceIdentity,
+    pub message_id: String,
+    pub transaction_id: String,
+    pub resolution: TransactionResolution,
+    pub source: TransactionSource,
+    pub trace_context: Option<String>,
+    pub producer_group: Option<String>,
+    pub transaction_state_table_offset: Option<u64>,
+    pub commit_log_message_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EndTransactionPlan {
+    pub status: ProxyPayloadStatus,
+}
+
 #[async_trait]
 pub trait MessagingProcessor: Send + Sync {
     async fn query_route(&self, context: &ProxyContext, request: QueryRouteRequest) -> ProxyResult<QueryRoutePlan>;
@@ -190,6 +220,12 @@ pub trait MessagingProcessor: Send + Sync {
         context: &ProxyContext,
         request: ChangeInvisibleDurationRequest,
     ) -> ProxyResult<ChangeInvisibleDurationPlan>;
+
+    async fn end_transaction(
+        &self,
+        context: &ProxyContext,
+        request: EndTransactionRequest,
+    ) -> ProxyResult<EndTransactionPlan>;
 }
 
 #[derive(Clone)]
@@ -279,5 +315,14 @@ impl MessagingProcessor for DefaultMessagingProcessor {
     ) -> ProxyResult<ChangeInvisibleDurationPlan> {
         let consumer_service = self.service_manager.consumer_service();
         consumer_service.change_invisible_duration(context, &request).await
+    }
+
+    async fn end_transaction(
+        &self,
+        context: &ProxyContext,
+        request: EndTransactionRequest,
+    ) -> ProxyResult<EndTransactionPlan> {
+        let transaction_service = self.service_manager.transaction_service();
+        transaction_service.end_transaction(context, &request).await
     }
 }

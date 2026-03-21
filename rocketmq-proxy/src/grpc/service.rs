@@ -40,6 +40,7 @@ use crate::proto::v2;
 use crate::service::ResourceIdentity;
 use crate::session::ClientSessionRegistry;
 use crate::session::ClientSettingsSnapshot;
+use crate::session::PreparedTransactionRegistration;
 use crate::session::ReceiptHandleRegistration;
 use crate::session::TrackedReceiptHandle;
 use crate::status::ProxyStatusMapper;
@@ -368,6 +369,93 @@ where
         );
     }
 
+    fn track_prepared_transactions(
+        &self,
+        context: &ProxyContext,
+        request: &crate::processor::SendMessageRequest,
+        plan: &crate::processor::SendMessagePlan,
+    ) {
+        let Some(client_id) = context.client_id() else {
+            return;
+        };
+        let producer_group =
+            crate::cluster::build_proxy_producer_group(&self.config.cluster, Some(client_id), context.request_id());
+
+        for (message, result) in request.messages.iter().zip(plan.entries.iter()) {
+            if !is_transaction_message(&message.message) {
+                continue;
+            }
+            let Some(send_result) = result.send_result.as_ref() else {
+                continue;
+            };
+            let Some(transaction_id) = send_result.transaction_id.clone() else {
+                continue;
+            };
+            let Some(commit_log_message_id) = send_result
+                .offset_msg_id
+                .clone()
+                .or_else(|| send_result.msg_id.as_ref().map(ToString::to_string))
+            else {
+                continue;
+            };
+            let client_visible_message_id = send_result
+                .msg_id
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| message.client_message_id.clone());
+            self.sessions
+                .track_prepared_transaction(PreparedTransactionRegistration {
+                    client_id: client_id.to_owned(),
+                    topic: message.topic.clone(),
+                    message_id: client_visible_message_id,
+                    transaction_id,
+                    producer_group: producer_group.clone(),
+                    transaction_state_table_offset: send_result.queue_offset,
+                    commit_log_message_id,
+                });
+        }
+    }
+
+    fn enrich_end_transaction_request(
+        &self,
+        context: &ProxyContext,
+        request: &mut crate::processor::EndTransactionRequest,
+    ) -> ProxyResult<()> {
+        let client_id = self.validate_client_context(context)?;
+        let tracked = self
+            .sessions
+            .prepared_transaction(client_id, request.transaction_id.as_str(), request.message_id.as_str())
+            .ok_or_else(|| {
+                ProxyError::invalid_transaction_id(format!(
+                    "transaction '{}' was not found in proxy session state",
+                    request.transaction_id
+                ))
+            })?;
+        request.producer_group = Some(tracked.producer_group);
+        request.transaction_state_table_offset = Some(tracked.transaction_state_table_offset);
+        request.commit_log_message_id = Some(tracked.commit_log_message_id);
+        Ok(())
+    }
+
+    fn reconcile_end_transaction_result(
+        &self,
+        context: &ProxyContext,
+        request: &crate::processor::EndTransactionRequest,
+        plan: &crate::processor::EndTransactionPlan,
+    ) {
+        if !plan.status.is_ok() {
+            return;
+        }
+        let Some(client_id) = context.client_id() else {
+            return;
+        };
+        let _ = self.sessions.remove_prepared_transaction(
+            client_id,
+            request.transaction_id.as_str(),
+            request.message_id.as_str(),
+        );
+    }
+
     fn spawn_auto_renew_task(&self, context: ProxyContext, tracked: TrackedReceiptHandle) {
         let processor = Arc::clone(&self.processor);
         let sessions = self.sessions.clone();
@@ -498,6 +586,14 @@ fn is_lite_client(client_type: Option<i32>) -> bool {
     )
 }
 
+fn is_transaction_message(message: &rocketmq_common::common::message::message_single::Message) -> bool {
+    message
+        .property(&cheetah_string::CheetahString::from_static_str(
+            MessageConst::PROPERTY_TRANSACTION_PREPARED,
+        ))
+        .is_some()
+}
+
 #[tonic::async_trait]
 impl<P> v2::messaging_service_server::MessagingService for ProxyGrpcService<P>
 where
@@ -569,7 +665,10 @@ where
         {
             Ok(input) => match self.guards.try_producer() {
                 Ok(_permit) => match self.processor.send_message(&context, input.clone()).await {
-                    Ok(plan) => adapter::build_send_message_response(&plan, &input),
+                    Ok(plan) => {
+                        self.track_prepared_transactions(&context, &input, &plan);
+                        adapter::build_send_message_response(&plan, &input)
+                    }
                     Err(error) => adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
                 },
                 Err(error) => adapter::error_send_message_response(ProxyStatusMapper::from_error(&error)),
@@ -720,11 +819,33 @@ where
 
     async fn end_transaction(
         &self,
-        _request: Request<v2::EndTransactionRequest>,
+        request: Request<v2::EndTransactionRequest>,
     ) -> Result<Response<v2::EndTransactionResponse>, Status> {
-        Ok(Response::new(v2::EndTransactionResponse {
-            status: Some(self.not_implemented_status("EndTransaction")),
-        }))
+        self.reap_session_state();
+        let context = self.context("EndTransaction", &request);
+        let request = request.into_inner();
+
+        let response = match self
+            .validate_client_context(&context)
+            .and_then(|_| adapter::build_end_transaction_request(&request))
+            .and_then(|mut input| {
+                self.enrich_end_transaction_request(&context, &mut input)?;
+                Ok(input)
+            }) {
+            Ok(input) => match self.guards.try_producer() {
+                Ok(_permit) => match self.processor.end_transaction(&context, input.clone()).await {
+                    Ok(plan) => {
+                        self.reconcile_end_transaction_result(&context, &input, &plan);
+                        adapter::build_end_transaction_response(&plan)
+                    }
+                    Err(error) => adapter::error_end_transaction_response(ProxyStatusMapper::from_error(&error)),
+                },
+                Err(error) => adapter::error_end_transaction_response(ProxyStatusMapper::from_error(&error)),
+            },
+            Err(error) => adapter::error_end_transaction_response(ProxyStatusMapper::from_error(&error)),
+        };
+
+        Ok(Response::new(response))
     }
 
     async fn telemetry(
@@ -1043,6 +1164,7 @@ mod tests {
             Arc::new(crate::service::DefaultAssignmentService),
             message_service,
             consumer_service,
+            Arc::new(crate::service::DefaultTransactionService),
         );
         let processor = Arc::new(DefaultMessagingProcessor::new(Arc::new(manager)));
         ProxyGrpcService::new(

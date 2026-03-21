@@ -31,14 +31,18 @@ use rocketmq_client_rust::producer::default_mq_producer::DefaultMQProducer;
 use rocketmq_client_rust::producer::mq_producer::MQProducer;
 use rocketmq_client_rust::producer::send_result::SendResult;
 use rocketmq_common::common::attribute::topic_message_type::TopicMessageType;
+use rocketmq_common::common::message::message_id::MessageId;
 use rocketmq_common::common::message::message_queue::MessageQueue;
 use rocketmq_common::common::message::message_queue_assignment::MessageQueueAssignment;
 use rocketmq_common::common::mix_all;
 use rocketmq_common::common::mix_all::MASTER_ID;
+use rocketmq_common::common::sys_flag::message_sys_flag::MessageSysFlag;
+use rocketmq_common::MessageDecoder;
 use rocketmq_common::TimeUtils::current_millis;
 use rocketmq_error::RocketMQError;
 use rocketmq_remoting::protocol::header::ack_message_request_header::AckMessageRequestHeader;
 use rocketmq_remoting::protocol::header::change_invisible_time_request_header::ChangeInvisibleTimeRequestHeader;
+use rocketmq_remoting::protocol::header::end_transaction_request_header::EndTransactionRequestHeader;
 use rocketmq_remoting::protocol::header::extra_info_util::ExtraInfoUtil;
 use rocketmq_remoting::protocol::header::namesrv::topic_operation_header::TopicRequestHeader as PopTopicRequestHeader;
 use rocketmq_remoting::protocol::header::pop_message_request_header::PopMessageRequestHeader;
@@ -58,12 +62,16 @@ use crate::processor::AckMessageRequest;
 use crate::processor::AckMessageResultEntry;
 use crate::processor::ChangeInvisibleDurationPlan;
 use crate::processor::ChangeInvisibleDurationRequest;
+use crate::processor::EndTransactionPlan;
+use crate::processor::EndTransactionRequest;
 use crate::processor::ReceiveMessagePlan;
 use crate::processor::ReceiveMessageRequest;
 use crate::processor::ReceivedMessage;
 use crate::processor::SendMessageEntry;
 use crate::processor::SendMessageRequest;
 use crate::processor::SendMessageResultEntry;
+use crate::processor::TransactionResolution;
+use crate::processor::TransactionSource;
 use crate::proto::v2;
 use crate::service::ProxyTopicMessageType;
 use crate::service::ResourceIdentity;
@@ -113,6 +121,12 @@ pub trait ClusterClient: Send + Sync {
         context: &ProxyContext,
         request: &ChangeInvisibleDurationRequest,
     ) -> ProxyResult<ChangeInvisibleDurationPlan>;
+
+    async fn end_transaction(
+        &self,
+        context: &ProxyContext,
+        request: &EndTransactionRequest,
+    ) -> ProxyResult<EndTransactionPlan>;
 }
 
 pub struct RocketmqClusterClient {
@@ -254,11 +268,13 @@ impl ClusterClient for RocketmqClusterClient {
     ) -> ProxyResult<Vec<SendMessageResultEntry>> {
         let config = self.config.clone();
         let request = request.clone();
+        let client_id = context.client_id().map(ToOwned::to_owned);
         let request_id = context.request_id().to_owned();
 
         run_cluster_task(move || async move {
             let timeout = effective_send_timeout_ms(&config, request.timeout);
-            let mut producer = build_send_producer(&config, &request, request_id.as_str(), timeout);
+            let mut producer =
+                build_send_producer(&config, &request, client_id.as_deref(), request_id.as_str(), timeout);
             if let Err(error) = producer.start().await {
                 let error = ProxyError::from(error);
                 return Ok(request
@@ -345,6 +361,32 @@ impl ClusterClient for RocketmqClusterClient {
         run_cluster_task(move || async move {
             let mut client = initialize_client_instance(config.clone()).await?;
             change_invisible_duration_inner(&mut client, &config, &request, timeout_ms).await
+        })
+        .await
+    }
+
+    async fn end_transaction(
+        &self,
+        context: &ProxyContext,
+        request: &EndTransactionRequest,
+    ) -> ProxyResult<EndTransactionPlan> {
+        let config = self.config.clone();
+        let request = request.clone();
+        let client_id = context.client_id().map(ToOwned::to_owned);
+        let request_id = context.request_id().to_owned();
+        let timeout_ms = effective_request_timeout_ms(config.mq_client_api_timeout_ms, context.deadline());
+
+        run_cluster_task(move || async move {
+            let mut client = initialize_client_instance(config.clone()).await?;
+            end_transaction_inner(
+                &mut client,
+                &config,
+                &request,
+                client_id.as_deref(),
+                request_id.as_str(),
+                timeout_ms,
+            )
+            .await
         })
         .await
     }
@@ -672,6 +714,63 @@ async fn change_invisible_time(
     })?
 }
 
+async fn end_transaction_inner(
+    client: &mut ArcMut<MQClientInstance>,
+    config: &ClusterConfig,
+    request: &EndTransactionRequest,
+    client_id: Option<&str>,
+    request_id: &str,
+    timeout_ms: u64,
+) -> ProxyResult<EndTransactionPlan> {
+    let topic_name = request.topic.to_string();
+    let route = client
+        .get_mq_client_api_impl()
+        .get_topic_route_info_from_name_server(topic_name.as_str(), config.mq_client_api_timeout_ms)
+        .await?
+        .ok_or_else(|| RocketMQError::route_not_found(topic_name.clone()))?;
+    let broker_addr = select_master_broker_addr(&route).ok_or_else(|| RocketMQError::BrokerNotFound {
+        name: topic_name.clone(),
+    })?;
+    let producer_group = request
+        .producer_group
+        .clone()
+        .unwrap_or_else(|| build_proxy_producer_group(config, client_id, request_id));
+    let transaction_state_table_offset = request
+        .transaction_state_table_offset
+        .ok_or_else(|| ProxyError::invalid_transaction_id("missing transactional message offset for endTransaction"))?;
+    let broker_message_id = decode_end_transaction_message_id(
+        request
+            .commit_log_message_id
+            .as_deref()
+            .unwrap_or(request.message_id.as_str()),
+    )?;
+    let request_header = EndTransactionRequestHeader {
+        topic: CheetahString::from(topic_name),
+        producer_group: CheetahString::from(producer_group),
+        tran_state_table_offset: transaction_state_table_offset,
+        commit_log_offset: broker_message_id.offset as u64,
+        commit_or_rollback: transaction_resolution_flag(request.resolution),
+        from_transaction_check: matches!(request.source, TransactionSource::ServerCheck),
+        msg_id: CheetahString::from(request.message_id.as_str()),
+        transaction_id: Some(CheetahString::from(request.transaction_id.as_str())),
+        rpc_request_header: RpcRequestHeader::default(),
+    };
+
+    client
+        .get_mq_client_api_impl()
+        .end_transaction_oneway(
+            &broker_addr,
+            request_header,
+            CheetahString::from(request.trace_context.as_deref().unwrap_or("")),
+            timeout_ms,
+        )
+        .await?;
+
+    Ok(EndTransactionPlan {
+        status: ProxyStatusMapper::ok_payload(),
+    })
+}
+
 fn build_pop_request_header(broker_name: &CheetahString, request: &ReceiveMessageRequest) -> PopMessageRequestHeader {
     PopMessageRequestHeader {
         consumer_group: CheetahString::from(request.group.to_string()),
@@ -805,6 +904,7 @@ async fn resolve_subscription_broker_name(
 fn build_send_producer(
     config: &ClusterConfig,
     request: &SendMessageRequest,
+    client_id: Option<&str>,
     request_id: &str,
     timeout_ms: u64,
 ) -> DefaultMQProducer {
@@ -827,7 +927,7 @@ fn build_send_producer(
 
     DefaultMQProducer::builder()
         .client_config(client_config)
-        .producer_group(build_send_producer_group(config, request_id))
+        .producer_group(build_proxy_producer_group(config, client_id, request_id))
         .topics(topics)
         .send_msg_timeout(timeout_ms as u32)
         .build()
@@ -908,12 +1008,6 @@ fn failure_send_result_entry(error: &ProxyError) -> SendMessageResultEntry {
     }
 }
 
-fn build_send_producer_group(config: &ClusterConfig, request_id: &str) -> String {
-    let prefix = sanitize_group_component(config.producer_group_prefix.as_str());
-    let request = sanitize_group_component(request_id);
-    format!("{prefix}-{request}")
-}
-
 fn sanitize_group_component(value: &str) -> String {
     let sanitized: String = value
         .chars()
@@ -925,6 +1019,25 @@ fn sanitize_group_component(value: &str) -> String {
     } else {
         sanitized
     }
+}
+
+pub(crate) fn build_proxy_producer_group(config: &ClusterConfig, client_id: Option<&str>, request_id: &str) -> String {
+    let prefix = sanitize_group_component(config.producer_group_prefix.as_str());
+    let identity = sanitize_group_component(client_id.unwrap_or(request_id));
+    format!("{prefix}-{identity}")
+}
+
+fn transaction_resolution_flag(resolution: TransactionResolution) -> i32 {
+    match resolution {
+        TransactionResolution::Commit => MessageSysFlag::TRANSACTION_COMMIT_TYPE,
+        TransactionResolution::Rollback => MessageSysFlag::TRANSACTION_ROLLBACK_TYPE,
+    }
+}
+
+fn decode_end_transaction_message_id(message_id: &str) -> ProxyResult<MessageId> {
+    MessageDecoder::decode_message_id(&CheetahString::from(message_id)).map_err(|error| {
+        ProxyError::invalid_transaction_id(format!("failed to decode transactional message id: {error}"))
+    })
 }
 
 fn effective_send_timeout_ms(config: &ClusterConfig, deadline: Option<Duration>) -> u64 {

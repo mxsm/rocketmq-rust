@@ -43,6 +43,8 @@ use crate::processor::AckMessageResultEntry;
 use crate::processor::ChangeInvisibleDurationPlan;
 use crate::processor::ChangeInvisibleDurationRequest;
 use crate::processor::ConsumerFilterExpression;
+use crate::processor::EndTransactionPlan;
+use crate::processor::EndTransactionRequest;
 use crate::processor::QueryAssignmentPlan;
 use crate::processor::QueryAssignmentRequest;
 use crate::processor::QueryRoutePlan;
@@ -55,6 +57,8 @@ use crate::processor::SendMessageEntry;
 use crate::processor::SendMessagePlan;
 use crate::processor::SendMessageRequest;
 use crate::processor::SendMessageResultEntry;
+use crate::processor::TransactionResolution;
+use crate::processor::TransactionSource;
 use crate::proto::v2;
 use crate::service::ProxyTopicMessageType;
 use crate::service::ResourceIdentity;
@@ -212,6 +216,41 @@ pub fn build_change_invisible_duration_request(
     })
 }
 
+pub fn build_end_transaction_request(request: &v2::EndTransactionRequest) -> ProxyResult<EndTransactionRequest> {
+    let resolution = match v2::TransactionResolution::try_from(request.resolution)
+        .unwrap_or(v2::TransactionResolution::Unspecified)
+    {
+        v2::TransactionResolution::Commit => TransactionResolution::Commit,
+        v2::TransactionResolution::Rollback => TransactionResolution::Rollback,
+        v2::TransactionResolution::Unspecified => {
+            return Err(rocketmq_error::RocketMQError::illegal_argument("resolution must not be unspecified").into());
+        }
+    };
+    let source =
+        match v2::TransactionSource::try_from(request.source).unwrap_or(v2::TransactionSource::SourceUnspecified) {
+            v2::TransactionSource::SourceClient => TransactionSource::Client,
+            v2::TransactionSource::SourceServerCheck => TransactionSource::ServerCheck,
+            v2::TransactionSource::SourceUnspecified => {
+                return Err(rocketmq_error::RocketMQError::illegal_argument("source must not be unspecified").into());
+            }
+        };
+
+    Ok(EndTransactionRequest {
+        topic: resource_identity(request.topic.as_ref(), "topic")?,
+        message_id: validate_non_empty_string("messageId", request.message_id.as_str())?,
+        transaction_id: validate_transaction_id(request.transaction_id.as_str())?,
+        resolution,
+        source,
+        trace_context: {
+            let trimmed = request.trace_context.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_owned())
+        },
+        producer_group: None,
+        transaction_state_table_offset: None,
+        commit_log_message_id: None,
+    })
+}
+
 pub fn build_query_route_response(request: &v2::QueryRouteRequest, plan: &QueryRoutePlan) -> v2::QueryRouteResponse {
     let broker_map = build_broker_map(&plan.route);
     let topic = request.topic.clone().unwrap_or_default();
@@ -366,6 +405,12 @@ pub fn build_change_invisible_duration_response(
     }
 }
 
+pub fn build_end_transaction_response(plan: &EndTransactionPlan) -> v2::EndTransactionResponse {
+    v2::EndTransactionResponse {
+        status: Some(plan.status.clone().into()),
+    }
+}
+
 fn build_query_assignment_response_from_server(
     request: &v2::QueryAssignmentRequest,
     plan: &QueryAssignmentPlan,
@@ -421,6 +466,10 @@ pub fn error_change_invisible_duration_response(status: v2::Status) -> v2::Chang
         status: Some(status),
         receipt_handle: String::new(),
     }
+}
+
+pub fn error_end_transaction_response(status: v2::Status) -> v2::EndTransactionResponse {
+    v2::EndTransactionResponse { status: Some(status) }
 }
 
 fn resource_identity(resource: Option<&v2::Resource>, field: &'static str) -> ProxyResult<ResourceIdentity> {
@@ -666,6 +715,15 @@ fn validate_client_message_id(message_id: &str) -> ProxyResult<String> {
     Ok(trimmed.to_owned())
 }
 
+fn validate_transaction_id(transaction_id: &str) -> ProxyResult<String> {
+    let trimmed = transaction_id.trim();
+    if trimmed.is_empty() {
+        return Err(ProxyError::invalid_transaction_id("transactionId must not be empty"));
+    }
+
+    Ok(trimmed.to_owned())
+}
+
 fn infer_message_type(system: &v2::SystemProperties) -> ProxyResult<ProxyTopicMessageType> {
     let has_message_group = system
         .message_group
@@ -708,7 +766,15 @@ fn infer_message_type(system: &v2::SystemProperties) -> ProxyResult<ProxyTopicMe
 
             Ok(ProxyTopicMessageType::Delay)
         }
-        v2::MessageType::Transaction => Err(ProxyError::not_implemented("SendMessage(transaction)")),
+        v2::MessageType::Transaction => {
+            if has_message_group || has_delivery_timestamp {
+                return Err(ProxyError::message_property_conflict(
+                    "transaction message does not support message group or delivery timestamp",
+                ));
+            }
+
+            Ok(ProxyTopicMessageType::Transaction)
+        }
         v2::MessageType::Lite => Err(ProxyError::not_implemented("SendMessage(lite-topic)")),
         v2::MessageType::Priority => Err(ProxyError::not_implemented("SendMessage(priority)")),
     }
@@ -798,7 +864,13 @@ fn apply_message_type(
             message.set_deliver_time_ms(deliver_time_ms);
             Ok(())
         }
-        ProxyTopicMessageType::Transaction => Err(ProxyError::not_implemented("SendMessage(transaction)")),
+        ProxyTopicMessageType::Transaction => {
+            message.put_property(
+                CheetahString::from_static_str(MessageConst::PROPERTY_TRANSACTION_PREPARED),
+                CheetahString::from_static_str("true"),
+            );
+            Ok(())
+        }
         ProxyTopicMessageType::Mixed => Err(ProxyError::not_implemented("SendMessage(mixed-type topic)")),
         ProxyTopicMessageType::Lite => Err(ProxyError::not_implemented("SendMessage(lite-topic)")),
         ProxyTopicMessageType::Priority => Err(ProxyError::not_implemented("SendMessage(priority)")),
