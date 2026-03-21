@@ -219,9 +219,9 @@ export const ConsumerConfigModal = ({
                                         label="Orderly Consumption"
                                         enabled={data.consumeMessageOrderly}
                                     />
-                                    <ConfigField
+                                    <ConfigToggleField
                                         label="Notify Client Change"
-                                        value={data.notifyConsumerIdsChangedEnable ? 'Enabled' : 'Disabled'}
+                                        enabled={data.notifyConsumerIdsChangedEnable}
                                     />
                                 </section>
 

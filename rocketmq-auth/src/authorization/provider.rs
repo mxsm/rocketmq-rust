@@ -17,9 +17,20 @@
 //! This module defines the core `AuthorizationProvider` trait, which serves as the
 //! unified interface for all authorization implementations (ACL, RBAC, OPA, etc.).
 
+use std::sync::Arc;
+
 use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
 
+use crate::authentication::provider::LocalAuthenticationMetadataProvider;
+use crate::authorization::builder::default_authorization_context_builder::DefaultAuthorizationContextBuilder;
+use crate::authorization::builder::AuthorizationContextBuilder;
+use crate::authorization::chain::AclAuthorizationHandler;
+use crate::authorization::chain::AuthorizationHandler;
+use crate::authorization::chain::UserAuthorizationDecision;
+use crate::authorization::chain::UserAuthorizationHandler;
 use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
+use crate::authorization::metadata_provider::AuthorizationMetadataProvider;
+use crate::authorization::metadata_provider::LocalAuthorizationMetadataProvider;
 use crate::config::AuthConfig;
 
 /// Result type for authorization operations.
@@ -333,13 +344,12 @@ pub struct DefaultAuthorizationProvider {
     /// Authorization configuration
     config: Option<AuthConfig>,
 
-    /// Metadata service supplier (for context builder)
-    #[allow(dead_code)]
+    /// Metadata service supplier (reserved for future external providers)
     metadata_service: Option<Box<dyn std::any::Any + Send + Sync>>,
 
-    /// Context builder for creating authorization contexts from requests
-    #[allow(dead_code)]
-    context_builder: Option<Box<dyn std::any::Any + Send + Sync>>,
+    authentication_metadata_provider: Option<Arc<LocalAuthenticationMetadataProvider>>,
+    authorization_metadata_provider: Option<Arc<LocalAuthorizationMetadataProvider>>,
+    context_builder: Option<DefaultAuthorizationContextBuilder>,
 }
 
 impl DefaultAuthorizationProvider {
@@ -348,8 +358,18 @@ impl DefaultAuthorizationProvider {
         Self {
             config: None,
             metadata_service: None,
+            authentication_metadata_provider: None,
+            authorization_metadata_provider: None,
             context_builder: None,
         }
+    }
+
+    pub fn authentication_metadata_provider(&self) -> Option<Arc<LocalAuthenticationMetadataProvider>> {
+        self.authentication_metadata_provider.clone()
+    }
+
+    pub fn authorization_metadata_provider(&self) -> Option<Arc<LocalAuthorizationMetadataProvider>> {
+        self.authorization_metadata_provider.clone()
     }
 
     /// Audit log an authorization decision.
@@ -420,9 +440,13 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
         debug!("Initializing DefaultAuthorizationProvider");
         self.config = Some(config.clone());
         self.metadata_service = metadata_service;
+        self.context_builder = Some(DefaultAuthorizationContextBuilder::new(config.clone()));
 
-        // Context builder would be initialized here if needed
-        // self.context_builder = Some(Box::new(DefaultAuthorizationContextBuilder::new(config)));
+        self.authentication_metadata_provider = Some(Arc::new(LocalAuthenticationMetadataProvider::new()));
+
+        let mut authorization_metadata_provider = LocalAuthorizationMetadataProvider::new();
+        authorization_metadata_provider.initialize(config, None)?;
+        self.authorization_metadata_provider = Some(Arc::new(authorization_metadata_provider));
 
         Ok(())
     }
@@ -460,23 +484,65 @@ impl AuthorizationProvider for DefaultAuthorizationProvider {
             context.actions()
         );
 
-        // In the full implementation, this would delegate to a handler chain:
-        // 1. UserAuthorizationHandler - check for super users
-        // 2. AclAuthorizationHandler - perform ACL checks
-        //
-        // For now, we return a placeholder implementation that would need
-        // to be connected to the actual handler chain infrastructure.
+        let authentication_metadata_provider = self.authentication_metadata_provider.as_ref().ok_or_else(|| {
+            AuthorizationError::NotInitialized("Authentication metadata provider is not configured".to_string())
+        })?;
+        let authorization_metadata_provider = self.authorization_metadata_provider.as_ref().ok_or_else(|| {
+            AuthorizationError::NotInitialized("Authorization metadata provider is not configured".to_string())
+        })?;
 
-        // Audit log the result
-        let result = Ok(());
+        let result = async {
+            let user_handler = UserAuthorizationHandler::new(authentication_metadata_provider.clone());
+            match user_handler
+                .authorize_subject(context)
+                .await
+                .map_err(|error| map_handler_error(context, error))?
+            {
+                UserAuthorizationDecision::SuperUser => Ok(()),
+                UserAuthorizationDecision::Continue => {
+                    let acl_handler = AclAuthorizationHandler::new(authorization_metadata_provider.clone());
+                    acl_handler
+                        .handle(context)
+                        .await
+                        .map_err(|error| map_handler_error(context, error))
+                }
+            }
+        }
+        .await;
+
         self.audit_log(context, result.as_ref().err());
         result
+    }
+
+    fn new_contexts_from_remoting_command(
+        &self,
+        channel_context: &dyn std::any::Any,
+        command: &RemotingCommand,
+    ) -> AuthorizationResult<Vec<DefaultAuthorizationContext>> {
+        let builder = self.context_builder.as_ref().ok_or_else(|| {
+            AuthorizationError::NotInitialized("Authorization context builder is not configured".to_string())
+        })?;
+        builder.build_from_remoting(channel_context, command)
+    }
+}
+
+fn map_handler_error(
+    context: &DefaultAuthorizationContext,
+    error: rocketmq_error::RocketMQError,
+) -> AuthorizationError {
+    AuthorizationError::PermissionDenied {
+        subject: context.subject_key().unwrap_or("unknown").to_string(),
+        resource: context.resource_key().unwrap_or_else(|| "unknown".to_string()),
+        reason: error.to_string(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::authentication::enums::subject_type::SubjectType;
+    use crate::authentication::provider::authentication_metadata_provider::AuthenticationMetadataProvider;
+    use crate::authorization::metadata_provider::AuthorizationMetadataProvider;
 
     #[tokio::test]
     async fn test_noop_provider_always_allows() {
@@ -603,5 +669,68 @@ mod tests {
         // Both should be properly initialized
         assert!(provider1.config.is_none());
         assert!(provider2.config.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_default_provider_super_user_bypass() {
+        use crate::authentication::enums::user_status::UserStatus;
+        use crate::authentication::enums::user_type::UserType;
+        use crate::authorization::model::resource::Resource;
+
+        let mut provider = DefaultAuthorizationProvider::new();
+        provider.initialize(AuthConfig::default()).unwrap();
+
+        let auth_provider = provider.authentication_metadata_provider().unwrap();
+        let mut user = crate::authentication::model::user::User::of_with_type("alice", "secret", UserType::Super);
+        user.set_user_status(UserStatus::Enable);
+        auth_provider.create_user(user).await.unwrap();
+
+        let mut context = DefaultAuthorizationContext::default();
+        context.set_subject("alice", SubjectType::User);
+        context.set_resource(Resource::of_topic("test-topic"));
+        context.set_actions(vec![rocketmq_common::common::action::Action::Pub]);
+        context.set_source_ip("127.0.0.1");
+
+        assert!(provider.authorize(&context).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_default_provider_acl_authorization() {
+        use crate::authentication::enums::user_status::UserStatus;
+        use crate::authentication::enums::user_type::UserType;
+        use crate::authorization::enums::decision::Decision;
+        use crate::authorization::model::acl::Acl;
+        use crate::authorization::model::policy::Policy;
+        use crate::authorization::model::resource::Resource;
+
+        let mut provider = DefaultAuthorizationProvider::new();
+        provider.initialize(AuthConfig::default()).unwrap();
+
+        let auth_provider = provider.authentication_metadata_provider().unwrap();
+        let mut user = crate::authentication::model::user::User::of_with_type("alice", "secret", UserType::Normal);
+        user.set_user_status(UserStatus::Enable);
+        auth_provider.create_user(user).await.unwrap();
+
+        let acl_provider = provider.authorization_metadata_provider().unwrap();
+        let resource = Resource::of_topic("test-topic");
+        let acl = Acl::of(
+            "alice",
+            SubjectType::User,
+            Policy::of(
+                vec![resource.clone()],
+                vec![rocketmq_common::common::action::Action::Pub],
+                None,
+                Decision::Allow,
+            ),
+        );
+        acl_provider.create_acl(acl).await.unwrap();
+
+        let mut context = DefaultAuthorizationContext::default();
+        context.set_subject("alice", SubjectType::User);
+        context.set_resource(resource);
+        context.set_actions(vec![rocketmq_common::common::action::Action::Pub]);
+        context.set_source_ip("127.0.0.1");
+
+        assert!(provider.authorize(&context).await.is_ok());
     }
 }

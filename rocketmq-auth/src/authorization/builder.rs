@@ -12,13 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod builder;
-pub mod chain;
-pub mod context;
-pub mod enums;
-pub mod evaluator;
-pub mod manager;
-pub mod metadata_provider;
-pub mod model;
-pub mod provider;
-pub mod strategy;
+pub mod default_authorization_context_builder;
+
+use std::any::Any;
+
+use rocketmq_remoting::protocol::remoting_command::RemotingCommand;
+
+use crate::authorization::context::default_authorization_context::DefaultAuthorizationContext;
+use crate::authorization::provider::AuthorizationResult;
+
+pub trait AuthorizationContextBuilder: Send + Sync {
+    fn build_from_remoting(
+        &self,
+        channel_context: &dyn Any,
+        command: &RemotingCommand,
+    ) -> AuthorizationResult<Vec<DefaultAuthorizationContext>>;
+}
